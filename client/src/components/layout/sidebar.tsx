@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { BarChart3, Table, AlertTriangle, Grid3x3, ClipboardCheck, Sliders, CheckSquare, FileText, Settings, Users, UserCog, Calendar, Search, BookOpen, Clock, UserPlus, Award, Scale, FileCheck, FolderOpen, UserCheck, FileX, MessageSquare, Eye, Target, Upload, Tag, Crown, Trash2, Activity, LayoutGrid, ChevronLeft, ChevronRight, Building2, AlertCircle } from "lucide-react";
+import { BarChart3, Table, AlertTriangle, Grid3x3, ClipboardCheck, Sliders, CheckSquare, FileText, Settings, Users, UserCog, Calendar, Search, BookOpen, Clock, UserPlus, Award, Scale, FileCheck, FolderOpen, UserCheck, FileX, MessageSquare, Eye, Target, Upload, Tag, Crown, Trash2, Activity, LayoutGrid, ChevronLeft, ChevronRight, Building2, AlertCircle, Shield } from "lucide-react";
 import { usePermissions } from "@/hooks/usePermissions";
 import UserSwitcher from "@/components/user-switcher";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -21,6 +21,8 @@ const navigation = [
 
 const configNavigation = [
   { name: "Configuración", href: "/config", icon: Settings },
+  { name: "Usuarios", href: "/config/users", icon: Users },
+  { name: "Roles", href: "/config/roles", icon: Shield },
 ];
 
 const importNavigation = [
