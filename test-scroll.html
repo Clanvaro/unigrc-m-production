@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DialogContent Scroll Test</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="p-8 bg-gray-100">
+  <h1 class="text-2xl font-bold mb-4">Dialog Scroll Test - Configuración Actual</h1>
+  
+  <!-- Test 1: Current implementation -->
+  <div class="mb-8">
+    <h2 class="text-xl font-semibold mb-2">Test 1: Implementación Actual (scrollable prop)</h2>
+    <div class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 border bg-white shadow-lg rounded-lg max-h-[90vh] flex flex-col">
+      <div class="flex-shrink-0 p-6 pb-2 bg-blue-50">
+        <h3 class="text-lg font-semibold">Dialog Header (Fixed)</h3>
+        <p class="text-sm text-gray-600">Este header debe permanecer visible</p>
+      </div>
+      <div class="flex-1 min-h-0 overflow-y-auto px-6 pb-6 bg-white">
+        <div class="space-y-4">
+          <p>Contenido del formulario...</p>
+          <div class="h-32 bg-gray-200 rounded">Campo 1</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 2</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 3</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 4</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 5</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 6</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 7</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 8</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 9</div>
+          <div class="h-32 bg-gray-200 rounded">Campo 10</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height: 200vh;"></div>
+</body>
+</html>

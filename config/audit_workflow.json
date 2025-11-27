@@ -1,0 +1,150 @@
+{
+  "name": "Audit Workflow",
+  "description": "Workflow de estados para auditorías siguiendo estándares NOGAI",
+  "version": "1.0.0",
+  "states": [
+    {
+      "id": "planificacion",
+      "name": "Planificación",
+      "description": "Auditoría en etapa de planificación",
+      "color": "#3b82f6",
+      "order": 1,
+      "requiredFields": [
+        "name",
+        "auditCode",
+        "plannedStartDate",
+        "plannedEndDate",
+        "auditType"
+      ],
+      "allowedRoles": ["admin", "auditor", "audit_director"]
+    },
+    {
+      "id": "trabajo_campo",
+      "name": "Trabajo de Campo",
+      "description": "Auditoría en ejecución (trabajo de campo)",
+      "color": "#f59e0b",
+      "order": 2,
+      "requiredFields": [
+        "name",
+        "auditCode",
+        "plannedStartDate",
+        "plannedEndDate",
+        "auditType",
+        "actualStartDate",
+        "leadAuditorId"
+      ],
+      "allowedRoles": ["admin", "auditor", "audit_director"]
+    },
+    {
+      "id": "reporte",
+      "name": "Reporte",
+      "description": "Elaboración de informe de auditoría",
+      "color": "#8b5cf6",
+      "order": 3,
+      "requiredFields": [
+        "name",
+        "auditCode",
+        "plannedStartDate",
+        "plannedEndDate",
+        "auditType",
+        "actualStartDate",
+        "actualEndDate",
+        "leadAuditorId"
+      ],
+      "allowedRoles": ["admin", "auditor", "audit_director"]
+    },
+    {
+      "id": "completado",
+      "name": "Completado",
+      "description": "Auditoría finalizada y reportada",
+      "color": "#10b981",
+      "order": 4,
+      "requiredFields": [
+        "name",
+        "auditCode",
+        "plannedStartDate",
+        "plannedEndDate",
+        "auditType",
+        "actualStartDate",
+        "actualEndDate",
+        "leadAuditorId",
+        "reportIssuedDate"
+      ],
+      "allowedRoles": ["admin", "audit_director"]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "planificacion",
+      "to": "trabajo_campo",
+      "name": "Iniciar Trabajo de Campo",
+      "description": "Transición de planificación a ejecución",
+      "requiresComment": false,
+      "allowedRoles": ["admin", "auditor", "audit_director"],
+      "validations": [
+        "Debe tener auditor líder asignado",
+        "Debe tener fecha de inicio real"
+      ]
+    },
+    {
+      "from": "trabajo_campo",
+      "to": "reporte",
+      "name": "Pasar a Reporte",
+      "description": "Finalizar trabajo de campo e iniciar reporte",
+      "requiresComment": false,
+      "allowedRoles": ["admin", "auditor", "audit_director"],
+      "validations": [
+        "Debe tener fecha de finalización real"
+      ]
+    },
+    {
+      "from": "reporte",
+      "to": "completado",
+      "name": "Completar Auditoría",
+      "description": "Finalizar auditoría con reporte emitido",
+      "requiresComment": false,
+      "allowedRoles": ["admin", "audit_director"],
+      "validations": [
+        "Debe tener fecha de emisión del reporte"
+      ]
+    },
+    {
+      "from": "trabajo_campo",
+      "to": "planificacion",
+      "name": "Regresar a Planificación",
+      "description": "Retroceder a planificación (requiere comentario)",
+      "requiresComment": true,
+      "allowedRoles": ["admin", "audit_director"],
+      "validations": []
+    },
+    {
+      "from": "reporte",
+      "to": "trabajo_campo",
+      "name": "Regresar a Trabajo de Campo",
+      "description": "Retroceder a trabajo de campo (requiere comentario)",
+      "requiresComment": true,
+      "allowedRoles": ["admin", "audit_director"],
+      "validations": []
+    }
+  ],
+  "slaRules": [
+    {
+      "state": "planificacion",
+      "maxDays": 30,
+      "warningDays": 7,
+      "warningMessage": "Planificación próxima a vencer"
+    },
+    {
+      "state": "trabajo_campo",
+      "maxDays": 60,
+      "warningDays": 10,
+      "warningMessage": "Trabajo de campo próximo a vencer"
+    },
+    {
+      "state": "reporte",
+      "maxDays": 15,
+      "warningDays": 5,
+      "warningMessage": "Reporte próximo a vencer"
+    }
+  ]
+}

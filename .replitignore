@@ -1,0 +1,82 @@
+# Node modules - needed in deployment for externalized dependencies
+# node_modules/ - COMMENTED OUT: Required for production dependencies
+
+# Git repository
+.git/
+.gitignore
+
+# Development and testing files
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+tests/
+__tests__/
+coverage/
+.nyc_output/
+
+# Testing tools
+playwright-report/
+test-results/
+e2e/
+
+# Build artifacts (will be rebuilt)
+# dist/ - Commented out to include pre-built backend in deployment
+.next/
+out/
+
+# Development tools
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.DS_Store
+*.pid
+*.seed
+*.pid.lock
+
+# Environment files (should use Replit secrets)
+.env
+.env.local
+.env.*.local
+
+# Cache directories
+.npm/
+.eslintcache
+*.tsbuildinfo
+.cache/
+tmp/
+temp/
+
+# Documentation (not needed in deployment)
+docs/
+CONTRIBUTING.md
+CHANGELOG.md
+
+# Replit specific
+.replit
+replit.nix
+.config/
+.upm/
+.cache/
+
+# Optional: Exclude development dependencies manifest
+# Note: package.json is needed, but we could optimize it
+
+# Husky git hooks
+.husky/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Playwright browsers
+~/.cache/ms-playwright/

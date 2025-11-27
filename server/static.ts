@@ -1,0 +1,70 @@
+import express, { type Express } from "express";
+import fs from "fs";
+import path from "path";
+
+export function log(message: string, source = "express") {
+  const formattedTime = new Date().toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+
+  console.log(`${formattedTime} [${source}] ${message}`);
+}
+
+export function serveStatic(app: Express) {
+  // In production (bundled), look for dist/public
+  // In development, look for client folder (Vite dev server handles it)
+  const isProduction = process.env.NODE_ENV === "production";
+  const distPath = isProduction 
+    ? path.resolve(process.cwd(), "dist", "public")
+    : path.resolve(import.meta.dirname, "public");
+
+  if (!fs.existsSync(distPath)) {
+    log(`Build directory not found: ${distPath}`, "static");
+    if (isProduction) {
+      throw new Error(
+        `Could not find the build directory: ${distPath}, make sure to build the client first`,
+      );
+    }
+    return; // In dev, Vite handles serving
+  }
+
+  log(`Serving static files from: ${distPath}`, "static");
+
+  // Serve static assets with appropriate cache headers
+  app.use(express.static(distPath, {
+    setHeaders: (res, filepath) => {
+      // For index.html: always revalidate to get latest version
+      if (filepath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+      // For favicon.ico: cache aggressively (1 year) to eliminate redundant requests
+      else if (filepath.endsWith('favicon.ico')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+      // For hashed assets (main.abc123.js): cache aggressively since hash changes when content changes
+      else if (/\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|webp|ico)$/.test(filepath)) {
+        // Check if file has hash in name (Vite adds hashes like: main.abc123.js)
+        if (/\.[a-f0-9]{8,}\.(js|css)$/.test(filepath)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          // Non-hashed assets: short cache with revalidation
+          res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+        }
+      }
+    }
+  }));
+
+  // fall through to index.html if the file doesn't exist
+  app.use("*", (_req, res) => {
+    // Always send fresh index.html for SPA routing
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(path.resolve(distPath, "index.html"));
+  });
+}

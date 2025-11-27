@@ -1,0 +1,23 @@
+node_modules
+node_modules.backup
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Husky hooks (disabled for Replit Agent compatibility)
+.husky/_
+
+# Attached assets (screenshots from conversations - not needed in version control)
+attached_assets/
+
+# Ollama data directory (model files are large and shouldn't be in version control)
+ollama_data/
+
+# Test and build artifacts
+playwright-report/
+test-results/
+.vite/
+*.log
+.github/workflows/

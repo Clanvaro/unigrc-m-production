@@ -1,0 +1,506 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --radius: 8px;
+  --background: hsl(210, 40%, 98%);
+  --foreground: hsl(210, 40%, 8%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(210, 40%, 8%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(210, 40%, 8%);
+  --primary: hsl(210, 85%, 40%);
+  --primary-foreground: hsl(0, 0%, 98%);
+  --secondary: hsl(174, 70%, 41%);
+  --secondary-foreground: hsl(0, 0%, 98%);
+  --muted: hsl(210, 40%, 96%);
+  --muted-foreground: hsl(210, 40%, 45%);
+  --accent: hsl(210, 80%, 60%);
+  --accent-foreground: hsl(0, 0%, 98%);
+  --destructive: hsl(0, 84%, 50%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --border: hsl(210, 40%, 87%);
+  --input: hsl(210, 40%, 96%);
+  --ring: hsl(210, 85%, 40%);
+  --chart-1: hsl(142, 70%, 45%);
+  --chart-2: hsl(45, 90%, 55%);
+  --chart-3: hsl(25, 85%, 50%);
+  --chart-4: hsl(270, 70%, 50%);
+  --chart-5: hsl(180, 70%, 40%);
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-serif: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  --shadow-2xs: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00), 0px 1px 2px -1px hsl(210, 85%, 40%, 0.00);
+  --shadow: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00), 0px 1px 2px -1px hsl(210, 85%, 40%, 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00), 0px 2px 4px -1px hsl(210, 85%, 40%, 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00), 0px 4px 6px -1px hsl(210, 85%, 40%, 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00), 0px 8px 10px -1px hsl(210, 85%, 40%, 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(210, 85%, 40%, 0.00);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+  
+  /* Mobile accessibility variables */
+  --touch-target-min: 44px;
+  --touch-spacing: 8px;
+  --mobile-padding: 12px;
+}
+
+.dark {
+  --background: hsl(210, 40%, 8%);
+  --foreground: hsl(210, 40%, 98%);
+  --card: hsl(210, 40%, 12%);
+  --card-foreground: hsl(210, 40%, 98%);
+  --popover: hsl(210, 40%, 12%);
+  --popover-foreground: hsl(210, 40%, 98%);
+  --primary: hsl(210, 85%, 60%);
+  --primary-foreground: hsl(210, 40%, 8%);
+  --secondary: hsl(174, 70%, 45%);
+  --secondary-foreground: hsl(210, 40%, 8%);
+  --muted: hsl(210, 40%, 16%);
+  --muted-foreground: hsl(210, 40%, 60%);
+  --accent: hsl(210, 80%, 50%);
+  --accent-foreground: hsl(210, 40%, 98%);
+  --destructive: hsl(0, 84%, 45%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --border: hsl(210, 40%, 20%);
+  --input: hsl(210, 40%, 16%);
+  --ring: hsl(210, 85%, 60%);
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-serif: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --shadow-2xs: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00), 0px 1px 2px -1px hsl(210, 85%, 60%, 0.00);
+  --shadow: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00), 0px 1px 2px -1px hsl(210, 85%, 60%, 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00), 0px 2px 4px -1px hsl(210, 85%, 60%, 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00), 0px 4px 6px -1px hsl(210, 85%, 60%, 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00), 0px 8px 10px -1px hsl(210, 85%, 60%, 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(210, 85%, 60%, 0.00);
+}
+
+/* High Contrast Theme - WCAG 2.2 AAA Compliance */
+.high-contrast {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(0, 0%, 0%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(0, 0%, 0%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(0, 0%, 0%);
+  --primary: hsl(210, 100%, 35%);
+  --primary-foreground: hsl(0, 0%, 100%);
+  --secondary: hsl(174, 100%, 25%);
+  --secondary-foreground: hsl(0, 0%, 100%);
+  --muted: hsl(0, 0%, 95%);
+  --muted-foreground: hsl(0, 0%, 10%);
+  --accent: hsl(210, 100%, 40%);
+  --accent-foreground: hsl(0, 0%, 100%);
+  --destructive: hsl(0, 100%, 35%);
+  --destructive-foreground: hsl(0, 0%, 100%);
+  --border: hsl(0, 0%, 0%);
+  --input: hsl(0, 0%, 100%);
+  --ring: hsl(210, 100%, 35%);
+  
+  /* High contrast shadows */
+  --shadow-2xs: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3);
+  --shadow-xs: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3);
+  --shadow-sm: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3), 0px 1px 2px -1px hsl(0, 0%, 0%, 0.3);
+  --shadow: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3), 0px 1px 2px -1px hsl(0, 0%, 0%, 0.3);
+  --shadow-md: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3), 0px 2px 4px -1px hsl(0, 0%, 0%, 0.3);
+  --shadow-lg: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3), 0px 4px 6px -1px hsl(0, 0%, 0%, 0.3);
+  --shadow-xl: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3), 0px 8px 10px -1px hsl(0, 0%, 0%, 0.3);
+  --shadow-2xl: 0px 2px 0px 0px hsl(0, 0%, 0%, 0.3);
+  
+  /* Increased touch targets for accessibility */
+  --touch-target-min: 48px;
+}
+
+/* ============================================================================
+   DESIGN TOKENS SYSTEM - Enterprise Theme Support
+   ============================================================================ */
+
+:root {
+  /* Spacing Scale (consistent 4px grid) */
+  --space-1: 0.25rem;  /* 4px */
+  --space-2: 0.5rem;   /* 8px */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-8: 2rem;     /* 32px */
+  --space-10: 2.5rem;  /* 40px */
+  --space-12: 3rem;    /* 48px */
+  --space-16: 4rem;    /* 64px */
+  --space-20: 5rem;    /* 80px */
+  
+  /* Typography Scale */
+  --text-xs: 0.75rem;    /* 12px */
+  --text-sm: 0.875rem;   /* 14px */
+  --text-base: 1rem;     /* 16px */
+  --text-lg: 1.125rem;   /* 18px */
+  --text-xl: 1.25rem;    /* 20px */
+  --text-2xl: 1.5rem;    /* 24px */
+  --text-3xl: 1.875rem;  /* 30px */
+  --text-4xl: 2.25rem;   /* 36px */
+  --text-5xl: 3rem;      /* 48px */
+  
+  /* Font Weights */
+  --font-light: 300;
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  
+  /* Line Heights */
+  --leading-none: 1;
+  --leading-tight: 1.25;
+  --leading-snug: 1.375;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+  --leading-loose: 2;
+  
+  /* Border Radius Scale */
+  --radius-sm: 0.25rem;   /* 4px */
+  --radius-base: 0.5rem;  /* 8px */
+  --radius-md: 0.75rem;   /* 12px */
+  --radius-lg: 1rem;      /* 16px */
+  --radius-xl: 1.5rem;    /* 24px */
+  --radius-2xl: 2rem;     /* 32px */
+  --radius-3xl: 3rem;     /* 48px */
+  --radius-full: 9999px;
+  
+  /* Animation Durations */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+  --duration-slower: 500ms;
+  
+  /* Animation Easing */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  
+  /* Z-Index Scale */
+  --z-base: 0;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-fixed: 1200;
+  --z-modal-backdrop: 1300;
+  --z-modal: 1400;
+  --z-popover: 1500;
+  --z-tooltip: 1600;
+  
+  /* Blur Effects */
+  --blur-sm: 4px;
+  --blur-base: 8px;
+  --blur-md: 12px;
+  --blur-lg: 16px;
+  --blur-xl: 24px;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+    font-family: var(--font-sans);
+    /* Improve touch handling on mobile */
+    touch-action: manipulation;
+  }
+
+  /* Enhanced mobile touch targets */
+  button, [role="button"], a, input, select, textarea {
+    /* Ensure minimum touch target size */
+    min-height: var(--touch-target-min);
+    /* Better touch response */
+    touch-action: manipulation;
+  }
+
+  /* Improve spacing between interactive elements on mobile */
+  @media (max-width: 768px) {
+    button + button,
+    [role="button"] + [role="button"],
+    a + a {
+      margin-left: var(--touch-spacing);
+    }
+
+    /* Increase padding for better touch targets */
+    .sidebar-item {
+      padding: var(--mobile-padding) !important;
+      min-height: var(--touch-target-min);
+    }
+
+    /* Improve form controls */
+    input, select, textarea {
+      padding: var(--mobile-padding);
+      min-height: var(--touch-target-min);
+    }
+
+    /* Better spacing for interactive elements */
+    .space-x-2 > * + * {
+      margin-left: var(--touch-spacing) !important;
+    }
+
+    .space-y-2 > * + * {
+      margin-top: var(--touch-spacing) !important;
+    }
+  }
+}
+
+.risk-level-1 { 
+  background-color: hsl(120, 60%, 50%); /* Verde vibrante */
+  color: white; 
+  font-weight: bold;
+}
+
+.risk-level-2 { 
+  background-color: hsl(45, 100%, 50%); /* Amarillo vibrante */
+  color: hsl(45, 100%, 20%); 
+  font-weight: bold;
+}
+
+.risk-level-3 { 
+  background-color: hsl(30, 100%, 50%); /* Naranja vibrante */
+  color: white; 
+  font-weight: bold;
+}
+
+.risk-level-4 { 
+  background-color: hsl(0, 85%, 50%); /* Rojo vibrante */
+  color: white; 
+  font-weight: bold;
+}
+
+.risk-level-5 { 
+  background-color: hsl(0, 85%, 40%); /* Rojo más oscuro */
+  color: white; 
+  font-weight: bold;
+}
+
+.matrix-cell {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  /* Better touch handling */
+  touch-action: manipulation;
+}
+
+/* Mobile matrix improvements */
+@media (max-width: 768px) {
+  .matrix-cell {
+    width: var(--touch-target-min);
+    height: var(--touch-target-min);
+    font-size: 12px;
+  }
+}
+
+.sidebar-item {
+  /* Ensure good touch targets */
+  min-height: var(--touch-target-min);
+  display: flex;
+  align-items: center;
+  transition-duration: 150ms;
+  transition-property: background-color, color;
+}
+
+.sidebar-item:hover {
+  background-color: var(--muted);
+}
+
+.sidebar-item.active {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* Mobile-specific sidebar improvements */
+@media (max-width: 768px) {
+  .sidebar-item {
+    padding: var(--mobile-padding);
+    margin-bottom: 4px;
+  }
+}
+
+/* iOS-specific scrolling improvements for AI assistant */
+.ai-scrollarea [data-radix-scroll-area-viewport] {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* iOS Safari scroll fixes */
+@supports (-webkit-overflow-scrolling: touch) {
+  .ai-scrollarea [data-radix-scroll-area-viewport] {
+    transform: translateZ(0);
+    will-change: scroll-position;
+  }
+}
+
+/* Command Palette - Enhanced backdrop with blur */
+[data-radix-dialog-overlay][data-state="open"] {
+  backdrop-filter: blur(var(--blur-md));
+  -webkit-backdrop-filter: blur(var(--blur-md));
+  animation: backdrop-fade-in var(--duration-base) var(--ease-out);
+}
+
+[data-radix-dialog-overlay][data-state="closed"] {
+  backdrop-filter: blur(0);
+  -webkit-backdrop-filter: blur(0);
+  animation: backdrop-fade-out var(--duration-base) var(--ease-in);
+}
+
+@keyframes backdrop-fade-in {
+  from {
+    backdrop-filter: blur(0);
+    -webkit-backdrop-filter: blur(0);
+  }
+  to {
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+  }
+}
+
+@keyframes backdrop-fade-out {
+  from {
+    backdrop-filter: blur(var(--blur-md));
+    -webkit-backdrop-filter: blur(var(--blur-md));
+  }
+  to {
+    backdrop-filter: blur(0);
+    -webkit-backdrop-filter: blur(0);
+  }
+}
+
+/* ============================================================================
+   WCAG 2.2 Level AA Accessibility Enhancements
+   ============================================================================ */
+
+/* WCAG 2.5.8 - Touch Targets ≥24px */
+button, 
+a, 
+input[type="checkbox"], 
+input[type="radio"],
+[role="button"],
+[role="link"],
+[role="switch"],
+.interactive {
+  min-height: 24px;
+  min-width: 24px;
+}
+
+/* Icon-only buttons need larger touch targets for mobile */
+button:has(svg:only-child),
+a:has(svg:only-child) {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px;
+}
+
+/* Ensure adequate spacing between interactive elements */
+.button-group > *:not(:last-child) {
+  margin-right: 8px;
+}
+
+/* WCAG 2.4.7 - Focus Visible (≥3:1 contrast) */
+*:focus-visible {
+  outline: 3px solid hsl(var(--primary));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Skip to main content link - WCAG 2.4.1 Bypass Blocks */
+.skip-to-main {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  padding: 8px 16px;
+  text-decoration: none;
+  z-index: 1000;
+  font-weight: 600;
+}
+
+.skip-to-main:focus {
+  top: 0;
+}
+
+/* Keyboard navigation indicator for custom components */
+[data-keyboard-focus="true"] {
+  outline: 3px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* WCAG 1.3.1 - Screen reader only content */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.sr-only-focusable:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  *:focus-visible {
+    outline-width: 4px;
+  }
+  
+  button, a {
+    border: 2px solid currentColor;
+  }
+}
+
+/* iOS Safari keyboard input fix for modals/dialogs */
+@supports (-webkit-touch-callout: none) {
+  /* Fix for iOS: ensure inputs in dialogs can receive keyboard events */
+  [role="dialog"] input,
+  [role="dialog"] textarea,
+  [data-radix-dialog-content] input,
+  [data-radix-dialog-content] textarea {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-transform: translateZ(0) !important;
+    transform: translateZ(0) !important;
+    position: relative !important;
+    z-index: 9999 !important;
+    isolation: isolate !important;
+  }
+  
+  /* Force compositing layer for inputs to prevent iOS blocking */
+  [role="dialog"] *,
+  [data-radix-dialog-content] * {
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+  }
+  
+  /* Prevent iOS from blocking pointer events on dialog content */
+  [data-radix-dialog-content] {
+    isolation: isolate;
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0);
+  }
+}

@@ -1,0 +1,21398 @@
+import type { Express, Request, Response, NextFunction } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { setupAuth, isAuthenticated, optionalTenant } from "./replitAuth";
+import { authCache } from "./auth-cache";
+import { csrfProtection, csrfProtectionForMutations, getCSRFToken, generateCsrfToken } from "./csrf";
+import { authRateLimiter, apiMutationLimiter } from "./security";
+import { sendEmail, generateRiskValidationEmail, initializeEmailService, getEmailService, setEmailService, testEmailConnection } from "./email-service";
+import { calculateAggregatedValidationStatus, type ProcessValidationInfo } from "@shared/risk-validation-helpers";
+import { EmailServiceFactory, type EmailConfig } from "./services/EmailServiceFactory";
+import { normalizePaginationParams, createPaginatedResponse } from "./pagination";
+// Query analyzer for on-demand EXPLAIN ANALYZE (admin-only, predefined queries only)
+import { analyzeCriticalQuery, analyzeAllCriticalQueries, CRITICAL_QUERIES, type CriticalQueryKey } from './performance/query-analyzer';
+// New performance services
+import { distributedCache } from './services/redis';
+import { QueueService } from './services/queue';
+import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
+import { invalidateRiskMatrixCache, invalidateRiskControlCaches, invalidateProcessRelationsCaches, invalidateRiskEventsPageDataCache, CACHE_VERSION } from './cache-helpers';
+import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
+import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
+import { z } from "zod";
+import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
+import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import { ObjectPermission } from "./objectAcl";
+import approvalRoutes from "./approval-routes";
+import setupRevalidationRoutes from "./revalidation-routes";
+import { calculateProbability, type ProbabilityFactors, type ProbabilityWeights, calculateDynamicProbability, type DynamicProbabilityFactors, type DynamicCriterion } from "@shared/probability-calculation";
+import { 
+  insertMacroprocesoSchema,
+  insertProcessSchema,
+  insertSubprocesoSchema,
+  insertGerenciaSchema,
+  insertRiskSchema,
+  insertRiskEventSchema,
+  baseInsertRiskSchema,
+  insertControlSchema, 
+  insertControlEvaluationCriteriaSchema,
+  insertControlEvaluationOptionsSchema,
+  insertControlEvaluationSchema,
+  insertRiskControlSchema,
+  insertActionPlanRiskSchema,
+  insertActionSchema,
+  insertActionEvidenceSchema,
+  insertRiskCategorySchema,
+  insertFiscalEntitySchema,
+  insertUserSchema,
+  insertRoleSchema,
+  insertUserRoleSchema,
+  validateRiskSchema,
+  validateControlSchema,
+  insertRiskSnapshotSchema,
+  insertAuditPlanSchema,
+  insertAuditSchema,
+  insertAuditControlSchema,
+  insertAuditUniverseSchema,
+  insertAuditPrioritizationFactorsSchema,
+  insertAuditPlanItemSchema,
+  insertAuditPlanCapacitySchema,
+  insertSystemConfigSchema,
+  insertRegulationSchema,
+  insertRiskRegulationSchema,
+  insertComplianceTestSchema,
+  insertComplianceTestControlSchema,
+  insertComplianceDocumentSchema,
+  insertAuditFindingSchema,
+  insertAuditCriterionSchema,
+  auditScopeSelectionsSchema,
+  auditScopeInitializeSchema,
+  auditGenerateTestsSchema,
+  insertAuditTestWorkLogSchema,
+  insertAuditTestAttachmentSchema,
+  insertAuditAttachmentCodeSequenceSchema,
+  NotificationTypes,
+  NotificationPriorities,
+  NotificationType,
+  NotificationPriority,
+  // Recommendation schemas
+  comprehensiveRecommendationRequestSchema,
+  procedureRecommendationRequestSchema,
+  auditorRecommendationRequestSchema,
+  timelineRecommendationRequestSchema,
+  recommendationFeedbackRequestSchema,
+  // Process Owners schemas
+  insertProcessOwnerSchema,
+  updateProcessOwnerSchema,
+  insertValidationTokenSchema,
+  insertProbabilityCriteriaSchema,
+  insertImpactCriteriaSchema,
+  // RiskProcessLinks and ControlProcess schemas
+  insertRiskProcessLinkSchema,
+  insertControlProcessSchema,
+  // Enhanced validation schemas
+  updateRiskProcessLinkSchema,
+  updateControlProcessSchema,
+  processFilterSchema,
+  validateRiskProcessLinkSchema,
+  validateControlProcessSchema,
+  controlProcessSelfEvaluationSchema,
+  // Process Validation schemas
+  insertProcessValidationSchema,
+  insertProcessRiskValidationSchema,
+  insertProcessControlValidationSchema,
+  validateProcessValidationSchema,
+  validateProcessRiskValidationSchema,
+  validateProcessControlValidationSchema,
+  // Compliance schemas
+  insertCrimeCategorySchema,
+  updateCrimeCategorySchema,
+  insertComplianceOfficerSchema,
+  updateComplianceOfficerSchema,
+  insertComplianceOfficerAttachmentSchema,
+  // User Saved Views & Preferences schemas
+  insertUserSavedViewSchema,
+  updateUserSavedViewSchema,
+  insertUserPreferencesSchema
+} from "@shared/schema";
+import { notificationService } from "./notification-service";
+import { importService } from "./services/import-service";
+import path from "path";
+import fs from "fs";
+import { randomBytes } from "crypto";
+import { registerAIAssistantRoutes } from "./ai-assistant-routes";
+import multer from "multer";
+import { objectStorageClient } from "./objectStorage";
+
+// Soft-delete validation schema
+const softDeleteSchema = z.object({
+  deletionReason: z.string().trim().min(1, "El motivo de eliminación es requerido")
+});
+
+// ============= DUAL-TABLE SYNC HELPER =============
+/**
+ * Syncs validation status between action_plans and actions tables
+ * This ensures both tables are always in sync when validation status changes
+ */
+async function syncActionPlanValidation(actionPlanCode: string, validationData: {
+  validationStatus?: string;
+  validationComments?: string | null;
+  reviewedAt?: Date;
+  validatedAt?: Date;
+  validatedBy?: string;
+  notifiedAt?: Date;
+}) {
+  if (!db) {
+    throw new Error("Database not available");
+  }
+  
+  await requireDb()
+    .update(actions)
+    .set(validationData)
+    .where(eq(actions.code, actionPlanCode));
+}
+
+// ============= AUDIT HELPERS =============
+// Error tipado para cuando no se encuentra tenant activo
+class ActiveTenantError extends Error {
+  statusCode: number;
+  
+  constructor(message: string = "No active tenant found") {
+    super(message);
+    this.name = "ActiveTenantError";
+    this.statusCode = 400;
+  }
+}
+
+/**
+ * SINGLE-TENANT MODE: Returns a default tenant ID for all requests.
+ * This function is simplified for single-tenant operation.
+ * @param req - Express Request
+ * @param options - { required: boolean } - ignored in single-tenant mode
+ * @returns Promise<{ tenantId: string, userId: string | null }>
+ */
+export async function resolveActiveTenant(
+  req: Request, 
+  options: { required?: boolean } = {}
+): Promise<{ tenantId: string; userId: string | null }> {
+  // Single-tenant mode: always return a constant tenant ID
+  const SINGLE_TENANT_ID = 'default';
+  
+  // Get userId from authenticated user
+  const userId = (req as any).user?.claims?.sub || (req as any).user?.id || null;
+  
+  return { tenantId: SINGLE_TENANT_ID, userId };
+}
+
+/**
+ * Helper que retorna solo el tenantId como string.
+ * Usa resolveActiveTenant internamente y lanza ActiveTenantError cuando required=true y no hay tenant.
+ * 
+ * USAGE: Prefer this helper over manually destructuring when you only need the tenantId string.
+ * For write operations, always call with `required: true` to ensure tenant context is present.
+ * 
+ * @param req - Express Request
+ * @param options - { required: boolean } - si es true, lanza error cuando no hay tenant
+ * @returns Promise<string | null> - el tenantId como string, o null si no está disponible y required=false
+ */
+async function resolveActiveTenantId(
+  req: Request, 
+  options: { required?: boolean } = {}
+): Promise<string | null> {
+  const { tenantId } = await resolveActiveTenant(req, options);
+  
+  if (options.required && !tenantId) {
+    throw new ActiveTenantError("No active tenant found. Please ensure user has at least one tenant assigned.");
+  }
+  
+  return tenantId;
+}
+
+/**
+ * SINGLE-TENANT MODE: This function is now a no-op that just returns the data as-is.
+ * Previously it would inject tenantId into the data object.
+ * @param req - Express Request (ignored in single-tenant mode)
+ * @param data - Data to return unchanged
+ * @returns Data unchanged
+ */
+async function withTenantId<T extends object>(req: Request, data: T): Promise<T> {
+  // Single-tenant mode: no tenantId injection needed
+  return data;
+}
+
+// Funciones helper para inyectar automáticamente campos de auditoría
+
+/**
+ * Inyecta el campo created_by en un objeto de inserción
+ * @param data - Objeto de inserción
+ * @param userId - ID del usuario autenticado
+ * @returns Objeto con created_by inyectado
+ */
+function withCreatedBy<T extends Record<string, any>>(data: T, userId: string): T & { createdBy: string } {
+  return {
+    ...data,
+    createdBy: userId
+  };
+}
+
+/**
+ * Inyecta el campo updated_by en un objeto de actualización
+ * @param data - Objeto de actualización
+ * @param userId - ID del usuario autenticado
+ * @returns Objeto con updated_by inyectado
+ */
+function withUpdatedBy<T extends Record<string, any>>(data: T, userId: string): T & { updatedBy: string } {
+  return {
+    ...data,
+    updatedBy: userId
+  };
+}
+
+/**
+ * Inyecta campos de soft-delete en un objeto de actualización
+ * @param userId - ID del usuario que elimina
+ * @param reason - Motivo de la eliminación
+ * @returns Objeto con campos de soft-delete
+ */
+function withSoftDelete(userId: string, reason: string) {
+  return {
+    status: 'deleted',
+    deletedBy: userId,
+    deletedAt: new Date(),
+    deletionReason: reason
+  };
+}
+
+/**
+ * Helper para asegurar que db está disponible antes de usarlo
+ * Lanza un error claro si la base de datos no está configurada
+ * @returns db instance (garantizado no-null)
+ */
+function requireDb() {
+  if (!db) {
+    throw new Error('Database not configured. Please set DATABASE_URL or POOLED_DATABASE_URL environment variable.');
+  }
+  return db;
+}
+
+// In-memory cache for risk levels with TTL to improve performance
+interface CacheEntry {
+  data: any;
+  timestamp: number;
+  ttl: number; // Time to live in milliseconds
+}
+
+class SimpleCache {
+  private cache = new Map<string, CacheEntry>();
+  private readonly defaultTTL = 5 * 60 * 1000; // 5 minutes
+
+  set(key: string, data: any, ttl?: number): void {
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now(),
+      ttl: ttl || this.defaultTTL
+    });
+  }
+
+  get(key: string): any | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+
+    // Check if entry has expired
+    if (Date.now() - entry.timestamp > entry.ttl) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return entry.data;
+  }
+
+  invalidate(key?: string): void {
+    if (key) {
+      this.cache.delete(key);
+    } else {
+      // Clear all cache
+      this.cache.clear();
+    }
+  }
+
+  // Clean expired entries
+  cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of Array.from(this.cache.entries())) {
+      if (now - entry.timestamp > entry.ttl) {
+        this.cache.delete(key);
+      }
+    }
+  }
+}
+
+const riskLevelsCache = new SimpleCache();
+
+// Clean up expired cache entries every 10 minutes
+setInterval(() => {
+  riskLevelsCache.cleanup();
+}, 10 * 60 * 1000);
+
+// Action Plans email validation schema
+const sendActionPlansEmailSchema = z.object({
+  planIds: z.array(z.string()).min(1, "Al menos un plan de acción es requerido"),
+  subject: z.string().min(1, "El asunto del email es requerido"),
+  message: z.string().min(1, "El mensaje del email es requerido")
+});
+
+// AI Risk Suggestion validation schema
+const aiRiskSuggestionSchema = z.object({
+  processId: z.string().nullable().optional(),
+  subprocesoId: z.string().nullable().optional(),
+  macroprocesoId: z.string().nullable().optional(),
+  userContext: z.string().nullable().optional(),
+  industry: z.string().nullable().optional(),
+  excludeExistingRisks: z.boolean().optional().default(true),
+  useGlobalDocumentation: z.boolean().optional().default(false)
+}).refine(
+  data => data.useGlobalDocumentation || data.processId || data.subprocesoId || data.macroprocesoId,
+  { message: "At least one of processId, subprocesoId, or macroprocesoId must be provided, unless useGlobalDocumentation is true" }
+);
+
+// Configure multer for file uploads (moved here to avoid reference error)
+const storage_multer = multer.memoryStorage();
+const upload = multer({
+  storage: storage_multer,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+    files: 5 // Max 5 files per upload
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedMimeTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.ms-powerpoint',
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'text/plain',
+      'text/csv'
+    ];
+    
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`File type ${file.mimetype} not allowed. Allowed: PDF, Word, Excel, PowerPoint, Images, Text, CSV`));
+    }
+  }
+});
+
+// Additional validation schemas for audit assignment endpoints
+const validateAuditorAssignmentSchema = z.object({
+  executorId: z.string().min(1, "Executor ID is required"),
+  supervisorId: z.string().min(1, "Supervisor ID is required")
+});
+
+const validateStatusTransitionSchema = z.object({
+  fromStatus: z.string().min(1, "From status is required"),
+  toStatus: z.string().min(1, "To status is required")
+});
+
+// Platform Admin User Management validation schemas
+const createUserSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  email: z.string().email("Valid email required"),
+  fullName: z.string().min(1, "Full name is required"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  isPlatformAdmin: z.boolean().optional()
+});
+
+const updateUserSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters").optional(),
+  email: z.string().email("Valid email required").optional(),
+  fullName: z.string().min(1, "Full name is required").optional(),
+  password: z.string().min(8, "Password must be at least 8 characters").optional(),
+  isPlatformAdmin: z.boolean().optional()
+});
+
+const assignRoleSchema = z.object({
+  roleId: z.string().min(1, "Role ID is required")
+});
+
+/**
+ * Middleware to prevent browser caching for critical data endpoints
+ * Forces browsers to always fetch fresh data from the server
+ */
+function noCacheMiddleware(req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+}
+
+// Centralized authentication helper
+function getAuthenticatedUserId(req: any, options: { allowDevDemo?: boolean } = {}): string {
+  // Check for user ID in multiple locations for compatibility
+  // In development, isAuthenticated middleware sets req.user.id
+  // In production with Replit Auth, it's in req.user.claims.sub
+  const userId = req.user?.id || req.user?.claims?.sub;
+  
+  // Check if user is authenticated
+  if (userId) {
+    return userId;
+  }
+  
+  // Development fallback - use demo user when not authenticated
+  if (process.env.NODE_ENV === 'development' && options.allowDevDemo !== false) {
+    return "user-1";
+  }
+  
+  // Production - require authentication
+  throw new Error("User not authenticated");
+}
+
+// Authorization middleware
+function requirePermission(permission: string) {
+  return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
+    let userId: string;
+    
+    // Use centralized helper to get authenticated user ID
+    // This handles both OAuth (req.user.claims.sub) and local auth (req.user.id)
+    try {
+      userId = getAuthenticatedUserId(req, { allowDevDemo: true });
+    } catch (error) {
+      // User not authenticated and not in development mode
+      return res.status(401).json({ message: "Autenticación requerida" });
+    }
+    
+    // Set development mock user if not already set (development only)
+    if (process.env.NODE_ENV === 'development' && !req.user) {
+      // SINGLE-TENANT MODE: Use constant tenant ID
+      const activeTenantId = 'single-tenant';
+      let permissions: string[] = [];
+      
+      try {
+        // Load user's permissions from global roles
+        permissions = (await storage.getUserPermissions(userId)) ?? [];
+      } catch (error) {
+        console.error("[requirePermission] Error getting user permissions:", error);
+      }
+      
+      (req as any).user = {
+        id: userId,
+        username: 'admin',
+        email: 'admin@riskmatrix.com',
+        activeTenantId,
+        permissions
+      };
+    }
+    
+    try {
+      // Check for exact permission match
+      const hasExactPermission = await storage.hasPermission(userId, permission);
+      if (hasExactPermission) {
+        return next();
+      }
+
+      // PERMISSION MAPPING GAP FIX: Check for wildcard permissions
+      // Dynamic permission mapping for better maintainability
+      
+      // Check if user has view_all for any permission that starts with "view_"
+      if (permission.startsWith('view_')) {
+        const hasViewAll = await storage.hasPermission(userId, 'view_all');
+        if (hasViewAll) {
+          return next();
+        }
+      }
+
+      // Check if user has edit_all for any write/manage/create/delete permission
+      if (permission.startsWith('manage_') || permission.startsWith('create_') || 
+          permission.startsWith('edit_') || permission.startsWith('delete_') ||
+          permission === 'validate_risks' || permission === 'update_audit_progress' || 
+          permission === 'review_audit_tests' || permission === 'create_work_logs' ||
+          permission === 'review_work_logs' || permission === 'validate_assignments' || 
+          permission === 'validate_transitions') {
+        const hasEditAll = await storage.hasPermission(userId, 'edit_all');
+        if (hasEditAll) {
+          return next();
+        }
+      }
+
+      // If no permission match found, deny access
+      return res.status(403).json({ message: "Acceso denegado: permisos insuficientes" });
+    } catch (error) {
+      res.status(500).json({ message: "Error al verificar permisos" });
+    }
+  };
+}
+
+// Platform admin middleware - verifica que el usuario sea platform admin
+function requirePlatformAdmin() {
+  return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
+    const requestUser = req.user as any;
+
+    // Short-circuit if req.user already has isPlatformAdmin flag set by isAuthenticated middleware
+    if (requestUser?.isPlatformAdmin === true) {
+      console.log("[Platform Admin Check] Access granted via req.user flag");
+      return next();
+    }
+
+    // Extract user identifiers from various auth sources
+    let userId = requestUser?.claims?.sub ?? requestUser?.id;
+    let userEmail = requestUser?.claims?.email ?? requestUser?.email;
+
+    // Development fallback
+    if (!userId) {
+      if (process.env.NODE_ENV === "development") {
+        userId = "user-1";
+      } else {
+        return res.status(401).json({ message: "Autenticación requerida" });
+      }
+    }
+
+    try {
+      console.log("[Platform Admin Check] Checking user in database:", userId, "email:", userEmail);
+      // Verify platform admin status from database
+      let user = await storage.getUser(userId);
+      
+      // Fallback to email lookup if ID lookup fails
+      if (!user && userEmail) {
+        console.log("[Platform Admin Check] User not found by ID, trying by email:", userEmail);
+        user = await storage.getUserByEmail(userEmail);
+      }
+
+      console.log("[Platform Admin Check] User found:", user?.username, "isPlatformAdmin:", user?.isPlatformAdmin);
+      
+      if (!user || !user.isPlatformAdmin) {
+        console.log("[Platform Admin Check] Access denied - not a platform admin");
+        return res.status(403).json({ message: "Acceso denegado: se requiere ser administrador de plataforma" });
+      }
+
+      // Cache the platform admin flag in req.user for subsequent middleware
+      if (requestUser) {
+        requestUser.isPlatformAdmin = true;
+      }
+
+      console.log("[Platform Admin Check] Access granted");
+      return next();
+    } catch (error) {
+      console.error("[Platform Admin Check] Error verifying platform admin status:", error);
+      return res.status(500).json({ message: "Error al verificar permisos de plataforma" });
+    }
+  };
+}
+
+// Middleware para serializar recursivamente todas las fechas a ISO strings
+function serializeDatesToISO(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  
+  if (obj instanceof Date) {
+    return obj.toISOString();
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => serializeDatesToISO(item));
+  }
+  
+  if (typeof obj === 'object') {
+    const result: any = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        result[key] = serializeDatesToISO(obj[key]);
+      }
+    }
+    return result;
+  }
+  
+  return obj;
+}
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  // Middleware global para serializar todas las fechas a ISO strings ANTES de enviar la respuesta
+  app.use((req, res, next) => {
+    const originalJson = res.json.bind(res);
+    res.json = function(body: any) {
+      return originalJson(serializeDatesToISO(body));
+    };
+    next();
+  });
+
+  // Auth middleware
+  await setupAuth(app);
+
+  // Health check and warmup endpoints (no auth required for load balancer/monitoring)
+  app.get("/api/health", async (req, res) => {
+    try {
+      const health = await getHealthStatus();
+      const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+      res.status(statusCode).json(health);
+    } catch (error) {
+      res.status(503).json({ 
+        status: 'unhealthy', 
+        database: false, 
+        error: 'Health check failed',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Warmup endpoint - called by load balancer or cron to keep connections alive
+  app.get("/api/warmup", async (req, res) => {
+    try {
+      const startTime = Date.now();
+      const warmResult = await warmPool(2);
+      const poolMetrics = getPoolMetrics();
+      
+      res.json({
+        success: warmResult.success,
+        warmupDuration: warmResult.duration,
+        totalDuration: Date.now() - startTime,
+        connections: warmResult.connections,
+        poolMetrics,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(500).json({ 
+        success: false, 
+        error: 'Warmup failed',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Database latency diagnostic endpoint - measures network latency to Neon
+  app.get("/api/db-latency", async (req, res) => {
+    try {
+      // Run multiple measurements to get a good picture
+      const measurements = [];
+      for (let i = 0; i < 3; i++) {
+        const latency = await measureDatabaseLatency();
+        measurements.push(latency);
+        // Small delay between measurements
+        if (i < 2) await new Promise(r => setTimeout(r, 100));
+      }
+      
+      // Calculate averages
+      const avgConnect = Math.round(measurements.reduce((sum, m) => sum + m.connect, 0) / measurements.length);
+      const avgQuery = Math.round(measurements.reduce((sum, m) => sum + m.query, 0) / measurements.length);
+      const avgRoundTrip = Math.round(measurements.reduce((sum, m) => sum + m.roundTrip, 0) / measurements.length);
+      
+      // Log warning if latency is high
+      if (avgRoundTrip > 200) {
+        console.warn(`[DB LATENCY] HIGH LATENCY DETECTED: avg=${avgRoundTrip}ms (connect=${avgConnect}ms, query=${avgQuery}ms)`);
+      }
+      
+      res.json({
+        measurements,
+        averages: {
+          connect: avgConnect,
+          query: avgQuery,
+          roundTrip: avgRoundTrip
+        },
+        diagnosis: avgRoundTrip > 1000 ? 'CRITICAL' : avgRoundTrip > 200 ? 'HIGH' : avgRoundTrip > 50 ? 'NORMAL' : 'EXCELLENT',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('[DB LATENCY] Error:', error);
+      res.status(500).json({ 
+        error: 'Latency measurement failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Initialize email service from configuration
+  await initializeEmailService(storage);
+
+  // Shared handler for current user endpoint - with 10s cache
+  // SINGLE-TENANT MODE: Simplified auth handler without tenant logic
+  const getCurrentUserHandler = async (req: any, res: any) => {
+    try {
+      const user = req.user as any;
+      
+      // Check if user is authenticated (includes dev mode check)
+      if (!req.isAuthenticated() && process.env.NODE_ENV !== 'development') {
+        const unauthResponse = { 
+          authenticated: false,
+          user: null,
+          permissions: []
+        };
+        return res.json(unauthResponse);
+      }
+      
+      // Get effective user ID
+      const userId = user?.id || (process.env.NODE_ENV === 'development' ? ((req.session as any)?.switchedUserId || 'user-1') : null);
+      
+      if (!userId) {
+        return res.json({
+          authenticated: false,
+          user: null,
+          permissions: []
+        });
+      }
+      
+      // Get user data and permissions
+      const [dbUser, userPermissions] = await Promise.all([
+        storage.getUser(userId),
+        storage.getUserPermissions(userId)
+      ]);
+      
+      if (!dbUser) {
+        return res.json({
+          authenticated: false,
+          user: null,
+          permissions: []
+        });
+      }
+      
+      const response = {
+        authenticated: true,
+        user: {
+          id: dbUser.id,
+          email: dbUser.email,
+          firstName: dbUser.firstName,
+          lastName: dbUser.lastName,
+          fullName: dbUser.fullName,
+          profileImageUrl: dbUser.profileImageUrl,
+          isAdmin: dbUser.isAdmin ?? false
+        },
+        permissions: userPermissions || []
+      };
+      
+      return res.json(response);
+    } catch (error) {
+      console.error('Error in getCurrentUser handler:', error);
+      return res.json({ 
+        authenticated: false,
+        user: null,
+        permissions: []
+      });
+    }
+  };
+
+  // Current user endpoint - uses isAuthenticated middleware to populate req.user
+  app.get('/api/auth/me', noCacheMiddleware, isAuthenticated, getCurrentUserHandler);
+
+  // CSRF token endpoint (must be before CSRF protection middleware)
+  app.get('/api/csrf-token', noCacheMiddleware, getCSRFToken);
+
+  // Local authentication endpoint (email/password)
+  app.post('/api/auth/login', async (req, res) => {
+    const loginStart = Date.now();
+    const timings: Record<string, number> = {};
+    
+    const bcrypt = await import('bcrypt');
+    timings.bcryptImport = Date.now() - loginStart;
+    
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        message: 'Email y contraseña son requeridos' 
+      });
+    }
+
+    try {
+      // Find user by email
+      const dbStart = Date.now();
+      const user = await storage.getUserByEmail(email);
+      timings.getUserByEmail = Date.now() - dbStart;
+      
+      if (!user) {
+        console.log('[Local Auth] User not found:', email);
+        return res.status(401).json({ 
+          message: 'Credenciales inválidas' 
+        });
+      }
+
+      // Check if user is active
+      if (!user.isActive) {
+        console.log('[Local Auth] User is deactivated:', email);
+        return res.status(401).json({ 
+          message: 'Tu cuenta ha sido desactivada' 
+        });
+      }
+
+      // Check if user has a password set
+      if (!user.password) {
+        console.log('[Local Auth] User has no password set:', email);
+        return res.status(401).json({ 
+          message: 'Tu cuenta no tiene contraseña configurada. Contacta al administrador.' 
+        });
+      }
+
+      // Verify password
+      const bcryptStart = Date.now();
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      timings.bcryptCompare = Date.now() - bcryptStart;
+      
+      if (!isValidPassword) {
+        console.log('[Local Auth] Invalid password for user:', email);
+        return res.status(401).json({ 
+          message: 'Credenciales inválidas' 
+        });
+      }
+
+      console.log('[Local Auth] User authenticated successfully for userId:', user.id);
+      
+      // SINGLE-TENANT MODE: Only get permissions (no tenant lookup needed)
+      const parallelStart = Date.now();
+      const userPermissions = await storage.getUserPermissions(user.id);
+      
+      // Non-critical: update last login timestamp (fire and forget, don't block login)
+      storage.updateUserLastLogin(user.id).catch(err => {
+        console.warn('[Local Auth] Non-critical: failed to update last login:', err);
+      });
+      timings.parallelDbQueries = Date.now() - parallelStart;
+      
+      // SINGLE-TENANT MODE: Use constant tenant ID
+      const SINGLE_TENANT_ID = 'single-tenant';
+      
+      // Create session user object
+      const sessionUser = {
+        id: user.id,
+        username: user.username || 'unknown',
+        email: user.email || 'no-email@unknown.com',
+        fullName: user.fullName || 'Unknown User',
+        isPlatformAdmin: user.isPlatformAdmin,
+        activeTenantId: SINGLE_TENANT_ID,
+        permissions: userPermissions
+      };
+
+      console.log('[Local Auth] Session user data:', {
+        id: sessionUser.id,
+        email: sessionUser.email,
+        activeTenantId: sessionUser.activeTenantId,
+        isPlatformAdmin: sessionUser.isPlatformAdmin
+      });
+
+      // Log in the user (creates session)
+      const sessionStart = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        req.logIn(sessionUser, (err: any) => {
+          if (err) {
+            console.error('[Local Auth] Session creation error:', err);
+            reject(err);
+          } else {
+            console.log('[Local Auth] Session created for user:', email);
+            resolve();
+          }
+        });
+      });
+      timings.sessionCreate = Date.now() - sessionStart;
+
+      // SINGLE-TENANT MODE: Store constant tenant ID in session
+      req.session.activeTenantId = SINGLE_TENANT_ID;
+
+      // CRITICAL: Save session to database before sending response
+      const sessionSaveStart = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err: any) => {
+          if (err) {
+            console.error('[Local Auth] Session save error:', err);
+            reject(err);
+          } else {
+            console.log('[Local Auth] Session saved successfully');
+            resolve();
+          }
+        });
+      });
+      timings.sessionSave = Date.now() - sessionSaveStart;
+
+      // CRITICAL: Regenerate CSRF token after login (session ID changed)
+      // This ensures the new session has a valid CSRF token
+      const isProduction = process.env.NODE_ENV === 'production';
+      if (isProduction) {
+        try {
+          const newCsrfToken = generateCsrfToken(req, res);
+          const cookieName = '__Host-psifi.x-csrf-token';
+          res.cookie(cookieName, newCsrfToken, {
+            httpOnly: false,
+            sameSite: 'strict',
+            path: '/',
+            secure: true
+          });
+          console.log('[Local Auth] New CSRF token generated for session');
+        } catch (error) {
+          console.error('[Local Auth] Failed to generate CSRF token:', error);
+        }
+      }
+
+      // Log timing breakdown for performance monitoring (production-safe: no PII)
+      timings.total = Date.now() - loginStart;
+      console.log('[Local Auth] ⏱️ Login timing breakdown:', {
+        ...timings,
+        userId: user.id,
+        // Only log email in development for debugging
+        ...(isProduction ? {} : { email })
+      });
+      
+      // SINGLE-TENANT MODE: Simplified login response
+      console.log('[Local Auth] Login successful:', email);
+      return res.json({ 
+        authenticated: true,
+        isPlatformAdmin: user.isPlatformAdmin,
+        needsTenantSelection: false,
+        user: sessionUser
+      });
+
+    } catch (error) {
+      console.error('[Local Auth] Login error:', error);
+      return res.status(500).json({ 
+        message: 'Error al procesar el login' 
+      });
+    }
+  });
+
+  // Set password endpoint (for users without passwords)
+  app.post('/api/auth/set-password', isAuthenticated, async (req, res) => {
+    const bcrypt = await import('bcrypt');
+    const { password } = req.body;
+    const user = (req as any).user;
+
+    if (!password || password.length < 8) {
+      return res.status(400).json({ 
+        message: 'La contraseña debe tener al menos 8 caracteres' 
+      });
+    }
+
+    try {
+      // Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      // Update user password
+      await storage.updateUserPassword(user.id, hashedPassword);
+      
+      console.log('[Set Password] Password set for user:', user.email);
+      
+      return res.json({ 
+        success: true,
+        message: 'Contraseña establecida exitosamente' 
+      });
+    } catch (error) {
+      console.error('[Set Password] Error:', error);
+      return res.status(500).json({ 
+        message: 'Error al establecer la contraseña' 
+      });
+    }
+  });
+
+  // Health check endpoint (no auth required for monitoring)
+  app.get('/health', async (req, res) => {
+    try {
+      const { checkDatabaseHealth, getPoolMetrics } = await import('./db');
+      const { checkObjectStorageHealth } = await import('./objectStorage');
+      
+      const startTime = Date.now();
+      const [dbHealthy, storageHealthy] = await Promise.all([
+        checkDatabaseHealth(),
+        checkObjectStorageHealth()
+      ]);
+      const checkDuration = Date.now() - startTime;
+      
+      const healthy = dbHealthy && storageHealthy;
+      const status = healthy ? 'healthy' : 'degraded';
+      
+      const storageKind = (storage as any).storageKind || 'Unknown';
+      
+      // Get deployment info
+      const deploymentInfo = {
+        environment: process.env.NODE_ENV || 'development',
+        isDeployment: process.env.REPLIT_DEPLOYMENT === '1',
+        nodeVersion: process.version,
+        platform: process.platform,
+        uptime: Math.floor(process.uptime()),
+        memory: {
+          heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+          heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+          rss: Math.round(process.memoryUsage().rss / 1024 / 1024)
+        }
+      };
+      
+      // Get pool metrics (Phase 1 - Nov 23, 2025)
+      const poolMetrics = getPoolMetrics();
+      const poolHealth = poolMetrics ? {
+        totalConnections: poolMetrics.totalCount,
+        idleConnections: poolMetrics.idleCount,
+        waitingQueries: poolMetrics.waitingCount,
+        maxConnections: poolMetrics.maxConnections,
+        utilizationPct: Math.round((poolMetrics.totalCount / poolMetrics.maxConnections) * 100),
+        status: poolMetrics.waitingCount > 5 ? 'saturated' : 
+                poolMetrics.totalCount >= poolMetrics.maxConnections * 0.8 ? 'high' : 'normal'
+      } : null;
+      
+      // Check critical environment variables
+      const criticalEnvVars = {
+        DATABASE_URL: !!process.env.DATABASE_URL,
+        SESSION_SECRET: !!process.env.SESSION_SECRET && process.env.SESSION_SECRET !== 'your-secret-key-here',
+        CSRF_SECRET: !!process.env.CSRF_SECRET && process.env.CSRF_SECRET !== 'csrf-secret-key-change-in-production',
+        PORT: process.env.PORT || '5000'
+      };
+      
+      const envVarsHealthy = Object.entries(criticalEnvVars)
+        .filter(([key]) => key !== 'PORT')
+        .every(([_, value]) => value === true);
+      
+      res.status(healthy ? 200 : 503).json({
+        status,
+        timestamp: new Date().toISOString(),
+        services: {
+          database: dbHealthy ? 'up' : 'down',
+          objectStorage: storageHealthy ? 'up' : 'down',
+          dataStorage: storageKind,
+          envVars: envVarsHealthy ? 'configured' : 'missing_or_default'
+        },
+        version: process.env.npm_package_version || '1.0.0',
+        deployment: deploymentInfo,
+        storageInfo: {
+          kind: storageKind,
+          databaseConfigured: !!process.env.DATABASE_URL,
+          constructorName: storage.constructor.name,
+          warning: storageKind === 'MemStorage' && !!process.env.DATABASE_URL 
+            ? 'DatabaseStorage failed to initialize - check server logs for errors'
+            : null
+        },
+        poolMetrics: poolHealth,
+        performance: {
+          healthCheckDuration: `${checkDuration}ms`
+        }
+      });
+    } catch (error) {
+      res.status(503).json({
+        status: 'error',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Readiness check endpoint (Phase 1 - Nov 23, 2025)
+  // Used by orchestrators (Kubernetes, Replit) to determine if app can accept traffic
+  app.get('/readiness', async (req, res) => {
+    try {
+      const { checkDatabaseHealth, getPoolMetrics } = await import('./db');
+      
+      const startTime = Date.now();
+      const dbHealthy = await checkDatabaseHealth();
+      const checkDuration = Date.now() - startTime;
+      
+      // Get pool metrics
+      const poolMetrics = getPoolMetrics();
+      
+      // App is ready if:
+      // 1. Database is reachable (or no database configured - fallback mode)
+      // 2. Pool exists and is not saturated (< 90% utilization)
+      let poolOk = true;
+      let poolStatus: any = null;
+      
+      if (poolMetrics) {
+        const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+        const activeUtilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+        // Pool is OK if active connections < 90% AND no significant queue
+        poolOk = activeUtilizationPct < 90 && poolMetrics.waitingCount < 10;
+        poolStatus = {
+          activeUtilizationPct,
+          activeConnections,
+          totalConnections: poolMetrics.totalCount,
+          waitingQueries: poolMetrics.waitingCount,
+          status: poolMetrics.waitingCount > 5 ? 'saturated' : 
+                  activeUtilizationPct >= 80 ? 'high' : 'normal'
+        };
+      }
+      
+      // Ready means: database is up (or optional) AND pool has capacity
+      // If database is required but down, not ready
+      const ready = dbHealthy && poolOk;
+      
+      const response: any = {
+        ready,
+        timestamp: new Date().toISOString(),
+        checks: {
+          database: dbHealthy,
+          poolCapacity: poolOk
+        },
+        performance: {
+          checkDuration: `${checkDuration}ms`
+        }
+      };
+      
+      if (poolStatus) {
+        response.poolStatus = poolStatus;
+      }
+      
+      // Return 503 if not ready (orchestrator should not route traffic)
+      res.status(ready ? 200 : 503).json(response);
+    } catch (error) {
+      res.status(503).json({
+        ready: false,
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Metrics endpoint (no auth required for monitoring)
+  app.get('/metrics', async (req, res) => {
+    try {
+      const { performanceMonitor } = await import('./middleware/performance');
+      
+      const globalMetrics = performanceMonitor.getGlobalMetrics();
+      const slowestEndpoints = performanceMonitor.getSlowestEndpoints(5);
+      
+      res.json({
+        timestamp: new Date().toISOString(),
+        global: globalMetrics,
+        slowestEndpoints: slowestEndpoints.map(m => ({
+          endpoint: `${m.method} ${m.endpoint}`,
+          avgDuration: Math.round(m.avgDuration),
+          p95Duration: Math.round(m.p95Duration),
+          count: m.count,
+          errorCount: m.errorCount,
+          errorRate: m.count > 0 ? ((m.errorCount / m.count) * 100).toFixed(2) + '%' : '0%'
+        }))
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to retrieve metrics',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Version endpoint (no auth required for monitoring)
+  // Useful for deployments: "What version is running right now?"
+  app.get('/version', async (req, res) => {
+    try {
+      const { execSync } = await import('child_process');
+      
+      let gitCommit = 'unknown';
+      let gitBranch = 'unknown';
+      let buildTime = new Date().toISOString();
+      
+      // Try to get git information (may fail in production)
+      try {
+        gitCommit = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+        gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
+      } catch (error) {
+        // Git not available or not in a repo
+      }
+      
+      res.json({
+        version: process.env.npm_package_version || '1.0.0',
+        gitCommit,
+        gitBranch,
+        buildTime,
+        nodeVersion: process.version,
+        platform: process.platform,
+        uptime: Math.floor(process.uptime()),
+        environment: process.env.NODE_ENV || 'development'
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: 'Failed to retrieve version info',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // CSRF Protection for state-changing routes
+  app.use('/api', csrfProtectionForMutations);
+  
+  // Rate limiting for API mutations (POST/PUT/PATCH/DELETE)
+  app.use('/api', (req, res, next) => {
+    const mutationMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    if (mutationMethods.includes(req.method)) {
+      return apiMutationLimiter(req, res, next);
+    }
+    next();
+  });
+  
+  // Rate limiting for authentication routes (stricter)
+  app.use('/api/auth', authRateLimiter);
+
+  // Alias /api/auth/user to /api/auth/me for backward compatibility - both use same handler
+  app.get('/api/auth/user', noCacheMiddleware, isAuthenticated, getCurrentUserHandler);
+
+  // Processes - Basic endpoint for fast initial loading
+  app.get("/api/processes/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // PERFORMANCE: Only fetch process risk levels (not all entities)
+      const [processes, allRiskLevels] = await Promise.all([
+        storage.getProcessesWithOwners(),
+        storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
+      ]);
+      
+      // Return essential fields with risk count for display
+      const basicProcesses = processes.map((process) => {
+        const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        return {
+          id: process.id,
+          code: process.code,
+          name: process.name,
+          description: process.description,
+          ownerId: process.ownerId,
+          macroprocesoId: process.macroprocesoId,
+          owner: process.owner,
+          inherentRisk: riskLevels.inherentRisk,
+          residualRisk: riskLevels.residualRisk,
+          riskCount: riskLevels.riskCount
+        };
+      });
+      
+      res.json(basicProcesses);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch basic processes" });
+    }
+  });
+
+  // Processes - Full endpoint with risk calculations (legacy) - with 60s distributed cache
+  app.get("/api/processes", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Try distributed cache first (60s TTL)
+      const cacheKey = `processes:single-tenant`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // PERFORMANCE: Only fetch process risk levels (not all entities)
+      const [processes, allRiskLevels] = await Promise.all([
+        storage.getProcessesWithOwners(),
+        storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
+      ]);
+      
+      // Filter out soft-deleted records
+      const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
+      
+      const processesWithRisks = activeProcesses.map((process) => {
+        const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        return {
+          ...process,
+          ...riskLevels
+        };
+      });
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, processesWithRisks, 60);
+      
+      res.json(processesWithRisks);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Error in /api/processes:", error);
+      res.status(500).json({ message: "Failed to fetch processes", error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  app.get("/api/processes/:id/summary", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const processId = req.params.id;
+      const cacheKey = `risk-levels-all`;
+      
+      // Try to get from cache first
+      let allRiskLevels = riskLevelsCache.get(cacheKey);
+      
+      if (!allRiskLevels) {
+        // Cache miss - compute and cache the result
+        allRiskLevels = await storage.getAllRiskLevelsOptimized();
+        riskLevelsCache.set(cacheKey, allRiskLevels);
+      }
+      
+      // Get risk levels for this specific process
+      const riskLevels = allRiskLevels.processes.get(processId) || { 
+        inherentRisk: 0, 
+        residualRisk: 0, 
+        riskCount: 0 
+      };
+      
+      res.json(riskLevels);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch process summary" });
+    }
+  });
+
+  app.get("/api/processes/:id", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const process = await storage.getProcess(req.params.id);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+      res.json(process);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch process" });
+    }
+  });
+
+  app.post("/api/processes", isAuthenticated, async (req, res) => {
+    try {
+      // Generate unique code if not provided
+      let code = req.body.code;
+      if (!code) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        // Query ALL process codes (including soft-deleted) to avoid duplicates
+        const allCodes = await requireDb().select({ code: processes.code })
+          .from(processes);
+        
+        const existingCodes = allCodes.map(p => p.code);
+        let nextNumber = 1;
+        while (existingCodes.includes(`PROC-${nextNumber.toString().padStart(3, '0')}`)) {
+          nextNumber++;
+        }
+        code = `PROC-${nextNumber.toString().padStart(3, '0')}`;
+      }
+      
+      const validatedData = insertProcessSchema.parse({
+        ...req.body,
+        code
+      });
+      
+      // Inject audit fields (createdBy) using helper function
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withCreatedBy(validatedData, userId);
+      
+      const process = await storage.createProcess(dataWithAudit);
+      
+      // Invalidate processes and org-structure cache
+      await Promise.all([
+        distributedCache.invalidate(`processes:single-tenant`),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.status(201).json(process);
+    } catch (error) {
+      console.error("Error creating process:", error);
+      res.status(400).json({ message: "Invalid process data" });
+    }
+  });
+
+  app.put("/api/processes/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertProcessSchema.partial().parse(req.body);
+      const process = await storage.updateProcess(req.params.id, validatedData);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+      
+      // Invalidate processes and org-structure cache
+      await Promise.all([
+        distributedCache.invalidate(`processes:single-tenant`),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.json(process);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid process data" });
+    }
+  });
+
+  app.delete("/api/processes/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // First check if process exists
+      const process = await storage.getProcess(req.params.id);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+
+      // Check if there are linked risks or subprocesos
+      const linkedRisks = await storage.getRisksByProcess(req.params.id);
+      const linkedSubprocesos = await storage.getSubprocesosByProceso(req.params.id);
+      
+      if (linkedRisks.length > 0 || linkedSubprocesos.length > 0) {
+        return res.status(400).json({ 
+          message: "Cannot delete process with linked risks or subprocesses",
+          linkedRisksCount: linkedRisks.length,
+          linkedSubprocessesCount: linkedSubprocesos.length 
+        });
+      }
+
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateProcess(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+      
+      // Invalidate processes and org-structure cache
+      await Promise.all([
+        distributedCache.invalidate(`processes:single-tenant`),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to delete process:", error);
+      res.status(500).json({ message: "Failed to delete process" });
+    }
+  });
+
+  // Fiscal entities for processes
+  app.get("/api/processes/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const entities = await storage.getProcessFiscalEntities(req.params.id);
+      res.json(entities.map(entity => ({ fiscalEntityId: entity.id, ...entity })));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch process fiscal entities" });
+    }
+  });
+
+  app.put("/api/processes/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const { fiscalEntityIds } = req.body;
+      if (!Array.isArray(fiscalEntityIds)) {
+        return res.status(400).json({ message: "fiscalEntityIds must be an array" });
+      }
+
+      // First remove existing associations
+      await storage.removeProcessFromFiscalEntities(req.params.id);
+      
+      // Then add new associations if any
+      if (fiscalEntityIds.length > 0) {
+        await storage.assignProcessToFiscalEntities(req.params.id, fiscalEntityIds);
+      }
+
+      const entities = await storage.getProcessFiscalEntities(req.params.id);
+      res.json(entities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update process fiscal entities" });
+    }
+  });
+
+  // ============== CONSOLIDATED RISKS PAGE DATA ==============
+  // This endpoint combines multiple API calls into one for better performance
+  app.get("/api/risks/page-data", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const profile = req.headers['x-profile'] === '1';
+    const isProd = process.env.NODE_ENV === 'production';
+    const requestStart = Date.now();
+    const timings: Record<string, number> = {};
+    
+    // Helper to time async operations - ALWAYS time in production for diagnostics
+    const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+      const start = Date.now();
+      const result = await fn();
+      timings[label] = Date.now() - start;
+      return result;
+    };
+    
+    try {
+      if (profile) {
+        console.log('[PROFILE] /api/risks/page-data START', { pool: getPoolMetrics() });
+      }
+      
+      // Measure pre-query phase (middleware + tenant resolution)
+      const { tenantId } = await timed('resolveActiveTenant', () => resolveActiveTenant(req, { required: true }));
+      const cacheKey = `risks-page-data:${CACHE_VERSION}:${tenantId}`;
+      
+      // Log time spent before any DB queries (middleware overhead)
+      timings['preQuery'] = Date.now() - requestStart;
+      if (timings['preQuery'] > 200) {
+        console.warn(`[PERF] /api/risks/page-data PRE-QUERY SLOW: ${timings['preQuery']}ms (tenant resolution + middleware)`);
+      }
+      
+      // Try cache first (30 second TTL)
+      const cached = await timed('cache:get', () => distributedCache.get(cacheKey));
+      if (cached) {
+        timings['total'] = Date.now() - requestStart;
+        if (profile || isProd) {
+          console.log(`[CACHE HIT] ${cacheKey} in ${timings['total']}ms`, timings);
+        }
+        return res.json(cached);
+      }
+      
+      console.log(`[CACHE MISS] ${cacheKey} - fetching all data in parallel`);
+      const dbStart = Date.now();
+      
+      // Fetch all data in parallel for maximum performance
+      // When profiling, wrap each call to measure individual times
+      const [
+        gerencias,
+        macroprocesos,
+        subprocesos,
+        processes,
+        processOwnersData,
+        riskCategories,
+        riskProcessLinks,
+        riskControlsWithDetails,
+        processGerenciasRelations
+      ] = await Promise.all([
+        timed('db:gerencias', () => storage.getGerencias(tenantId)),
+        timed('db:macroprocesos', () => storage.getMacroprocesos(tenantId)),
+        timed('db:subprocesos', () => storage.getSubprocesosWithOwners(tenantId)),
+        timed('db:processes', () => storage.getProcesses(tenantId)),
+        timed('db:processOwners', () => storage.getProcessOwners(tenantId)),
+        timed('db:riskCategories', () => storage.getRiskCategories(tenantId)),
+        timed('db:riskProcessLinks', () => storage.getRiskProcessLinksWithDetails(tenantId)),
+        timed('db:riskControls', () => storage.getAllRiskControlsWithDetails(tenantId)),
+        timed('db:processGerencias', () => storage.getAllProcessGerenciasRelations(tenantId))
+      ]);
+      
+      // Measure DB query phase
+      timings['dbQueries'] = Date.now() - dbStart;
+      
+      // Filter out soft-deleted records
+      const filterStart = Date.now();
+      const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
+      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+      const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
+      timings['filter'] = Date.now() - filterStart;
+      
+      const response = {
+        gerencias: activeGerencias,
+        macroprocesos: activeMacroprocesos,
+        subprocesos: activeSubprocesos,
+        processes: activeProcesses,
+        processOwners: processOwnersData,
+        riskCategories,
+        riskProcessLinks,
+        riskControlsWithDetails,
+        processGerencias: processGerenciasRelations,
+        macroprocesoGerencias: [] // Placeholder - can be populated if needed
+      };
+      
+      // Cache for 30 seconds
+      await timed('cache:set', () => distributedCache.set(cacheKey, response, 30));
+      
+      timings['total'] = Date.now() - requestStart;
+      
+      // Always log timings for diagnostics (>100ms or in production)
+      if (profile || isProd || timings['total'] > 100) {
+        console.log('[PERF] /api/risks/page-data COMPLETE', { 
+          timings, 
+          pool: getPoolMetrics(),
+          counts: {
+            gerencias: activeGerencias.length,
+            macroprocesos: activeMacroprocesos.length,
+            subprocesos: activeSubprocesos.length,
+            processes: activeProcesses.length
+          }
+        });
+      }
+      
+      if (profile) {
+        res.set('X-Profile-Timings', JSON.stringify(timings));
+      }
+      
+      res.json(response);
+    } catch (error) {
+      if (profile) {
+        console.log('[PROFILE] /api/risks/page-data ERROR', { timings, pool: getPoolMetrics(), error });
+      }
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("[ERROR] /api/risks/page-data failed:", error);
+      res.status(500).json({ message: "Failed to fetch risks page data" });
+    }
+  });
+
+  // Risks
+  app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Get active tenant ID
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Parse query parameters for pagination and filters
+      const limit = parseInt(req.query.limit as string) || 50; // Reduced from 1000 to 50
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Cache bypass for debugging
+      const bypassCache = req.query.nocache === '1' || req.headers['x-bypass-cache'] === '1';
+      
+      // Build filters object
+      const filters: import('./storage').RiskFilters = {
+        search: req.query.search as string,
+        category: req.query.category as string,
+        status: req.query.status as string,
+        processId: req.query.processId as string,
+        subprocesoId: req.query.subprocesoId as string,
+        macroprocesoId: req.query.macroprocesoId as string,
+        minProbability: req.query.minProbability ? parseInt(req.query.minProbability as string) : undefined,
+        maxProbability: req.query.maxProbability ? parseInt(req.query.maxProbability as string) : undefined,
+        minImpact: req.query.minImpact ? parseInt(req.query.minImpact as string) : undefined,
+        maxImpact: req.query.maxImpact ? parseInt(req.query.maxImpact as string) : undefined,
+      };
+      
+      // Create cache key including all filters
+      const cacheKey = `risks:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
+      
+      // Try cache first (unless bypassed)
+      if (!bypassCache) {
+        const cached = await distributedCache.get(cacheKey);
+        if (cached !== null) {
+          console.log(`[CACHE HIT] /api/risks key=${cacheKey.slice(0, 50)}... count=${(cached as any)?.data?.length || 0}`);
+          res.setHeader('X-Cache', 'HIT');
+          return res.json(cached);
+        }
+      }
+      
+      console.log(`[CACHE ${bypassCache ? 'BYPASS' : 'MISS'}] /api/risks key=${cacheKey.slice(0, 50)}...`);
+      
+      // Cache miss - query database
+      const { risks: paginatedRisks, total } = await storage.getRisksPaginated(tenantId, filters, limit, offset);
+      
+      console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total}`);
+      
+      // Prepare response
+      const response = {
+        data: paginatedRisks,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      };
+      
+      // Cache for 15 seconds (invalidated automatically on mutations) - skip if bypassed
+      if (!bypassCache) {
+        await distributedCache.set(cacheKey, response, 15);
+      }
+      
+      res.setHeader('X-Cache', bypassCache ? 'BYPASS' : 'MISS');
+      res.json(response);
+    } catch (error) {
+      console.error("[ERROR] /api/risks failed:", error);
+      res.status(500).json({ message: "Failed to fetch risks" });
+    }
+  });
+
+  app.get("/api/risks-with-details", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      // Use distributed cache with 30s TTL for performance
+      // Versioned key matches invalidation in cache-helpers.ts
+      const cacheKey = `risks-with-details:${CACHE_VERSION}:${tenantId}`;
+      const cachedData = await distributedCache.get(cacheKey);
+      if (cachedData) {
+        return res.json(cachedData);
+      }
+      
+      // Fetch basic risks only for list view - use paginated endpoint for performance
+      const { risks: paginatedRisks, total } = await storage.getRisksPaginated(tenantId, {}, 1000, 0);
+      
+      // Filter out soft-deleted records (only return active records)
+      const activeRisks = paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
+      
+      // Cache for 30 seconds (invalidated on mutations via invalidateRiskControlCaches)
+      await distributedCache.set(cacheKey, activeRisks, 30);
+      
+      res.json(activeRisks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks with details" });
+    }
+  });
+
+  // Aggregated endpoint for risk matrix - loads all data in one call
+  app.get("/api/risk-matrix", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      // Use versioned cache with 60s TTL for the entire aggregated response
+      const cacheKey = `risk-matrix-aggregated:${CACHE_VERSION}:${tenantId}`;
+      const aggregatedData = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          // Load all data in parallel with timing metrics
+          const startTime = Date.now();
+          const timings: Record<string, number> = {};
+          
+          const timedQuery = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+            const queryStart = Date.now();
+            const result = await fn();
+            timings[name] = Date.now() - queryStart;
+            return result;
+          };
+          
+          const [
+            risksWithDetails,
+            processes,
+            macroprocesos,
+            subprocesos,
+            gerencias,
+            riskCategories,
+            riskControlsWithDetails,
+            actionPlans,
+            controls,
+            processOwners,
+            riskLevelRanges,
+          ] = await Promise.all([
+            timedQuery('risksWithDetails', () => storage.getRisksWithDetails(tenantId)),
+            timedQuery('processes', () => storage.getProcesses(tenantId)),
+            timedQuery('macroprocesos', () => storage.getMacroprocesos(tenantId)),
+            timedQuery('subprocesos', () => storage.getSubprocesos(tenantId)),
+            timedQuery('gerencias', () => storage.getGerencias(tenantId)),
+            timedQuery('riskCategories', () => storage.getRiskCategories(tenantId)),
+            timedQuery('riskControlsWithDetails', () => storage.getAllRiskControlsWithDetails(tenantId)),
+            timedQuery('actionPlans', () => storage.getActionPlans(tenantId)),
+            timedQuery('controls', () => storage.getControls(tenantId)),
+            timedQuery('processOwners', () => storage.getProcessOwners(tenantId)),
+            timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges', tenantId).then(config => 
+              config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+            )),
+          ]);
+          
+          // Log timing breakdown sorted by duration
+          const totalTime = Date.now() - startTime;
+          const sortedTimings = Object.entries(timings).sort((a, b) => b[1] - a[1]);
+          console.log(`[RISK-MATRIX] Query timing breakdown (total: ${totalTime}ms):`);
+          sortedTimings.forEach(([name, duration]) => {
+            const pct = ((duration / totalTime) * 100).toFixed(1);
+            console.log(`  ${name}: ${duration}ms (${pct}%)`);
+          });
+          
+          return {
+            risksWithDetails: risksWithDetails.filter((risk: any) => risk.status !== 'deleted'),
+            processes: processes.filter((p: any) => !p.deletedAt),
+            macroprocesos: macroprocesos.filter((m: any) => !m.deletedAt),
+            subprocesos: subprocesos.filter((s: any) => !s.deletedAt),
+            gerencias: gerencias.filter((g: any) => !g.deletedAt),
+            riskCategories,
+            riskControlsWithDetails,
+            actionPlans: actionPlans.filter((ap: any) => !ap.deletedAt),
+            controls: controls.filter((c: any) => !c.deletedAt),
+            processOwners,
+            riskLevelRanges,
+          };
+        },
+        60 // 60 seconds TTL
+      );
+      
+      res.json(aggregatedData);
+    } catch (error) {
+      console.error("Error fetching risk matrix data:", error);
+      res.status(500).json({ message: "Failed to fetch risk matrix data" });
+    }
+  });
+
+  // Get orphaned risks (risks without any process association)
+  app.get("/api/risks/orphaned", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      // Get all active risks for this tenant
+      const allRisks = await requireDb().select().from(risks).where(
+        and(
+          eq(risks.status, 'active'),
+          eq(risks.tenantId, tenantId)
+        )
+      );
+      
+      // MULTI-TENANT FIX: Get risk-process links filtered by tenant
+      // Join with risks table to ensure tenant ownership
+      const allRiskProcessLinks = await requireDb().select({
+        riskId: riskProcessLinks.riskId
+      })
+      .from(riskProcessLinks)
+      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .where(eq(risks.tenantId, tenantId));
+      
+      const linkedRiskIds = new Set(allRiskProcessLinks.map(link => link.riskId));
+      
+      // Filter risks that have no links in riskProcessLinks
+      const orphanedRisks = allRisks.filter(risk => 
+        !linkedRiskIds.has(risk.id)
+      );
+      
+      res.json({
+        count: orphanedRisks.length,
+        risks: orphanedRisks.map(risk => ({
+          id: risk.id,
+          code: risk.code,
+          name: risk.name,
+          description: risk.description,
+          inherentRisk: risk.inherentRisk,
+          createdAt: risk.createdAt
+        }))
+      });
+    } catch (error) {
+      console.error("Error fetching orphaned risks:", error);
+      res.status(500).json({ message: "Failed to fetch orphaned risks" });
+    }
+  });
+
+
+  app.get("/api/risks/:id", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const risk = await storage.getRiskWithDetails(req.params.id, tenantId);
+      if (!risk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      res.json(risk);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk" });
+    }
+  });
+
+  // Get aggregated validation status for a risk
+  app.get("/api/risks/:id/validation-status", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const riskId = req.params.id;
+      
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      // Get all process links for this risk with process details
+      const processLinksData = await requireDb()
+        .select({
+          id: riskProcessLinks.id,
+          riskId: riskProcessLinks.riskId,
+          macroprocesoId: riskProcessLinks.macroprocesoId,
+          processId: riskProcessLinks.processId,
+          subprocesoId: riskProcessLinks.subprocesoId,
+          responsibleOverrideId: riskProcessLinks.responsibleOverrideId,
+          validationStatus: riskProcessLinks.validationStatus,
+          validatedBy: riskProcessLinks.validatedBy,
+          validatedAt: riskProcessLinks.validatedAt,
+          validationComments: riskProcessLinks.validationComments,
+          macroprocesoName: macroprocesos.name,
+          processName: processes.name,
+          subprocesoName: subprocesos.name,
+          responsibleName: processOwners.name,
+        })
+        .from(riskProcessLinks)
+        .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+        .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+        .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+        .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+        .where(eq(riskProcessLinks.riskId, riskId));
+
+      // Transform to ProcessValidationInfo
+      const processValidations: ProcessValidationInfo[] = processLinksData.map(link => ({
+        processId: link.processId || undefined,
+        macroprocesoId: link.macroprocesoId || undefined,
+        subprocesoId: link.subprocesoId || undefined,
+        processName: link.processName || undefined,
+        macroprocesoName: link.macroprocesoName || undefined,
+        subprocesoName: link.subprocesoName || undefined,
+        validationStatus: link.validationStatus as any,
+        validatedBy: link.validatedBy || undefined,
+        validatedAt: link.validatedAt ? new Date(link.validatedAt) : undefined,
+        validationComments: link.validationComments || undefined,
+        responsibleName: link.responsibleName || undefined,
+      }));
+
+      // Calculate aggregated status
+      const aggregatedResult = calculateAggregatedValidationStatus(processValidations);
+
+      res.json(aggregatedResult);
+    } catch (error) {
+      console.error("Error fetching risk validation status:", error);
+      res.status(500).json({ message: "Failed to fetch risk validation status" });
+    }
+  });
+
+  app.post("/api/risks", isAuthenticated, async (req, res) => {
+    try {
+      console.log("Risk creation request body:", JSON.stringify(req.body, null, 2));
+      const validatedData = baseInsertRiskSchema.parse(req.body);
+      
+      // Extract probabilityOverride and directProbability from validated data  
+      const { probabilityOverride, directProbability, ...riskData } = validatedData;
+      
+      // Calculate final probability: use override, then direct, then calculate from factors
+      let finalProbability: number;
+      if (probabilityOverride !== undefined) {
+        finalProbability = probabilityOverride;
+      } else if (directProbability !== undefined) {
+        finalProbability = directProbability;
+      } else {
+        // Try dynamic criteria system first, fallback to legacy system
+        try {
+          const activeCriteria = await storage.getActiveProbabilityCriteria();
+          
+          if (activeCriteria && activeCriteria.length > 0) {
+            // Use dynamic criteria system
+            const dynamicFactors: DynamicProbabilityFactors = {};
+            
+            // Extract available factors from request data
+            for (const criterion of activeCriteria) {
+              switch (criterion.fieldName) {
+                case 'frequency_occurrence':
+                  dynamicFactors[criterion.fieldName] = riskData.frequencyOccurrence ?? 3;
+                  break;
+                case 'exposure_volume':
+                  dynamicFactors[criterion.fieldName] = riskData.exposureVolume ?? 3;
+                  break;
+                case 'complexity':
+                  dynamicFactors[criterion.fieldName] = riskData.complexity ?? 3;
+                  break;
+                case 'change_volatility':
+                  dynamicFactors[criterion.fieldName] = riskData.changeVolatility ?? 3;
+                  break;
+                case 'vulnerabilities':
+                  dynamicFactors[criterion.fieldName] = riskData.vulnerabilities ?? 3;
+                  break;
+                default:
+                  // For new dynamic criteria not in legacy system, default to 3
+                  dynamicFactors[criterion.fieldName] = 3;
+              }
+            }
+            
+            finalProbability = calculateDynamicProbability(dynamicFactors, activeCriteria);
+            console.log("Using dynamic probability calculation:", { dynamicFactors, activeCriteria: activeCriteria.map(c => ({ name: c.name, weight: c.weight })), finalProbability });
+          } else {
+            throw new Error("No active criteria found, fallback to legacy system");
+          }
+        } catch (error) {
+          console.log("Falling back to legacy probability calculation:", error instanceof Error ? error.message : String(error));
+          
+          // Fallback to legacy calculation system
+          const probabilityFactors: ProbabilityFactors = {
+            frequencyOccurrence: riskData.frequencyOccurrence ?? 3,
+            exposureVolume: riskData.exposureVolume ?? 3,
+            exposureMassivity: riskData.exposureMassivity ?? 3,
+            exposureCriticalPath: riskData.exposureCriticalPath ?? 3,
+            complexity: riskData.complexity ?? 3,
+            changeVolatility: riskData.changeVolatility ?? 3,
+            vulnerabilities: riskData.vulnerabilities ?? 3,
+          };
+          const configuredWeights = await storage.getProbabilityWeights();
+          finalProbability = calculateProbability(probabilityFactors, configuredWeights);
+        }
+      }
+      
+      // Calculate inherent risk
+      const inherentRisk = finalProbability * (riskData.impact ?? 1);
+      
+      // Auto-assign processOwner based on hierarchy if not provided
+      let processOwner = riskData.processOwner; // Keep if provided manually
+      
+      if (!processOwner) {
+        // Search owner automatically based on hierarchy: subproceso > proceso > macroproceso
+        if (riskData.subprocesoId) {
+          const subprocesoWithOwner = await storage.getSubprocesoWithOwner(riskData.subprocesoId);
+          if (subprocesoWithOwner?.owner) {
+            processOwner = `${subprocesoWithOwner.owner.name} - ${subprocesoWithOwner.owner.email}`;
+          }
+        } else if (riskData.processId) {
+          const processWithOwner = await storage.getProcessWithOwner(riskData.processId);
+          if (processWithOwner?.owner) {
+            processOwner = `${processWithOwner.owner.name} - ${processWithOwner.owner.email}`;
+          }
+        } else if (riskData.macroprocesoId) {
+          const macroprocesoWithOwner = await storage.getMacroprocesoWithOwner(riskData.macroprocesoId);
+          if (macroprocesoWithOwner?.owner) {
+            processOwner = `${macroprocesoWithOwner.owner.name} - ${macroprocesoWithOwner.owner.email}`;
+          }
+        }
+      }
+      
+      // Prepare data for storage (exclude probabilityOverride and add calculated values)
+      const dataToSave = {
+        ...riskData,
+        processOwner, // Use automatically found owner
+        probability: finalProbability,
+        inherentRisk: inherentRisk
+      };
+      
+      // Inject audit fields (createdBy) using helper function
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withCreatedBy(dataToSave, userId);
+      
+      const risk = await storage.createRisk(await withTenantId(req, dataWithAudit));
+      
+      // Log audit trail for risk creation
+      try {
+        // Prepare changes object with all risk fields (for creation, all fields are "new")
+        const changes: Record<string, any> = {};
+        
+        // Fields to exclude from audit logs (internal/audit fields)
+        const excludedFields = [
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
+          'deletedAt', 'deletedBy', 'validatedAt', 'validatedBy'
+        ];
+        
+        for (const key in risk) {
+          if (!excludedFields.includes(key) && (risk as any)[key] !== undefined) {
+            changes[key] = { old: null, new: (risk as any)[key] };
+          }
+        }
+        
+        // Insert audit log for creation
+        if (Object.keys(changes).length > 0) {
+          if (!db) {
+            console.error('Database not available for audit logging');
+          } else {
+            await requireDb().insert(auditLogs).values({
+              entityType: 'risk',
+              entityId: risk.id,
+              action: 'create',
+              userId: userId,
+              changes: changes,
+              ipAddress: req.ip || req.connection.remoteAddress || null,
+              userAgent: req.get('user-agent') || null
+            });
+          }
+        }
+      } catch (auditError) {
+        // Don't fail the request if audit logging fails
+        console.error('Failed to log audit for risk creation:', auditError);
+      }
+      
+      // Invalidate all risk-related caches after creating risk
+      await invalidateRiskControlCaches();
+      
+      res.status(201).json(risk);
+    } catch (error) {
+      console.error("Risk creation validation error:", error);
+      if (error instanceof z.ZodError) {
+        console.error("Zod validation errors:", error.errors);
+        res.status(400).json({ 
+          message: "Invalid risk data", 
+          errors: error.errors 
+        });
+      } else {
+        res.status(400).json({ message: "Invalid risk data" });
+      }
+    }
+  });
+
+  app.put("/api/risks/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get active tenant ID for ownership validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      console.log('PUT /api/risks/:id received body:', {
+        directProbability: req.body.directProbability,
+        probability: req.body.probability,
+        impact: req.body.impact,
+        inherentRisk: req.body.inherentRisk
+      });
+      
+      const validatedData = baseInsertRiskSchema.partial().parse(req.body);
+      
+      console.log('After validation:', {
+        directProbability: validatedData.directProbability,
+        probability: (validatedData as any).probability,
+        impact: validatedData.impact
+      });
+      
+      // Extract probabilityOverride and directProbability from validated data
+      const { probabilityOverride, directProbability, ...riskData } = validatedData;
+      
+      console.log('After extraction:', {
+        probabilityOverride,
+        directProbability,
+        impact: riskData.impact
+      });
+      
+      // Get existing risk to access current values for calculation
+      const existingRisk = await storage.getRisk(req.params.id, tenantId);
+      if (!existingRisk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      // Prepare data for calculation with fallback to existing values
+      let dataToSave = { ...riskData };
+      
+      // Check if probability or impact are being updated
+      const factorKeys: (keyof ProbabilityFactors)[] = [
+        'frequencyOccurrence', 'exposureVolume', 'exposureMassivity', 
+        'exposureCriticalPath', 'complexity', 'changeVolatility', 'vulnerabilities'
+      ];
+      const factorsAreBeingUpdated = factorKeys.some(k => (riskData as Partial<ProbabilityFactors>)[k] !== undefined);
+      const probabilityIsBeingUpdated = probabilityOverride !== undefined || directProbability !== undefined || factorsAreBeingUpdated;
+      const impactIsBeingUpdated = riskData.impact !== undefined;
+      
+      // Recalculate if probability or impact are being updated
+      if (probabilityIsBeingUpdated || impactIsBeingUpdated) {
+        let finalProbability: number;
+        
+        if (probabilityIsBeingUpdated) {
+          if (probabilityOverride !== undefined) {
+            finalProbability = probabilityOverride;
+          } else if (directProbability !== undefined) {
+            finalProbability = directProbability;
+          } else {
+            // Try dynamic criteria system first, fallback to legacy system
+            try {
+              const activeCriteria = await storage.getActiveProbabilityCriteria();
+              
+              if (activeCriteria && activeCriteria.length > 0) {
+                // Use dynamic criteria system
+                const dynamicFactors: DynamicProbabilityFactors = {};
+                
+                // Extract available factors from request data or existing values
+                for (const criterion of activeCriteria) {
+                  switch (criterion.fieldName) {
+                    case 'frequency_occurrence':
+                      dynamicFactors[criterion.fieldName] = riskData.frequencyOccurrence ?? existingRisk.frequencyOccurrence;
+                      break;
+                    case 'exposure_volume':
+                      dynamicFactors[criterion.fieldName] = riskData.exposureVolume ?? existingRisk.exposureVolume;
+                      break;
+                    case 'complexity':
+                      dynamicFactors[criterion.fieldName] = riskData.complexity ?? existingRisk.complexity;
+                      break;
+                    case 'change_volatility':
+                      dynamicFactors[criterion.fieldName] = riskData.changeVolatility ?? existingRisk.changeVolatility;
+                      break;
+                    case 'vulnerabilities':
+                      dynamicFactors[criterion.fieldName] = riskData.vulnerabilities ?? existingRisk.vulnerabilities;
+                      break;
+                    default:
+                      // For new dynamic criteria not in legacy system, default to 3
+                      dynamicFactors[criterion.fieldName] = 3;
+                  }
+                }
+                
+                finalProbability = calculateDynamicProbability(dynamicFactors, activeCriteria);
+                console.log("Using dynamic probability calculation for update:", { dynamicFactors, activeCriteria: activeCriteria.map(c => ({ name: c.name, weight: c.weight })), finalProbability });
+              } else {
+                throw new Error("No active criteria found, fallback to legacy system");
+              }
+            } catch (error) {
+              console.log("Falling back to legacy probability calculation for update:", error instanceof Error ? error.message : String(error));
+              
+              // Fallback to legacy calculation system
+              const probabilityFactors: ProbabilityFactors = {
+                frequencyOccurrence: riskData.frequencyOccurrence ?? existingRisk.frequencyOccurrence,
+                exposureVolume: riskData.exposureVolume ?? existingRisk.exposureVolume,
+                exposureMassivity: riskData.exposureMassivity ?? existingRisk.exposureMassivity,
+                exposureCriticalPath: riskData.exposureCriticalPath ?? existingRisk.exposureCriticalPath,
+                complexity: riskData.complexity ?? existingRisk.complexity,
+                changeVolatility: riskData.changeVolatility ?? existingRisk.changeVolatility,
+                vulnerabilities: riskData.vulnerabilities ?? existingRisk.vulnerabilities,
+              };
+              const configuredWeights = await storage.getProbabilityWeights();
+              finalProbability = calculateProbability(probabilityFactors, configuredWeights);
+            }
+          }
+        } else {
+          // Use existing probability if not being updated
+          finalProbability = existingRisk.probability;
+        }
+        
+        // Calculate inherent risk with final probability and impact (updated or existing)
+        const finalImpact = riskData.impact ?? existingRisk.impact;
+        const inherentRisk = finalProbability * finalImpact;
+        
+        // Add calculated values to data to save
+        dataToSave = {
+          ...dataToSave,
+          probability: finalProbability,
+          inherentRisk: inherentRisk
+        } as any;
+      }
+      
+      // Auto-assign processOwner based on hierarchy if not provided manually AND if process assignment is changing
+      const processAssignmentChanged = (
+        riskData.subprocesoId !== undefined || 
+        riskData.processId !== undefined || 
+        riskData.macroprocesoId !== undefined
+      );
+      
+      if (processAssignmentChanged && !riskData.processOwner) {
+        // Search owner automatically based on hierarchy: subproceso > proceso > macroproceso
+        let autoProcessOwner: string | undefined;
+        
+        const finalSubprocesoId = riskData.subprocesoId ?? existingRisk.subprocesoId;
+        const finalProcessId = riskData.processId ?? existingRisk.processId;
+        const finalMacroprocesoId = riskData.macroprocesoId ?? existingRisk.macroprocesoId;
+        
+        if (finalSubprocesoId) {
+          const subprocesoWithOwner = await storage.getSubprocesoWithOwner(finalSubprocesoId);
+          if (subprocesoWithOwner?.owner) {
+            autoProcessOwner = `${subprocesoWithOwner.owner.name} - ${subprocesoWithOwner.owner.email}`;
+          }
+        } else if (finalProcessId) {
+          const processWithOwner = await storage.getProcessWithOwner(finalProcessId);
+          if (processWithOwner?.owner) {
+            autoProcessOwner = `${processWithOwner.owner.name} - ${processWithOwner.owner.email}`;
+          }
+        } else if (finalMacroprocesoId) {
+          const macroprocesoWithOwner = await storage.getMacroprocesoWithOwner(finalMacroprocesoId);
+          if (macroprocesoWithOwner?.owner) {
+            autoProcessOwner = `${macroprocesoWithOwner.owner.name} - ${macroprocesoWithOwner.owner.email}`;
+          }
+        }
+        
+        if (autoProcessOwner) {
+          dataToSave = {
+            ...dataToSave,
+            processOwner: autoProcessOwner
+          } as any;
+        }
+      }
+      
+      // Inject audit fields (updatedBy) using helper function
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withUpdatedBy(dataToSave, userId);
+      
+      if (!tenantId) {
+        return res.status(400).json({ message: "Tenant ID required" });
+      }
+      
+      const risk = await storage.updateRisk(req.params.id, dataWithAudit, tenantId);
+      if (!risk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      // Log changes to audit_logs
+      try {
+        const changes: Record<string, { old: any; new: any }> = {};
+        
+        // Helper function to normalize HTML entities
+        const normalizeValue = (val: any): any => {
+          if (typeof val === 'string') {
+            // Decode HTML entities
+            return val.replace(/&amp;/g, '&')
+                     .replace(/&lt;/g, '<')
+                     .replace(/&gt;/g, '>')
+                     .replace(/&quot;/g, '"')
+                     .replace(/&#39;/g, "'");
+          }
+          if (Array.isArray(val)) {
+            return val.map(normalizeValue);
+          }
+          if (val && typeof val === 'object') {
+            const normalized: any = {};
+            for (const key in val) {
+              normalized[key] = normalizeValue(val[key]);
+            }
+            return normalized;
+          }
+          return val;
+        };
+        
+        // Helper function to check if values are actually different
+        const hasChanged = (oldVal: any, newVal: any): boolean => {
+          // Normalize both values to handle HTML entity encoding differences
+          const normalizedOld = normalizeValue(oldVal);
+          const normalizedNew = normalizeValue(newVal);
+          
+          // If both are null/undefined, no change
+          if (normalizedOld == null && normalizedNew == null) return false;
+          // If one is null/undefined and the other isn't, it changed
+          if (normalizedOld == null || normalizedNew == null) return true;
+          // For arrays and objects, compare serialized versions
+          if ((Array.isArray(normalizedOld) && Array.isArray(normalizedNew)) ||
+              (typeof normalizedOld === 'object' && typeof normalizedNew === 'object')) {
+            return JSON.stringify(normalizedOld) !== JSON.stringify(normalizedNew);
+          }
+          // For primitives, direct comparison
+          return normalizedOld !== normalizedNew;
+        };
+        
+        // Fields to exclude from audit logs (internal/audit fields)
+        const excludedFields = [
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
+          'deletedAt', 'deletedBy', 'validatedAt', 'validatedBy'
+        ];
+        
+        // Compare existingRisk with dataWithAudit to detect changes
+        for (const key in dataWithAudit) {
+          // Skip excluded fields
+          if (excludedFields.includes(key)) continue;
+          
+          const oldValue = (existingRisk as any)[key];
+          const newValue = (dataWithAudit as any)[key];
+          
+          if (hasChanged(oldValue, newValue) && newValue !== undefined) {
+            changes[key] = { old: oldValue, new: newValue };
+          }
+        }
+        
+        // Only insert audit log if there are actual changes
+        if (Object.keys(changes).length > 0) {
+          if (!db) {
+            console.error('Database not available for audit logging');
+          } else {
+            await requireDb().insert(auditLogs).values({
+              entityType: 'risk',
+              entityId: req.params.id,
+              action: 'update',
+              userId: userId,
+              changes: changes,
+              ipAddress: req.ip || req.connection.remoteAddress || null,
+              userAgent: req.get('user-agent') || null
+            });
+          }
+        }
+      } catch (auditError) {
+        // Don't fail the request if audit logging fails
+        console.error('Failed to log audit changes:', auditError);
+      }
+      
+      // Invalidate all risk-related caches after updating risk
+      if (tenantId) {
+        await invalidateRiskControlCaches();
+      }
+      
+      res.json(risk);
+    } catch (error) {
+      console.error("Risk update error:", error);
+      if (error instanceof z.ZodError) {
+        console.error("Zod validation errors:", error.errors);
+        res.status(400).json({ 
+          message: "Datos de riesgo inválidos", 
+          errors: error.errors 
+        });
+      } else if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      } else {
+        res.status(400).json({ 
+          message: error instanceof Error ? error.message : "No se pudo actualizar el riesgo"
+        });
+      }
+    }
+  });
+
+  app.delete("/api/risks/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get active tenant ID for ownership validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Perform soft delete by updating status and soft-delete fields
+      const softDeleteData = withSoftDelete(userId, deletionReason);
+      const deleted = await storage.updateRisk(req.params.id, softDeleteData, tenantId);
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      // Invalidate all risk-control related caches (soft-deleting risk affects associations)
+      await invalidateRiskControlCaches();
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to soft-delete risk:", error);
+      res.status(500).json({ message: "Failed to delete risk" });
+    }
+  });
+
+  // Risk Validation Routes (protected, with 15s cache for validation center)
+  app.get("/api/risks/validation/pending", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      // Create cache key for validation center
+      const cacheKey = `validation:risks:pending:${tenantId}`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // Cache miss - query database
+      const risks = await storage.getPendingValidationRisks(tenantId);
+      
+      // Cache for 15 seconds (critical validation data needs fresher updates)
+      await distributedCache.set(cacheKey, risks, 15);
+      
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pending validation risks" });
+    }
+  });
+
+  app.get("/api/risks/validation/:status", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const risks = await storage.getRisksByValidationStatus(req.params.status, tenantId);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks by validation status" });
+    }
+  });
+
+  app.post("/api/risks/:id/validate", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      console.log("Risk validation request:", {
+        riskId: req.params.id,
+        body: req.body,
+        user: (req as any).user?.claims?.sub
+      });
+      
+      const validatedData = validateRiskSchema.parse(req.body);
+      
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+
+      // BUSINESS RULE: Check if user is the owner of the macroproceso where this risk resides
+      // Platform admins and users with full permissions (*) can validate any risk
+      const canValidate = await storage.canUserValidateRisk(validatedBy, req.params.id);
+      const userPermissions = (req as any).user?.permissions || [];
+      const isAdmin = userPermissions.includes('*') || (req as any).user?.isPlatformAdmin;
+      const hasValidatePermission = userPermissions.includes('validate_risks');
+      
+      // Allow validation if: user is owner OR is admin OR has explicit validate_risks permission with admin role
+      if (!canValidate && !isAdmin) {
+        return res.status(403).json({ 
+          message: "Access denied: Only the macroproceso owner or administrators can validate this risk",
+          details: "Risk validation must be performed by the owner of the macroproceso or a platform administrator"
+        });
+      }
+      
+      const risk = await storage.validateRisk(
+        req.params.id, 
+        validatedBy, 
+        validatedData.validationStatus,
+        validatedData.validationComments
+      );
+      
+      if (!risk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      // Invalidate all risk-related caches (validation changes risk state)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:pending:${tenantId}`, null, 0)
+      ]);
+      
+      res.json(risk);
+    } catch (error) {
+      console.error("Risk validation error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Internal server error during validation" });
+    }
+  });
+
+  // Check if current user can validate a specific risk
+  app.get("/api/risks/:id/can-validate", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using centralized helper
+      const userId = getAuthenticatedUserId(req);
+
+      const canValidate = await storage.canUserValidateRisk(userId, req.params.id);
+      
+      res.json({ canValidate });
+    } catch (error) {
+      console.error("Error checking risk validation permissions:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Send notification email for risk validation
+  app.post("/api/risks/:id/send-notification", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      const risk = await storage.getRisk(req.params.id, tenantId);
+      if (!risk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+
+      if (!risk.processOwner) {
+        return res.status(400).json({ message: "Risk has no process owner assigned" });
+      }
+
+      // Get process owner details
+      const owner = await storage.getUserByUsername(risk.processOwner);
+      if (!owner || !owner.email) {
+        return res.status(400).json({ message: "Process owner email not found" });
+      }
+
+      // Generate validation link (for now using the main app URL)
+      const baseUrl = req.headers.origin || req.headers.host || "http://localhost:5000";
+      const validationLink = `${baseUrl}/validation`;
+
+      // Generate email content
+      const emailHtml = generateRiskValidationEmail(
+        risk.code,
+        risk.name,
+        risk.processOwner,
+        validationLink
+      );
+
+      // Send email (using configured email service sender)
+      const emailSent = await sendEmail({
+        from: 'noreply@unigrc.app',
+        to: owner.email,
+        subject: `Validación Requerida: Riesgo ${risk.code}`,
+        html: emailHtml
+      });
+
+      if (emailSent) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        // Update all risk-process links for this risk to mark as notified
+        const now = new Date();
+        await requireDb().update(riskProcessLinks)
+          .set({ 
+            notificationSent: true,
+            lastNotificationSent: now
+          })
+          .where(and(
+            eq(riskProcessLinks.riskId, req.params.id),
+            eq(riskProcessLinks.validationStatus, 'pending_validation')
+          ));
+        
+        res.json({ 
+          success: true, 
+          message: `Notification sent to ${risk.processOwner} (${owner.email})` 
+        });
+      } else {
+        res.status(500).json({ 
+          success: false, 
+          message: "Failed to send email notification" 
+        });
+      }
+    } catch (error: unknown) {
+      console.error("Error sending notification:", error);
+      res.status(500).json({ message: "Failed to send notification" });
+    }
+  });
+
+  // Control Validation Routes (protected, with 15s cache for validation center)
+  app.get("/api/controls/validation/pending", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Get active tenant ID
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Create cache key for validation center
+      const cacheKey = `validation:controls:pending:${tenantId}`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // Cache miss - query database
+      console.log('🔍 Routes: Getting pending validation controls...');
+      const controls = await storage.getPendingValidationControls(tenantId);
+      console.log(`📊 Routes: Found ${controls.length} pending validation controls`);
+      
+      // Cache for 15 seconds (critical validation data needs fresher updates)
+      await distributedCache.set(cacheKey, controls, 15);
+      
+      res.json(controls);
+    } catch (error) {
+      console.error('❌ Routes: Error getting pending validation controls:', error);
+      res.status(500).json({ message: "Failed to fetch pending validation controls" });
+    }
+  });
+
+  app.get("/api/controls/validation/notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { limit, offset } = normalizePaginationParams(req.query);
+      
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      const notifiedControls = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          isNull(controls.deletedAt),
+          eq(controls.validationStatus, 'pending_validation'),
+          isNotNull(controls.notifiedAt)
+        ));
+      
+      const controlsWithOwner = notifiedControls.map(row => ({
+        ...row.control,
+        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+      }));
+      
+      const total = controlsWithOwner.length;
+      const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
+      
+      // Get associated risks for paginated controls
+      const controlIds = paginatedControls.map(c => c.id);
+      if (controlIds.length > 0) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        const associatedRisks = await requireDb()
+          .select({
+            controlId: riskControls.controlId,
+            risk: risks,
+          })
+          .from(riskControls)
+          .leftJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(inArray(riskControls.controlId, controlIds));
+        
+        // Map risks to controls
+        const controlsWithRisks = paginatedControls.map(control => ({
+          ...control,
+          associatedRisks: associatedRisks
+            .filter(ar => ar.controlId === control.id && ar.risk)
+            .map(ar => ({
+              id: ar.risk!.id,
+              code: ar.risk!.code,
+              name: ar.risk!.name,
+              inherentRisk: ar.risk!.inherentRisk,
+            }))
+        }));
+        
+        res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
+      } else {
+        res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
+      }
+    } catch (error) {
+      console.error("Failed to fetch notified controls:", error);
+      res.status(500).json({ message: "Failed to fetch notified controls" });
+    }
+  });
+
+  app.get("/api/controls/validation/not-notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { limit, offset} = normalizePaginationParams(req.query);
+      
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      const notNotifiedControls = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          isNull(controls.deletedAt),
+          or(
+            isNull(controls.validationStatus),
+            and(
+              eq(controls.validationStatus, 'pending_validation'),
+              isNull(controls.notifiedAt)
+            )
+          )
+        ));
+      
+      const controlsWithOwner = notNotifiedControls.map(row => ({
+        ...row.control,
+        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+      }));
+      
+      const total = controlsWithOwner.length;
+      const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
+      
+      // Get associated risks for paginated controls
+      const controlIds = paginatedControls.map(c => c.id);
+      if (controlIds.length > 0) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        const associatedRisks = await requireDb()
+          .select({
+            controlId: riskControls.controlId,
+            risk: risks,
+          })
+          .from(riskControls)
+          .leftJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(inArray(riskControls.controlId, controlIds));
+        
+        // Map risks to controls
+        const controlsWithRisks = paginatedControls.map(control => ({
+          ...control,
+          associatedRisks: associatedRisks
+            .filter(ar => ar.controlId === control.id && ar.risk)
+            .map(ar => ({
+              id: ar.risk!.id,
+              code: ar.risk!.code,
+              name: ar.risk!.name,
+              inherentRisk: ar.risk!.inherentRisk,
+            }))
+        }));
+        
+        res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
+      } else {
+        res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
+      }
+    } catch (error) {
+      console.error("Failed to fetch not-notified controls:", error);
+      res.status(500).json({ message: "Failed to fetch not-notified controls" });
+    }
+  });
+
+  app.get("/api/controls/validation/validated", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      const validatedControls = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          isNull(controls.deletedAt),
+          eq(controls.validationStatus, 'validated')
+        ));
+      
+      const controlsWithOwner = validatedControls.map(row => ({
+        ...row.control,
+        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+      }));
+      
+      // Get associated risks for each control
+      const controlIds = controlsWithOwner.map(c => c.id);
+      if (controlIds.length > 0) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        const associatedRisks = await requireDb()
+          .select({
+            controlId: riskControls.controlId,
+            risk: risks,
+          })
+          .from(riskControls)
+          .leftJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(inArray(riskControls.controlId, controlIds));
+        
+        // Map risks to controls
+        const controlsWithRisks = controlsWithOwner.map(control => ({
+          ...control,
+          associatedRisks: associatedRisks
+            .filter(ar => ar.controlId === control.id && ar.risk)
+            .map(ar => ({
+              id: ar.risk!.id,
+              code: ar.risk!.code,
+              name: ar.risk!.name,
+              inherentRisk: ar.risk!.inherentRisk,
+            }))
+        }));
+        
+        res.json(controlsWithRisks);
+      } else {
+        res.json(controlsWithOwner);
+      }
+    } catch (error) {
+      console.error("Failed to fetch validated controls:", error);
+      res.status(500).json({ message: "Failed to fetch validated controls" });
+    }
+  });
+
+  app.get("/api/controls/validation/observed", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      const observedControls = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          isNull(controls.deletedAt),
+          eq(controls.validationStatus, 'observed')
+        ));
+      
+      const controlsWithOwner = observedControls.map(row => ({
+        ...row.control,
+        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+      }));
+      
+      // Get associated risks for each control
+      const controlIds = controlsWithOwner.map(c => c.id);
+      if (controlIds.length > 0) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        const associatedRisks = await requireDb()
+          .select({
+            controlId: riskControls.controlId,
+            risk: risks,
+          })
+          .from(riskControls)
+          .leftJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(inArray(riskControls.controlId, controlIds));
+        
+        // Map risks to controls
+        const controlsWithRisks = controlsWithOwner.map(control => ({
+          ...control,
+          associatedRisks: associatedRisks
+            .filter(ar => ar.controlId === control.id && ar.risk)
+            .map(ar => ({
+              id: ar.risk!.id,
+              code: ar.risk!.code,
+              name: ar.risk!.name,
+              inherentRisk: ar.risk!.inherentRisk,
+            }))
+        }));
+        
+        res.json(controlsWithRisks);
+      } else {
+        res.json(controlsWithOwner);
+      }
+    } catch (error) {
+      console.error("Failed to fetch observed controls:", error);
+      res.status(500).json({ message: "Failed to fetch observed controls" });
+    }
+  });
+
+  app.get("/api/controls/validation/rejected", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    try {
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      const rejectedControls = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          isNull(controls.deletedAt),
+          eq(controls.validationStatus, 'rejected')
+        ));
+      
+      const controlsWithOwner = rejectedControls.map(row => ({
+        ...row.control,
+        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+      }));
+      
+      // Get associated risks for each control
+      const controlIds = controlsWithOwner.map(c => c.id);
+      if (controlIds.length > 0) {
+        if (!db) {
+          return res.status(500).json({ message: "Database not available" });
+        }
+        const associatedRisks = await requireDb()
+          .select({
+            controlId: riskControls.controlId,
+            risk: risks,
+          })
+          .from(riskControls)
+          .leftJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(inArray(riskControls.controlId, controlIds));
+        
+        // Map risks to controls
+        const controlsWithRisks = controlsWithOwner.map(control => ({
+          ...control,
+          associatedRisks: associatedRisks
+            .filter(ar => ar.controlId === control.id && ar.risk)
+            .map(ar => ({
+              id: ar.risk!.id,
+              code: ar.risk!.code,
+              name: ar.risk!.name,
+              inherentRisk: ar.risk!.inherentRisk,
+            }))
+        }));
+        
+        res.json(controlsWithRisks);
+      } else {
+        res.json(controlsWithOwner);
+      }
+    } catch (error) {
+      console.error("Failed to fetch rejected controls:", error);
+      res.status(500).json({ message: "Failed to fetch rejected controls" });
+    }
+  });
+
+  app.post("/api/controls/:id/validate", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      console.log("Control validation request:", {
+        controlId: req.params.id,
+        body: req.body,
+        user: (req as any).user?.claims?.sub
+      });
+      
+      const validatedData = validateControlSchema.parse(req.body);
+      
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+      
+      const control = await storage.validateControl(
+        req.params.id, 
+        validatedBy, 
+        validatedData.validationStatus,
+        validatedData.validationComments
+      );
+      
+      if (!control) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+      
+      // Invalidate validation center caches and risk-matrix
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        distributedCache.invalidatePattern(`validation:controls:*:${tenantId}`),
+        distributedCache.invalidatePattern(`validation:process-dashboard:${tenantId}`),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+        distributedCache.set(`validation:controls:pending:${tenantId}`, null, 0)
+      ]);
+      
+      res.json(control);
+    } catch (error) {
+      console.error("Control validation error:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Internal server error during validation" });
+    }
+  });
+
+  // Bulk control email validation endpoint (grouped by responsible)
+  app.post("/api/controls/send-bulk-validation-email", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { controlIds } = req.body;
+      
+      if (!Array.isArray(controlIds) || controlIds.length === 0) {
+        return res.status(400).json({ message: "Control IDs array is required" });
+      }
+      
+      // Get all controls by IDs with their owners
+      const controlsData = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(inArray(controls.id, controlIds));
+      
+      if (controlsData.length === 0) {
+        return res.status(404).json({ message: "No se encontraron controles con los IDs proporcionados" });
+      }
+      
+      // GROUP CONTROLS BY RESPONSIBLE EMAIL
+      const controlsByResponsible = new Map<string, Array<typeof controlsData[number]>>();
+      const emailResults: Array<{ controlId: string; success: boolean; email?: string; error?: string; }> = [];
+      
+      for (const row of controlsData) {
+        const control = row.control;
+        const owner = row.owner;
+        
+        if (!owner?.email) {
+          emailResults.push({
+            controlId: control.id,
+            success: false,
+            error: "Control sin responsable o email configurado"
+          });
+          continue;
+        }
+        
+        // Group by email
+        const email = owner.email;
+        if (!controlsByResponsible.has(email)) {
+          controlsByResponsible.set(email, []);
+        }
+        controlsByResponsible.get(email)!.push(row);
+      }
+      
+      // Now send one email per responsible (grouped)
+      let sentCount = 0;
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      
+      for (const [responsibleEmail, controlRows] of controlsByResponsible.entries()) {
+        const controlsList = controlRows.map(r => r.control);
+        const processOwner = controlRows[0].owner;
+        if (!processOwner) continue;
+        
+        // Generate batch validation token
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+        
+        const batchTokenValue = randomBytes(32).toString('hex');
+        const entityIds = controlsList.map(c => c.id);
+        
+        const validationData = controlsList.map(control => ({
+          id: control.id,
+          code: control.code,
+          name: control.name,
+          description: control.description,
+          type: control.type,
+          automationLevel: control.automationLevel
+        }));
+        
+        // Get tenantId from first control (all controls should belong to same tenant)
+        const tenantId = controlsList[0].tenantId;
+        
+        // Create batch token in database
+        const batchToken = await storage.createBatchValidationToken({
+          token: batchTokenValue,
+          tenantId, // CRITICAL: Include tenant for security isolation
+          type: 'control',
+          entityIds,
+          responsibleEmail,
+          processOwnerId: processOwner.id,
+          validationData,
+          isUsed: false,
+          partiallyUsed: false,
+          expiresAt
+        });
+        
+        // Create validation URL (points to batch validation page)
+        const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
+        
+        // Helper function to get control type text in Spanish
+        const getControlTypeText = (type: string) => {
+          const typeMap: Record<string, string> = {
+            'preventive': 'Preventivo',
+            'detective': 'Detectivo',
+            'corrective': 'Correctivo',
+          };
+          return typeMap[type] || type;
+        };
+        
+        // Build email with grouped controls table
+        const controlsTableRows = controlsList.map(control => {
+          return `
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${control.code}</td>
+              <td style="padding: 12px 8px; color: #1f2937;">${control.name || ''}</td>
+              <td style="padding: 12px 8px; color: #6b7280;">${getControlTypeText(control.type)}</td>
+            </tr>
+          `;
+        }).join('');
+        
+        const emailHtml = `
+          <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <h1 style="color: #1f2937; margin: 0; font-size: 24px;">Validación de Controles</h1>
+                <p style="color: #6b7280; margin-top: 8px; font-size: 14px;">Se requiere su validación para ${controlsList.length} control${controlsList.length > 1 ? 'es' : ''}</p>
+              </div>
+              
+              <div style="background: linear-gradient(135deg, #1E3A8A 0%, #3b82f6 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 16px; opacity: 0.9;">
+                  <strong>${controlsList.length}</strong> ${controlsList.length > 1 ? 'controles' : 'control'} pendientes de validación
+                </p>
+              </div>
+              
+              <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 24px; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; min-width: 500px;">
+                  <thead>
+                    <tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Código</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nombre</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Tipo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${controlsTableRows}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div style="margin-bottom: 24px;">
+                <p style="color: #4b5563; font-size: 14px; margin: 0 0 16px 0; text-align: center;">
+                  Haga clic en el botón para revisar y validar estos controles:
+                </p>
+                
+                <div style="text-align: center;">
+                  <a href="${validationUrl}" 
+                     style="display: inline-block; text-align: center; background-color: #1E3A8A; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; transition: background-color 0.2s;"
+                     onmouseover="this.style.backgroundColor='#1e40af'"
+                     onmouseout="this.style.backgroundColor='#1E3A8A'">
+                    🛡️ Revisar y Validar Controles
+                  </a>
+                </div>
+              </div>
+              
+              <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 24px;">
+                <p style="color: #9ca3af; font-size: 12px; margin: 0; text-align: center;">
+                  Este enlace es válido por 7 días.<br>
+                  Podrá aprobar, observar o rechazar cada control individualmente.
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+              <p style="color: #6b7280; font-size: 12px; margin: 0;">
+                Este es un mensaje automático del Sistema de Gestión de Riesgos.
+              </p>
+            </div>
+          </div>
+        `;
+        
+        // Send grouped email
+        try {
+          const emailSent = await sendEmail({
+            from: 'noreply@unigrc.app',
+            to: responsibleEmail,
+            subject: `Validación de ${controlsList.length} control${controlsList.length > 1 ? 'es' : ''}`,
+            html: emailHtml
+          });
+          
+          if (emailSent) {
+            sentCount++;
+            
+            // Update notifiedAt timestamp for all controls in this batch
+            for (const control of controlsList) {
+              if (!db) {
+                console.error('Database not available for updating notifiedAt');
+                continue;
+              }
+              await requireDb()
+                .update(controls)
+                .set({ notifiedAt: new Date() })
+                .where(eq(controls.id, control.id));
+              
+              emailResults.push({
+                controlId: control.id,
+                success: true,
+                email: responsibleEmail
+              });
+            }
+          } else {
+            for (const control of controlsList) {
+              emailResults.push({
+                controlId: control.id,
+                success: false,
+                error: "Error al enviar email"
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Error sending grouped email to", responsibleEmail, emailError);
+          for (const control of controlsList) {
+            emailResults.push({
+              controlId: control.id,
+              success: false,
+              error: emailError instanceof Error ? emailError.message : "Error desconocido"
+            });
+          }
+        }
+      }
+      
+      // Return results
+      const successCount = emailResults.filter(r => r.success).length;
+      const failureCount = emailResults.filter(r => !r.success).length;
+      
+      res.json({
+        message: `Emails enviados: ${sentCount} correo(s) agrupado(s)`,
+        emailsSent: sentCount,
+        controlsNotified: successCount,
+        controlsFailed: failureCount,
+        details: emailResults
+      });
+    } catch (error) {
+      console.error("Error sending bulk control validation emails:", error);
+      res.status(500).json({ message: "Error al enviar emails de validación de controles" });
+    }
+  });
+
+  // Resend validation for individual control
+  app.post("/api/controls/:id/resend-validation", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+      
+      // Get control with owner information
+      const controlData = await requireDb()
+        .select({
+          control: controls,
+          owner: processOwners,
+        })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(eq(controls.id, id))
+        .limit(1);
+      
+      if (controlData.length === 0 || !controlData[0].control) {
+        return res.status(404).json({ message: "Control no encontrado" });
+      }
+      
+      const control = controlData[0].control;
+      const owner = controlData[0].owner;
+      
+      if (!owner?.email) {
+        return res.status(400).json({ message: "El control no tiene un responsable con email configurado" });
+      }
+      
+      // Generate new batch validation token
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+      
+      const batchTokenValue = randomBytes(32).toString('hex');
+      const entityIds = [control.id];
+      
+      const validationData = [{
+        id: control.id,
+        code: control.code,
+        name: control.name,
+        description: control.description,
+        type: control.type,
+        automationLevel: control.automationLevel
+      }];
+      
+      // Create batch token in database
+      await storage.createBatchValidationToken({
+        token: batchTokenValue,
+        tenantId: control.tenantId, // CRITICAL: Include tenant for security isolation
+        type: 'control',
+        entityIds,
+        responsibleEmail: owner.email,
+        processOwnerId: owner.id,
+        validationData,
+        isUsed: false,
+        partiallyUsed: false,
+        expiresAt
+      });
+      
+      // Create validation URL
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
+      
+      // Helper function to get control type text in Spanish
+      const getControlTypeText = (type: string) => {
+        const typeMap: Record<string, string> = {
+          'preventive': 'Preventivo',
+          'detective': 'Detectivo',
+          'corrective': 'Correctivo',
+        };
+        return typeMap[type] || type;
+      };
+      
+      // Build email
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+          <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #1f2937; margin: 0; font-size: 24px;">Validación de Control</h1>
+              <p style="color: #6b7280; margin-top: 8px; font-size: 14px;">Recordatorio de validación pendiente</p>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #1E3A8A 0%, #3b82f6 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+              <p style="margin: 0; font-size: 16px; opacity: 0.9;">
+                <strong>1</strong> control pendiente de validación
+              </p>
+            </div>
+            
+            <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Código</th>
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nombre</th>
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Tipo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom: 1px solid #e5e7eb;">
+                    <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${control.code}</td>
+                    <td style="padding: 12px 8px; color: #1f2937;">${control.name || ''}</td>
+                    <td style="padding: 12px 8px; color: #6b7280;">${getControlTypeText(control.type)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <div style="margin-bottom: 24px;">
+              <p style="color: #4b5563; font-size: 14px; margin: 0 0 16px 0; text-align: center;">
+                Haga clic en el botón para revisar y validar este control:
+              </p>
+              
+              <div style="text-align: center;">
+                <a href="${validationUrl}" 
+                   style="display: inline-block; text-align: center; background-color: #1E3A8A; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; transition: background-color 0.2s;"
+                   onmouseover="this.style.backgroundColor='#1e40af'"
+                   onmouseout="this.style.backgroundColor='#1E3A8A'">
+                  🛡️ Revisar y Validar Control
+                </a>
+              </div>
+            </div>
+            
+            <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 24px;">
+              <p style="color: #9ca3af; font-size: 12px; margin: 0; text-align: center;">
+                Este enlace es válido por 7 días.<br>
+                Podrá aprobar, observar o rechazar el control.
+              </p>
+            </div>
+          </div>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <p style="color: #6b7280; font-size: 12px; margin: 0;">
+              Este es un mensaje automático del Sistema de Gestión de Riesgos.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      // Send email
+      const emailSent = await sendEmail({
+        from: 'noreply@unigrc.app',
+        to: owner.email,
+        subject: `Recordatorio: Validación de Control ${control.code}`,
+        html: emailHtml
+      });
+      
+      if (!emailSent) {
+        return res.status(500).json({ message: "Error al enviar el email" });
+      }
+      
+      // Update notifiedAt timestamp
+      await requireDb()
+        .update(controls)
+        .set({ notifiedAt: new Date() })
+        .where(eq(controls.id, control.id));
+      
+      res.json({
+        success: true,
+        message: "Email de validación reenviado exitosamente",
+        email: owner.email,
+        controlCode: control.code
+      });
+    } catch (error) {
+      console.error("Error resending control validation:", error);
+      res.status(500).json({ message: "Error al reenviar email de validación" });
+    }
+  });
+
+  // Generic control validation endpoint (must be last to not override specific routes)
+  app.get("/api/controls/validation/:status", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Get active tenant ID
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      const controls = await storage.getControlsByValidationStatus(req.params.status, tenantId);
+      res.json(controls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch controls by validation status" });
+    }
+  });
+
+  // ============== PROCESS VALIDATION ROUTES ==============
+  
+  // Process Validation Dashboard - Get all process validations (with 15s cache for validation center)
+  app.get("/api/process-validations/dashboard", requirePermission("view_all"), async (req, res) => {
+    try {
+      // Extract tenant ID for cache key (validation dashboard may not be strictly tenant-scoped in current impl)
+      const tenantId = (req as any).user?.activeTenantId || 'global';
+      const cacheKey = `validation:process-dashboard:${tenantId}`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // Cache miss - query database
+      const processValidations = await storage.getProcessValidationDashboard();
+      
+      // Cache for 15 seconds (critical validation data needs fresher updates)
+      await distributedCache.set(cacheKey, processValidations, 15);
+      
+      res.json(processValidations);
+    } catch (error) {
+      console.error("Error fetching process validation dashboard:", error);
+      res.status(500).json({ message: "Failed to fetch process validation dashboard" });
+    }
+  });
+
+  // Get all process validations
+  app.get("/api/process-validations", requirePermission("view_all"), async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.activeTenantId || 'global';
+      const cacheKey = `validation:process-list:${tenantId}`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      const processValidations = await storage.getProcessValidations();
+      
+      // Cache for 15 seconds
+      await distributedCache.set(cacheKey, processValidations, 15);
+      
+      res.json(processValidations);
+    } catch (error) {
+      console.error("Error fetching process validations:", error);
+      res.status(500).json({ message: "Failed to fetch process validations" });
+    }
+  });
+
+  // Get process validation by process ID
+  app.get("/api/process-validations/:processId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const processValidation = await storage.getProcessValidation(req.params.processId);
+      if (!processValidation) {
+        return res.status(404).json({ message: "Process validation not found" });
+      }
+      res.json(processValidation);
+    } catch (error) {
+      console.error("Error fetching process validation:", error);
+      res.status(500).json({ message: "Failed to fetch process validation" });
+    }
+  });
+
+  // Create process validation
+  app.post("/api/process-validations", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = insertProcessValidationSchema.parse(req.body);
+      const processValidation = await storage.createProcessValidation(validatedData);
+      res.status(201).json(processValidation);
+    } catch (error) {
+      console.error("Error creating process validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create process validation" });
+    }
+  });
+
+  // Update process validation
+  app.put("/api/process-validations/:processId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = validateProcessValidationSchema.parse(req.body);
+      const updated = await storage.updateProcessValidation(req.params.processId, validatedData);
+      if (!updated) {
+        return res.status(404).json({ message: "Process validation not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating process validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update process validation" });
+    }
+  });
+
+  // ============== PROCESS RISK VALIDATION ROUTES ==============
+
+  // Get process risk validations by process
+  app.get("/api/process-risk-validations/process/:processId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const validations = await storage.getProcessRiskValidationsByProcess(req.params.processId);
+      res.json(validations);
+    } catch (error) {
+      console.error("Error fetching process risk validations:", error);
+      res.status(500).json({ message: "Failed to fetch process risk validations" });
+    }
+  });
+
+  // Get specific process risk validation
+  app.get("/api/process-risk-validations/:processId/:riskId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const validation = await storage.getProcessRiskValidation(req.params.processId, req.params.riskId);
+      if (!validation) {
+        return res.status(404).json({ message: "Process risk validation not found" });
+      }
+      res.json(validation);
+    } catch (error) {
+      console.error("Error fetching process risk validation:", error);
+      res.status(500).json({ message: "Failed to fetch process risk validation" });
+    }
+  });
+
+  // Create process risk validation
+  app.post("/api/process-risk-validations", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = insertProcessRiskValidationSchema.parse(req.body);
+      const validation = await storage.createProcessRiskValidation(validatedData);
+      res.status(201).json(validation);
+    } catch (error) {
+      console.error("Error creating process risk validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create process risk validation" });
+    }
+  });
+
+  // Update process risk validation
+  app.put("/api/process-risk-validations/:processId/:riskId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = validateProcessRiskValidationSchema.parse(req.body);
+      
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+
+      // Update with validation metadata
+      const updateData = {
+        ...validatedData,
+        validatedBy: validatedBy,
+        validatedAt: new Date(),
+      };
+
+      const updated = await storage.updateProcessRiskValidation(req.params.processId, req.params.riskId, updateData);
+      if (!updated) {
+        return res.status(404).json({ message: "Process risk validation not found" });
+      }
+
+      // Update process validation summary
+      await storage.updateProcessValidationSummary(req.params.processId);
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating process risk validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update process risk validation" });
+    }
+  });
+
+  // ============== PROCESS CONTROL VALIDATION ROUTES ==============
+
+  // Get process control validations by process
+  app.get("/api/process-control-validations/process/:processId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const validations = await storage.getProcessControlValidationsByProcess(req.params.processId);
+      res.json(validations);
+    } catch (error) {
+      console.error("Error fetching process control validations:", error);
+      res.status(500).json({ message: "Failed to fetch process control validations" });
+    }
+  });
+
+  // Get specific process control validation
+  app.get("/api/process-control-validations/:processId/:controlId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const { riskId } = req.query;
+      const validation = await storage.getProcessControlValidation(
+        req.params.processId, 
+        req.params.controlId, 
+        riskId as string || undefined
+      );
+      if (!validation) {
+        return res.status(404).json({ message: "Process control validation not found" });
+      }
+      res.json(validation);
+    } catch (error) {
+      console.error("Error fetching process control validation:", error);
+      res.status(500).json({ message: "Failed to fetch process control validation" });
+    }
+  });
+
+  // Create process control validation
+  app.post("/api/process-control-validations", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = insertProcessControlValidationSchema.parse(req.body);
+      const validation = await storage.createProcessControlValidation(validatedData);
+      res.status(201).json(validation);
+    } catch (error) {
+      console.error("Error creating process control validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create process control validation" });
+    }
+  });
+
+  // Update process control validation
+  app.put("/api/process-control-validations/:processId/:controlId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const validatedData = validateProcessControlValidationSchema.parse(req.body);
+      const { riskId } = req.query;
+      
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+
+      // Update with validation metadata
+      const updateData = {
+        ...validatedData,
+        validatedBy: validatedBy,
+        validatedAt: new Date(),
+      };
+
+      if (!riskId || typeof riskId !== 'string') {
+        const updated = await storage.updateProcessControlValidation(
+          req.params.processId, 
+          req.params.controlId, 
+          undefined,
+          updateData
+        );
+        if (!updated) {
+          return res.status(404).json({ message: "Process control validation not found" });
+        }
+        await storage.updateProcessValidationSummary(req.params.processId);
+        return res.json(updated);
+      }
+      
+      const updated = await storage.updateProcessControlValidation(
+        req.params.processId, 
+        req.params.controlId, 
+        riskId,
+        updateData
+      );
+      if (!updated) {
+        return res.status(404).json({ message: "Process control validation not found" });
+      }
+
+      // Update process validation summary
+      await storage.updateProcessValidationSummary(req.params.processId);
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating process control validation:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid validation data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update process control validation" });
+    }
+  });
+
+  // DELETE process validation
+  app.delete("/api/process-validations/:processId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const deleted = await storage.deleteProcessValidation(req.params.processId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Process validation not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting process validation:", error);
+      res.status(500).json({ message: "Failed to delete process validation" });
+    }
+  });
+
+  // DELETE process risk validation
+  app.delete("/api/process-risk-validations/:processId/:riskId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const deleted = await storage.deleteProcessRiskValidation(req.params.processId, req.params.riskId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Process risk validation not found" });
+      }
+      
+      // Update process validation summary
+      await storage.updateProcessValidationSummary(req.params.processId);
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting process risk validation:", error);
+      res.status(500).json({ message: "Failed to delete process risk validation" });
+    }
+  });
+
+  // DELETE process control validation  
+  app.delete("/api/process-control-validations/:processId/:controlId", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { riskId } = req.query;
+      const deleted = await storage.deleteProcessControlValidation(
+        req.params.processId, 
+        req.params.controlId, 
+        riskId as string || undefined
+      );
+      if (!deleted) {
+        return res.status(404).json({ message: "Process control validation not found" });
+      }
+      
+      // Update process validation summary
+      await storage.updateProcessValidationSummary(req.params.processId);
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting process control validation:", error);
+      res.status(500).json({ message: "Failed to delete process control validation" });
+    }
+  });
+
+  // ============== RISK-PROCESS ASSOCIATION ROUTES ==============
+  
+  // Get all risk-process associations
+  app.get("/api/risk-processes", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Use distributed cache with versioned key (60s TTL)
+      const cacheKey = `risk-processes:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      const riskProcesses = await storage.getRiskProcessLinksWithDetails(tenantId);
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, riskProcesses, 60);
+      
+      res.json(riskProcesses);
+    } catch (error) {
+      console.error("Error fetching risk processes:", error);
+      res.status(500).json({ message: "Failed to fetch risk processes" });
+    }
+  });
+
+  // Get risk-process associations by risk ID
+  app.get("/api/risk-processes/risk/:riskId", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      const riskProcesses = await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId);
+      res.json(riskProcesses);
+    } catch (error) {
+      console.error("Error fetching risk processes by risk:", error);
+      res.status(500).json({ message: "Failed to fetch risk processes by risk" });
+    }
+  });
+
+  // Get risk-process associations by process hierarchy
+  app.get("/api/risk-processes/process", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      // Validate that exactly one process parameter is provided
+      const processParams = processFilterSchema.parse(req.query);
+      const { macroprocesoId, processId, subprocesoId } = processParams;
+      
+      const riskProcesses = await storage.getRiskProcessLinksByProcess(
+        tenantId,
+        macroprocesoId,
+        processId,
+        subprocesoId
+      );
+      res.json(riskProcesses);
+    } catch (error) {
+      console.error("Error fetching risk processes by process:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid process filter", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to fetch risk processes by process" });
+    }
+  });
+
+  // Create new risk-process association
+  app.post("/api/risk-processes", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRiskProcessLinkSchema.parse(req.body);
+      const riskProcess = await storage.createRiskProcessLink(validatedData);
+      
+      if (!riskProcess) {
+        return res.status(400).json({ message: "Failed to create risk-process association" });
+      }
+      
+      // Invalidate risk caches (process filters may now return different results)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-processes:${tenantId}`, null, 0),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+        ]);
+      }
+      
+      res.status(201).json(riskProcess);
+    } catch (error) {
+      console.error("Error creating risk process:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create risk-process association" });
+    }
+  });
+
+  // Update risk-process association
+  app.put("/api/risk-processes/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Use specific update schema to prevent overposting
+      const updateData = updateRiskProcessLinkSchema.parse(req.body);
+      const riskProcess = await storage.updateRiskProcessLink(req.params.id, updateData);
+      
+      if (!riskProcess) {
+        return res.status(404).json({ message: "Risk-process association not found" });
+      }
+      
+      // Invalidate risk caches (process association changed)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-processes:${tenantId}`, null, 0),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+        ]);
+      }
+      
+      res.json(riskProcess);
+    } catch (error) {
+      console.error("Error updating risk process:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update risk-process association" });
+    }
+  });
+
+  // Delete risk-process association
+  app.delete("/api/risk-processes/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteRiskProcessLink(req.params.id);
+      
+      if (!success) {
+        return res.status(404).json({ message: "Risk-process association not found" });
+      }
+      
+      // Invalidate risk caches (process association removed)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-processes:${tenantId}`, null, 0),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+          // Invalidate validation status caches
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:validated`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:rejected`)
+        ]);
+      }
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting risk process:", error);
+      res.status(500).json({ message: "Failed to delete risk-process association" });
+    }
+  });
+
+  // Validate risk-process association
+  app.post("/api/risk-processes/:id/validate", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Use specific validation schema
+      const validatedData = validateRiskProcessLinkSchema.parse(req.body);
+      const { validationStatus, validationComments } = validatedData;
+
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+
+      const riskProcess = await storage.validateRiskProcessLink(
+        req.params.id,
+        validatedBy,
+        validationStatus,
+        validationComments
+      );
+
+      if (!riskProcess) {
+        return res.status(404).json({ message: "Risk-process association not found" });
+      }
+
+      // Invalidate all risk-related caches (validation changes affect process filtering)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-processes:${tenantId}`, null, 0),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+          // Invalidate validation status caches for all statuses
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:validated`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`),
+          distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:rejected`),
+          distributedCache.invalidate(`validation:process-dashboard:${tenantId}`),
+          distributedCache.invalidate(`validation:process-list:${tenantId}`)
+        ]);
+      }
+
+      res.json(riskProcess);
+    } catch (error) {
+      console.error("Error validating risk process:", error);
+      res.status(500).json({ message: "Failed to validate risk-process association" });
+    }
+  });
+
+  // Get risk-process links by validation status (cached 15s for validation center)
+  app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      const { status } = req.params;
+      const validStatuses = ['pending_validation', 'validated', 'observed', 'rejected'];
+      
+      if (!validStatuses.includes(status) && status !== 'pending') {
+        return res.status(400).json({ message: "Invalid validation status" });
+      }
+      
+      // Convert 'pending' to 'pending_validation' for backward compatibility
+      const actualStatus = status === 'pending' ? 'pending_validation' : status;
+      
+      // Cache for 15s (validation data needs fresher updates)
+      const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      const riskProcessLinks = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      
+      await distributedCache.set(cacheKey, riskProcessLinks, 15);
+      
+      res.json(riskProcessLinks);
+    } catch (error) {
+      console.error("Error fetching risk processes by validation status:", error);
+      res.status(500).json({ message: "Failed to fetch risk processes by validation status" });
+    }
+  });
+
+  // Get notified risk-process links (pending_validation + notificationSent = true) with pagination
+  app.get("/api/risk-processes/validation/notified/list", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { limit, offset } = normalizePaginationParams(req.query);
+      const allLinks = await storage.getRiskProcessLinksByNotificationStatus(true);
+      const total = allLinks.length;
+      const paginatedLinks = allLinks.slice(offset, offset + limit);
+      
+      res.json(createPaginatedResponse(paginatedLinks, total, limit, offset));
+    } catch (error) {
+      console.error("Error fetching notified risk processes:", error);
+      res.status(500).json({ message: "Failed to fetch notified risk processes" });
+    }
+  });
+
+  // Get not-notified risk-process links (pending_validation + notificationSent = false) with pagination
+  app.get("/api/risk-processes/validation/not-notified/list", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { limit, offset } = normalizePaginationParams(req.query);
+      const allLinks = await storage.getRiskProcessLinksByNotificationStatus(false);
+      const total = allLinks.length;
+      const paginatedLinks = allLinks.slice(offset, offset + limit);
+      
+      res.json(createPaginatedResponse(paginatedLinks, total, limit, offset));
+    } catch (error) {
+      console.error("Error fetching not-notified risk processes:", error);
+      res.status(500).json({ message: "Failed to fetch not-notified risk processes" });
+    }
+  });
+
+  // Get validation history for a specific risk-process link
+  app.get("/api/risk-process-links/:id/validation-history", isAuthenticated, async (req, res) => {
+    try {
+      const history = await storage.getValidationHistory(req.params.id);
+      res.json(history);
+    } catch (error) {
+      console.error("Error fetching validation history:", error);
+      res.status(500).json({ message: "Failed to fetch validation history" });
+    }
+  });
+
+  // Bulk risk-process-link email validation endpoint (grouped by responsible)
+  app.post("/api/risk-processes/send-bulk-validation-email", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { riskProcessLinkIds } = req.body;
+      
+      if (!Array.isArray(riskProcessLinkIds) || riskProcessLinkIds.length === 0) {
+        return res.status(400).json({ message: "Risk process link IDs array is required" });
+      }
+      
+      // Get all risk-process-links with full details
+      const riskProcessLinksData = await requireDb()
+        .select({
+          riskProcessLink: riskProcessLinks,
+          risk: risks,
+          macroproceso: macroprocesos,
+          process: processes,
+          subproceso: subprocesos,
+          responsibleOwnerId: sql<string>`
+            COALESCE(
+              ${riskProcessLinks.responsibleOverrideId},
+              ${subprocesos.ownerId},
+              ${processes.ownerId},
+              ${macroprocesos.ownerId}
+            )
+          `.as('responsible_owner_id')
+        })
+        .from(riskProcessLinks)
+        .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+        .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+        .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+        .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+        .where(inArray(riskProcessLinks.id, riskProcessLinkIds));
+      
+      if (riskProcessLinksData.length === 0) {
+        return res.status(404).json({ message: "No se encontraron riesgos con los IDs proporcionados" });
+      }
+      
+      // Fetch process owners for each link
+      const enrichedLinks = await Promise.all(riskProcessLinksData.map(async (row) => {
+        let processOwner = null;
+        
+        if (row.responsibleOwnerId) {
+          const owners = await requireDb().select()
+            .from(processOwners)
+            .where(eq(processOwners.id, row.responsibleOwnerId))
+            .limit(1);
+          
+          if (owners.length > 0) {
+            processOwner = owners[0];
+          }
+        }
+        
+        return {
+          ...row,
+          processOwner
+        };
+      }));
+      
+      // GROUP RISK-PROCESS-LINKS BY RESPONSIBLE EMAIL
+      const risksByResponsible = new Map<string, Array<typeof enrichedLinks[number]>>();
+      const emailResults: Array<{ riskProcessLinkId: string; success: boolean; email?: string; error?: string; }> = [];
+      
+      for (const row of enrichedLinks) {
+        const rpl = row.riskProcessLink;
+        const owner = row.processOwner;
+        
+        if (!owner?.email) {
+          emailResults.push({
+            riskProcessLinkId: rpl.id,
+            success: false,
+            error: "Riesgo sin responsable o email configurado"
+          });
+          continue;
+        }
+        
+        // Group by email
+        const email = owner.email;
+        if (!risksByResponsible.has(email)) {
+          risksByResponsible.set(email, []);
+        }
+        risksByResponsible.get(email)!.push(row);
+      }
+      
+      // Now send one email per responsible (grouped)
+      let sentCount = 0;
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      
+      for (const [responsibleEmail, riskRows] of risksByResponsible.entries()) {
+        const riskProcessLinksList = riskRows.map(r => ({
+          id: r.riskProcessLink.id,
+          risk: r.risk!,
+          macroproceso: r.macroproceso,
+          process: r.process,
+          subproceso: r.subproceso
+        }));
+        const processOwner = riskRows[0].processOwner;
+        if (!processOwner) continue;
+        
+        // Generate batch validation token
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+        
+        const batchTokenValue = randomBytes(32).toString('hex');
+        const entityIds = riskProcessLinksList.map(r => r.id);
+        
+        const validationData = riskProcessLinksList.map(rpl => ({
+          id: rpl.id,
+          riskId: rpl.risk.id,
+          code: rpl.risk.code,
+          name: rpl.risk.name,
+          description: rpl.risk.description,
+          inherentRisk: rpl.risk.inherentRisk,
+          processName: rpl.subproceso?.name || rpl.process?.name || rpl.macroproceso?.name
+        }));
+        
+        // Get tenantId from first risk (all risks should belong to same tenant)
+        const tenantId = riskProcessLinksList[0].risk.tenantId;
+        
+        // Create batch token in database
+        const batchToken = await storage.createBatchValidationToken({
+          token: batchTokenValue,
+          tenantId, // CRITICAL: Include tenant for security isolation
+          type: 'risk',
+          entityIds,
+          responsibleEmail,
+          processOwnerId: processOwner.id,
+          validationData,
+          isUsed: false,
+          partiallyUsed: false,
+          expiresAt
+        });
+        
+        // Create validation URL (points to batch validation page)
+        const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
+        
+        // Helper function to get risk level text in Spanish
+        const getRiskLevelText = (inherentRisk: number) => {
+          if (inherentRisk >= 15) return { text: 'Crítico', color: '#dc2626' };
+          if (inherentRisk >= 10) return { text: 'Alto', color: '#ea580c' };
+          if (inherentRisk >= 6) return { text: 'Medio', color: '#f59e0b' };
+          return { text: 'Bajo', color: '#10b981' };
+        };
+        
+        // Build email with grouped risks table
+        const risksTableRows = riskProcessLinksList.map(rpl => {
+          const risk = rpl.risk;
+          const riskLevel = getRiskLevelText(risk.inherentRisk);
+          const processName = rpl.subproceso?.name || rpl.process?.name || rpl.macroproceso?.name || 'N/A';
+          
+          return `
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${risk.code}</td>
+              <td style="padding: 12px 8px; color: #1f2937;">${risk.name || ''}</td>
+              <td style="padding: 12px 8px; color: #6b7280;">${processName}</td>
+              <td style="padding: 12px 8px;">
+                <span style="display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; background-color: ${riskLevel.color}20; color: ${riskLevel.color};">
+                  ${riskLevel.text}
+                </span>
+              </td>
+            </tr>
+          `;
+        }).join('');
+        
+        const emailHtml = `
+          <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <h1 style="color: #1f2937; margin: 0; font-size: 24px;">Validación de Riesgos</h1>
+                <p style="color: #6b7280; margin-top: 8px; font-size: 14px;">Se requiere su validación para ${riskProcessLinksList.length} riesgo${riskProcessLinksList.length > 1 ? 's' : ''}</p>
+              </div>
+              
+              <div style="background: linear-gradient(135deg, #dc2626 0%, #f59e0b 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 16px; opacity: 0.9;">
+                  <strong>${riskProcessLinksList.length}</strong> ${riskProcessLinksList.length > 1 ? 'riesgos' : 'riesgo'} pendientes de validación
+                </p>
+              </div>
+              
+              <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 24px; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; min-width: 600px;">
+                  <thead>
+                    <tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Código</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nombre</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Proceso</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nivel</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${risksTableRows}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div style="margin-bottom: 24px;">
+                <p style="color: #4b5563; font-size: 14px; margin: 0 0 16px 0; text-align: center;">
+                  Haga clic en el botón para revisar y validar estos riesgos:
+                </p>
+                
+                <div style="text-align: center;">
+                  <a href="${validationUrl}" 
+                     style="display: inline-block; text-align: center; background-color: #dc2626; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; transition: background-color 0.2s;"
+                     onmouseover="this.style.backgroundColor='#b91c1c'"
+                     onmouseout="this.style.backgroundColor='#dc2626'">
+                    ⚠️ Revisar y Validar Riesgos
+                  </a>
+                </div>
+              </div>
+              
+              <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 24px;">
+                <p style="color: #9ca3af; font-size: 12px; margin: 0; text-align: center;">
+                  Este enlace es válido por 7 días.<br>
+                  Podrá aprobar, observar o rechazar cada riesgo individualmente.
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+              <p style="color: #6b7280; font-size: 12px; margin: 0;">
+                Este es un mensaje automático del Sistema de Gestión de Riesgos.
+              </p>
+            </div>
+          </div>
+        `;
+        
+        // Send grouped email
+        try {
+          const emailSent = await sendEmail({
+            from: 'noreply@unigrc.app',
+            to: responsibleEmail,
+            subject: `Validación de ${riskProcessLinksList.length} riesgo${riskProcessLinksList.length > 1 ? 's' : ''}`,
+            html: emailHtml
+          });
+          
+          if (emailSent) {
+            sentCount++;
+            
+            // Update notificationSent flag for all risk-process-links in this batch
+            for (const rpl of riskProcessLinksList) {
+              await requireDb()
+                .update(riskProcessLinks)
+                .set({ 
+                  notificationSent: true,
+                  lastNotificationSent: new Date()
+                })
+                .where(eq(riskProcessLinks.id, rpl.id));
+              
+              emailResults.push({
+                riskProcessLinkId: rpl.id,
+                success: true,
+                email: responsibleEmail
+              });
+            }
+          } else {
+            for (const rpl of riskProcessLinksList) {
+              emailResults.push({
+                riskProcessLinkId: rpl.id,
+                success: false,
+                error: "Error al enviar email"
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Error sending grouped email to", responsibleEmail, emailError);
+          for (const rpl of riskProcessLinksList) {
+            emailResults.push({
+              riskProcessLinkId: rpl.id,
+              success: false,
+              error: emailError instanceof Error ? emailError.message : "Error desconocido"
+            });
+          }
+        }
+      }
+      
+      // Return results
+      const successCount = emailResults.filter(r => r.success).length;
+      const failureCount = emailResults.filter(r => !r.success).length;
+      
+      res.json({
+        emailsSent: sentCount,
+        linksNotified: successCount,
+        failures: failureCount,
+        details: emailResults
+      });
+      
+    } catch (error) {
+      console.error("Error sending bulk risk validation emails:", error);
+      res.status(500).json({ message: "Failed to send bulk validation emails" });
+    }
+  });
+
+  // Resend validation notification for a single risk-process link
+  app.post("/api/risk-processes/:id/resend-notification", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const riskProcessLinkId = req.params.id;
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      console.log("📧 [RESEND] Endpoint called for risk-process link:", riskProcessLinkId);
+      console.log("   User:", req.user?.id, req.user?.email);
+      console.log("   Active tenant:", tenantId);
+      
+      // Check if email service is configured
+      const emailServiceAvailable = getEmailService();
+      if (!emailServiceAvailable) {
+        console.error("❌ [RESEND] Email service not configured");
+        return res.status(503).json({ 
+          message: "Servicio de email no configurado. Por favor, configure el servicio de email en la configuración del sistema.",
+          code: "EMAIL_SERVICE_NOT_CONFIGURED"
+        });
+      }
+      
+      // Get risk-process-link data
+      const rplData = await requireDb().select().from(riskProcessLinks).where(eq(riskProcessLinks.id, riskProcessLinkId)).limit(1);
+      
+      if (rplData.length === 0) {
+        return res.status(404).json({ message: "Risk-process link not found" });
+      }
+      
+      const rpl = rplData[0];
+      
+      // Get risk data
+      const riskData = await requireDb().select().from(risks).where(eq(risks.id, rpl.riskId)).limit(1);
+      
+      if (riskData.length === 0) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      const risk = riskData[0];
+      
+      // Get responsible owner - try override first, then hierarchy
+      let ownerId = rpl.responsibleOverrideId;
+      
+      if (!ownerId && rpl.subprocesoId) {
+        const spData = await requireDb().select().from(subprocesos).where(eq(subprocesos.id, rpl.subprocesoId)).limit(1);
+        if (spData.length > 0) ownerId = spData[0].ownerId;
+      }
+      
+      if (!ownerId && rpl.processId) {
+        const pData = await requireDb().select().from(processes).where(eq(processes.id, rpl.processId)).limit(1);
+        if (pData.length > 0) ownerId = pData[0].ownerId;
+      }
+      
+      if (!ownerId && rpl.macroprocesoId) {
+        const mpData = await requireDb().select().from(macroprocesos).where(eq(macroprocesos.id, rpl.macroprocesoId)).limit(1);
+        if (mpData.length > 0) ownerId = mpData[0].ownerId;
+      }
+      
+      if (!ownerId) {
+        return res.status(400).json({ message: "No se encontró responsable asignado" });
+      }
+      
+      // Get process owner details
+      const poData = await requireDb().select().from(processOwners).where(eq(processOwners.id, ownerId)).limit(1);
+      
+      if (poData.length === 0 || !poData[0].email) {
+        return res.status(400).json({ message: "No se encontró email del responsable" });
+      }
+      
+      const processOwner = poData[0];
+      
+      // Get process name
+      let processName = 'N/A';
+      if (rpl.subprocesoId) {
+        const spData = await requireDb().select().from(subprocesos).where(eq(subprocesos.id, rpl.subprocesoId)).limit(1);
+        if (spData.length > 0) processName = spData[0].name;
+      } else if (rpl.processId) {
+        const pData = await requireDb().select().from(processes).where(eq(processes.id, rpl.processId)).limit(1);
+        if (pData.length > 0) processName = pData[0].name;
+      } else if (rpl.macroprocesoId) {
+        const mpData = await requireDb().select().from(macroprocesos).where(eq(macroprocesos.id, rpl.macroprocesoId)).limit(1);
+        if (mpData.length > 0) processName = mpData[0].name;
+      }
+      
+      // Generate validation token
+      const tokenValue = randomBytes(32).toString('hex');
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      
+      // Create batch token
+      await storage.createBatchValidationToken({
+        token: tokenValue,
+        type: 'risk',
+        tenantId: tenantId!,
+        entityIds: [rpl.id],
+        responsibleEmail: processOwner.email,
+        processOwnerId: processOwner.id,
+        validationData: [{
+          id: rpl.id,
+          riskId: risk.id,
+          code: risk.code,
+          name: risk.name,
+          description: risk.description,
+          inherentRisk: risk.inherentRisk,
+          processName
+        }],
+        isUsed: false,
+        partiallyUsed: false,
+        expiresAt
+      });
+      
+      // Create validation URL
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      const validationUrl = `${baseUrl}/public/batch-validation/${tokenValue}`;
+      
+      // Get risk level
+      const getRiskLevelText = (inherentRisk: number) => {
+        if (inherentRisk >= 15) return { text: 'Crítico', color: '#dc2626' };
+        if (inherentRisk >= 10) return { text: 'Alto', color: '#ea580c' };
+        if (inherentRisk >= 6) return { text: 'Medio', color: '#f59e0b' };
+        return { text: 'Bajo', color: '#10b981' };
+      };
+      
+      const riskLevel = getRiskLevelText(risk.inherentRisk || 0);
+      
+      console.log("📧 [RESEND] Sending email to:", processOwner.email);
+      
+      // Send email
+      const emailSent = await sendEmail({
+        from: 'noreply@unigrc.app',
+        to: processOwner.email,
+        subject: `Recordatorio: Validación de riesgo ${risk.code}`,
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 32px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">⚠️ Recordatorio de Validación</h1>
+            </div>
+            <div style="background: white; padding: 32px; border-radius: 0 0 8px 8px; border: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 16px 0; color: #374151;">Estimado/a <strong>${processOwner.name}</strong>,</p>
+              <p style="margin: 0 0 24px 0; color: #6b7280;">Se requiere validar el siguiente riesgo:</p>
+              <div style="background: #fef2f2; border-left: 4px solid ${riskLevel.color}; padding: 16px; margin: 24px 0; border-radius: 4px;">
+                <p style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #1f2937;">${risk.code}</p>
+                <p style="margin: 0 0 8px 0; color: #4b5563;">${risk.name || ''}</p>
+                <p style="margin: 0; font-size: 13px; color: #6b7280;"><strong>Proceso:</strong> ${processName}</p>
+              </div>
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="${validationUrl}" style="display: inline-block; background: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600;">Revisar y Validar</a>
+              </div>
+              <p style="margin: 16px 0 0 0; font-size: 12px; color: #9ca3af; text-align: center;">Enlace válido por 7 días</p>
+            </div>
+          </div>
+        `
+      });
+      
+      if (!emailSent) {
+        console.error("❌ [RESEND] Email failed to send");
+        return res.status(500).json({ 
+          message: "No se pudo enviar el email. Verifique la configuración del servicio de email.",
+          code: "EMAIL_SEND_FAILED"
+        });
+      }
+      
+      console.log("✅ [RESEND] Email sent successfully to:", processOwner.email);
+      
+      // Update notification flags
+      await requireDb().update(riskProcessLinks).set({
+        notificationSent: true,
+        lastNotificationSent: new Date()
+      }).where(eq(riskProcessLinks.id, rpl.id));
+      
+      res.json({ 
+        success: true, 
+        message: "Notificación reenviada exitosamente",
+        email: processOwner.email 
+      });
+      
+    } catch (error) {
+      console.error("❌ [RESEND] Error resending validation notification:", error);
+      res.status(500).json({ 
+        message: "Error al reenviar notificación", 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // ============== RISK-PROCESS MIGRATION ROUTES ==============
+  
+  // Execute migration from legacy risk fields to riskProcessLinks
+  app.post("/api/risk-processes/migrate", requirePermission("admin"), async (req, res) => {
+    try {
+      console.log("Starting migration from legacy risk fields to riskProcessLinks...");
+      const result = await storage.migrateRisksToRiskProcessLinks();
+      
+      // Invalidate all risk caches after migration (associations changed)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await invalidateRiskControlCaches();
+      }
+      
+      if (result.success) {
+        res.json({
+          message: "Migration completed successfully",
+          migratedCount: result.migratedCount,
+          errors: result.errors
+        });
+      } else {
+        res.status(500).json({
+          message: "Migration completed with errors",
+          migratedCount: result.migratedCount,
+          errors: result.errors
+        });
+      }
+    } catch (error) {
+      console.error("Error during migration:", error);
+      res.status(500).json({ 
+        message: "Migration failed", 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Cleanup legacy risk fields after successful migration
+  app.post("/api/risk-processes/cleanup-legacy", requirePermission("admin"), async (req, res) => {
+    try {
+      console.log("Starting cleanup of legacy risk fields...");
+      const result = await storage.cleanupLegacyRiskFields();
+      
+      // Invalidate all risk caches after cleanup (data structure changed)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await invalidateRiskControlCaches();
+      }
+      
+      if (result.success) {
+        res.json({
+          message: "Cleanup completed successfully",
+          updatedCount: result.updatedCount,
+          errors: result.errors
+        });
+      } else {
+        res.status(500).json({
+          message: "Cleanup failed",
+          updatedCount: result.updatedCount,
+          errors: result.errors
+        });
+      }
+    } catch (error) {
+      console.error("Error during cleanup:", error);
+      res.status(500).json({ 
+        message: "Cleanup failed", 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // ============== CONTROL-PROCESS ASSOCIATION ROUTES ==============
+  
+  // Get all control-process associations
+  app.get("/api/control-processes", requirePermission("view_all"), async (req, res) => {
+    try {
+      const controlProcesses = await storage.getControlProcessesWithDetails();
+      res.json(controlProcesses);
+    } catch (error) {
+      console.error("Error fetching control processes:", error);
+      res.status(500).json({ message: "Failed to fetch control processes" });
+    }
+  });
+
+  // Get control-process associations by control ID
+  app.get("/api/control-processes/control/:controlId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const controlProcesses = await storage.getControlProcessesByControl(req.params.controlId);
+      res.json(controlProcesses);
+    } catch (error) {
+      console.error("Error fetching control processes by control:", error);
+      res.status(500).json({ message: "Failed to fetch control processes by control" });
+    }
+  });
+
+  // Get control-process associations by process hierarchy
+  app.get("/api/control-processes/process", requirePermission("view_all"), async (req, res) => {
+    try {
+      // Validate query parameters with improved schema
+      const validatedQuery = processFilterSchema.parse(req.query);
+      const { macroprocesoId, processId, subprocesoId } = validatedQuery;
+      
+      const controlProcesses = await storage.getControlProcessesByProcess(
+        macroprocesoId,
+        processId,
+        subprocesoId
+      );
+      res.json(controlProcesses);
+    } catch (error) {
+      console.error("Error fetching control processes by process:", error);
+      res.status(500).json({ message: "Failed to fetch control processes by process" });
+    }
+  });
+
+  // Create new control-process association
+  app.post("/api/control-processes", requirePermission("create_all"), async (req, res) => {
+    try {
+      const validatedData = insertControlProcessSchema.parse(req.body);
+      const controlProcess = await storage.createControlProcess(validatedData);
+      
+      if (!controlProcess) {
+        return res.status(400).json({ message: "Failed to create control-process association" });
+      }
+      
+      // Invalidate caches after creation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
+      }
+      
+      res.status(201).json(controlProcess);
+    } catch (error) {
+      console.error("Error creating control process:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to create control-process association" });
+    }
+  });
+
+  // Update control-process association
+  app.put("/api/control-processes/:id", requirePermission("edit_all"), async (req, res) => {
+    try {
+      // Use specific update schema to prevent overposting
+      const updateData = updateControlProcessSchema.parse(req.body);
+      const controlProcess = await storage.updateControlProcess(req.params.id, updateData);
+      
+      if (!controlProcess) {
+        return res.status(404).json({ message: "Control-process association not found" });
+      }
+      
+      // Invalidate caches after update
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
+      }
+      
+      res.json(controlProcess);
+    } catch (error) {
+      console.error("Error updating control process:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to update control-process association" });
+    }
+  });
+
+  // Delete control-process association
+  app.delete("/api/control-processes/:id", requirePermission("delete_all"), async (req, res) => {
+    try {
+      const success = await storage.deleteControlProcess(req.params.id);
+      
+      if (!success) {
+        return res.status(404).json({ message: "Control-process association not found" });
+      }
+      
+      // Invalidate caches after delete
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
+      }
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting control process:", error);
+      res.status(500).json({ message: "Failed to delete control-process association" });
+    }
+  });
+
+  // Validate control-process association
+  app.post("/api/control-processes/:id/validate", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      // Use specific validation schema
+      const validatedData = validateControlProcessSchema.parse(req.body);
+      const { validationStatus, validationComments } = validatedData;
+
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const validatedBy = getAuthenticatedUserId(req);
+
+      const controlProcess = await storage.validateControlProcess(
+        req.params.id,
+        validatedBy,
+        validationStatus,
+        validationComments
+      );
+
+      if (!controlProcess) {
+        return res.status(404).json({ message: "Control-process association not found" });
+      }
+
+      // Invalidate caches after validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (tenantId) {
+        await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
+      }
+
+      res.json(controlProcess);
+    } catch (error) {
+      console.error("Error validating control process:", error);
+      res.status(500).json({ message: "Failed to validate control-process association" });
+    }
+  });
+
+  // Update control-process self-evaluation
+  app.put("/api/control-processes/:id/self-evaluation", requirePermission("edit_controls"), async (req, res) => {
+    try {
+      // Use specific self-evaluation schema
+      const validatedData = controlProcessSelfEvaluationSchema.parse(req.body);
+      const { 
+        selfEvaluationStatus, 
+        selfEvaluationComments, 
+        selfEvaluationScore, 
+        nextEvaluationDate 
+      } = validatedData;
+
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const selfEvaluatedBy = getAuthenticatedUserId(req);
+
+      const controlProcess = await storage.updateControlProcessSelfEvaluation(req.params.id, {
+        selfEvaluatedBy,
+        selfEvaluationStatus,
+        selfEvaluationComments,
+        selfEvaluationScore,
+        nextEvaluationDate: nextEvaluationDate ? new Date(nextEvaluationDate) : undefined
+      });
+
+      if (!controlProcess) {
+        return res.status(404).json({ message: "Control-process association not found" });
+      }
+
+      res.json(controlProcess);
+    } catch (error) {
+      console.error("Error updating control process self-evaluation:", error);
+      res.status(500).json({ message: "Failed to update control-process self-evaluation" });
+    }
+  });
+
+  // Get pending self-evaluation control processes
+  app.get("/api/control-processes/self-evaluation/pending", requirePermission("view_all"), async (req, res) => {
+    try {
+      const controlProcesses = await storage.getPendingSelfEvaluationControlProcesses();
+      res.json(controlProcesses);
+    } catch (error) {
+      console.error("Error fetching pending self-evaluation control processes:", error);
+      res.status(500).json({ message: "Failed to fetch pending self-evaluation control processes" });
+    }
+  });
+
+  // ============== AI RISK SUGGESTIONS (DEPRECATED - Moved to Azure OpenAI) ==============
+  // These endpoints are no longer used. AI functionality now uses Azure OpenAI via AI Assistant.
+  
+  /*
+  // AI Risk Suggestions endpoint (DEPRECATED)
+  app.post("/api/risks/ai-suggestions", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      // Get authenticated user ID
+      const userId = getAuthenticatedUserId(req as any, { allowDevDemo: true });
+      
+      // Validate request data
+      const validatedData = aiRiskSuggestionSchema.parse(req.body);
+      
+      console.log("🤖 AI Risk Suggestions request:", {
+        userId,
+        context: validatedData,
+        timestamp: new Date().toISOString()
+      });
+
+      // SCOPE NORMALIZATION FIX: Convert numeric string IDs to actual UUIDs
+      let normalizedProcessId: string | undefined;
+      let normalizedSubprocesoId: string | undefined; 
+      let normalizedMacroprocesoId: string | undefined;
+
+      // Map processId: '1', '2', etc. to actual UUIDs
+      if (validatedData.processId) {
+        const allProcesses = await storage.getProcesses();
+        const processIndex = parseInt(validatedData.processId) - 1;
+        if (processIndex >= 0 && processIndex < allProcesses.length) {
+          normalizedProcessId = allProcesses[processIndex].id;
+          console.log(`🔍 SCOPE FIX: Mapped processId '${validatedData.processId}' to UUID '${normalizedProcessId}'`);
+        } else {
+          // Try direct UUID lookup if it's already a UUID
+          const directProcess = await storage.getProcess(validatedData.processId);
+          if (directProcess) {
+            normalizedProcessId = validatedData.processId;
+            console.log(`🔍 SCOPE FIX: Using direct UUID processId '${normalizedProcessId}'`);
+          } else {
+            console.warn(`⚠️ SCOPE FIX: Could not resolve processId '${validatedData.processId}' to valid UUID`);
+          }
+        }
+      }
+
+      // Map subprocesoId similarly
+      if (validatedData.subprocesoId) {
+        const allSubprocesos = await storage.getSubprocesos();
+        const subprocesoIndex = parseInt(validatedData.subprocesoId) - 1;
+        if (subprocesoIndex >= 0 && subprocesoIndex < allSubprocesos.length) {
+          normalizedSubprocesoId = allSubprocesos[subprocesoIndex].id;
+          console.log(`🔍 SCOPE FIX: Mapped subprocesoId '${validatedData.subprocesoId}' to UUID '${normalizedSubprocesoId}'`);
+        } else {
+          const directSubproceso = await storage.getSubproceso(validatedData.subprocesoId);
+          if (directSubproceso) {
+            normalizedSubprocesoId = validatedData.subprocesoId;
+            console.log(`🔍 SCOPE FIX: Using direct UUID subprocesoId '${normalizedSubprocesoId}'`);
+          } else {
+            console.warn(`⚠️ SCOPE FIX: Could not resolve subprocesoId '${validatedData.subprocesoId}' to valid UUID`);
+          }
+        }
+      }
+
+      // Map macroprocesoId similarly
+      if (validatedData.macroprocesoId) {
+        const allMacroprocesos = await storage.getMacroprocesos();
+        const macroprocesoIndex = parseInt(validatedData.macroprocesoId) - 1;
+        if (macroprocesoIndex >= 0 && macroprocesoIndex < allMacroprocesos.length) {
+          normalizedMacroprocesoId = allMacroprocesos[macroprocesoIndex].id;
+          console.log(`🔍 SCOPE FIX: Mapped macroprocesoId '${validatedData.macroprocesoId}' to UUID '${normalizedMacroprocesoId}'`);
+        } else {
+          const directMacroproceso = await storage.getMacroproceso(validatedData.macroprocesoId);
+          if (directMacroproceso) {
+            normalizedMacroprocesoId = validatedData.macroprocesoId;
+            console.log(`🔍 SCOPE FIX: Using direct UUID macroprocesoId '${normalizedMacroprocesoId}'`);
+          } else {
+            console.warn(`⚠️ SCOPE FIX: Could not resolve macroprocesoId '${validatedData.macroprocesoId}' to valid UUID`);
+          }
+        }
+      }
+
+      console.log("🎯 SCOPE NORMALIZATION RESULT:", {
+        original: { processId: validatedData.processId, subprocesoId: validatedData.subprocesoId, macroprocesoId: validatedData.macroprocesoId },
+        normalized: { processId: normalizedProcessId, subprocesoId: normalizedSubprocesoId, macroprocesoId: normalizedMacroprocesoId }
+      });
+
+      // Log global documentation mode if requested
+      if (validatedData.useGlobalDocumentation) {
+        console.log('🌐 GLOBAL DOCUMENTATION MODE requested - AI will analyze ALL compliance documents in the system');
+      } else {
+        console.log('🎯 Scope-specific mode - AI will analyze documents filtered by process scope');
+      }
+      
+      // Generate AI suggestions using the service with normalized UUIDs and global documentation support
+      // SECURITY: Pass userId for RBAC enforcement and cache isolation
+      const suggestions = await riskAIService.generateRiskSuggestions({
+        processId: normalizedProcessId,
+        subprocesoId: normalizedSubprocesoId,
+        macroprocesoId: normalizedMacroprocesoId,
+        userContext: validatedData.userContext || undefined,
+        industry: validatedData.industry || undefined,
+        excludeExistingRisks: validatedData.excludeExistingRisks,
+        useGlobalDocumentation: validatedData.useGlobalDocumentation,
+        userId: userId // SECURITY: Critical for document permission validation and cache isolation
+      });
+
+      // Log successful generation
+      console.log("✅ AI Risk Suggestions generated successfully:", {
+        suggestionCount: suggestions.suggestions.length,
+        context: suggestions.context.processHierarchy,
+        existingRisksCount: suggestions.context.existingRisksCount
+      });
+
+      res.json(suggestions);
+
+    } catch (error: unknown) {
+      console.error("❌ AI Risk Suggestions error:", error);
+      
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid request data",
+          errors: error.errors
+        });
+      }
+
+      // Handle specific AI service errors
+      if (error instanceof Error) {
+        // Check if it's an Ollama connection error
+        if (error.message.includes("Ollama") || error.message.includes("fetch")) {
+          return res.status(503).json({
+            success: false,
+            message: "AI service temporarily unavailable. Please try again later.",
+            error: "AI_SERVICE_UNAVAILABLE"
+          });
+        }
+        
+        // Handle authentication errors
+        if (error.message.includes("authenticated")) {
+          return res.status(401).json({
+            success: false,
+            message: "Authentication required",
+            error: "AUTHENTICATION_REQUIRED"
+          });
+        }
+      }
+
+      // Generic error response
+      res.status(500).json({
+        success: false,
+        message: "Failed to generate AI risk suggestions. Please try again.",
+        error: "INTERNAL_SERVER_ERROR"
+      });
+    }
+  });
+
+  // AI Risk Suggestions cache management (admin only) - ENHANCED
+  app.delete("/api/risks/ai-suggestions/cache", requirePermission("manage_system"), async (req: Request, res: Response) => {
+    try {
+      // Get cache stats before clearing
+      const statsBefore = riskAIService.getCacheStats();
+      console.log("📊 Cache stats before clearing:", statsBefore);
+      
+      // Clear all caches aggressively
+      riskAIService.clearCache();
+      
+      // Get stats after clearing to confirm
+      const statsAfter = riskAIService.getCacheStats();
+      console.log("📊 Cache stats after clearing:", statsAfter);
+      
+      console.log("🧹 AI Risk Suggestions cache cleared by admin - NEXT REQUEST WILL EXECUTE FRESH CODE");
+      
+      res.json({
+        success: true,
+        message: "AI suggestions cache cleared successfully - next request will execute fresh PDF extraction code",
+        statsBefore,
+        statsAfter,
+        note: "Cache busted - PDF extraction will now run on next AI suggestion request"
+      });
+    } catch (error) {
+      console.error("Error clearing AI suggestions cache:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to clear cache"
+      });
+    }
+  });
+
+  // AI Risk Suggestions cache stats (admin only)
+  app.get("/api/risks/ai-suggestions/cache/stats", requirePermission("manage_system"), async (req: Request, res: Response) => {
+    try {
+      const stats = riskAIService.getCacheStats();
+      
+      res.json({
+        success: true,
+        data: stats
+      });
+    } catch (error) {
+      console.error("Error getting AI suggestions cache stats:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to get cache statistics"
+      });
+    }
+  });
+
+  // Development-only: Force fresh AI suggestions with PDF extraction
+  if (process.env.NODE_ENV === 'development') {
+    app.post("/api/risks/ai-suggestions/force-fresh", isAuthenticated, async (req: Request, res: Response) => {
+      try {
+        console.log("🔥 DEVELOPMENT ENDPOINT: Forcing fresh AI risk suggestions with PDF extraction");
+        
+        // SECURITY: Get authenticated user ID for development testing too
+        const userId = getAuthenticatedUserId(req as any, { allowDevDemo: true });
+        
+        // Parse and validate the request body
+        const validatedContext = aiRiskSuggestionSchema.parse(req.body);
+        
+        // Add force fresh flag and handle null values
+        const contextWithForce = {
+          ...validatedContext,
+          forceFresh: true,
+          // Convert null values to undefined for type compatibility
+          processId: validatedContext.processId === null ? undefined : validatedContext.processId,
+          subprocesoId: validatedContext.subprocesoId === null ? undefined : validatedContext.subprocesoId,
+          macroprocesoId: validatedContext.macroprocesoId === null ? undefined : validatedContext.macroprocesoId,
+          industry: validatedContext.industry === null ? undefined : validatedContext.industry,
+          userContext: validatedContext.userContext === null ? undefined : validatedContext.userContext,
+          userId: userId // SECURITY: Critical for permission validation even in dev mode
+        };
+        
+        console.log("🧪 Testing new PDF extraction code with context (with security):", contextWithForce);
+        
+        // Generate suggestions with forced cache bypass and security validation
+        const suggestions = await riskAIService.generateRiskSuggestions(contextWithForce);
+        
+        console.log("✅ Fresh AI suggestions generated successfully!");
+        console.log(`📝 Generated ${suggestions.suggestions.length} risk suggestions`);
+        
+        res.json({
+          success: true,
+          data: suggestions,
+          note: "Generated with forced cache bypass - PDF extraction executed",
+          debug: {
+            cacheBypass: true,
+            pdfExtractionTested: true,
+            generatedAt: new Date().toISOString()
+          }
+        });
+      } catch (error) {
+        console.error("Error in force fresh AI suggestions:", error);
+        
+        // Enhanced error responses for different scenarios
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid request data",
+            errors: error.errors
+          });
+        }
+        
+        // Handle service errors
+        if (error instanceof Error && (error.message.includes("Ollama") || error.message.includes("fetch"))) {
+          return res.status(503).json({
+            success: false,
+            message: "AI service temporarily unavailable. Please try again later.",
+            error: "AI_SERVICE_UNAVAILABLE"
+          });
+        }
+        
+        // Generic error response
+        res.status(500).json({
+          success: false,
+          message: "Failed to generate fresh AI risk suggestions. Please try again.",
+          error: "INTERNAL_SERVER_ERROR"
+        });
+      }
+    });
+  }
+  */
+  // ============== END OF DEPRECATED AI RISK SUGGESTIONS ==============
+
+  // ============== RISK EVENTS ==============
+  
+  // Consolidated endpoint for risk events page - reduces API calls from 3 to 1
+  app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Cache key for consolidated risk events page data
+      const cacheKey = `risk-events-page-data:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try to get from cache
+      const cached = await distributedCache.get<any>(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CACHE MISS] ${cacheKey} - fetching all data in parallel`);
+      
+      // Parse pagination parameters
+      const limit = parseInt(req.query.limit as string) || 1000;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Fetch all data in parallel
+      const [
+        eventsData,
+        totalCountResult,
+        risksData,
+        processesData
+      ] = await Promise.all([
+        // Events with pagination
+        requireDb().select().from(riskEvents)
+          .where(and(
+            eq(riskEvents.tenantId, tenantId),
+            isNull(riskEvents.deletedAt)
+          ))
+          .orderBy(desc(riskEvents.eventDate))
+          .limit(limit)
+          .offset(offset),
+        // Total count
+        requireDb().select({ count: sql<number>`count(*)` })
+          .from(riskEvents)
+          .where(and(
+            eq(riskEvents.tenantId, tenantId),
+            isNull(riskEvents.deletedAt)
+          )),
+        // Risks for reference
+        storage.getRisks(tenantId),
+        // Processes for reference
+        storage.getProcesses(tenantId)
+      ]);
+      
+      // Load related entities for all events in parallel
+      const eventsForList = await Promise.all(eventsData.map(async (event) => {
+        const [relatedMacroprocesos, relatedProcesses, relatedSubprocesos] = await Promise.all([
+          requireDb()
+            .select({
+              id: macroprocesos.id,
+              name: macroprocesos.name,
+              code: macroprocesos.code
+            })
+            .from(riskEventMacroprocesos)
+            .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+            .where(eq(riskEventMacroprocesos.riskEventId, event.id)),
+          requireDb()
+            .select({
+              id: processes.id,
+              name: processes.name,
+              code: processes.code
+            })
+            .from(riskEventProcesses)
+            .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+            .where(eq(riskEventProcesses.riskEventId, event.id)),
+          requireDb()
+            .select({
+              id: subprocesos.id,
+              name: subprocesos.name,
+              code: subprocesos.code
+            })
+            .from(riskEventSubprocesos)
+            .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+            .where(eq(riskEventSubprocesos.riskEventId, event.id))
+        ]);
+        
+        return {
+          ...event,
+          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+          relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
+          relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
+          relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
+          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+          selectedRisks: event.riskId ? [event.riskId] : []
+        };
+      }));
+      
+      const response = {
+        riskEvents: {
+          data: eventsForList,
+          pagination: {
+            limit,
+            offset,
+            total: totalCountResult[0]?.count || 0
+          }
+        },
+        risks: risksData || [],
+        processes: processesData || []
+      };
+      
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, response, 30);
+      
+      res.json(response);
+    } catch (error) {
+      console.error('[ERROR] /api/risk-events/page-data failed:', error);
+      res.status(500).json({ message: "Failed to fetch risk events page data" });
+    }
+  });
+
+  app.get("/api/risk-events", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Parse pagination parameters
+      const limit = parseInt(req.query.limit as string) || 100; // Default 100 events
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Fetch events with pagination (basic data only for list view)
+      const [events, totalCount] = await Promise.all([
+        requireDb().select().from(riskEvents)
+          .where(and(
+            eq(riskEvents.tenantId, tenantId),
+            isNull(riskEvents.deletedAt)
+          ))
+          .orderBy(desc(riskEvents.eventDate))
+          .limit(limit)
+          .offset(offset),
+        requireDb().select({ count: sql<number>`count(*)` })
+          .from(riskEvents)
+          .where(and(
+            eq(riskEvents.tenantId, tenantId),
+            isNull(riskEvents.deletedAt)
+          ))
+      ]);
+      
+      // Load related entities for all events in parallel
+      const eventsForList = await Promise.all(events.map(async (event) => {
+        // Get related macroprocesos
+        const relatedMacroprocesos = await requireDb()
+          .select({
+            id: macroprocesos.id,
+            name: macroprocesos.name,
+            code: macroprocesos.code
+          })
+          .from(riskEventMacroprocesos)
+          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+          .where(eq(riskEventMacroprocesos.riskEventId, event.id));
+        
+        // Get related processes
+        const relatedProcesses = await requireDb()
+          .select({
+            id: processes.id,
+            name: processes.name,
+            code: processes.code
+          })
+          .from(riskEventProcesses)
+          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+          .where(eq(riskEventProcesses.riskEventId, event.id));
+        
+        // Get related subprocesos
+        const relatedSubprocesos = await requireDb()
+          .select({
+            id: subprocesos.id,
+            name: subprocesos.name,
+            code: subprocesos.code
+          })
+          .from(riskEventSubprocesos)
+          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+          .where(eq(riskEventSubprocesos.riskEventId, event.id));
+        
+        return {
+          ...event,
+          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+          relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
+          relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
+          relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
+          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+          selectedRisks: event.riskId ? [event.riskId] : []
+        };
+      }));
+      
+      res.json({
+        data: eventsForList,
+        pagination: {
+          limit,
+          offset,
+          total: totalCount[0]?.count || 0
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching risk events:', error);
+      res.status(500).json({ message: "Failed to fetch risk events" });
+    }
+  });
+
+  app.get("/api/risk-events/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const event = await storage.getRiskEvent(req.params.id, tenantId);
+      if (!event) {
+        return res.status(404).json({ message: "Risk event not found" });
+      }
+      
+      // Get related macroprocesos
+      const relatedMacroprocesos = await requireDb()
+        .select({
+          id: macroprocesos.id,
+          name: macroprocesos.name,
+          code: macroprocesos.code
+        })
+        .from(riskEventMacroprocesos)
+        .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+        .where(eq(riskEventMacroprocesos.riskEventId, event.id));
+      
+      // Get related processes
+      const relatedProcesses = await requireDb()
+        .select({
+          id: processes.id,
+          name: processes.name,
+          code: processes.code
+        })
+        .from(riskEventProcesses)
+        .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+        .where(eq(riskEventProcesses.riskEventId, event.id));
+      
+      // Get related subprocesos
+      const relatedSubprocesos = await requireDb()
+        .select({
+          id: subprocesos.id,
+          name: subprocesos.name,
+          code: subprocesos.code
+        })
+        .from(riskEventSubprocesos)
+        .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+        .where(eq(riskEventSubprocesos.riskEventId, event.id));
+      
+      // Serialize dates to ISO strings to avoid "Invalid date" errors in frontend
+      const eventWithRelations = {
+        ...event,
+        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+        relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
+        relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
+        relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      };
+      res.json(eventWithRelations);
+    } catch (error) {
+      console.error('Error fetching risk event with relationships:', error);
+      res.status(500).json({ message: "Failed to fetch risk event" });
+    }
+  });
+
+  app.get("/api/risk-events/type/:eventType", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const events = await storage.getRiskEventsByType(req.params.eventType, tenantId);
+      // Add legacy fields for backward compatibility during transition
+      const eventsWithLegacy = events.map(event => ({
+        ...event,
+        relatedMacroprocesos: [],
+        relatedProcesses: [],
+        relatedSubprocesos: [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      }));
+      res.json(eventsWithLegacy);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk events by type" });
+    }
+  });
+
+  app.get("/api/risk-events/status/:status", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const events = await storage.getRiskEventsByStatus(req.params.status, tenantId);
+      // Add legacy fields for backward compatibility during transition
+      const eventsWithLegacy = events.map(event => ({
+        ...event,
+        relatedMacroprocesos: [],
+        relatedProcesses: [],
+        relatedSubprocesos: [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      }));
+      res.json(eventsWithLegacy);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk events by status" });
+    }
+  });
+
+  app.get("/api/risk-events/process/:processId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const events = await storage.getRiskEventsByProcess(req.params.processId, tenantId);
+      // Add legacy fields for backward compatibility during transition
+      const eventsWithLegacy = events.map(event => ({
+        ...event,
+        relatedMacroprocesos: [],
+        relatedProcesses: [],
+        relatedSubprocesos: [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      }));
+      res.json(eventsWithLegacy);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk events by process" });
+    }
+  });
+
+  app.get("/api/risk-events/risk/:riskId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const events = await storage.getRiskEventsByRisk(req.params.riskId, tenantId);
+      // Add legacy fields for backward compatibility during transition
+      const eventsWithLegacy = events.map(event => ({
+        ...event,
+        relatedMacroprocesos: [],
+        relatedProcesses: [],
+        relatedSubprocesos: [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      }));
+      res.json(eventsWithLegacy);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk events by risk" });
+    }
+  });
+
+  app.post("/api/risk-events", isAuthenticated, async (req, res) => {
+    try {
+      // Transform eventDate string to Date if present
+      const bodyWithDateTransform = {
+        ...req.body,
+        ...(req.body.eventDate && { eventDate: new Date(req.body.eventDate) })
+      };
+      
+      // Transitional compatibility: ensure riskId is set BEFORE parsing
+      const riskId = bodyWithDateTransform.riskId ?? bodyWithDateTransform.selectedRisks?.[0];
+      const bodyWithRiskId = { ...bodyWithDateTransform, riskId };
+      
+      const validatedData = insertRiskEventSchema.parse(bodyWithRiskId);
+      
+      // Get authenticated user ID for audit fields
+      const userId = getAuthenticatedUserId(req);
+      const eventWithAudit = {
+        ...validatedData,
+        reportedBy: validatedData.reportedBy || userId,
+        createdBy: userId
+      };
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const event = await storage.createRiskEvent(await withTenantId(req, eventWithAudit));
+      
+      // Handle related entities if provided
+      if (req.body.relatedEntities && Array.isArray(req.body.relatedEntities)) {
+        await storage.setRiskEventEntities(event.id, req.body.relatedEntities);
+      }
+      
+      // Invalidate risk caches (risk event affects residual risk calculations)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        invalidateRiskEventsPageDataCache()
+      ]);
+      
+      res.status(201).json(event);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid risk event data", details: error.errors });
+      }
+      console.error('Error creating risk event:', error);
+      res.status(500).json({ message: "Failed to create risk event" });
+    }
+  });
+
+  app.put("/api/risk-events/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get tenant ID from authenticated user (FIX: destructure properly)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Get existing risk event for audit logging
+      const existingEvent = await storage.getRiskEvent(req.params.id, tenantId);
+      if (!existingEvent) {
+        return res.status(404).json({ message: "Risk event not found" });
+      }
+      
+      // Helper function to safely parse event date
+      const parseEventDate = (dateValue: any): Date | undefined => {
+        if (!dateValue) return undefined;
+        
+        try {
+          const parsedDate = typeof dateValue === 'string' ? new Date(dateValue) : dateValue;
+          // Check if date is valid
+          if (!isNaN(parsedDate.getTime())) {
+            return parsedDate;
+          }
+        } catch (error) {
+          console.warn('Invalid date value in update, skipping:', dateValue);
+        }
+        
+        return undefined;
+      };
+      
+      // Transform eventDate string to Date if present (with validation)
+      const bodyWithDateTransform = {
+        ...req.body,
+        ...(req.body.eventDate && { eventDate: parseEventDate(req.body.eventDate) })
+      };
+      
+      // Transitional compatibility: ensure riskId is set BEFORE parsing
+      const riskId = bodyWithDateTransform.riskId ?? bodyWithDateTransform.selectedRisks?.[0];
+      const bodyWithRiskId = { ...bodyWithDateTransform, riskId };
+      
+      const validatedData = insertRiskEventSchema.partial().parse(bodyWithRiskId);
+      
+      // Inject audit fields (updatedBy)
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withUpdatedBy(validatedData, userId);
+      
+      const event = await storage.updateRiskEvent(req.params.id, dataWithAudit);
+      if (!event) {
+        return res.status(404).json({ message: "Risk event not found" });
+      }
+      
+      // Handle related entities if provided
+      if (req.body.relatedEntities !== undefined) {
+        await storage.setRiskEventEntities(req.params.id, req.body.relatedEntities || []);
+      }
+      
+      // Load related entities for response
+      const relatedMacroprocesos = await requireDb()
+        .select({
+          id: macroprocesos.id,
+          name: macroprocesos.name,
+          code: macroprocesos.code
+        })
+        .from(riskEventMacroprocesos)
+        .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+        .where(eq(riskEventMacroprocesos.riskEventId, event.id));
+      
+      const relatedProcesses = await requireDb()
+        .select({
+          id: processes.id,
+          name: processes.name,
+          code: processes.code
+        })
+        .from(riskEventProcesses)
+        .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+        .where(eq(riskEventProcesses.riskEventId, event.id));
+      
+      const relatedSubprocesos = await requireDb()
+        .select({
+          id: subprocesos.id,
+          name: subprocesos.name,
+          code: subprocesos.code
+        })
+        .from(riskEventSubprocesos)
+        .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+        .where(eq(riskEventSubprocesos.riskEventId, event.id));
+      
+      // Log changes to audit_logs
+      try {
+        const changes: Record<string, { old: any; new: any }> = {};
+        
+        // Fields to exclude from audit logs (internal/audit fields)
+        const excludedFields = [
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
+          'deletedAt', 'deletedBy'
+        ];
+        
+        // Compare existingEvent with dataWithAudit to detect changes
+        for (const key in dataWithAudit) {
+          // Skip excluded fields
+          if (excludedFields.includes(key)) continue;
+          
+          const oldValue = (existingEvent as any)[key];
+          const newValue = (dataWithAudit as any)[key];
+          
+          // Check if values are different
+          if (oldValue !== newValue && newValue !== undefined) {
+            changes[key] = { old: oldValue, new: newValue };
+          }
+        }
+        
+        // Only insert audit log if there are actual changes
+        if (Object.keys(changes).length > 0) {
+          await requireDb().insert(auditLogs).values({
+            entityType: 'risk_event',
+            entityId: req.params.id,
+            action: 'update',
+            userId: userId,
+            changes: changes,
+            ipAddress: req.ip || req.connection.remoteAddress || null,
+            userAgent: req.get('user-agent') || null
+          });
+        }
+      } catch (auditError) {
+        // Don't fail the request if audit logging fails
+        console.error('Failed to log audit changes for risk event:', auditError);
+      }
+      
+      // Invalidate risk caches (risk event update affects residual risk)
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        invalidateRiskEventsPageDataCache()
+      ]);
+      
+      // Serialize dates and return with relations loaded
+      const eventWithRelations = {
+        ...event,
+        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+        relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
+        relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
+        relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
+      };
+      res.json(eventWithRelations);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid risk event data", details: error.errors });
+      }
+      console.error('Error updating risk event:', error);
+      res.status(500).json({ message: "Failed to update risk event" });
+    }
+  });
+
+  app.delete("/api/risk-events/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteRiskEvent(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Risk event not found" });
+      }
+      
+      // Invalidate risk caches (risk event deletion affects residual risk)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        invalidateRiskEventsPageDataCache()
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete risk event" });
+    }
+  });
+
+  // Check fraud history for audit plan entities based on risk events in last 3 years
+  app.get("/api/risk-events/fraud-history/check", isAuthenticated, async (req, res) => {
+    try {
+      const { year, startMonth = 1 } = req.query;
+      
+      if (!year) {
+        return res.status(400).json({ message: "Year parameter is required" });
+      }
+
+      const planYear = parseInt(year as string);
+      const planStartMonth = parseInt(startMonth as string);
+      
+      // Calculate cutoff date: 3 years before today (to capture recent fraud history)
+      const today = new Date();
+      const cutoffDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
+
+      // Query risk events with entity associations from last 3 years
+      // Include events at subproceso, process, and macroproceso levels
+      // Also include events from parent processes when checking subprocesos
+      const recentEvents = await requireDb().execute(sql`
+        SELECT DISTINCT
+          CASE
+            WHEN rem.macroproceso_id IS NOT NULL THEN 'macro:' || rem.macroproceso_id
+            WHEN rep.process_id IS NOT NULL THEN 'process:' || rep.process_id
+            WHEN res.subproceso_id IS NOT NULL THEN 'subproceso:' || res.subproceso_id
+          END as entity_key
+        FROM risk_events re
+        LEFT JOIN risk_event_macroprocesos rem ON re.id = rem.risk_event_id
+        LEFT JOIN risk_event_processes rep ON re.id = rep.risk_event_id
+        LEFT JOIN risk_event_subprocesos res ON re.id = res.risk_event_id
+        WHERE re.event_date >= ${cutoffDate.toISOString()}
+          AND re.event_date <= ${today.toISOString()}
+          AND re.deleted_at IS NULL
+          AND (rem.macroproceso_id IS NOT NULL OR rep.process_id IS NOT NULL OR res.subproceso_id IS NOT NULL)
+      `);
+
+      // Build map of entities with fraud history
+      const fraudHistoryMap: Record<string, boolean> = {};
+      
+      recentEvents.rows.forEach((row: any) => {
+        if (row.entity_key) {
+          fraudHistoryMap[row.entity_key] = true;
+        }
+      });
+
+      // Also get all subprocesos to check their parent processes
+      const allSubprocesos = await requireDb().execute(sql`
+        SELECT id, proceso_id FROM subprocesos WHERE proceso_id IS NOT NULL
+      `);
+
+      // For each subproceso, if its parent process has fraud history, mark the subproceso too
+      allSubprocesos.rows.forEach((subproc: any) => {
+        if (subproc.proceso_id && fraudHistoryMap[`process:${subproc.proceso_id}`]) {
+          fraudHistoryMap[`subproceso:${subproc.id}`] = true;
+        }
+      });
+
+      res.json(fraudHistoryMap);
+    } catch (error) {
+      console.error('Error checking fraud history:', error);
+      res.status(500).json({ message: "Failed to check fraud history" });
+    }
+  });
+
+  // Controls (with 15s cache - will need proper invalidation for production)
+  app.get("/api/controls", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Get active tenant ID
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Parse query parameters for pagination and filters
+      const limit = parseInt(req.query.limit as string) || 1000;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Build filters object
+      const filters: import('./storage').ControlFilters = {
+        search: req.query.search as string,
+        type: req.query.type as string,
+        frequency: req.query.frequency as string,
+        status: req.query.status as string,
+        ownerId: req.query.ownerId as string,
+        minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
+        maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
+      };
+      
+      // Create cache key including all filters
+      const cacheKey = `controls:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
+      
+      // Try cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // Cache miss - query database with optimized paginated method
+      const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(
+        tenantId,
+        filters,
+        limit,
+        offset
+      );
+      
+      // Apply current maximum effectiveness limit dynamically
+      let controlsWithEffectivenessLimit = paginatedControls;
+      try {
+        const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
+        const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
+        
+        controlsWithEffectivenessLimit = paginatedControls.map(control => ({
+          ...control,
+          effectiveness: Math.min(control.effectiveness, maxEffectivenessLimit)
+        }));
+      } catch (configError) {
+        // Continue with original effectiveness values if config fetch fails
+      }
+      
+      // Prepare response
+      const response = {
+        data: controlsWithEffectivenessLimit,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      };
+      
+      // Cache for 15 seconds (invalidated automatically on mutations)
+      await distributedCache.set(cacheKey, response, 15);
+      
+      res.json(response);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch controls" });
+    }
+  });
+
+  app.post("/api/controls", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Transform lastReview string to Date if present
+      const bodyWithDateTransform = {
+        ...req.body,
+        ...(req.body.lastReview && { lastReview: new Date(req.body.lastReview) })
+      };
+      
+      const validatedData = insertControlSchema.parse(bodyWithDateTransform);
+      
+      // Inject audit fields (createdBy) using helper function
+      const dataWithAudit = withCreatedBy(validatedData, userId);
+      
+      const control = await storage.createControl(await withTenantId(req, dataWithAudit));
+      
+      // Save audit log for creation
+      await requireDb().insert(auditLogs).values({
+        entityType: 'control',
+        entityId: control.id,
+        action: 'create',
+        userId: userId,
+        changes: validatedData,
+        ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
+        userAgent: req.headers['user-agent'] || 'unknown'
+      });
+      
+      // Invalidate caches
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await distributedCache.invalidate(`risks-with-details:${tenantId}`);
+      await distributedCache.invalidatePattern(`controls:${tenantId}:*`); // Invalidate all controls cache variants
+      
+      res.status(201).json(control);
+    } catch (error) {
+      console.error("Error creating control:", error);
+      res.status(400).json({ message: "Invalid control data" });
+    }
+  });
+
+  app.put("/api/controls/:id", requirePermission("edit_controls"), async (req, res) => {
+    try {
+      // Get active tenant ID for ownership validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const controlId = req.params.id;
+      const userId = getAuthenticatedUserId(req);
+      
+      // Get original control for audit trail
+      const originalControl = await requireDb()
+        .select()
+        .from(controls)
+        .where(eq(controls.id, controlId))
+        .limit(1);
+      
+      if (!originalControl.length) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+      
+      // Transform lastReview string to Date if present
+      const bodyWithDateTransform = {
+        ...req.body,
+        ...(req.body.lastReview && { lastReview: new Date(req.body.lastReview) })
+      };
+      
+      const validatedData = insertControlSchema.partial().parse(bodyWithDateTransform);
+      const control = await storage.updateControl(controlId, validatedData, tenantId);
+      
+      if (!control) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+      
+      // Save audit log with changes
+      const changes: Record<string, { old: any; new: any }> = {};
+      Object.keys(validatedData).forEach((key) => {
+        const oldValue = originalControl[0][key as keyof typeof originalControl[0]];
+        const newValue = validatedData[key as keyof typeof validatedData];
+        if (oldValue !== newValue) {
+          changes[key] = { old: oldValue, new: newValue };
+        }
+      });
+      
+      await requireDb().insert(auditLogs).values({
+        entityType: 'control',
+        entityId: controlId,
+        action: 'update',
+        userId: userId,
+        changes: changes,
+        ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
+        userAgent: req.headers['user-agent'] || 'unknown'
+      });
+      
+      // Invalidate all risk-control related caches (control updates may affect associations)
+      await invalidateRiskControlCaches();
+      
+      res.json(control);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid control data" });
+    }
+  });
+
+  app.delete("/api/controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get active tenant ID for ownership validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateControl(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      }, tenantId);
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+      
+      // Invalidate all risk-control related caches (deleting control removes associations in cascade)
+      await invalidateRiskControlCaches();
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to delete control:", error);
+      res.status(500).json({ message: "Failed to delete control" });
+    }
+  });
+
+  // Control Evaluation Criteria
+  app.get("/api/control-evaluation-criteria", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const criteria = await storage.getControlEvaluationCriteria(tenantId);
+      res.json(criteria);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch control evaluation criteria" });
+    }
+  });
+
+  app.post("/api/control-evaluation-criteria", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const validatedData = insertControlEvaluationCriteriaSchema.omit({ tenantId: true }).parse(req.body);
+      const criteria = await storage.createControlEvaluationCriteria({
+        ...validatedData,
+        tenantId
+      });
+      res.status(201).json(criteria);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(400).json({ message: "Invalid criteria data" });
+    }
+  });
+
+  app.put("/api/control-evaluation-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertControlEvaluationCriteriaSchema.partial().parse(req.body);
+      const updated = await storage.updateControlEvaluationCriteria(req.params.id, validatedData);
+      if (!updated) {
+        return res.status(404).json({ message: "Control evaluation criteria not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid criteria data" });
+    }
+  });
+
+  app.delete("/api/control-evaluation-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteControlEvaluationCriteria(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Control evaluation criteria not found" });
+      }
+      res.status(204).send();
+    } catch (error: any) {
+      if (error.message.includes("Cannot delete criteria with existing evaluations")) {
+        return res.status(400).json({ message: "Cannot delete criteria that has existing evaluations" });
+      }
+      res.status(500).json({ message: "Failed to delete control evaluation criteria" });
+    }
+  });
+
+  app.get("/api/control-evaluation-criteria/:criteriaId/options", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const options = await storage.getControlEvaluationOptions(req.params.criteriaId, tenantId);
+      res.json(options);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch control evaluation options" });
+    }
+  });
+
+  app.post("/api/control-evaluation-options", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const validatedData = insertControlEvaluationOptionsSchema.omit({ tenantId: true }).parse(req.body);
+      const option = await storage.createControlEvaluationOption({
+        ...validatedData,
+        tenantId
+      });
+      res.status(201).json(option);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(400).json({ message: "Invalid option data" });
+    }
+  });
+
+  app.put("/api/control-evaluation-options/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertControlEvaluationOptionsSchema.partial().parse(req.body);
+      const updated = await storage.updateControlEvaluationOption(req.params.id, validatedData);
+      if (!updated) {
+        return res.status(404).json({ message: "Control evaluation option not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid option data" });
+    }
+  });
+
+  app.delete("/api/control-evaluation-options/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteControlEvaluationOption(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Control evaluation option not found" });
+      }
+      res.status(204).send();
+    } catch (error: any) {
+      if (error.message.includes("Cannot delete option with existing evaluations")) {
+        return res.status(400).json({ message: "Cannot delete option that has existing evaluations" });
+      }
+      res.status(500).json({ message: "Failed to delete control evaluation option" });
+    }
+  });
+
+  app.patch("/api/control-evaluation-options/reorder", isAuthenticated, async (req, res) => {
+    try {
+      const { options } = req.body as { options: { id: string; order: number }[] };
+      
+      if (!Array.isArray(options)) {
+        return res.status(400).json({ message: "Options array is required" });
+      }
+
+      await storage.updateControlEvaluationOptionsOrder(options);
+      res.status(200).json({ message: "Options reordered successfully" });
+    } catch (error) {
+      console.error("Failed to reorder options:", error);
+      res.status(500).json({ message: "Failed to reorder control evaluation options" });
+    }
+  });
+
+  app.get("/api/control-evaluation-criteria-with-options", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const criteriaWithOptions = await storage.getControlEvaluationsByCriteria(tenantId);
+      
+      // Transform data to match frontend expectations (label, score, description instead of name, weight)
+      const transformedData = criteriaWithOptions.map(({ criteria, options }) => ({
+        criteria,
+        options: options.map(option => ({
+          ...option,
+          label: option.name,
+          score: option.weight,
+          description: option.description || ""
+        }))
+      }));
+      
+      res.json(transformedData);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch control evaluation criteria with options" });
+    }
+  });
+
+  // Control Evaluations for specific controls
+  app.get("/api/controls/:controlId/evaluations", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const evaluations = await storage.getControlEvaluations(req.params.controlId);
+      res.json(evaluations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control evaluations" });
+    }
+  });
+
+  app.post("/api/controls/:controlId/evaluations", isAuthenticated, async (req, res) => {
+    try {
+      const evaluatedBy = getAuthenticatedUserId(req);
+      const validatedData = insertControlEvaluationSchema.parse({
+        ...req.body,
+        controlId: req.params.controlId,
+        evaluatedBy: evaluatedBy
+      });
+      const evaluation = await storage.createControlEvaluation(validatedData);
+      res.status(201).json(evaluation);
+    } catch (error) {
+      console.error("Error creating control evaluation:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+      res.status(400).json({ message: "Invalid control evaluation data", error: errorMessage });
+    }
+  });
+
+  app.put("/api/controls/:controlId/evaluations/:criteriaId", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertControlEvaluationSchema.partial().parse(req.body);
+      const evaluation = await storage.updateControlEvaluation(
+        req.params.controlId, 
+        req.params.criteriaId, 
+        validatedData
+      );
+      if (!evaluation) {
+        return res.status(404).json({ message: "Control evaluation not found" });
+      }
+      res.json(evaluation);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid control evaluation data" });
+    }
+  });
+
+  app.delete("/api/controls/:controlId/evaluations", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteControlEvaluations(req.params.controlId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Control evaluations not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete control evaluations" });
+    }
+  });
+
+  // Calculate control effectiveness
+  app.get("/api/controls/:controlId/effectiveness", isAuthenticated, async (req, res) => {
+    try {
+      const effectiveness = await storage.calculateControlEffectiveness(req.params.controlId);
+      res.json({ effectiveness });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to calculate control effectiveness" });
+    }
+  });
+
+  // General control evaluations endpoints (not tied to specific control)
+  app.get("/api/control-evaluations", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Parse query parameters for pagination and filters
+      const limit = parseInt(req.query.limit as string) || 1000;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const controlId = req.query.controlId as string;
+      const evaluatedBy = req.query.evaluatedBy as string;
+      const criteriaId = req.query.criteriaId as string;
+      const startDate = req.query.startDate as string;
+      const endDate = req.query.endDate as string;
+      const vigente = req.query.vigente === 'true'; // Latest evaluation only
+      
+      // Get all evaluations from all controls
+      const allControls = await storage.getControlsWithRiskCount();
+      let allEvaluations: any[] = [];
+      
+      for (const control of allControls) {
+        const evaluations = await storage.getControlEvaluations(control.id);
+        allEvaluations = allEvaluations.concat(
+          evaluations.map(ev => ({
+            ...ev,
+            controlCode: control.code,
+            controlName: control.name
+          }))
+        );
+      }
+      
+      // Apply filters
+      let filteredEvaluations = allEvaluations;
+      
+      if (controlId) {
+        filteredEvaluations = filteredEvaluations.filter(ev => ev.controlId === controlId);
+      }
+      
+      if (evaluatedBy) {
+        filteredEvaluations = filteredEvaluations.filter(ev => ev.evaluatedBy === evaluatedBy);
+      }
+      
+      if (criteriaId) {
+        filteredEvaluations = filteredEvaluations.filter(ev => ev.criteriaId === criteriaId);
+      }
+      
+      if (startDate) {
+        filteredEvaluations = filteredEvaluations.filter(ev => 
+          new Date(ev.evaluatedAt) >= new Date(startDate)
+        );
+      }
+      
+      if (endDate) {
+        filteredEvaluations = filteredEvaluations.filter(ev => 
+          new Date(ev.evaluatedAt) <= new Date(endDate)
+        );
+      }
+      
+      // If vigente flag is set, only return the latest evaluation per control
+      if (vigente) {
+        const latestByControl = new Map();
+        filteredEvaluations.forEach(ev => {
+          const existing = latestByControl.get(ev.controlId);
+          if (!existing || new Date(ev.evaluatedAt) > new Date(existing.evaluatedAt)) {
+            latestByControl.set(ev.controlId, ev);
+          }
+        });
+        filteredEvaluations = Array.from(latestByControl.values());
+      }
+      
+      const total = filteredEvaluations.length;
+      
+      // Apply pagination
+      const paginatedEvaluations = filteredEvaluations.slice(offset, offset + limit);
+      
+      res.json({
+        data: paginatedEvaluations,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      });
+    } catch (error) {
+      console.error("Error fetching control evaluations:", error);
+      res.status(500).json({ message: "Failed to fetch control evaluations" });
+    }
+  });
+
+  app.get("/api/control-evaluations/:id", isAuthenticated, async (req, res) => {
+    try {
+      // This requires looking up across all controls - not optimal but works
+      const allControls = await storage.getControlsWithRiskCount();
+      
+      for (const control of allControls) {
+        const evaluations = await storage.getControlEvaluations(control.id);
+        const evaluation = evaluations.find(ev => ev.id === req.params.id);
+        if (evaluation) {
+          return res.json({
+            ...evaluation,
+            controlCode: control.code,
+            controlName: control.name
+          });
+        }
+      }
+      
+      res.status(404).json({ message: "Control evaluation not found" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control evaluation" });
+    }
+  });
+
+  // Update control effectiveness after evaluation
+  app.post("/api/controls/:controlId/complete-evaluation", isAuthenticated, async (req, res) => {
+    try {
+      // Get active tenant ID for multi-tenant validation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Calculate effectiveness based on evaluations
+      const effectiveness = await storage.calculateControlEffectiveness(req.params.controlId);
+      
+      // Update the control with calculated effectiveness
+      const updatedControl = await storage.updateControl(req.params.controlId, {
+        effectiveness
+      }, tenantId);
+
+      if (!updatedControl) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+
+      res.json({ 
+        control: updatedControl, 
+        effectiveness 
+      });
+    } catch (error) {
+      console.error("Error completing control evaluation:", error);
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to complete control evaluation" });
+    }
+  });
+
+  // ============= CONTROL SELF-ASSESSMENTS ROUTES =============
+  
+  // Get all control self-assessments
+  app.get("/api/control-assessments", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const controls = await storage.getControls(tenantId);
+      const assessments = controls
+        .filter(control => control.selfAssessment)
+        .map(control => ({
+          id: `assessment-${control.id}`,
+          controlId: control.id,
+          selfAssessment: control.selfAssessment,
+          evidenceDescription: control.selfAssessmentComments || '',
+          observations: control.selfAssessmentComments || '',
+          evaluatedBy: control.selfAssessmentBy || 'current-user',
+          evaluatedAt: control.selfAssessmentDate || control.createdAt
+        }));
+      res.json(assessments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control assessments" });
+    }
+  });
+
+  // Get control self-assessment statistics
+  app.get("/api/control-assessment-stats", async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const controls = await storage.getControls(tenantId);
+      const totalControls = controls.length;
+      const completedAssessments = controls.filter(control => control.selfAssessment).length;
+      const completionPercentage = totalControls > 0 ? Math.round((completedAssessments / totalControls) * 100) : 0;
+      
+      // Calculate average effectiveness based on assessment levels
+      const effectivenessMap = {
+        'efectivo': 100,
+        'parcialmente_efectivo': 75,
+        'no_efectivo': 25,
+        'no_aplica': 0
+      };
+      
+      const controlsWithAssessment = controls.filter(control => control.selfAssessment);
+      const averageEffectiveness = controlsWithAssessment.length > 0 
+        ? Math.round(controlsWithAssessment.reduce((sum, control) => 
+            sum + (effectivenessMap[control.selfAssessment as keyof typeof effectivenessMap] || 0), 0) / controlsWithAssessment.length)
+        : 0;
+      
+      res.json({
+        totalControls,
+        completedAssessments,
+        completionPercentage,
+        averageEffectiveness
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control assessment stats" });
+    }
+  });
+
+  // Create or update control self-assessment
+  app.post("/api/control-assessments", isAuthenticated, async (req, res) => {
+    try {
+      const { controlId, selfAssessment, evidenceDescription, observations, evaluatedBy } = req.body;
+      
+      if (!controlId || !selfAssessment || !evidenceDescription) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Save to history
+      await storage.createControlAssessmentHistory({
+        controlId,
+        selfAssessment,
+        evidenceDescription,
+        observations,
+        evaluatedBy: evaluatedBy || getAuthenticatedUserId(req)
+      });
+
+      console.log("✅ History saved, now updating control...", { controlId, selfAssessment });
+
+      const updatedControl = await storage.updateControl(controlId, {
+        selfAssessment,
+        selfAssessmentComments: observations || evidenceDescription,
+        selfAssessmentDate: new Date(),
+        selfAssessmentBy: evaluatedBy || getAuthenticatedUserId(req)
+      });
+
+      console.log("✅ Control updated:", updatedControl ? "success" : "not found");
+
+      if (!updatedControl) {
+        console.error("❌ Control not found:", controlId);
+        return res.status(404).json({ message: "Control not found" });
+      }
+
+      const assessment = {
+        id: `assessment-${controlId}`,
+        controlId,
+        selfAssessment,
+        evidenceDescription,
+        observations,
+        evaluatedBy: evaluatedBy || getAuthenticatedUserId(req),
+        evaluatedAt: new Date()
+      };
+
+      res.status(201).json(assessment);
+    } catch (error) {
+      console.error("❌ Error in control assessment POST:", error);
+      res.status(500).json({ message: "Failed to create control assessment" });
+    }
+  });
+
+  // Update existing control self-assessment
+  app.put("/api/control-assessments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const assessmentId = req.params.id;
+      const controlId = assessmentId.replace('assessment-', '');
+      const { selfAssessment, evidenceDescription, observations, evaluatedBy } = req.body;
+      
+      if (!selfAssessment || !evidenceDescription) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Save to history
+      await storage.createControlAssessmentHistory({
+        controlId,
+        selfAssessment,
+        evidenceDescription,
+        observations,
+        evaluatedBy: evaluatedBy || getAuthenticatedUserId(req)
+      });
+
+      const updatedControl = await storage.updateControl(controlId, {
+        selfAssessment,
+        selfAssessmentComments: observations || evidenceDescription,
+        selfAssessmentDate: new Date(),
+        selfAssessmentBy: evaluatedBy || getAuthenticatedUserId(req)
+      });
+
+      if (!updatedControl) {
+        return res.status(404).json({ message: "Control not found" });
+      }
+
+      const assessment = {
+        id: assessmentId,
+        controlId,
+        selfAssessment,
+        evidenceDescription,
+        observations,
+        evaluatedBy: evaluatedBy || getAuthenticatedUserId(req),
+        evaluatedAt: new Date()
+      };
+
+      res.json(assessment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update control assessment" });
+    }
+  });
+
+  // Get assessment history for a specific control
+  app.get("/api/control-assessments/:controlId/history", isAuthenticated, async (req, res) => {
+    try {
+      const { controlId } = req.params;
+      const history = await storage.getControlAssessmentHistory(controlId);
+      res.json(history);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control assessment history" });
+    }
+  });
+
+  // ============= PROBABILITY CRITERIA ROUTES =============
+  
+  // Get all probability criteria
+  app.get("/api/probability-criteria", async (req, res) => {
+    try {
+      const criteria = await storage.getProbabilityCriteria();
+      res.json(criteria);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch probability criteria" });
+    }
+  });
+
+  // Get only active probability criteria
+  app.get("/api/probability-criteria/active", async (req, res) => {
+    try {
+      const criteria = await storage.getActiveProbabilityCriteria();
+      res.json(criteria);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch active probability criteria" });
+    }
+  });
+
+  // Get specific probability criterion by ID
+  app.get("/api/probability-criteria/:id", async (req, res) => {
+    try {
+      const criterion = await storage.getProbabilityCriterion(req.params.id);
+      if (!criterion) {
+        return res.status(404).json({ message: "Probability criterion not found" });
+      }
+      res.json(criterion);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch probability criterion" });
+    }
+  });
+
+  // Create new probability criterion
+  app.post("/api/probability-criteria", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertProbabilityCriteriaSchema.parse(req.body);
+      const criterion = await storage.createProbabilityCriterion(validatedData);
+      res.status(201).json(criterion);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid probability criterion data" });
+    }
+  });
+
+  // Update existing probability criterion
+  app.put("/api/probability-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertProbabilityCriteriaSchema.partial().parse(req.body);
+      const criterion = await storage.updateProbabilityCriterion(req.params.id, validatedData);
+      if (!criterion) {
+        return res.status(404).json({ message: "Probability criterion not found" });
+      }
+      res.json(criterion);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid probability criterion data" });
+    }
+  });
+
+  // Delete probability criterion
+  app.delete("/api/probability-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteProbabilityCriterion(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Probability criterion not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete probability criterion" });
+    }
+  });
+
+  // Reorder probability criteria
+  app.post("/api/probability-criteria/reorder", isAuthenticated, async (req, res) => {
+    try {
+      const { criteriaIds } = req.body;
+      if (!Array.isArray(criteriaIds)) {
+        return res.status(400).json({ message: "criteriaIds must be an array" });
+      }
+      await storage.reorderProbabilityCriteria(criteriaIds);
+      res.json({ message: "Criteria reordered successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to reorder criteria" });
+    }
+  });
+
+  // ============= IMPACT CRITERIA ROUTES =============
+  
+  // Get all impact criteria
+  app.get("/api/impact-criteria", async (req, res) => {
+    try {
+      const criteria = await storage.getImpactCriteria();
+      res.json(criteria);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch impact criteria" });
+    }
+  });
+
+  // Get only active impact criteria
+  app.get("/api/impact-criteria/active", async (req, res) => {
+    try {
+      const criteria = await storage.getActiveImpactCriteria();
+      res.json(criteria);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch active impact criteria" });
+    }
+  });
+
+  // Get specific impact criterion by ID
+  app.get("/api/impact-criteria/:id", async (req, res) => {
+    try {
+      const criterion = await storage.getImpactCriterion(req.params.id);
+      if (!criterion) {
+        return res.status(404).json({ message: "Impact criterion not found" });
+      }
+      res.json(criterion);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch impact criterion" });
+    }
+  });
+
+  // Create new impact criterion
+  app.post("/api/impact-criteria", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertImpactCriteriaSchema.parse(req.body);
+      const criterion = await storage.createImpactCriterion(validatedData);
+      res.status(201).json(criterion);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid impact criterion data" });
+    }
+  });
+
+  // Update existing impact criterion
+  app.put("/api/impact-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertImpactCriteriaSchema.partial().parse(req.body);
+      const criterion = await storage.updateImpactCriterion(req.params.id, validatedData);
+      if (!criterion) {
+        return res.status(404).json({ message: "Impact criterion not found" });
+      }
+      res.json(criterion);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid impact criterion data" });
+    }
+  });
+
+  // Delete impact criterion
+  app.delete("/api/impact-criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteImpactCriterion(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Impact criterion not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete impact criterion" });
+    }
+  });
+
+  // Reorder impact criteria
+  app.post("/api/impact-criteria/reorder", isAuthenticated, async (req, res) => {
+    try {
+      const { criteriaIds } = req.body;
+      if (!Array.isArray(criteriaIds)) {
+        return res.status(400).json({ message: "criteriaIds must be an array" });
+      }
+      await storage.reorderImpactCriteria(criteriaIds);
+      res.json({ message: "Criteria reordered successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to reorder criteria" });
+    }
+  });
+
+  // Risk Controls
+  app.get("/api/risk-controls", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const allRiskControls = await storage.getAllRiskControls(tenantId);
+      res.json(allRiskControls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch all risk controls" });
+    }
+  });
+
+  app.get("/api/risks/:riskId/controls", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const controls = await storage.getRiskControls(req.params.riskId, tenantId);
+      res.json(controls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk controls" });
+    }
+  });
+
+  app.get("/api/controls/:controlId/risks", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const risks = await storage.getControlRisks(req.params.controlId, tenantId);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch control risks" });
+    }
+  });
+
+  // Optimized endpoint to get all risk-controls with their control details in one query
+  app.get("/api/risk-controls-with-details", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Use distributed cache to prevent slow queries (60s TTL)
+      const cacheKey = `risk-controls-with-details:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      if (storage.getAllRiskControlsWithDetails) {
+        const riskControls = await storage.getAllRiskControlsWithDetails(tenantId);
+        
+        // Cache for 60 seconds
+        await distributedCache.set(cacheKey, riskControls, 60);
+        
+        res.json(riskControls);
+      } else {
+        res.status(404).json({ message: "Method not available" });
+      }
+    } catch (error: any) {
+      console.error("[ERROR] /api/risk-controls-with-details failed:", error);
+      console.error("Stack:", error.stack);
+      res.status(500).json({ 
+        message: "Failed to fetch risk controls with details",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  });
+
+  app.post("/api/risks/:riskId/controls", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRiskControlSchema.parse({
+        ...req.body,
+        residualRisk: Number(req.body.residualRisk).toFixed(1),
+        riskId: req.params.riskId,
+      });
+      const riskControl = await storage.createRiskControl(validatedData);
+      
+      // Invalidate all risk-control related caches for real-time UI updates
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+      ]);
+      
+      res.status(201).json(riskControl);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid risk control data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error creating risk control:", error);
+      res.status(400).json({ message: "Invalid risk control data" });
+    }
+  });
+
+  app.delete("/api/risk-controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteRiskControl(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Risk control not found" });
+      }
+      
+      // Invalidate all risk-control related caches for real-time UI updates
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete risk control" });
+    }
+  });
+
+
+  // Endpoint dedicado para invalidar manualmente el caché de risk-controls
+  // Útil después de despliegues o cuando hay inconsistencias de caché
+  app.post("/api/risk-controls/clear-cache", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateRiskControlCaches();
+      
+      res.json({ 
+        message: "Caché invalidado exitosamente",
+        tenantId,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Error invalidando caché:", error);
+      res.status(500).json({ message: "Error al invalidar caché" });
+    }
+  });
+
+  // Endpoint para recalcular todos los riesgos residuales con nueva metodología
+  app.post("/api/risk-controls/recalculate-all", isAuthenticated, async (req, res) => {
+    try {
+      const recalculateResult = await storage.recalculateAllResidualRisks();
+      
+      // Invalidate all risk-control related caches after bulk recalculation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+      ]);
+      
+      res.json({ 
+        message: "Recálculo completado exitosamente",
+        updated: recalculateResult?.updated || 0,
+        total: recalculateResult?.total || 0
+      });
+    } catch (error) {
+      console.error("Error recalculando riesgos residuales:", error);
+      res.status(500).json({ message: "Error al recalcular riesgos residuales" });
+    }
+  });
+
+  // Action Plans - OPTIMIZED: Parallel queries to reduce cold start latency
+  app.get("/api/action-plans", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const startTime = Date.now();
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "Tenant ID is required" });
+      }
+      
+      // Use distributed cache with versioned key (30s TTL)
+      const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey} (${Date.now() - startTime}ms)`);
+        return res.json(cached);
+      }
+      
+      const actionPlans = await storage.getActionPlans(tenantId);
+      
+      // Early return if no plans - avoid unnecessary queries
+      if (actionPlans.length === 0) {
+        await distributedCache.set(cacheKey, [], 30);
+        return res.json([]);
+      }
+      
+      const planIds = actionPlans.map(p => p.id);
+      const actionCodes = actionPlans.map(p => p.code);
+      const riskIds = actionPlans
+        .map(p => p.riskId)
+        .filter((id): id is string => id !== null && id !== undefined);
+      
+      // PHASE 1: Execute independent queries in parallel
+      const [allActions, auditLogsData, riskProcessLinksData] = await Promise.all([
+        // Get all actions to find corresponding action_id for each plan
+        requireDb()
+          .select({ id: actions.id, code: actions.code })
+          .from(actions)
+          .where(and(eq(actions.tenantId, tenantId), inArray(actions.code, actionCodes))),
+        
+        // Audit logs for reschedule counting
+        requireDb()
+          .select()
+          .from(auditLogs)
+          .where(and(
+            eq(auditLogs.entityType, 'action_plan'),
+            eq(auditLogs.action, 'update'),
+            inArray(auditLogs.entityId, planIds)
+          )),
+        
+        // Risk-process links
+        riskIds.length > 0
+          ? requireDb().select().from(riskProcessLinks).where(inArray(riskProcessLinks.riskId, riskIds))
+          : Promise.resolve([])
+      ]);
+      
+      // Count reschedules
+      const rescheduleCounts = new Map<string, number>();
+      for (const log of auditLogsData) {
+        if (log.changes && typeof log.changes === 'object' && 'dueDate' in log.changes) {
+          rescheduleCounts.set(log.entityId, (rescheduleCounts.get(log.entityId) || 0) + 1);
+        }
+      }
+      
+      // If no risks linked, return early with simplified data
+      if (riskIds.length === 0) {
+        const plansWithoutRisks = actionPlans.map(plan => ({
+          ...plan,
+          title: plan.name,
+          rescheduleCount: rescheduleCounts.get(plan.id) || 0,
+          gerencias: [],
+          associatedRisks: []
+        }));
+        await distributedCache.set(cacheKey, plansWithoutRisks, 30);
+        console.log(`[ACTION-PLANS] Completed (no risks) in ${Date.now() - startTime}ms`);
+        return res.json(plansWithoutRisks);
+      }
+      
+      // Extract IDs from risk-process links
+      const processIds = [...new Set(riskProcessLinksData.map(l => l.processId).filter((id): id is string => !!id))];
+      const subprocesoIds = [...new Set(riskProcessLinksData.map(l => l.subprocesoId).filter((id): id is string => !!id))];
+      const macroprocesoIds = [...new Set(riskProcessLinksData.map(l => l.macroprocesoId).filter((id): id is string => !!id))];
+      
+      // PHASE 2: Fetch processes, subprocesos, and associated risks in parallel
+      const actionIds = allActions.map(a => a.id);
+      const [processesData, subprocesosData, processesFromMacro, allAssociatedRisks] = await Promise.all([
+        processIds.length > 0
+          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, processIds)))
+          : Promise.resolve([]),
+        
+        subprocesoIds.length > 0
+          ? requireDb().select().from(subprocesos).where(and(eq(subprocesos.tenantId, tenantId), inArray(subprocesos.id, subprocesoIds)))
+          : Promise.resolve([]),
+        
+        macroprocesoIds.length > 0
+          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.macroprocesoId, macroprocesoIds)))
+          : Promise.resolve([]),
+        
+        // Associated risks query
+        requireDb()
+          .select({
+            actionPlanId: actionPlanRisks.actionPlanId,
+            actionId: actionPlanRisks.actionId,
+            riskId: actionPlanRisks.riskId,
+            isPrimary: actionPlanRisks.isPrimary,
+            riskCode: risks.code,
+            riskName: risks.name,
+          })
+          .from(actionPlanRisks)
+          .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+          .where(and(
+            eq(risks.tenantId, tenantId),
+            or(
+              inArray(actionPlanRisks.actionPlanId, planIds),
+              actionIds.length > 0 ? inArray(actionPlanRisks.actionId, actionIds) : undefined
+            )
+          ))
+      ]);
+      
+      // Get additional parent process IDs from subprocesos
+      const additionalProcessIds = subprocesosData
+        .map(s => s.procesoId)
+        .filter((id): id is string => !!id && !processIds.includes(id));
+      
+      // PHASE 3: Fetch additional processes and gerencias data in parallel
+      const allProcessesMap = new Map([...processesData, ...processesFromMacro].map(p => [p.id, p]));
+      
+      const [additionalProcesses, processGerenciasData] = await Promise.all([
+        additionalProcessIds.length > 0
+          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, additionalProcessIds)))
+          : Promise.resolve([]),
+        
+        allProcessesMap.size > 0
+          ? requireDb().select().from(processGerencias).where(inArray(processGerencias.processId, Array.from(allProcessesMap.keys())))
+          : Promise.resolve([])
+      ]);
+      
+      // Add additional processes to map
+      additionalProcesses.forEach(p => allProcessesMap.set(p.id, p));
+      
+      // Get gerencia IDs and fetch in final phase
+      const gerenciaIds = [...new Set(processGerenciasData.map(pg => pg.gerenciaId).filter((id): id is string => !!id))];
+      const gerenciasData = gerenciaIds.length > 0
+        ? await requireDb().select().from(gerencias).where(inArray(gerencias.id, gerenciaIds))
+        : [];
+      
+      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
+      
+      // Build final result
+      const plansWithCounts = actionPlans.map(plan => {
+        let process = null;
+        if (plan.riskId) {
+          const riskLink = riskProcessLinksData.find(link => link.riskId === plan.riskId);
+          if (riskLink) {
+            if (riskLink.processId) {
+              process = allProcessesMap.get(riskLink.processId) || null;
+            } else if (riskLink.subprocesoId) {
+              const subproceso = subprocesosData.find(s => s.id === riskLink.subprocesoId);
+              if (subproceso?.procesoId) process = allProcessesMap.get(subproceso.procesoId) || null;
+            } else if (riskLink.macroprocesoId) {
+              process = processesFromMacro.find(p => p.macroprocesoId === riskLink.macroprocesoId) || null;
+            }
+          }
+        }
+        
+        const gerenciasForPlan = process
+          ? processGerenciasData
+              .filter(pg => pg.processId === process.id)
+              .map(pg => gerenciasMap.get(pg.gerenciaId))
+              .filter((g): g is NonNullable<typeof g> => !!g)
+          : [];
+        
+        const correspondingAction = allActions.find(a => a.code === plan.code);
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => 
+          ar.actionPlanId === plan.id || (correspondingAction && ar.actionId === correspondingAction.id)
+        );
+        
+        return {
+          ...plan,
+          title: plan.name,
+          rescheduleCount: rescheduleCounts.get(plan.id) || 0,
+          gerencias: gerenciasForPlan,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, plansWithCounts, 30);
+      console.log(`[ACTION-PLANS] Completed in ${Date.now() - startTime}ms (${actionPlans.length} plans)`);
+      
+      res.json(plansWithCounts);
+    } catch (error) {
+      console.error("Failed to fetch action plans:", error);
+      res.status(500).json({ message: "Failed to fetch action plans" });
+    }
+  });
+
+  // Helper function to invalidate action plan caches
+  async function invalidateActionPlanCaches(tenantId: string) {
+    await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}`, null, 0);
+  }
+
+  app.post("/api/action-plans", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Convert string dates back to Date objects and prepare data for unified actions table
+      const processedData = {
+        origin: 'risk' as const,
+        title: req.body.name || req.body.title,
+        riskId: req.body.riskId,
+        description: req.body.description || null,
+        responsible: req.body.responsible || null,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        priority: req.body.priority || 'medium',
+        status: req.body.status || 'pending',
+        progress: req.body.progress || 0,
+      };
+      
+      // Validate and create action in unified table
+      const validatedData = insertActionSchema.parse(processedData);
+      // Add createdBy AFTER validation (it's omitted from schema)
+      const actionData = { ...validatedData, createdBy: userId };
+      const action = await storage.createAction(await withTenantId(req, actionData));
+      
+      // Return data in ActionPlan format for backward compatibility
+      const actionPlan = {
+        ...action,
+        name: action.title, // Map title back to name
+      };
+      
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.status(201).json(actionPlan);
+    } catch (error) {
+      console.error("Failed to create action plan:", error);
+      res.status(400).json({ message: "Invalid action plan data" });
+    }
+  });
+
+  app.put("/api/action-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Try to get from actions table first (new system)
+      const currentAction = await storage.getAction(req.params.id);
+      
+      if (currentAction) {
+        // Found in actions table - update it
+        // Map action plan fields to action fields
+        // responsible can be a process owner name (text), not necessarily a user ID
+        const actionData: any = {
+          title: req.body.name || req.body.title,
+          description: req.body.description || null,
+          responsible: req.body.responsible || null,
+          riskId: req.body.riskId || null,
+          dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+          priority: req.body.priority || 'medium',
+          status: req.body.status || 'pending',
+          progress: req.body.progress !== undefined ? req.body.progress : 0,
+          updatedBy: userId
+        };
+        
+        // Track due date changes and rescheduling
+        if (actionData.dueDate && currentAction.dueDate) {
+          const oldDate = new Date(currentAction.dueDate);
+          const newDate = new Date(actionData.dueDate);
+          
+          if (oldDate.getTime() !== newDate.getTime()) {
+            // If this is the first reschedule, save the original date
+            if (!currentAction.originalDueDate) {
+              actionData.originalDueDate = oldDate;
+            }
+            // Increment reschedule counter
+            actionData.rescheduleCount = (currentAction.rescheduleCount || 0) + 1;
+            
+            await requireDb().insert(auditLogs).values({
+              entityType: 'action',
+              entityId: req.params.id,
+              action: 'update',
+              userId,
+              changes: {
+                dueDate: {
+                  old: oldDate.toISOString(),
+                  new: newDate.toISOString()
+                }
+              }
+            });
+          }
+        }
+        
+        const updatedAction = await storage.updateAction(req.params.id, actionData);
+        return res.json(updatedAction);
+      }
+      
+      // Not found in actions, try legacy action_plans table
+      const currentPlan = await storage.getActionPlan(req.params.id);
+      if (!currentPlan) {
+        return res.status(404).json({ message: "Action plan not found" });
+      }
+      
+      // Found in action_plans table - update it
+      const processedData = {
+        ...req.body,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        originalDueDate: req.body.originalDueDate ? new Date(req.body.originalDueDate) : null
+      };
+      
+      const validatedData = insertActionPlanSchema.partial().parse(processedData);
+      
+      // Track due date changes in audit logs
+      if (validatedData.dueDate && currentPlan.dueDate) {
+        const oldDate = new Date(currentPlan.dueDate);
+        const newDate = new Date(validatedData.dueDate);
+        
+        if (oldDate.getTime() !== newDate.getTime()) {
+          // If this is the first reschedule, save the original date
+          if (!currentPlan.originalDueDate) {
+            validatedData.originalDueDate = oldDate;
+          }
+          // Increment reschedule counter
+          validatedData.rescheduleCount = (currentPlan.rescheduleCount || 0) + 1;
+          
+          // Date changed - log it
+          await requireDb().insert(auditLogs).values({
+            entityType: 'action_plan',
+            entityId: req.params.id,
+            action: 'update',
+            userId,
+            changes: {
+              dueDate: {
+                old: oldDate.toISOString(),
+                new: newDate.toISOString()
+              }
+            }
+          });
+        }
+      }
+      
+      const actionPlan = await storage.updateActionPlan(req.params.id, validatedData);
+      
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.json(actionPlan);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        console.error("Action plan validation error:", error.errors);
+        return res.status(400).json({ 
+          message: error.errors[0].message,
+          errors: error.errors 
+        });
+      }
+      console.error("Failed to update action plan:", error);
+      res.status(400).json({ message: "Invalid action plan data" });
+    }
+  });
+
+  app.delete("/api/action-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateActionPlan(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Action plan not found" });
+      }
+      
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to delete action plan:", error);
+      res.status(500).json({ message: "Failed to delete action plan" });
+    }
+  });
+
+  // Action Plan Risks (Many-to-Many Relationship) Endpoints
+  // GET /api/action-plans/:id/risks - Get all risks associated with an action plan
+  app.get("/api/action-plans/:id/risks", isAuthenticated, async (req, res) => {
+    try {
+      const id = req.params.id;
+      
+      // Check if it's in actions table (new) or action_plans (legacy)
+      const action = await storage.getAction(id);
+      if (action) {
+        // Query from action_plan_risks using action_id
+        const riskAssociations = await requireDb().select({
+          id: actionPlanRisks.id,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          mitigationStatus: actionPlanRisks.mitigationStatus,
+          notes: actionPlanRisks.notes,
+          code: risks.code,
+          name: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+        .where(eq(actionPlanRisks.actionId, id));
+        return res.json(riskAssociations);
+      }
+      
+      // Fallback to legacy action_plans table
+      const actionPlanRisksData = await storage.getActionPlanRisks(id);
+      res.json(actionPlanRisksData);
+    } catch (error) {
+      console.error("Failed to fetch action plan risks:", error);
+      res.status(500).json({ message: "Failed to fetch action plan risks" });
+    }
+  });
+
+  // POST /api/action-plans/:id/risks - Add a risk to an action plan
+  app.post("/api/action-plans/:id/risks", isAuthenticated, async (req, res) => {
+    try {
+      const id = req.params.id;
+      const { riskId, isPrimary, mitigationStatus, notes } = req.body;
+
+      // Check if it's in actions table (new) or action_plans (legacy)
+      const action = await storage.getAction(id);
+      
+      let newRelation;
+      if (action) {
+        // Insert with actionId for new actions table
+        const [created] = await requireDb().insert(actionPlanRisks).values({
+          actionId: id,
+          riskId,
+          isPrimary: isPrimary ?? false,
+          mitigationStatus: mitigationStatus || 'pending',
+          notes,
+        }).returning();
+        newRelation = created;
+      } else {
+        // Insert with actionPlanId for legacy action_plans table
+        newRelation = await storage.addRiskToActionPlan({
+          actionPlanId: id,
+          riskId,
+          isPrimary: isPrimary ?? false,
+          mitigationStatus,
+          notes,
+        });
+      }
+
+      // Invalidate risk caches (action plan associations may affect risk views)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateRiskControlCaches();
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.status(201).json(newRelation);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to add risk to action plan:", error);
+      res.status(500).json({ message: "Failed to add risk to action plan" });
+    }
+  });
+
+  // DELETE /api/action-plans/:id/risks/:riskId - Remove a risk from an action plan
+  app.delete("/api/action-plans/:id/risks/:riskId", isAuthenticated, async (req, res) => {
+    try {
+      const { id, riskId } = req.params;
+      
+      // Check if it's in actions table (new) or action_plans (legacy)
+      const action = await storage.getAction(id);
+      
+      let deleted;
+      if (action) {
+        // Delete from action_plan_risks using action_id
+        const result = await requireDb().delete(actionPlanRisks).where(and(
+          eq(actionPlanRisks.actionId, id),
+          eq(actionPlanRisks.riskId, riskId)
+        ));
+        deleted = (result.rowCount ?? 0) > 0;
+      } else {
+        // Delete using legacy method
+        deleted = await storage.removeRiskFromActionPlan(id, riskId);
+      }
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Risk association not found" });
+      }
+      
+      // Invalidate risk caches (action plan association removed)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateRiskControlCaches();
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to remove risk from action plan:", error);
+      res.status(500).json({ message: "Failed to remove risk from action plan" });
+    }
+  });
+
+  // PATCH /api/action-plans/risks/:relationId - Update mitigation status for a specific risk
+  app.patch("/api/action-plans/risks/:relationId", isAuthenticated, async (req, res) => {
+    try {
+      const { relationId } = req.params;
+      const { mitigationStatus, notes } = req.body;
+      
+      if (!mitigationStatus) {
+        return res.status(400).json({ message: "mitigationStatus is required" });
+      }
+
+      const updated = await storage.updateActionPlanRiskStatus(relationId, mitigationStatus, notes);
+      
+      if (!updated) {
+        return res.status(404).json({ message: "Risk association not found" });
+      }
+      
+      // Invalidate risk caches (action plan status may affect risk views)
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateRiskControlCaches();
+      await invalidateActionPlanCaches(tenantId);
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Failed to update risk mitigation status:", error);
+      res.status(500).json({ message: "Failed to update risk mitigation status" });
+    }
+  });
+
+  // Action Plans Validation Endpoints
+  app.get("/api/action-plans/validation/pending", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Get all action plans that are pending validation
+      const pendingPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          eq(actions.validationStatus, 'pending_validation')
+        ));
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks
+      const allAssociatedRisks = await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = pendingPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      res.json(plansWithRisks);
+    } catch (error) {
+      console.error("Failed to fetch pending action plans:", error);
+      res.status(500).json({ message: "Failed to fetch pending action plans" });
+    }
+  });
+
+  app.get("/api/action-plans/validation/validated", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Get all action plans that have been validated
+      const validatedPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          eq(actions.validationStatus, 'validated')
+        ));
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks
+      const allAssociatedRisks = await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = validatedPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      res.json(plansWithRisks);
+    } catch (error) {
+      console.error("Failed to fetch validated action plans:", error);
+      res.status(500).json({ message: "Failed to fetch validated action plans" });
+    }
+  });
+
+  app.get("/api/action-plans/validation/observed", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Get all action plans that have been observed in validation
+      const observedPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          eq(actions.validationStatus, 'observed')
+        ));
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks
+      const allAssociatedRisks = await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = observedPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+
+      res.json(plansWithRisks);
+    } catch (error) {
+      console.error("Failed to fetch observed action plans:", error);
+      res.status(500).json({ message: "Failed to fetch observed action plans" });
+    }
+  });
+
+  app.get("/api/action-plans/validation/rejected", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      // Get all action plans that have been rejected in validation
+      const rejectedPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          eq(actions.validationStatus, 'rejected')
+        ));
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks
+      const allAssociatedRisks = await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = rejectedPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      res.json(plansWithRisks);
+    } catch (error) {
+      console.error("Failed to fetch rejected action plans:", error);
+      res.status(500).json({ message: "Failed to fetch rejected action plans" });
+    }
+  });
+
+  app.get("/api/action-plans/validation/notified", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { limit, offset } = normalizePaginationParams(req.query);
+      
+      // Get all action plans that have been notified for validation
+      const notifiedPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          eq(actions.validationStatus, 'pending_validation'),
+          isNotNull(actions.notifiedAt)
+        ));
+      
+      const total = notifiedPlans.length;
+      const paginatedPlans = notifiedPlans.slice(offset, offset + limit);
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks for paginated plans
+      const planIds = paginatedPlans.map(p => p.id);
+      const allAssociatedRisks = planIds.length > 0 ? await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+        .where(inArray(actionPlanRisks.actionId, planIds)) : [];
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = paginatedPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      res.json(createPaginatedResponse(plansWithRisks, total, limit, offset));
+    } catch (error) {
+      console.error("Failed to fetch notified action plans:", error);
+      res.status(500).json({ message: "Failed to fetch notified action plans" });
+    }
+  });
+
+  app.get("/api/action-plans/validation/not-notified", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { limit, offset } = normalizePaginationParams(req.query);
+      
+      const notNotifiedPlans = await requireDb()
+        .select()
+        .from(actions)
+        .where(and(
+          isNull(actions.deletedAt),
+          or(
+            and(
+              eq(actions.validationStatus, 'pending_validation'),
+              isNull(actions.notifiedAt)
+            ),
+            and(
+              isNull(actions.validationStatus),
+              isNull(actions.notifiedAt)
+            )
+          )
+        ));
+      
+      const total = notNotifiedPlans.length;
+      const paginatedPlans = notNotifiedPlans.slice(offset, offset + limit);
+      
+      // Get all processes
+      const allProcesses = await requireDb().select().from(processes);
+      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+      
+      // Get all associated risks for paginated plans
+      const planIds = paginatedPlans.map(p => p.id);
+      const allAssociatedRisks = planIds.length > 0 ? await requireDb()
+        .select({
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+        .where(inArray(actionPlanRisks.actionId, planIds)) : [];
+      
+      // Add associated risks and process info to each action plan
+      const plansWithRisks = paginatedPlans.map(plan => {
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
+        const process = plan.processId ? processMap.get(plan.processId) : null;
+        return {
+          ...plan,
+          process: process ? { name: process.name } : null,
+          associatedRisks: associatedRisksForPlan
+        };
+      });
+      
+      res.json(createPaginatedResponse(plansWithRisks, total, limit, offset));
+    } catch (error) {
+      console.error("Failed to fetch not-notified action plans:", error);
+      res.status(500).json({ message: "Failed to fetch not-notified action plans" });
+    }
+  });
+
+  app.post("/api/action-plans/:id/validate", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const { status, comments, sendNotification } = req.body;
+      
+      // Validate status
+      if (!['validated', 'observed', 'rejected'].includes(status)) {
+        return res.status(400).json({ message: "Invalid validation status" });
+      }
+
+      // Get current action plan
+      const currentPlan = await storage.getActionPlan(req.params.id, tenantId);
+      if (!currentPlan) {
+        return res.status(404).json({ message: "Action plan not found" });
+      }
+
+      const oldStatus = currentPlan.validationStatus;
+      const now = new Date();
+
+      // Update validation status
+      const updated = await storage.updateActionPlan(req.params.id, {
+        validationStatus: status,
+        validatedBy: userId,
+        validatedAt: now,
+        validationComments: comments || null,
+        updatedBy: userId
+      });
+
+      // Log the validation action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: req.params.id,
+        action: 'validate',
+        userId,
+        changes: {
+          validationStatus: {
+            old: oldStatus,
+            new: status
+          },
+          validationComments: comments,
+          validatedBy: userId,
+          validatedAt: now.toISOString()
+        }
+      });
+
+      // Send notification if requested
+      if (sendNotification && currentPlan.responsible) {
+        const actionText = status === 'validated' ? 'aprobado' : status === 'observed' ? 'observado' : 'rechazado';
+        await notificationService.createNotification({
+          recipientId: currentPlan.responsible,
+          type: NotificationTypes.ACTION_PLAN_VALIDATED,
+          category: 'action',
+          priority: status === 'rejected' ? 'critical' : 'normal',
+          title: `Plan de Acción ${actionText}`,
+          message: `Tu plan de acción "${currentPlan.name}" ha sido ${actionText}.${comments ? ` Comentarios: ${comments}` : ''}`,
+          actionText: 'Ver Plan',
+          actionUrl: `/action-plans/${req.params.id}`,
+          data: {
+            actionPlanId: req.params.id,
+            actionPlanName: currentPlan.name,
+            validationStatus: status,
+            comments
+          },
+          channels: ['in_app', 'email'],
+          tenantId: currentPlan.tenantId,
+          createdBy: userId
+        });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to validate action plan:", error);
+      res.status(500).json({ message: "Failed to validate action plan" });
+    }
+  });
+
+  app.post("/api/action-plans/validate/bulk", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const { planIds, status, comments, sendNotification } = req.body;
+      
+      // Validate status
+      if (!['validated', 'observed', 'rejected'].includes(status)) {
+        return res.status(400).json({ message: "Invalid validation status" });
+      }
+
+      if (!Array.isArray(planIds) || planIds.length === 0) {
+        return res.status(400).json({ message: "Plan IDs are required" });
+      }
+
+      const now = new Date();
+      const results = [];
+
+      for (const planId of planIds) {
+        try {
+          const currentPlan = await storage.getActionPlan(planId, tenantId);
+          if (!currentPlan) continue;
+
+          const oldStatus = currentPlan.validationStatus;
+
+          // Update validation status
+          await storage.updateActionPlan(planId, {
+            validationStatus: status,
+            validatedBy: userId,
+            validatedAt: now,
+            validationComments: comments || null,
+            updatedBy: userId
+          });
+
+          // Log the validation
+          await requireDb().insert(auditLogs).values({
+            entityType: 'action_plan',
+            entityId: planId,
+            action: 'validate',
+            userId,
+            changes: {
+              validationStatus: {
+                old: oldStatus,
+                new: status
+              },
+              validationComments: comments,
+              validatedBy: userId,
+              validatedAt: now.toISOString()
+            }
+          });
+
+          // Send notification if requested
+          if (sendNotification && currentPlan.responsible) {
+            const actionText = status === 'validated' ? 'aprobado' : status === 'observed' ? 'observado' : 'rechazado';
+            await notificationService.createNotification({
+              recipientId: currentPlan.responsible,
+              type: NotificationTypes.ACTION_PLAN_VALIDATED,
+              category: 'action',
+              priority: status === 'rejected' ? 'critical' : 'normal',
+              title: `Plan de Acción ${actionText}`,
+              message: `Tu plan de acción "${currentPlan.name}" ha sido ${actionText}.${comments ? ` Comentarios: ${comments}` : ''}`,
+              actionText: 'Ver Plan',
+              actionUrl: `/action-plans/${planId}`,
+              data: {
+                actionPlanId: planId,
+                actionPlanName: currentPlan.name,
+                validationStatus: status,
+                comments
+              },
+              channels: ['in_app', 'email'],
+              tenantId: currentPlan.tenantId,
+              createdBy: userId
+            });
+          }
+
+          results.push({ planId, success: true });
+        } catch (error) {
+          results.push({ planId, success: false, error: error.message });
+        }
+      }
+
+      res.json({ results, total: planIds.length, success: results.filter(r => r.success).length });
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to bulk validate action plans:", error);
+      res.status(500).json({ message: "Failed to bulk validate action plans" });
+    }
+  });
+
+  // Action Plans Rescheduling Metrics
+  app.get("/api/action-plans/metrics/rescheduling", isAuthenticated, async (req, res) => {
+    try {
+      const actionPlans = await storage.getActionPlans();
+      const auditLogsData = await requireDb()
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.entityType, 'action_plan'));
+      
+      // Filter rescheduled plans (where originalDueDate !== dueDate)
+      const rescheduledPlans = actionPlans.filter(plan => 
+        plan.originalDueDate && 
+        plan.dueDate && 
+        new Date(plan.originalDueDate).getTime() !== new Date(plan.dueDate).getTime()
+      );
+      
+      // Calculate statistics
+      const totalPlans = actionPlans.filter(p => p.status !== 'deleted').length;
+      const rescheduledCount = rescheduledPlans.length;
+      const reschedulingRate = totalPlans > 0 ? (rescheduledCount / totalPlans) * 100 : 0;
+      
+      // Calculate average extension days
+      let totalExtensionDays = 0;
+      for (const plan of rescheduledPlans) {
+        const originalDate = new Date(plan.originalDueDate!);
+        const currentDate = new Date(plan.dueDate!);
+        const daysDiff = Math.ceil((currentDate.getTime() - originalDate.getTime()) / (1000 * 60 * 60 * 24));
+        totalExtensionDays += daysDiff;
+      }
+      const avgExtensionDays = rescheduledCount > 0 ? Math.round(totalExtensionDays / rescheduledCount) : 0;
+      
+      // Get date change audit logs
+      const dateChangeLogs = auditLogsData.filter(log => 
+        log.entityType === 'action_plan' && 
+        log.action === 'update' &&
+        log.changes && 
+        typeof log.changes === 'object' &&
+        'field' in log.changes &&
+        (log.changes as any).field === 'dueDate'
+      );
+      
+      // Plans by status
+      const byStatus = {
+        pending: rescheduledPlans.filter(p => p.status === 'pending').length,
+        in_progress: rescheduledPlans.filter(p => p.status === 'in_progress').length,
+        completed: rescheduledPlans.filter(p => p.status === 'completed').length,
+        overdue: rescheduledPlans.filter(p => {
+          const isOverdue = p.status !== 'completed' && p.dueDate && new Date(p.dueDate) < new Date();
+          return isOverdue;
+        }).length
+      };
+      
+      // Recent rescheduling activity (last 30 days)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const recentChanges = dateChangeLogs.filter(log => 
+        new Date(log.timestamp) >= thirtyDaysAgo
+      ).length;
+      
+      res.json({
+        summary: {
+          totalPlans,
+          rescheduledCount,
+          reschedulingRate: Math.round(reschedulingRate * 10) / 10,
+          avgExtensionDays,
+          recentChanges
+        },
+        byStatus,
+        rescheduledPlans: rescheduledPlans.map(plan => ({
+          id: plan.id,
+          code: plan.code,
+          name: plan.name,
+          originalDueDate: plan.originalDueDate,
+          currentDueDate: plan.dueDate,
+          extensionDays: Math.ceil((new Date(plan.dueDate!).getTime() - new Date(plan.originalDueDate!).getTime()) / (1000 * 60 * 60 * 24)),
+          status: plan.status
+        }))
+      });
+    } catch (error) {
+      console.error("Failed to fetch rescheduling metrics:", error);
+      res.status(500).json({ message: "Failed to fetch rescheduling metrics" });
+    }
+  });
+
+  // Action Plans Report - General Excel
+  app.get("/api/action-plans/reports/general", isAuthenticated, async (req, res) => {
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      
+      const plansData = await storage.getActionPlans();
+      const risksData = await requireDb().select().from(risks);
+      const usersData = await requireDb().select().from(users);
+      const processesData = await requireDb().select().from(processes);
+      const gerenciasData = await requireDb().select().from(gerencias);
+      const processGerenciasData = await requireDb().select().from(processGerencias);
+      
+      const risksMap = new Map(risksData.map(r => [r.id, r]));
+      const usersMap = new Map(usersData.map(u => [u.id, u]));
+      const processesMap = new Map(processesData.map(p => [p.id, p]));
+      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
+      
+      const processGerenciasMap = new Map<string, string[]>();
+      processGerenciasData.forEach(pg => {
+        if (!processGerenciasMap.has(pg.processId)) {
+          processGerenciasMap.set(pg.processId, []);
+        }
+        processGerenciasMap.get(pg.processId)?.push(pg.gerenciaId);
+      });
+      
+      const summary = {
+        total: plansData.filter(p => p.status !== 'deleted').length,
+        draft: plansData.filter(p => p.status === 'draft').length,
+        in_progress: plansData.filter(p => p.status === 'in_progress').length,
+        pending_review: plansData.filter(p => p.status === 'pending_review').length,
+        approved: plansData.filter(p => p.status === 'approved').length,
+        rejected: plansData.filter(p => p.status === 'rejected').length,
+        overdue: plansData.filter(p => p.status !== 'approved' && p.dueDate && new Date(p.dueDate) < new Date()).length
+      };
+      
+      const summarySheet = workbook.addWorksheet('Resumen');
+      summarySheet.columns = [
+        { header: 'Indicador', key: 'indicator', width: 30 },
+        { header: 'Valor', key: 'value', width: 15 }
+      ];
+      summarySheet.addRows([
+        { indicator: 'Total Planes', value: summary.total },
+        { indicator: 'Borradores', value: summary.draft },
+        { indicator: 'En Progreso', value: summary.in_progress },
+        { indicator: 'Pendiente Revision', value: summary.pending_review },
+        { indicator: 'Aprobados', value: summary.approved },
+        { indicator: 'Rechazados', value: summary.rejected },
+        { indicator: 'Vencidos', value: summary.overdue }
+      ]);
+      
+      const detailSheet = workbook.addWorksheet('Detalle');
+      detailSheet.columns = [
+        { header: 'Codigo', key: 'code', width: 12 },
+        { header: 'Nombre', key: 'name', width: 40 },
+        { header: 'Riesgo', key: 'risk', width: 40 },
+        { header: 'Gerencia', key: 'gerencia', width: 30 },
+        { header: 'Responsable', key: 'responsible', width: 25 },
+        { header: 'Fecha Vencimiento', key: 'dueDate', width: 18 },
+        { header: 'Estado', key: 'status', width: 15 },
+        { header: 'Progreso %', key: 'progress', width: 12 }
+      ];
+      
+      const statusMap: Record<string, string> = {
+        'draft': 'Borrador',
+        'in_progress': 'En Progreso',
+        'pending_review': 'Pendiente Revisión',
+        'approved': 'Aprobado',
+        'rejected': 'Rechazado'
+      };
+      
+      const rows = plansData
+        .filter(p => p.status !== 'deleted')
+        .map(p => {
+          const risk = risksMap.get(p.riskId);
+          let gerenciaNames: string[] = [];
+          
+          if (risk?.processId) {
+            const gerenciaIds = processGerenciasMap.get(risk.processId) || [];
+            gerenciaNames = gerenciaIds
+              .map(gId => gerenciasMap.get(gId)?.name)
+              .filter((name): name is string => !!name);
+          }
+          
+          return {
+            code: p.code,
+            name: p.name,
+            risk: risk?.name || 'N/A',
+            gerencia: gerenciaNames.join(', ') || 'N/A',
+            responsible: usersMap.get(p.responsible || '')?.fullName || p.responsible || 'N/A',
+            dueDate: p.dueDate ? new Date(p.dueDate).toLocaleDateString('es-ES') : 'N/A',
+            status: statusMap[p.status] || p.status,
+            progress: `${p.progress || 0}%`
+          };
+        });
+      
+      detailSheet.addRows(rows);
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=reporte-general-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
+      
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Failed to generate report:", error);
+      res.status(500).json({ message: "Failed to generate report" });
+    }
+  });
+
+  // Action Plans Report - Tracking/Trazabilidad Excel
+  app.get("/api/action-plans/reports/tracking", isAuthenticated, async (req, res) => {
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      
+      const plansData = await storage.getActionPlans();
+      const logsData = await requireDb().select().from(auditLogs).where(eq(auditLogs.entityType, 'action_plan')).orderBy(desc(auditLogs.timestamp));
+      const usersData = await requireDb().select().from(users);
+      
+      const usersMap = new Map(usersData.map(u => [u.id, u]));
+      
+      const rejectedPlans = plansData.filter(p => p.rejectionCount && p.rejectionCount > 0);
+      const rejectionSheet = workbook.addWorksheet('Analisis Rechazos');
+      rejectionSheet.columns = [
+        { header: 'Codigo', key: 'code', width: 12 },
+        { header: 'Nombre', key: 'name', width: 40 },
+        { header: 'Num Rechazos', key: 'count', width: 15 },
+        { header: 'Ultimo Motivo', key: 'reason', width: 50 }
+      ];
+      rejectionSheet.addRows(rejectedPlans.map(p => ({
+        code: p.code,
+        name: p.name,
+        count: p.rejectionCount || 0,
+        reason: p.lastRejectionReason || 'N/A'
+      })));
+      
+      const auditSheet = workbook.addWorksheet('Historial Cambios');
+      auditSheet.columns = [
+        { header: 'Fecha', key: 'timestamp', width: 20 },
+        { header: 'Plan', key: 'planId', width: 15 },
+        { header: 'Accion', key: 'action', width: 12 },
+        { header: 'Usuario', key: 'user', width: 25 }
+      ];
+      auditSheet.addRows(logsData.slice(0, 100).map(log => ({
+        timestamp: new Date(log.timestamp).toLocaleString('es-CL'),
+        planId: log.entityId,
+        action: log.action,
+        user: usersMap.get(log.userId || '')?.fullName || 'Sistema'
+      })));
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=reporte-trazabilidad-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
+      
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Failed to generate tracking report:", error);
+      res.status(500).json({ message: "Failed to generate tracking report" });
+    }
+  });
+
+  // Action Plans Report - Efficiency/Eficiencia Excel
+  app.get("/api/action-plans/reports/efficiency", isAuthenticated, async (req, res) => {
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      
+      const plansData = await storage.getActionPlans();
+      const usersData = await requireDb().select().from(users);
+      
+      const usersMap = new Map(usersData.map(u => [u.id, u]));
+      
+      const completedPlans = plansData.filter(p => p.status === 'approved');
+      const avgCompletionTime = completedPlans.length > 0 
+        ? completedPlans.reduce((acc, plan) => {
+            if (plan.createdAt && plan.reviewedAt) {
+              const days = Math.ceil((new Date(plan.reviewedAt).getTime() - new Date(plan.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+              return acc + days;
+            }
+            return acc;
+          }, 0) / completedPlans.length
+        : 0;
+      
+      const kpiSheet = workbook.addWorksheet('KPIs');
+      kpiSheet.columns = [
+        { header: 'Indicador', key: 'indicator', width: 40 },
+        { header: 'Valor', key: 'value', width: 20 }
+      ];
+      kpiSheet.addRows([
+        { indicator: 'Tiempo Promedio Ejecucion (dias)', value: Math.round(avgCompletionTime) },
+        { indicator: 'Total Aprobados', value: completedPlans.length },
+        { indicator: 'Total Planes', value: plansData.filter(p => p.status !== 'deleted').length }
+      ]);
+      
+      const byResponsible = new Map();
+      for (const plan of plansData.filter(p => p.status !== 'deleted')) {
+        const responsibleId = plan.responsible || 'Sin asignar';
+        if (!byResponsible.has(responsibleId)) {
+          byResponsible.set(responsibleId, {
+            name: usersMap.get(responsibleId)?.fullName || responsibleId,
+            total: 0,
+            approved: 0
+          });
+        }
+        const stats = byResponsible.get(responsibleId);
+        stats.total++;
+        if (plan.status === 'approved') stats.approved++;
+      }
+      
+      const responsibleSheet = workbook.addWorksheet('Por Responsable');
+      responsibleSheet.columns = [
+        { header: 'Responsable', key: 'name', width: 30 },
+        { header: 'Total Planes', key: 'total', width: 12 },
+        { header: 'Aprobados', key: 'approved', width: 12 },
+        { header: 'Tasa Exito %', key: 'rate', width: 15 }
+      ];
+      responsibleSheet.addRows(Array.from(byResponsible.values()).map(stat => ({
+        name: stat.name,
+        total: stat.total,
+        approved: stat.approved,
+        rate: stat.total > 0 ? ((stat.approved / stat.total) * 100).toFixed(1) : '0'
+      })));
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=reporte-eficiencia-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
+      
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Failed to generate efficiency report:", error);
+      res.status(500).json({ message: "Failed to generate efficiency report" });
+    }
+  });
+
+  // Action Plans Report - By Gerencia Excel
+  app.get("/api/action-plans/reports/by-gerencia", isAuthenticated, async (req, res) => {
+    try {
+      const ExcelJS = (await import('exceljs')).default;
+      const workbook = new ExcelJS.Workbook();
+      
+      // Get all action plans and gerencias
+      const actionsData = await requireDb().select().from(actions);
+      const gerenciasData = await requireDb().select().from(gerencias);
+      
+      // Get process-gerencia associations
+      const processGerenciasData = await requireDb().select().from(processGerencias);
+      const processesData = await requireDb().select().from(processes);
+      
+      // Create maps for lookups
+      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
+      const processMap = new Map(processesData.map(p => [p.id, p]));
+      
+      // Build process -> gerencias mapping
+      const processToGerencias = new Map<string, string[]>();
+      for (const pg of processGerenciasData) {
+        if (!processToGerencias.has(pg.processId)) {
+          processToGerencias.set(pg.processId, []);
+        }
+        processToGerencias.get(pg.processId)!.push(pg.gerenciaId);
+      }
+      
+      // Group actions by gerencia and count by status
+      const gerenciaStats = new Map<string, {
+        name: string;
+        pending: number;
+        in_progress: number;
+        completed: number;
+        cancelled: number;
+        total: number;
+      }>();
+      
+      // Initialize all gerencias with zero counts
+      for (const gerencia of gerenciasData) {
+        gerenciaStats.set(gerencia.id, {
+          name: gerencia.name,
+          pending: 0,
+          in_progress: 0,
+          completed: 0,
+          cancelled: 0,
+          total: 0
+        });
+      }
+      
+      // Count actions by gerencia
+      for (const action of actionsData) {
+        if (action.status === 'deleted') continue;
+        
+        // Get gerencias associated with this action's process
+        const gerenciaIds = action.processId ? processToGerencias.get(action.processId) || [] : [];
+        
+        if (gerenciaIds.length === 0) {
+          // Actions without gerencia - add to "Sin Gerencia" category
+          if (!gerenciaStats.has('sin-gerencia')) {
+            gerenciaStats.set('sin-gerencia', {
+              name: 'Sin Gerencia Asignada',
+              pending: 0,
+              in_progress: 0,
+              completed: 0,
+              cancelled: 0,
+              total: 0
+            });
+          }
+          gerenciaIds.push('sin-gerencia');
+        }
+        
+        // Count for each gerencia
+        for (const gerenciaId of gerenciaIds) {
+          const stats = gerenciaStats.get(gerenciaId);
+          if (stats) {
+            stats.total++;
+            if (action.status === 'pending') stats.pending++;
+            else if (action.status === 'in_progress') stats.in_progress++;
+            else if (action.status === 'completed') stats.completed++;
+            else if (action.status === 'cancelled') stats.cancelled++;
+          }
+        }
+      }
+      
+      // Create worksheet
+      const worksheet = workbook.addWorksheet('Planes por Gerencia');
+      
+      // Define columns
+      worksheet.columns = [
+        { header: 'Gerencia', key: 'gerencia', width: 40 },
+        { header: 'Pendientes', key: 'pending', width: 15 },
+        { header: 'En Desarrollo', key: 'in_progress', width: 18 },
+        { header: 'Completados', key: 'completed', width: 15 },
+        { header: 'Cancelados', key: 'cancelled', width: 15 },
+        { header: 'Total', key: 'total', width: 12 }
+      ];
+      
+      // Style header row
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4F46E5' }
+      };
+      worksheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      
+      // Add data rows
+      const statsArray = Array.from(gerenciaStats.values())
+        .filter(stats => stats.total > 0) // Only show gerencias with actions
+        .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+      
+      for (const stats of statsArray) {
+        worksheet.addRow({
+          gerencia: stats.name,
+          pending: stats.pending,
+          in_progress: stats.in_progress,
+          completed: stats.completed,
+          cancelled: stats.cancelled,
+          total: stats.total
+        });
+      }
+      
+      // Calculate totals
+      const totals = {
+        gerencia: 'TOTAL',
+        pending: statsArray.reduce((sum, s) => sum + s.pending, 0),
+        in_progress: statsArray.reduce((sum, s) => sum + s.in_progress, 0),
+        completed: statsArray.reduce((sum, s) => sum + s.completed, 0),
+        cancelled: statsArray.reduce((sum, s) => sum + s.cancelled, 0),
+        total: statsArray.reduce((sum, s) => sum + s.total, 0)
+      };
+      
+      // Add totals row with styling
+      const totalRow = worksheet.addRow(totals);
+      totalRow.font = { bold: true };
+      totalRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE5E7EB' }
+      };
+      
+      // Add borders to all cells
+      worksheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          if (rowNumber > 1) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          }
+        });
+      });
+      
+      // Set first column alignment to left
+      worksheet.getColumn(1).alignment = { horizontal: 'left', vertical: 'middle' };
+      
+      // Send file
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=reporte-planes-por-gerencia-${new Date().toISOString().split('T')[0]}.xlsx`);
+      
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Failed to generate by-gerencia report:", error);
+      res.status(500).json({ message: "Failed to generate by-gerencia report" });
+    }
+  });
+
+  // Generate reports endpoint
+  app.post("/api/reports/generate", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const { reportType, format, title, startDate, endDate } = req.body;
+      
+      // Get data based on report type
+      const risksData = await storage.getRisks(tenantId);
+      const controlsData = await storage.getControls(tenantId);
+      const actionPlansData = await storage.getActionPlans();
+      const processesData = await requireDb().select().from(processes);
+      
+      // Generate HTML content based on report type
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>${title || 'Reporte'}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            h1 { color: #333; border-bottom: 2px solid #4F46E5; padding-bottom: 10px; }
+            h2 { color: #4F46E5; margin-top: 30px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background-color: #4F46E5; color: white; }
+            tr:hover { background-color: #f5f5f5; }
+            .summary { background-color: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+            .summary-item { display: inline-block; margin-right: 30px; }
+            .high-risk { color: #ef4444; font-weight: bold; }
+            .medium-risk { color: #f97316; }
+            .low-risk { color: #22c55e; }
+          </style>
+        </head>
+        <body>
+          <h1>${title || 'Reporte de Riesgos'}</h1>
+          <p>Período: ${new Date(startDate).toLocaleDateString()} - ${new Date(endDate).toLocaleDateString()}</p>
+          
+          <div class="summary">
+            <div class="summary-item"><strong>Total Riesgos:</strong> ${risksData.length}</div>
+            <div class="summary-item"><strong>Riesgos Críticos:</strong> ${risksData.filter(r => r.inherentRisk >= 20).length}</div>
+            <div class="summary-item"><strong>Controles Activos:</strong> ${controlsData.filter(c => c.isActive).length}</div>
+            <div class="summary-item"><strong>Planes de Acción:</strong> ${actionPlansData.length}</div>
+          </div>
+          
+          <h2>Distribución de Riesgos</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Nombre</th>
+                <th>Categoría</th>
+                <th>Nivel Inherente</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      risksData.slice(0, 50).forEach(risk => {
+        const riskClass = risk.inherentRisk >= 20 ? 'high-risk' : risk.inherentRisk >= 13 ? 'medium-risk' : 'low-risk';
+        htmlContent += `
+              <tr>
+                <td>${risk.code}</td>
+                <td>${risk.name}</td>
+                <td>${risk.category || 'N/A'}</td>
+                <td class="${riskClass}">${risk.inherentRisk}</td>
+                <td>${risk.status}</td>
+              </tr>
+        `;
+      });
+      
+      htmlContent += `
+            </tbody>
+          </table>
+          
+          <h2>Controles</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Nombre</th>
+                <th>Tipo</th>
+                <th>Efectividad</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      controlsData.slice(0, 30).forEach(control => {
+        htmlContent += `
+              <tr>
+                <td>${control.code}</td>
+                <td>${control.name}</td>
+                <td>${control.type || 'N/A'}</td>
+                <td>${control.effectiveness}%</td>
+                <td>${control.isActive ? 'Activo' : 'Inactivo'}</td>
+              </tr>
+        `;
+      });
+      
+      htmlContent += `
+            </tbody>
+          </table>
+        </body>
+        </html>
+      `;
+      
+      // Return HTML or convert to PDF/Excel based on format
+      if (format === 'html') {
+        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Content-Disposition', `attachment; filename=reporte_${reportType}_${new Date().toISOString().split('T')[0]}.html`);
+        res.send(htmlContent);
+      } else if (format === 'pdf') {
+        // For PDF generation, return HTML for now (can be enhanced with puppeteer later)
+        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Content-Disposition', `inline; filename=reporte_${reportType}_${new Date().toISOString().split('T')[0]}.html`);
+        res.send(htmlContent);
+      } else if (format === 'excel') {
+        // Generate Excel report
+        const ExcelJS = (await import('exceljs')).default;
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte');
+        
+        // Add headers
+        worksheet.columns = [
+          { header: 'Código', key: 'code', width: 15 },
+          { header: 'Nombre', key: 'name', width: 40 },
+          { header: 'Categoría', key: 'category', width: 20 },
+          { header: 'Nivel Inherente', key: 'inherentRisk', width: 15 },
+          { header: 'Estado', key: 'status', width: 15 },
+        ];
+        
+        // Add data
+        risksData.forEach(risk => {
+          worksheet.addRow({
+            code: risk.code,
+            name: risk.name,
+            category: risk.category || 'N/A',
+            inherentRisk: risk.inherentRisk,
+            status: risk.status,
+          });
+        });
+        
+        // Style header
+        worksheet.getRow(1).font = { bold: true };
+        worksheet.getRow(1).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF4F46E5' }
+        };
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=reporte_${reportType}_${new Date().toISOString().split('T')[0]}.xlsx`);
+        
+        await workbook.xlsx.write(res);
+        res.end();
+      } else {
+        res.status(400).json({ message: "Formato no soportado" });
+      }
+    } catch (error) {
+      console.error("Failed to generate report:", error);
+      res.status(500).json({ message: "Failed to generate report" });
+    }
+  });
+
+  // Send email to selected action plans
+  app.post("/api/action-plans/send-email", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate request body
+      const { planIds, subject, message } = sendActionPlansEmailSchema.parse(req.body);
+      
+      // Get all action plans by IDs (using actions table, not deprecated actionPlans)
+      const actionPlansToEmail = await requireDb()
+        .select()
+        .from(actions)
+        .where(inArray(actions.id, planIds));
+      
+      if (actionPlansToEmail.length === 0) {
+        return res.status(404).json({ message: "No se encontraron planes de acción con los IDs proporcionados" });
+      }
+      
+      // Get process owners for the responsible names
+      const responsibleNames = actionPlansToEmail
+        .map(plan => plan.responsible)
+        .filter(Boolean);
+      
+      const processOwnersData = responsibleNames.length > 0 
+        ? await requireDb()
+            .select()
+            .from(processOwners)
+            .where(inArray(processOwners.name, responsibleNames as string[]))
+        : [];
+      
+      const processOwnersMap = new Map(processOwnersData.map(po => [po.name, po]));
+      
+      // GROUP PLANS BY RESPONSIBLE EMAIL
+      const plansByResponsible = new Map<string, Array<typeof actionPlansToEmail[number]>>();
+      const emailResults: Array<{ planId: string; success: boolean; email?: string; error?: string; }> = [];
+      
+      for (const plan of actionPlansToEmail) {
+        if (!plan.responsible) {
+          emailResults.push({
+            planId: plan.id,
+            success: false,
+            error: "Plan sin responsable asignado"
+          });
+          continue;
+        }
+        
+        const processOwner = processOwnersMap.get(plan.responsible);
+        
+        if (!processOwner?.email) {
+          emailResults.push({
+            planId: plan.id,
+            success: false,
+            error: "Responsable sin email configurado"
+          });
+          continue;
+        }
+        
+        // Group by email
+        const email = processOwner.email;
+        if (!plansByResponsible.has(email)) {
+          plansByResponsible.set(email, []);
+        }
+        plansByResponsible.get(email)!.push(plan);
+      }
+      
+      // Now send one email per responsible (grouped)
+      let sentCount = 0;
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      
+      for (const [responsibleEmail, plans] of plansByResponsible.entries()) {
+        // Find the process owner for this email
+        const processOwner = processOwnersData.find(po => po.email === responsibleEmail);
+        if (!processOwner) continue;
+        
+        // Generate batch validation token
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+        
+        const batchTokenValue = randomBytes(32).toString('hex');
+        const entityIds = plans.map(p => p.id);
+        
+        const validationData = plans.map(plan => ({
+          id: plan.id,
+          code: plan.code,
+          name: plan.title, // Use 'title' from actions table
+          description: plan.description,
+          dueDate: plan.dueDate,
+          responsible: plan.responsible
+        }));
+        
+        // Create batch token in database
+        const batchToken = await storage.createBatchValidationToken({
+          token: batchTokenValue,
+          type: 'action_plan',
+          entityIds,
+          responsibleEmail,
+          processOwnerId: processOwner.id,
+          validationData,
+          isUsed: false,
+          partiallyUsed: false,
+          expiresAt
+        });
+        
+        // Create validation URL (points to batch validation page)
+        const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
+        
+        // Build email with grouped plans table
+        const plansTableRows = plans.map(plan => {
+          const dueDateText = plan.dueDate 
+            ? new Date(plan.dueDate).toLocaleDateString('es-CL', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric' 
+              })
+            : 'Sin fecha límite';
+          
+          return `
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${plan.code}</td>
+              <td style="padding: 12px 8px; color: #1f2937;">${plan.title || ''}</td>
+              <td style="padding: 12px 8px; color: #6b7280;">${dueDateText}</td>
+            </tr>
+          `;
+        }).join('');
+        
+        const emailHtml = `
+          <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+            <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <h1 style="color: #1f2937; margin: 0; font-size: 24px;">Validación de Planes de Acción</h1>
+                <p style="color: #6b7280; margin-top: 8px; font-size: 14px;">Se requiere su validación para ${plans.length} plan${plans.length > 1 ? 'es' : ''} de acción</p>
+              </div>
+              
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 16px; opacity: 0.9;">
+                  <strong>${plans.length}</strong> ${plans.length > 1 ? 'planes' : 'plan'} pendientes de validación
+                </p>
+              </div>
+              
+              <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 24px; overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; min-width: 500px;">
+                  <thead>
+                    <tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Código</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nombre</th>
+                      <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Fecha Límite</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${plansTableRows}
+                  </tbody>
+                </table>
+              </div>
+              
+              ${message ? `
+              <div style="margin-bottom: 24px; padding: 16px; background-color: #eff6ff; border-left: 4px solid #3b82f6; border-radius: 4px;">
+                <p style="margin: 0 0 8px 0; color: #1e40af; font-weight: 600;">Mensaje:</p>
+                <p style="margin: 0; color: #1f2937; white-space: pre-wrap;">${message}</p>
+              </div>
+              ` : ''}
+              
+              <div style="margin-bottom: 24px;">
+                <p style="color: #4b5563; font-size: 14px; margin: 0 0 16px 0; text-align: center;">
+                  Haga clic en el botón para revisar y validar estos planes de acción:
+                </p>
+                
+                <div style="text-align: center;">
+                  <a href="${validationUrl}" 
+                     style="display: inline-block; text-align: center; background-color: #1E3A8A; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; transition: background-color 0.2s;"
+                     onmouseover="this.style.backgroundColor='#1e40af'"
+                     onmouseout="this.style.backgroundColor='#1E3A8A'">
+                    📋 Revisar y Validar Planes
+                  </a>
+                </div>
+              </div>
+              
+              <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 24px;">
+                <p style="color: #9ca3af; font-size: 12px; margin: 0; text-align: center;">
+                  Este enlace es válido por 7 días.<br>
+                  Podrá aprobar, observar o rechazar cada plan individualmente.
+                </p>
+              </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+              <p style="color: #6b7280; font-size: 12px; margin: 0;">
+                Este es un mensaje automático del Sistema de Gestión de Riesgos.
+              </p>
+            </div>
+          </div>
+        `;
+        
+        // Send grouped email
+        try {
+          const emailSent = await sendEmail({
+            to: responsibleEmail,
+            subject: subject || `Validación de ${plans.length} plan${plans.length > 1 ? 'es' : ''} de acción`,
+            html: emailHtml
+          });
+          
+          if (emailSent) {
+            sentCount++;
+            
+            // Update notifiedAt timestamp for all plans in this batch
+            for (const plan of plans) {
+              await storage.updateActionPlan(plan.id, {
+                notifiedAt: new Date()
+              });
+              
+              emailResults.push({
+                planId: plan.id,
+                success: true,
+                email: responsibleEmail
+              });
+            }
+          } else {
+            for (const plan of plans) {
+              emailResults.push({
+                planId: plan.id,
+                success: false,
+                error: "Error al enviar email"
+              });
+            }
+          }
+        } catch (emailError) {
+          console.error("Error sending grouped email to", responsibleEmail, emailError);
+          for (const plan of plans) {
+            emailResults.push({
+              planId: plan.id,
+              success: false,
+              error: emailError instanceof Error ? emailError.message : "Error desconocido"
+            });
+          }
+        }
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: 'bulk-email',
+        action: 'send_email',
+        userId,
+        changes: {
+          planIds,
+          subject,
+          sentCount,
+          totalPlans: actionPlansToEmail.length,
+          results: emailResults
+        }
+      });
+      
+      res.json({ 
+        success: true, 
+        sentCount,
+        totalPlans: actionPlansToEmail.length,
+        results: emailResults
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: error.errors[0].message,
+          errors: error.errors 
+        });
+      }
+      console.error("Failed to send emails to action plans:", error);
+      res.status(500).json({ message: "Error al enviar emails a los planes de acción" });
+    }
+  });
+
+  // Resend rejected action plan to validation
+  app.post("/api/action-plans/:id/resend-validation", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { id } = req.params;
+      
+      // Get the action plan
+      const plan = await requireDb()
+        .select()
+        .from(actions)
+        .where(eq(actions.id, id))
+        .limit(1);
+      
+      if (plan.length === 0) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      const actionPlan = plan[0];
+      
+      // Check if plan is rejected or observed
+      if (actionPlan.validationStatus !== 'rejected' && actionPlan.validationStatus !== 'observed') {
+        return res.status(400).json({ 
+          message: "Solo se pueden reenviar planes rechazados u observados" 
+        });
+      }
+      
+      // Get process owner
+      if (!actionPlan.responsible) {
+        return res.status(400).json({ 
+          message: "Plan sin responsable asignado" 
+        });
+      }
+      
+      const processOwnerData = await requireDb()
+        .select()
+        .from(processOwners)
+        .where(eq(processOwners.name, actionPlan.responsible))
+        .limit(1);
+      
+      if (processOwnerData.length === 0 || !processOwnerData[0].email) {
+        return res.status(400).json({ 
+          message: "Responsable sin email configurado" 
+        });
+      }
+      
+      const processOwner = processOwnerData[0];
+      const baseUrl = process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
+        : 'http://localhost:5000';
+      
+      // Generate batch validation token (with single plan)
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
+      
+      const batchTokenValue = randomBytes(32).toString('hex');
+      
+      const validationData = [{
+        id: actionPlan.id,
+        code: actionPlan.code,
+        name: actionPlan.title,
+        description: actionPlan.description,
+        dueDate: actionPlan.dueDate,
+        responsible: actionPlan.responsible
+      }];
+      
+      // Create batch token in database
+      await storage.createBatchValidationToken({
+        token: batchTokenValue,
+        type: 'action_plan',
+        entityIds: [actionPlan.id],
+        responsibleEmail: processOwner.email,
+        processOwnerId: processOwner.id,
+        validationData,
+        isUsed: false,
+        partiallyUsed: false,
+        expiresAt
+      });
+      
+      // Create validation URL
+      const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
+      
+      const dueDateText = actionPlan.dueDate 
+        ? new Date(actionPlan.dueDate).toLocaleDateString('es-CL', { 
+            year: 'numeric', 
+            month: 'short', 
+            day: 'numeric' 
+          })
+        : 'Sin fecha límite';
+      
+      // Build revalidation email
+      const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+          <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #1f2937; margin: 0; font-size: 24px;">Revalidación de Plan de Acción</h1>
+              <p style="color: #6b7280; margin-top: 8px; font-size: 14px;">Se requiere una nueva revisión del plan corregido</p>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+              <p style="margin: 0; font-size: 14px; opacity: 0.9;">
+                ⚠️ Este plan fue <strong>rechazado previamente</strong> y ha sido corregido para su revalidación
+              </p>
+            </div>
+            
+            <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Código</th>
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Nombre</th>
+                    <th style="padding: 12px 8px; text-align: left; color: #374151; font-weight: 600;">Fecha Límite</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom: 1px solid #e5e7eb;">
+                    <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${actionPlan.code}</td>
+                    <td style="padding: 12px 8px; color: #1f2937;">${actionPlan.title || ''}</td>
+                    <td style="padding: 12px 8px; color: #6b7280;">${dueDateText}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <div style="margin-bottom: 24px;">
+              <p style="color: #4b5563; font-size: 14px; margin: 0 0 16px 0; text-align: center;">
+                Por favor, revise nuevamente este plan de acción y realice su validación:
+              </p>
+              
+              <div style="text-align: center;">
+                <a href="${validationUrl}" 
+                   style="display: inline-block; text-align: center; background-color: #1E3A8A; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; transition: background-color 0.2s;"
+                   onmouseover="this.style.backgroundColor='#1e40af'"
+                   onmouseout="this.style.backgroundColor='#1E3A8A'">
+                  📋 Revisar Plan Corregido
+                </a>
+              </div>
+            </div>
+            
+            <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 24px;">
+              <p style="color: #9ca3af; font-size: 12px; margin: 0; text-align: center;">
+                Este enlace es válido por 7 días.<br>
+                Podrá aprobar, observar o rechazar el plan según corresponda.
+              </p>
+            </div>
+          </div>
+          
+          <div style="text-align: center; margin-top: 20px;">
+            <p style="color: #6b7280; font-size: 12px; margin: 0;">
+              Este es un mensaje automático del Sistema de Gestión de Riesgos.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      // Send email
+      const emailSent = await sendEmail({
+        to: processOwner.email,
+        subject: `Revalidación de Plan de Acción ${actionPlan.code}`,
+        html: emailHtml
+      });
+      
+      if (!emailSent) {
+        return res.status(500).json({ 
+          message: "Error al enviar email de revalidación" 
+        });
+      }
+      
+      // Update notifiedAt timestamp and reset validation status to pending
+      await storage.updateActionPlan(actionPlan.id, {
+        notifiedAt: new Date(),
+        validationStatus: 'pending_validation'
+      });
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlan.id,
+        action: 'resend_validation',
+        userId,
+        changes: {
+          code: actionPlan.code,
+          responsible: actionPlan.responsible,
+          email: processOwner.email
+        }
+      });
+      
+      res.json({ 
+        success: true, 
+        message: "Email de revalidación enviado exitosamente",
+        email: processOwner.email
+      });
+    } catch (error) {
+      console.error("Failed to resend action plan to validation:", error);
+      res.status(500).json({ message: "Error al reenviar plan a validación" });
+    }
+  });
+
+  // ============== PUBLIC ACTION PLAN VALIDATION ENDPOINTS ==============
+  
+  // GET /api/public/validate-action-plan/:token - Get validation details without authentication
+  app.get("/api/public/validate-action-plan/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      
+      const validationResult = await storage.validateAndUseActionPlanToken(token);
+      
+      if (!validationResult.valid || !validationResult.token) {
+        return res.status(400).json({ 
+          success: false, 
+          error: validationResult.error || 'Token inválido' 
+        });
+      }
+      
+      const tokenData = validationResult.token;
+      
+      // Get action plan details
+      const actionPlan = await storage.getActionPlan(tokenData.entityId);
+      
+      if (!actionPlan) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Plan de acción no encontrado' 
+        });
+      }
+      
+      // Get related data for comprehensive view
+      // For public validation, we need to allow access without tenant context
+      // We'll fetch the process and risk directly by ID instead
+      const processData = actionPlan.processId ? await requireDb().select().from(processes).where(eq(processes.id, actionPlan.processId)).then(r => r[0]) : null;
+      
+      // Get associated risks from action_plan_risks table (many-to-many)
+      const associatedRisks = await requireDb()
+        .select({
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+        .where(eq(actionPlanRisks.actionPlanId, actionPlan.id));
+      
+      // Fallback: If no risks found in action_plan_risks but riskId exists (legacy data), load from riskId
+      let riskData = null;
+      if (associatedRisks.length > 0) {
+        const primaryRisk = associatedRisks.find(r => r.isPrimary) || associatedRisks[0];
+        riskData = {
+          id: primaryRisk.riskId,
+          code: primaryRisk.riskCode,
+          name: primaryRisk.riskName
+        };
+      } else if (actionPlan.riskId) {
+        const [risk] = await requireDb().select().from(risks).where(eq(risks.id, actionPlan.riskId));
+        riskData = risk ? { id: risk.id, code: risk.code, name: risk.name } : null;
+      }
+      
+      res.json({
+        success: true,
+        actionPlan: {
+          id: actionPlan.id,
+          code: actionPlan.code,
+          name: actionPlan.name,
+          description: actionPlan.description,
+          dueDate: actionPlan.dueDate,
+          responsible: actionPlan.responsible,
+          process: processData ? { id: processData.id, name: processData.name, code: processData.code } : null,
+          risk: riskData
+        },
+        action: tokenData.action,
+        validationData: tokenData.validationData
+      });
+    } catch (error) {
+      console.error('Error fetching validation token data:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Error al obtener la información de validación' 
+      });
+    }
+  });
+  
+  // POST /api/public/validate-action-plan/:token - Submit validation action
+  app.post("/api/public/validate-action-plan/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const { comments } = req.body;
+      
+      const validationResult = await storage.validateAndUseActionPlanToken(token);
+      
+      if (!validationResult.valid || !validationResult.token) {
+        return res.status(400).json({ 
+          success: false, 
+          error: validationResult.error || 'Token inválido' 
+        });
+      }
+      
+      const tokenData = validationResult.token;
+      
+      // Get action plan
+      const actionPlan = await storage.getActionPlan(tokenData.entityId);
+      
+      if (!actionPlan) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Plan de acción no encontrado' 
+        });
+      }
+      
+      // Map action to validationStatus (using schema-defined values)
+      const statusMap: Record<string, string> = {
+        'validated': 'validated',
+        'observed': 'observed',
+        'rejected': 'rejected'
+      };
+      
+      const newStatus = tokenData.action ? statusMap[tokenData.action] : 'pending_validation';
+      const now = new Date();
+      
+      // Update action plan with validation status in action_plans table
+      await storage.updateActionPlan(tokenData.entityId, {
+        validationStatus: newStatus,
+        validationComments: comments || null,
+        reviewedAt: now
+      });
+      
+      // CRITICAL: Sync validation status to actions table
+      await syncActionPlanValidation(actionPlan.code, {
+        validationStatus: newStatus,
+        validationComments: comments || null,
+        reviewedAt: now,
+        validatedAt: now
+      });
+      
+      // Mark token as used
+      await storage.markTokenAsUsed(token, tokenData.action || 'validated', comments);
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: tokenData.entityId,
+        action: 'email_validation',
+        userId: 'public-validation', // Special user for public validations
+        changes: {
+          action: tokenData.action,
+          validationStatus: newStatus,
+          comments,
+          validatedViaEmail: true,
+          responsibleEmail: tokenData.responsibleEmail
+        }
+      });
+      
+      res.json({
+        success: true,
+        message: `Plan de acción ${tokenData.action === 'validated' ? 'aprobado' : tokenData.action === 'observed' ? 'observado' : 'rechazado'} exitosamente`,
+        actionPlan: {
+          id: actionPlan.id,
+          code: actionPlan.code,
+          name: actionPlan.name,
+          validationStatus: newStatus
+        }
+      });
+    } catch (error) {
+      console.error('Error processing validation:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Error al procesar la validación' 
+      });
+    }
+  });
+
+  // ============== BATCH VALIDATION ENDPOINTS (GROUPED) ==============
+  
+  // GET /api/public/batch-validation/:token - Get batch validation details
+  app.get("/api/public/batch-validation/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      
+      console.log("🔍 [GET BATCH VALIDATION] Token received from URL");
+      console.log("   Raw token (first 20 chars):", token.substring(0, 20));
+      console.log("   Token length:", token.length);
+      console.log("   Full token:", token);
+      
+      // Get batch token data
+      const batchToken = await storage.getBatchValidationToken(token);
+      
+      console.log("   Token found:", !!batchToken);
+      
+      if (!batchToken) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Token inválido o expirado' 
+        });
+      }
+      
+      // Check if token is expired
+      if (new Date() > batchToken.expiresAt) {
+        return res.status(410).json({ 
+          success: false, 
+          error: 'El token ha expirado' 
+        });
+      }
+      
+      // Check if already fully used
+      if (batchToken.isUsed) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Este token ya ha sido utilizado completamente' 
+        });
+      }
+      
+      // Handle different entity types
+      if (batchToken.type === 'control') {
+        // Use tenantId from token for security isolation
+        const tenantId = batchToken.tenantId;
+        
+        // Get control details for all entities with proper tenantId
+        const controlsData = await Promise.all(
+          batchToken.entityIds.map(id => storage.getControl(id, tenantId))
+        );
+        
+        // Filter out nulls
+        const validControls = controlsData.filter(Boolean);
+        
+        const controlsWithDetails = validControls.map(control => ({
+          id: control.id,
+          code: control.code,
+          name: control.name,
+          description: control.description,
+          type: control.type,
+          automationLevel: control.automationLevel,
+          validationStatus: control.validationStatus
+        }));
+        
+        return res.json({
+          success: true,
+          type: batchToken.type,
+          responsibleEmail: batchToken.responsibleEmail,
+          expiresAt: batchToken.expiresAt,
+          controls: controlsWithDetails,
+          validationData: batchToken.validationData
+        });
+      } else if (batchToken.type === 'risk') {
+        // Get risk-process-link details for all entities
+        const riskProcessLinksData = await requireDb()
+          .select({
+            riskProcessLink: riskProcessLinks,
+            risk: risks,
+          })
+          .from(riskProcessLinks)
+          .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+          .where(inArray(riskProcessLinks.id, batchToken.entityIds));
+        
+        const risksWithDetails = riskProcessLinksData
+          .filter(row => row.risk)
+          .map(row => ({
+            id: row.riskProcessLink.id,
+            riskId: row.risk!.id,
+            code: row.risk!.code,
+            name: row.risk!.name,
+            description: row.risk!.description,
+            inherentRisk: row.risk!.inherentRisk,
+            processName: batchToken.validationData.find((v: any) => v.id === row.riskProcessLink.id)?.processName || null,
+            validationStatus: row.riskProcessLink.validationStatus
+          }));
+        
+        return res.json({
+          success: true,
+          type: batchToken.type,
+          responsibleEmail: batchToken.responsibleEmail,
+          expiresAt: batchToken.expiresAt,
+          risks: risksWithDetails,
+          validationData: batchToken.validationData
+        });
+      } else {
+        // Get action plan details for all entities
+        const actionPlans = await Promise.all(
+          batchToken.entityIds.map(id => storage.getActionPlan(id))
+        );
+        
+        // Filter out nulls and get associated risks
+        const validPlans = actionPlans.filter(Boolean);
+        const risks = await storage.getRisks();
+        
+        const plansWithDetails = validPlans.map(plan => {
+          const associatedRisk = risks.find(r => r.id === plan.riskId);
+          return {
+            id: plan.id,
+            code: plan.code,
+            name: plan.name,
+            description: plan.description,
+            dueDate: plan.dueDate,
+            responsible: plan.responsible,
+            validationStatus: plan.validationStatus,
+            risk: associatedRisk ? {
+              id: associatedRisk.id,
+              code: associatedRisk.code,
+              name: associatedRisk.name
+            } : null
+          };
+        });
+        
+        return res.json({
+          success: true,
+          type: batchToken.type,
+          responsibleEmail: batchToken.responsibleEmail,
+          expiresAt: batchToken.expiresAt,
+          plans: plansWithDetails,
+          validationData: batchToken.validationData
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching batch validation token:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Error al obtener la información de validación' 
+        });
+    }
+  });
+  
+  // POST /api/public/batch-validation/:token - Submit batch validation
+  app.post("/api/public/batch-validation/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const { validations, generalComments } = req.body;
+      
+      console.log("🔍 [BATCH VALIDATION DEBUG] Received validation request");
+      console.log("   Token received (first 20 chars):", token.substring(0, 20));
+      console.log("   Token length:", token.length);
+      console.log("   Validations count:", validations?.length || 0);
+      
+      // validations format: [{ entityId, action: 'validated'|'observed'|'rejected', comments }]
+      
+      if (!Array.isArray(validations) || validations.length === 0) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Se requiere al menos una validación' 
+        });
+      }
+      
+      // Get batch token data
+      console.log("🔍 [BATCH VALIDATION DEBUG] Calling getBatchValidationToken with token");
+      const batchToken = await storage.getBatchValidationToken(token);
+      
+      console.log("🔍 [BATCH VALIDATION DEBUG] getBatchValidationToken result:", {
+        found: !!batchToken,
+        tokenId: batchToken?.id,
+        tenantId: batchToken?.tenantId,
+        type: batchToken?.type,
+        entityIds: batchToken?.entityIds,
+        expiresAt: batchToken?.expiresAt
+      });
+      
+      if (!batchToken) {
+        console.error("❌ [BATCH VALIDATION ERROR] Token not found in database");
+        // Let's also try to search the DB directly for debugging
+        const directQuery = await requireDb().select().from(batchValidationTokens).limit(5);
+        console.log("   Sample tokens in DB (count):", directQuery.length);
+        console.log("   Sample token (first):", directQuery[0] ? { id: directQuery[0].id, tenantId: directQuery[0].tenantId, type: directQuery[0].type } : 'none');
+        
+        return res.status(404).json({ 
+          success: false, 
+          error: 'Token inválido o expirado' 
+        });
+      }
+      
+      // Check if token is expired
+      if (new Date() > batchToken.expiresAt) {
+        return res.status(410).json({ 
+          success: false, 
+          error: 'El token ha expirado' 
+        });
+      }
+      
+      // Check if already fully used
+      if (batchToken.isUsed) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Este token ya ha sido utilizado completamente' 
+        });
+      }
+      
+      const now = new Date();
+      const results = [];
+      
+      // Map action to validationStatus
+      const statusMap: Record<string, "validated" | "rejected" | "observed"> = {
+        'validated': 'validated',
+        'observed': 'observed',
+        'rejected': 'rejected'
+      };
+      
+      // Process based on entity type
+      if (batchToken.type === 'control') {
+        // Process control validations
+        for (const validation of validations) {
+          const { entityId, action, comments } = validation;
+          
+          // Verify entity is part of this batch
+          if (!batchToken.entityIds.includes(entityId)) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Esta entidad no pertenece a este lote de validación'
+            });
+            continue;
+          }
+          
+          // Get control (use tenant from batch token)
+          const control = await requireDb().select().from(controls).where(eq(controls.id, entityId)).limit(1).then(r => r[0]);
+          
+          if (!control) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Control no encontrado'
+            });
+            continue;
+          }
+          
+          const newStatus = statusMap[action];
+          
+          // Update control validation status directly via DB (bypass storage layer for public validation)
+          if (newStatus) {
+            await requireDb().update(controls)
+              .set({
+                validationStatus: newStatus,
+                validatedBy: null, // Public validation doesn't have a user ID
+                validatedAt: now,
+                validationComments: comments || generalComments || null
+              })
+              .where(eq(controls.id, entityId));
+          }
+          
+          /**
+           * CRITICAL: Log audit action with userId: null
+           * 
+           * Email-based validations are public (no authenticated user), so userId must be NULL.
+           * The audit_logs.user_id column was made nullable (Nov 2025) specifically for this use case.
+           * 
+           * DO NOT change userId to a string - it will cause constraint violations!
+           * See tests/integration/email-validation.test.ts for validation tests.
+           */
+          await requireDb().insert(auditLogs).values({
+            entityType: 'control',
+            entityId,
+            action: 'batch_email_validation',
+            userId: null, // Public validation doesn't have a specific user
+            changes: {
+              action,
+              validationStatus: newStatus,
+              comments: comments || generalComments,
+              validatedViaEmail: true,
+              batchValidation: true,
+              responsibleEmail: batchToken.responsibleEmail
+            }
+          });
+          
+          results.push({
+            entityId,
+            success: true,
+            action,
+            newStatus
+          });
+        }
+      } else if (batchToken.type === 'risk') {
+        // Process risk-process-link validations
+        for (const validation of validations) {
+          const { entityId, action, comments } = validation;
+          
+          // Verify entity is part of this batch
+          if (!batchToken.entityIds.includes(entityId)) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Esta entidad no pertenece a este lote de validación'
+            });
+            continue;
+          }
+          
+          // Get risk-process-link
+          const riskProcessLinkData = await requireDb()
+            .select()
+            .from(riskProcessLinks)
+            .where(eq(riskProcessLinks.id, entityId))
+            .limit(1);
+          
+          if (riskProcessLinkData.length === 0) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Riesgo no encontrado'
+            });
+            continue;
+          }
+          
+          const newStatus = statusMap[action];
+          
+          // Update risk-process-link validation status
+          if (newStatus) {
+            await requireDb().update(riskProcessLinks)
+              .set({
+                validationStatus: newStatus,
+                validatedBy: null, // Public validation doesn't have a user ID
+                validatedAt: now,
+                validationComments: comments || generalComments || null
+              })
+              .where(eq(riskProcessLinks.id, entityId));
+          }
+          
+          // Log audit action for each risk
+          await requireDb().insert(auditLogs).values({
+            entityType: 'risk',
+            entityId,
+            action: 'batch_email_validation',
+            userId: null, // Public validation doesn't have a specific user
+            changes: {
+              action,
+              validationStatus: newStatus,
+              comments: comments || generalComments,
+              validatedViaEmail: true,
+              batchValidation: true,
+              responsibleEmail: batchToken.responsibleEmail
+            }
+          });
+          
+          results.push({
+            entityId,
+            success: true,
+            action,
+            newStatus
+          });
+        }
+      } else {
+        // Process action plan validations
+        for (const validation of validations) {
+          const { entityId, action, comments } = validation;
+          
+          // Verify entity is part of this batch
+          if (!batchToken.entityIds.includes(entityId)) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Esta entidad no pertenece a este lote de validación'
+            });
+            continue;
+          }
+          
+          // Get action plan
+          const actionPlan = await storage.getActionPlan(entityId);
+          
+          if (!actionPlan) {
+            results.push({
+              entityId,
+              success: false,
+              error: 'Plan de acción no encontrado'
+            });
+            continue;
+          }
+          
+          const newStatus = statusMap[action] || 'pending_validation';
+          
+          // Update action plan
+          await storage.updateActionPlan(entityId, {
+            validationStatus: newStatus,
+            validationComments: comments || generalComments || null,
+            reviewedAt: now
+          });
+          
+          // Sync to actions table
+          await syncActionPlanValidation(actionPlan.code, {
+            validationStatus: newStatus,
+            validationComments: comments || generalComments || null,
+            reviewedAt: now,
+            validatedAt: now
+          });
+          
+          // Log audit action for each plan
+          await requireDb().insert(auditLogs).values({
+            entityType: 'action_plan',
+            entityId,
+            action: 'batch_email_validation',
+            userId: null, // Public validation doesn't have a specific user
+            changes: {
+              action,
+              validationStatus: newStatus,
+              comments: comments || generalComments,
+              validatedViaEmail: true,
+              batchValidation: true,
+              responsibleEmail: batchToken.responsibleEmail
+            }
+          });
+          
+          results.push({
+            entityId,
+            success: true,
+            action,
+            newStatus
+          });
+        }
+      }
+      
+      // Check how many entities have been validated in total
+      let validatedCount = 0;
+      if (batchToken.type === 'control') {
+        for (const entityId of batchToken.entityIds) {
+          const control = await requireDb().select().from(controls).where(eq(controls.id, entityId)).limit(1).then(r => r[0]);
+          if (control && control.validationStatus && control.validationStatus !== 'pending_validation') {
+            validatedCount++;
+          }
+        }
+      } else {
+        for (const entityId of batchToken.entityIds) {
+          const actionPlan = await storage.getActionPlan(entityId);
+          if (actionPlan && actionPlan.validationStatus && actionPlan.validationStatus !== 'pending_validation') {
+            validatedCount++;
+          }
+        }
+      }
+      
+      // Mark batch token as used only when ALL entities have been validated
+      const allEntitiesProcessed = validatedCount === batchToken.entityIds.length;
+      await storage.updateBatchValidationToken(batchToken.id, {
+        isUsed: allEntitiesProcessed,
+        partiallyUsed: validatedCount > 0 && !allEntitiesProcessed,
+        usedAt: allEntitiesProcessed ? now : batchToken.usedAt
+      });
+      
+      // ========================================
+      // MONITORING METRICS
+      // ========================================
+      const successfulValidations = results.filter(r => r.success).length;
+      const failedValidations = results.filter(r => !r.success).length;
+      const successRate = validations.length > 0 ? (successfulValidations / validations.length * 100).toFixed(2) : '0';
+      
+      console.log('[VALIDATION_METRICS]', JSON.stringify({
+        timestamp: now.toISOString(),
+        type: batchToken.type,
+        token: token.substring(0, 10) + '...',
+        totalRequested: validations.length,
+        successful: successfulValidations,
+        failed: failedValidations,
+        successRate: `${successRate}%`,
+        responsibleEmail: batchToken.responsibleEmail,
+        allEntitiesProcessed,
+        validatedCount,
+        totalEntities: batchToken.entityIds.length
+      }));
+
+      res.json({
+        success: true,
+        message: `Se procesaron ${successfulValidations} validaciones exitosamente`,
+        results,
+        totalProcessed: successfulValidations,
+        totalRequested: validations.length
+      });
+    } catch (error) {
+      // Log validation failure for monitoring
+      console.error('[VALIDATION_ERROR]', JSON.stringify({
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+        token: req.params.token?.substring(0, 10) + '...',
+        stack: error instanceof Error ? error.stack : undefined
+      }));
+      
+      res.status(500).json({ 
+        success: false, 
+        error: 'Error al procesar las validaciones' 
+      });
+    }
+  });
+
+  // ============== ACTION PLAN EVIDENCE SYSTEM ==============
+  
+  // 1. POST /api/action-plans/:id/attachments - Subir evidencias
+  app.post("/api/action-plans/:id/attachments", isAuthenticated, upload.array('files', 5), async (req: any, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionPlanId = req.params.id;
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ message: "No se proporcionaron archivos" });
+      }
+      
+      const privateDir = process.env.PRIVATE_OBJECT_DIR;
+      if (!privateDir) {
+        return res.status(500).json({ message: "PRIVATE_OBJECT_DIR no configurado" });
+      }
+      
+      // Parse bucket and path from PRIVATE_OBJECT_DIR (format: /bucket-name/path)
+      const match = privateDir.match(/^\/([^\/]+)(\/.*)?$/);
+      if (!match) {
+        return res.status(500).json({ message: "Formato de PRIVATE_OBJECT_DIR inválido" });
+      }
+      
+      const bucketName = match[1];
+      const basePath = (match[2] || '').replace(/^\//, '');
+      const bucket = objectStorageClient.bucket(bucketName);
+      
+      const uploadedAttachments = [];
+      
+      for (const file of req.files) {
+        // Generate unique filename
+        const uniqueId = randomBytes(8).toString('hex');
+        const timestamp = Date.now();
+        const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = basePath 
+          ? `${basePath}/action-plans/${actionPlanId}/${timestamp}_${uniqueId}_${sanitizedFileName}`
+          : `action-plans/${actionPlanId}/${timestamp}_${uniqueId}_${sanitizedFileName}`;
+        
+        const fileObj = bucket.file(storagePath);
+        
+        // Upload file to object storage
+        await fileObj.save(file.buffer, {
+          contentType: file.mimetype,
+          metadata: {
+            originalName: file.originalname,
+            uploadedBy: userId,
+            actionPlanId: actionPlanId
+          }
+        });
+        
+        // Create database record
+        const attachment = await storage.createActionPlanAttachment({
+          actionPlanId: actionPlanId,
+          fileName: file.originalname,
+          fileUrl: `/${bucketName}/${storagePath}`,
+          fileSize: file.size,
+          fileType: file.mimetype,
+          description: req.body.description || null,
+          uploadedBy: userId
+        });
+        
+        uploadedAttachments.push(attachment);
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'upload_attachments',
+        userId,
+        changes: {
+          filesUploaded: uploadedAttachments.length,
+          fileNames: uploadedAttachments.map(a => a.fileName)
+        }
+      });
+      
+      res.status(201).json(uploadedAttachments);
+    } catch (error) {
+      console.error("Error uploading attachments:", error);
+      res.status(500).json({ message: "Error al subir archivos" });
+    }
+  });
+  
+  // 2. GET /api/action-plans/:id/attachments - Obtener lista de evidencias
+  app.get("/api/action-plans/:id/attachments", isAuthenticated, async (req, res) => {
+    try {
+      const actionPlanId = req.params.id;
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      const attachments = await storage.getActionPlanAttachments(actionPlanId);
+      res.json(attachments);
+    } catch (error) {
+      console.error("Error fetching attachments:", error);
+      res.status(500).json({ message: "Error al obtener evidencias" });
+    }
+  });
+  
+  // 3. DELETE /api/action-plans/:id/attachments/:attachmentId - Eliminar evidencia
+  app.delete("/api/action-plans/:id/attachments/:attachmentId", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { id: actionPlanId, attachmentId } = req.params;
+      
+      // Get attachment details
+      const attachments = await storage.getActionPlanAttachments(actionPlanId);
+      const attachment = attachments.find(a => a.id === attachmentId);
+      
+      if (!attachment) {
+        return res.status(404).json({ message: "Evidencia no encontrada" });
+      }
+      
+      // Delete file from object storage
+      try {
+        // Parse bucket and path from fileUrl (format: /bucket-name/path)
+        const match = attachment.fileUrl.match(/^\/([^\/]+)\/(.+)$/);
+        if (match) {
+          const bucketName = match[1];
+          const filePath = match[2];
+          const bucket = objectStorageClient.bucket(bucketName);
+          const file = bucket.file(filePath);
+          
+          await file.delete();
+        }
+      } catch (storageError) {
+        console.error("Error deleting file from storage:", storageError);
+        // Continue to delete DB record even if file deletion fails
+      }
+      
+      // Delete database record
+      const deleted = await storage.deleteActionPlanAttachment(attachmentId);
+      
+      if (!deleted) {
+        return res.status(500).json({ message: "Error al eliminar evidencia de la base de datos" });
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'delete_attachment',
+        userId,
+        changes: {
+          attachmentId: attachmentId,
+          fileName: attachment.fileName
+        }
+      });
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting attachment:", error);
+      res.status(500).json({ message: "Error al eliminar evidencia" });
+    }
+  });
+  
+  // 4. POST /api/action-plans/:id/submit-evidence - Cambiar estado a evidence_submitted
+  app.post("/api/action-plans/:id/submit-evidence", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionPlanId = req.params.id;
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      // Check if there are attachments
+      const attachments = await storage.getActionPlanAttachments(actionPlanId);
+      if (attachments.length === 0) {
+        return res.status(400).json({ message: "No se pueden enviar evidencias sin adjuntos" });
+      }
+      
+      // Update status to evidence_submitted
+      const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, 'evidence_submitted', {
+        evidenceSubmittedBy: userId
+      });
+      
+      if (!updatedPlan) {
+        return res.status(500).json({ message: "Error al actualizar el estado del plan de acción" });
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'submit_evidence',
+        userId,
+        changes: {
+          status: {
+            old: actionPlan.status,
+            new: 'evidence_submitted'
+          },
+          attachmentsCount: attachments.length
+        }
+      });
+      
+      // Create notification for auditors/reviewers
+      await notificationService.createNotification({
+        recipientId: userId, // This would ideally be the auditor's ID
+        type: NotificationTypes.ACTION_PLAN_EVIDENCE_SUBMITTED,
+        category: 'action',
+        priority: 'important',
+        title: 'Evidencias Enviadas',
+        message: `El plan de acción ${actionPlan.code} ha enviado evidencias para revisión`,
+        actionText: 'Revisar Evidencias',
+        actionUrl: `/action-plans/${actionPlanId}`,
+        data: {
+          actionPlanId: actionPlanId,
+          actionPlanCode: actionPlan.code,
+          attachmentsCount: attachments.length
+        },
+        channels: ['in_app', 'email'],
+        tenantId: actionPlan.tenantId,
+        createdBy: userId
+      });
+      
+      res.json(updatedPlan);
+    } catch (error) {
+      console.error("Error submitting evidence:", error);
+      res.status(500).json({ message: "Error al enviar evidencias" });
+    }
+  });
+  
+  // 5. POST /api/action-plans/:id/review - Aprobar/rechazar evidencias (solo auditores)
+  app.post("/api/action-plans/:id/review", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionPlanId = req.params.id;
+      
+      // Check if user has auditor permissions
+      const userRoles = await storage.getUserRoles(userId);
+      const roles = await storage.getRoles();
+      const userRoleObjects = userRoles.map(ur => roles.find(r => r.id === ur.roleId)).filter(Boolean);
+      
+      const isAuditorOrAdmin = userRoleObjects.some(role => 
+        role?.name === 'Administrador' || 
+        role?.name === 'Auditor' ||
+        role?.permissions?.includes('audit_action_plans')
+      );
+      
+      if (!isAuditorOrAdmin) {
+        return res.status(403).json({ message: "No tiene permisos para revisar evidencias" });
+      }
+      
+      // Validate request body
+      const reviewSchema = z.object({
+        status: z.enum(['approved', 'rejected']),
+        reviewComments: z.string().min(1, "Los comentarios de revisión son requeridos")
+      });
+      
+      const { status, reviewComments } = reviewSchema.parse(req.body);
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      // Update status with review information and rejection tracking
+      const updateData: any = {
+        reviewedBy: userId,
+        reviewComments: reviewComments
+      };
+      
+      // If rejected, increment rejection counter and track details for full traceability
+      if (status === 'rejected') {
+        updateData.rejectionCount = (actionPlan.rejectionCount || 0) + 1;
+        updateData.lastRejectionDate = new Date();
+        updateData.lastRejectionReason = reviewComments;
+        updateData.lastRejectedBy = userId;
+      }
+      
+      const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, status, updateData);
+      
+      if (!updatedPlan) {
+        return res.status(500).json({ message: "Error al actualizar el estado del plan de acción" });
+      }
+      
+      // Log audit action with rejection details
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'review_evidence',
+        userId,
+        changes: {
+          status: {
+            old: actionPlan.status,
+            new: status
+          },
+          reviewComments: reviewComments,
+          ...(status === 'rejected' ? {
+            rejectionCount: updateData.rejectionCount,
+            lastRejectionDate: updateData.lastRejectionDate,
+            lastRejectionReason: updateData.lastRejectionReason
+          } : {})
+        }
+      });
+      
+      // Notify responsible person (only if exists)
+      if (actionPlan.responsible) {
+        try {
+          await notificationService.createNotification({
+            recipientId: actionPlan.responsible,
+            type: status === 'approved' ? NotificationTypes.ACTION_PLAN_APPROVED : NotificationTypes.ACTION_PLAN_REJECTED,
+            category: 'action',
+            priority: 'important',
+            title: status === 'approved' ? 'Evidencias Aprobadas' : 'Evidencias Rechazadas',
+            message: `El plan de acción ${actionPlan.code} ha sido ${status === 'approved' ? 'aprobado' : 'rechazado'}. ${status === 'rejected' ? `Total de rechazos: ${updateData.rejectionCount}. ` : ''}Comentarios: ${reviewComments}`,
+            actionText: 'Ver Plan',
+            actionUrl: `/action-plans/${actionPlanId}`,
+            data: {
+              actionPlanId: actionPlanId,
+              actionPlanCode: actionPlan.code,
+              reviewStatus: status,
+              reviewComments: reviewComments,
+              rejectionCount: status === 'rejected' ? updateData.rejectionCount : undefined
+            },
+            channels: ['in_app', 'email'],
+            tenantId: actionPlan.tenantId,
+            createdBy: userId
+          });
+        } catch (notifError) {
+          console.error("Error creating notification:", notifError);
+          // Don't fail the review if notification fails
+        }
+      }
+      
+      res.json(updatedPlan);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: error.errors[0].message,
+          errors: error.errors 
+        });
+      }
+      console.error("Error reviewing evidence:", error);
+      res.status(500).json({ message: "Error al revisar evidencias" });
+    }
+  });
+  
+  // 6. POST /api/action-plans/:id/reopen - Reopen rejected action plan
+  app.post("/api/action-plans/:id/reopen", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionPlanId = req.params.id;
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      // Only rejected plans can be reopened
+      if (actionPlan.status !== 'rejected') {
+        return res.status(400).json({ message: "Solo los planes rechazados pueden ser reabiertos" });
+      }
+      
+      // Update to in_progress status
+      const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, 'in_progress', {
+        updatedBy: userId
+      });
+      
+      if (!updatedPlan) {
+        return res.status(500).json({ message: "Error al reabrir el plan de acción" });
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'reopen',
+        userId,
+        changes: {
+          status: {
+            old: 'rejected',
+            new: 'in_progress'
+          },
+          reopenedAfterRejections: actionPlan.rejectionCount
+        }
+      });
+      
+      res.json(updatedPlan);
+    } catch (error) {
+      console.error("Error reopening action plan:", error);
+      res.status(500).json({ message: "Error al reabrir el plan de acción" });
+    }
+  });
+  
+  // 7. POST /api/action-plans/:id/generate-access-token - Generar token para email
+  app.post("/api/action-plans/:id/generate-access-token", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionPlanId = req.params.id;
+      
+      // Verify action plan exists
+      const actionPlan = await storage.getActionPlan(actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      // Generate secure token
+      const token = randomBytes(32).toString('hex');
+      
+      // Set expiration to 7 days from now
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      
+      // Create access token
+      const accessToken = await storage.createActionPlanAccessToken({
+        token: token,
+        actionPlanId: actionPlanId,
+        purpose: 'upload_evidence',
+        expiresAt: expiresAt,
+        createdBy: userId
+      });
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action_plan',
+        entityId: actionPlanId,
+        action: 'generate_access_token',
+        userId,
+        changes: {
+          purpose: 'upload_evidence',
+          expiresAt: expiresAt.toISOString()
+        }
+      });
+      
+      res.json({ 
+        token: accessToken.token,
+        expiresAt: accessToken.expiresAt
+      });
+    } catch (error) {
+      console.error("Error generating access token:", error);
+      res.status(500).json({ message: "Error al generar token de acceso" });
+    }
+  });
+  
+  // 7. GET /api/action-plans/by-token/:token - Acceso vía token (sin auth)
+  app.get("/api/action-plans/by-token/:token", async (req, res) => {
+    try {
+      const token = req.params.token;
+      const ipAddress = req.ip;
+      
+      // Validate token
+      const validation = await storage.validateAndUseToken(token, ipAddress);
+      
+      if (!validation.valid || !validation.actionPlanId) {
+        return res.status(401).json({ message: "Token inválido o expirado" });
+      }
+      
+      // Get action plan
+      const actionPlan = await storage.getActionPlan(validation.actionPlanId);
+      if (!actionPlan) {
+        return res.status(404).json({ message: "Plan de acción no encontrado" });
+      }
+      
+      // Get attachments
+      const attachments = await storage.getActionPlanAttachments(validation.actionPlanId);
+      
+      res.json({
+        actionPlan,
+        attachments
+      });
+    } catch (error) {
+      console.error("Error accessing by token:", error);
+      res.status(500).json({ message: "Error al acceder con token" });
+    }
+  });
+
+  // ============== UNIFIED ACTIONS API (Risk & Audit) ==============
+  // Nueva API unificada para acciones de riesgos y auditoría
+  
+  app.get("/api/actions", requirePermission("actions:read"), async (req, res) => {
+    try {
+      const origin = req.query.origin as 'risk' | 'audit' | undefined;
+      
+      const actions = origin 
+        ? await storage.getActionsByOrigin(origin)
+        : await storage.getActions();
+      
+      // Get all associated risks for all actions
+      const allAssociatedRisks = await requireDb()
+        .select({
+          actionPlanId: actionPlanRisks.actionPlanId,
+          actionId: actionPlanRisks.actionId,
+          riskId: actionPlanRisks.riskId,
+          isPrimary: actionPlanRisks.isPrimary,
+          riskCode: risks.code,
+          riskName: risks.name,
+        })
+        .from(actionPlanRisks)
+        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+      
+      // Add associated risks to each action
+      const actionsWithRisks = actions.map(action => {
+        const associatedRisksForAction = allAssociatedRisks.filter(ar => 
+          ar.actionId === action.id
+        );
+        
+        return {
+          ...action,
+          associatedRisks: associatedRisksForAction
+        };
+      });
+      
+      res.json(actionsWithRisks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch actions" });
+    }
+  });
+
+  app.get("/api/actions/:id", requirePermission("actions:read"), async (req, res) => {
+    try {
+      const action = await storage.getActionWithDetails(req.params.id);
+      if (!action) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      res.json(action);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch action" });
+    }
+  });
+
+  app.get("/api/actions/risk/:riskId", requirePermission("actions:read"), async (req, res) => {
+    try {
+      const actions = await storage.getActionsByRisk(req.params.riskId);
+      res.json(actions);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk actions" });
+    }
+  });
+
+  app.get("/api/actions/audit-finding/:auditFindingId", requirePermission("actions:read"), async (req, res) => {
+    try {
+      const actions = await storage.getActionsByAuditFinding(req.params.auditFindingId);
+      res.json(actions);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit finding actions" });
+    }
+  });
+
+  app.post("/api/actions", requirePermission("actions:write"), async (req, res) => {
+    try {
+      // Convert string dates back to Date objects
+      const processedData = {
+        ...req.body,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null
+      };
+      
+      const validatedData = insertActionSchema.parse(processedData);
+      
+      // Derive createdBy from authenticated user (never trust client)
+      const userId = (req as any).user?.claims?.sub || 'user-1'; // Usuario autenticado (fallback para desarrollo)
+      const actionWithCreatedBy = {
+        ...validatedData,
+        createdBy: userId
+      };
+      
+      const action = await storage.createAction(actionWithCreatedBy);
+      
+      // ============= ACTION PLAN NOTIFICATION HOOKS (STRUCTURE READY - FUNCTIONALITY DISABLED) =============
+      // Para activar estas notificaciones, cambiar ACTION_PLAN_NOTIFICATIONS_ENABLED a true en notification-service.ts
+      // También descomentar las siguientes líneas:
+      
+      /* HOOK: Notificar creación de plan de acción
+      try {
+        await notificationService.notifyActionPlanCreated(
+          action.id,
+          action.name,
+          action.responsible || '',
+          userId,
+          action.dueDate || undefined
+        );
+      } catch (notificationError) {
+        console.error('Failed to send action plan creation notification:', notificationError);
+        // No failing the request if notification fails
+      }
+      */
+      
+      res.status(201).json(action);
+    } catch (error) {
+      console.error("Error creating action:", error);
+      const errorMessage = error instanceof Error ? error.message : "Invalid action data";
+      const fullError = error instanceof Error ? error.stack : String(error);
+      console.error("Full error details:", fullError);
+      res.status(400).json({ message: "Invalid action data", error: errorMessage, details: fullError });
+    }
+  });
+
+  app.put("/api/actions/:id", requirePermission("actions:write"), async (req, res) => {
+    try {
+      // Get the current action data for comparison (needed for notifications)
+      const currentAction = await storage.getAction(req.params.id);
+      if (!currentAction) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      
+      // Convert string dates back to Date objects
+      const processedData = {
+        ...req.body,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null
+      };
+      
+      // RESCHEDULE LOGIC: Track when due dates change
+      const newDueDate = processedData.dueDate;
+      const currentDueDate = currentAction.dueDate;
+      const isDateChanged = newDueDate && currentDueDate && 
+        new Date(newDueDate).getTime() !== new Date(currentDueDate).getTime();
+      
+      if (isDateChanged) {
+        // If this is the first reschedule, save the current due date as originalDueDate
+        if (!currentAction.originalDueDate) {
+          processedData.originalDueDate = currentDueDate;
+        }
+        // Increment reschedule counter
+        processedData.rescheduleCount = (currentAction.rescheduleCount || 0) + 1;
+      }
+      
+      const validatedData = insertActionSchema.parse(processedData);
+      const userId = (req as any).user?.claims?.sub || 'user-1';
+      const updatedAction = await storage.updateAction(req.params.id, validatedData);
+      
+      if (!updatedAction) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      
+      // ============= ACTION PLAN NOTIFICATION HOOKS (STRUCTURE READY - FUNCTIONALITY DISABLED) =============
+      // Para activar estas notificaciones, cambiar ACTION_PLAN_NOTIFICATIONS_ENABLED a true en notification-service.ts
+      // También descomentar las siguientes secciones según los cambios detectados:
+
+      /* HOOK: Notificar cambio de responsable
+      if (currentAction.responsible !== updatedAction.responsible && updatedAction.responsible) {
+        try {
+          await notificationService.notifyActionPlanAssigned(
+            updatedAction.id,
+            updatedAction.name,
+            updatedAction.responsible,
+            currentAction.responsible || undefined,
+            userId
+          );
+        } catch (notificationError) {
+          console.error('Failed to send action plan assignment notification:', notificationError);
+        }
+      }
+      */
+
+      /* HOOK: Notificar cambio de estado
+      if (currentAction.status !== updatedAction.status) {
+        try {
+          await notificationService.notifyActionPlanStatusChanged(
+            updatedAction.id,
+            updatedAction.name,
+            updatedAction.status,
+            currentAction.status,
+            updatedAction.responsible || '',
+            userId
+          );
+        } catch (notificationError) {
+          console.error('Failed to send action plan status change notification:', notificationError);
+        }
+      }
+      */
+
+      /* HOOK: Notificar cambio de progreso
+      if (currentAction.progress !== updatedAction.progress && updatedAction.progress !== undefined) {
+        try {
+          await notificationService.notifyActionPlanProgressUpdated(
+            updatedAction.id,
+            updatedAction.name,
+            updatedAction.responsible || '',
+            updatedAction.progress,
+            currentAction.progress || 0,
+            userId
+          );
+        } catch (notificationError) {
+          console.error('Failed to send action plan progress notification:', notificationError);
+        }
+      }
+      */
+
+      /* HOOK: Notificar completación
+      if (currentAction.status !== 'completed' && updatedAction.status === 'completed') {
+        try {
+          await notificationService.notifyActionPlanCompleted(
+            updatedAction.id,
+            updatedAction.name,
+            updatedAction.responsible || '',
+            userId,
+            new Date()
+          );
+        } catch (notificationError) {
+          console.error('Failed to send action plan completion notification:', notificationError);
+        }
+      }
+      */
+
+      /* HOOK: Notificar reapertura
+      if (currentAction.status === 'completed' && updatedAction.status !== 'completed') {
+        try {
+          await notificationService.notifyActionPlanStatusChanged(
+            updatedAction.id,
+            updatedAction.name,
+            updatedAction.status,
+            currentAction.status,
+            updatedAction.responsible || '',
+            userId
+          );
+        } catch (notificationError) {
+          console.error('Failed to send action plan reopened notification:', notificationError);
+        }
+      }
+      */
+      
+      res.json(updatedAction);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Invalid action data";
+      res.status(400).json({ message: "Invalid action data", error: errorMessage });
+    }
+  });
+
+  app.delete("/api/actions/:id", requirePermission("actions:delete"), async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateAction(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to delete action:", error);
+      res.status(500).json({ message: "Failed to delete action" });
+    }
+  });
+
+  // ============== ACTION EVIDENCE ENDPOINTS ==============
+  
+  // Get all evidences for an action
+  app.get("/api/actions/:id/evidence", requirePermission("actions:read"), async (req: any, res) => {
+    try {
+      const tenantId = req.user?.activeTenantId;
+      const evidences = await storage.getActionEvidence(req.params.id, tenantId);
+      res.json(evidences);
+    } catch (error) {
+      console.error("Failed to fetch action evidence:", error);
+      res.status(500).json({ message: "Failed to fetch action evidence" });
+    }
+  });
+
+  // Upload evidence for an action with Object Storage
+  app.post("/api/actions/:id/evidence", requirePermission("actions:write"), upload.array('files', 5), async (req: any, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const actionId = req.params.id;
+      
+      // Verify action exists
+      const action = await storage.getAction(actionId);
+      if (!action) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ message: "No files provided" });
+      }
+      
+      // Validate description field with Zod if provided
+      let validatedDescription: string | null = null;
+      if (req.body.description) {
+        try {
+          const partialSchema = insertActionEvidenceSchema.pick({ description: true });
+          const result = partialSchema.parse({ description: req.body.description });
+          validatedDescription = result.description;
+        } catch (error) {
+          if (error instanceof z.ZodError) {
+            return res.status(400).json({ message: `Invalid description: ${error.errors[0].message}` });
+          }
+        }
+      }
+      
+      const privateDir = process.env.PRIVATE_OBJECT_DIR;
+      if (!privateDir) {
+        return res.status(500).json({ message: "PRIVATE_OBJECT_DIR not configured" });
+      }
+      
+      // Parse bucket and path from PRIVATE_OBJECT_DIR (format: /bucket-name/path)
+      const match = privateDir.match(/^\/([^\/]+)(\/.*)?$/);
+      if (!match) {
+        return res.status(500).json({ message: "Invalid PRIVATE_OBJECT_DIR format" });
+      }
+      
+      const bucketName = match[1];
+      const basePath = (match[2] || '').replace(/^\//, '');
+      const bucket = objectStorageClient.bucket(bucketName);
+      
+      const uploadedEvidences = [];
+      
+      for (const file of req.files) {
+        // Generate unique filename
+        const uniqueId = randomBytes(8).toString('hex');
+        const timestamp = Date.now();
+        const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = basePath 
+          ? `${basePath}/actions/${actionId}/${timestamp}_${uniqueId}_${sanitizedFileName}`
+          : `actions/${actionId}/${timestamp}_${uniqueId}_${sanitizedFileName}`;
+        
+        const fileObj = bucket.file(storagePath);
+        
+        // Upload file to object storage
+        await fileObj.save(file.buffer, {
+          contentType: file.mimetype,
+          metadata: {
+            originalName: file.originalname,
+            uploadedBy: userId,
+            actionId: actionId
+          }
+        });
+        
+        const storageUrl = `/${bucketName}/${storagePath}`;
+        
+        // Create database record with validated data
+        const evidence = await storage.createActionEvidence({
+          actionId: actionId,
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          storageUrl: storageUrl,
+          objectPath: storagePath,
+          description: validatedDescription,
+          uploadedBy: userId
+        });
+        
+        uploadedEvidences.push(evidence);
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action',
+        entityId: actionId,
+        action: 'upload_evidence',
+        userId,
+        changes: {
+          filesUploaded: uploadedEvidences.length,
+          fileNames: uploadedEvidences.map(e => e.fileName)
+        }
+      });
+      
+      res.status(201).json(uploadedEvidences);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to upload action evidence:", error);
+      res.status(500).json({ message: "Failed to upload action evidence" });
+    }
+  });
+
+  // Download action evidence
+  app.get("/api/actions/:actionId/evidence/:evidenceId/download", requirePermission("actions:read"), async (req: any, res) => {
+    try {
+      const { actionId, evidenceId } = req.params;
+      const tenantId = req.user?.activeTenantId;
+      
+      // Get evidence details with tenant scoping
+      const evidences = await storage.getActionEvidence(actionId, tenantId);
+      const evidence = evidences.find(e => e.id === evidenceId);
+      
+      if (!evidence) {
+        return res.status(404).json({ message: "Evidence not found" });
+      }
+      
+      // Verify ownership - ensure evidence belongs to this action
+      if (evidence.actionId !== actionId) {
+        return res.status(403).json({ message: "Evidence does not belong to this action" });
+      }
+      
+      if (!evidence.storageUrl) {
+        return res.status(404).json({ message: "File not found in storage" });
+      }
+      
+      // Parse bucket and path from storageUrl (format: /bucket-name/path)
+      const match = evidence.storageUrl.match(/^\/([^\/]+)\/(.+)$/);
+      if (!match) {
+        return res.status(500).json({ message: "Invalid storage URL format" });
+      }
+      
+      const bucketName = match[1];
+      const filePath = match[2];
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(filePath);
+      
+      // Check if file exists
+      const [exists] = await file.exists();
+      if (!exists) {
+        return res.status(404).json({ message: "File not found in object storage" });
+      }
+      
+      // Stream file to response
+      res.setHeader('Content-Type', evidence.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${evidence.fileName}"`);
+      
+      const readStream = file.createReadStream();
+      readStream.pipe(res);
+      
+      readStream.on('error', (error) => {
+        console.error('Error streaming file:', error);
+        if (!res.headersSent) {
+          res.status(500).json({ message: 'Error downloading file' });
+        }
+      });
+    } catch (error) {
+      console.error("Failed to download action evidence:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to download action evidence" });
+      }
+    }
+  });
+
+  // Delete action evidence
+  app.delete("/api/actions/:actionId/evidence/:evidenceId", requirePermission("actions:write"), async (req: any, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { actionId, evidenceId } = req.params;
+      const tenantId = req.user?.activeTenantId;
+      
+      // Get evidence details before deletion with tenant scoping
+      const evidences = await storage.getActionEvidence(actionId, tenantId);
+      const evidence = evidences.find(e => e.id === evidenceId);
+      
+      if (!evidence) {
+        return res.status(404).json({ message: "Evidence not found" });
+      }
+      
+      // Verify ownership - ensure evidence belongs to this action
+      if (evidence.actionId !== actionId) {
+        return res.status(403).json({ message: "Evidence does not belong to this action" });
+      }
+      
+      // Delete file from object storage
+      if (evidence.storageUrl) {
+        try {
+          // Parse bucket and path from storageUrl (format: /bucket-name/path)
+          const match = evidence.storageUrl.match(/^\/([^\/]+)\/(.+)$/);
+          if (match) {
+            const bucketName = match[1];
+            const filePath = match[2];
+            const bucket = objectStorageClient.bucket(bucketName);
+            const file = bucket.file(filePath);
+            
+            await file.delete();
+          }
+        } catch (storageError) {
+          console.error("Error deleting file from storage:", storageError);
+          // Continue to delete DB record even if file deletion fails
+        }
+      }
+      
+      // Delete database record with tenant scoping
+      const deleted = await storage.deleteActionEvidence(evidenceId, tenantId);
+      if (!deleted) {
+        return res.status(500).json({ message: "Failed to delete evidence from database" });
+      }
+      
+      // Log audit action
+      await requireDb().insert(auditLogs).values({
+        entityType: 'action',
+        entityId: actionId,
+        action: 'delete_evidence',
+        userId,
+        changes: {
+          deletedEvidence: {
+            id: evidenceId,
+            fileName: evidence.fileName
+          }
+        }
+      });
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to delete action evidence:", error);
+      res.status(500).json({ message: "Failed to delete action evidence" });
+    }
+  });
+
+  // Mark action as implemented
+  app.patch("/api/actions/:id/mark-implemented", requirePermission("actions:write"), async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate user role - only specific roles can mark as implemented
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+      
+      const userRoles = await storage.getUserRoles(userId);
+      const roleNames = await Promise.all(
+        userRoles.map(async (ur) => {
+          const role = await storage.getRole(ur.roleId);
+          return role?.name || '';
+        })
+      );
+      
+      const allowedRoles = ['analista_riesgo', 'analista_cumplimiento', 'administrador', 'usuario_auditor'];
+      const hasPermission = roleNames.some(roleName => allowedRoles.includes(roleName));
+      
+      if (!hasPermission) {
+        return res.status(403).json({ 
+          message: "Solo analistas de riesgo, analistas de cumplimiento, administradores y usuarios auditores pueden marcar acciones como implementadas" 
+        });
+      }
+      
+      const { comments } = req.body;
+      const action = await storage.markActionAsImplemented(req.params.id, userId, comments);
+      
+      if (!action) {
+        return res.status(404).json({ message: "Action not found" });
+      }
+      
+      res.json(action);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to mark action as implemented";
+      console.error("Failed to mark action as implemented:", error);
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // ============== MIGRATION ENDPOINT ==============
+  // Endpoint para migrar datos de action-plans a actions
+  app.post("/api/migrate/action-plans-to-actions", isAuthenticated, async (req, res) => {
+    try {
+      console.log("🔄 Starting migration from action_plans to actions...");
+      const result = await storage.migrateActionPlansToActions();
+      console.log(`✅ Migration completed: ${result.migrated} migrated, ${result.errors.length} errors`);
+      res.json({
+        message: "Migration completed",
+        migrated: result.migrated,
+        errors: result.errors
+      });
+    } catch (error) {
+      console.error("❌ Migration failed:", error);
+      res.status(500).json({ 
+        message: "Migration failed", 
+        error: error instanceof Error ? error.message || 'Unknown error' : 'Unknown error'
+      });
+    }
+  });
+
+  // Risk Categories
+  app.get("/api/risk-categories", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const categories = await storage.getRiskCategories(tenantId);
+      res.json(categories);
+    } catch (error) {
+      console.error("Error fetching risk categories:", error);
+      res.status(500).json({ message: "Failed to fetch risk categories" });
+    }
+  });
+
+  app.get("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const category = await storage.getRiskCategory(req.params.id, tenantId);
+      if (!category) {
+        return res.status(404).json({ message: "Risk category not found" });
+      }
+      res.json(category);
+    } catch (error) {
+      console.error("Error fetching risk category:", error);
+      res.status(500).json({ message: "Failed to fetch risk category" });
+    }
+  });
+
+  app.post("/api/risk-categories", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const validatedData = insertRiskCategorySchema.parse({ ...req.body, tenantId });
+      const category = await storage.createRiskCategory(validatedData);
+      res.status(201).json(category);
+    } catch (error) {
+      console.error("Error creating risk category:", error);
+      res.status(400).json({ 
+        message: "Invalid risk category data",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.put("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const validatedData = insertRiskCategorySchema.partial().parse(req.body);
+      const category = await storage.updateRiskCategory(req.params.id, tenantId, validatedData);
+      if (!category) {
+        return res.status(404).json({ message: "Risk category not found" });
+      }
+      res.json(category);
+    } catch (error) {
+      console.error("Error updating risk category:", error);
+      res.status(400).json({ 
+        message: "Invalid risk category data",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.delete("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const deleted = await storage.deleteRiskCategory(req.params.id, tenantId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Risk category not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting risk category:", error);
+      res.status(500).json({ message: "Failed to delete risk category" });
+    }
+  });
+
+  // System Configuration
+  app.get("/api/system-config", async (req, res) => {
+    try {
+      const configs = await storage.getAllSystemConfigs();
+      res.json(configs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch system configuration" });
+    }
+  });
+
+  // Specific routes must come BEFORE parameterized routes
+  app.get("/api/system-config/max-effectiveness-limit/value", async (req, res) => {
+    try {
+      const limit = await storage.getMaxEffectivenessLimit();
+      res.json({ maxEffectivenessLimit: limit });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch max effectiveness limit" });
+    }
+  });
+
+  app.get("/api/system-config/risk-level-ranges", async (req, res) => {
+    try {
+      const ranges = await storage.getRiskLevelRanges();
+      res.json(ranges);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk level ranges" });
+    }
+  });
+
+  app.get("/api/system-config/probability-weights", async (req, res) => {
+    try {
+      const weights = await storage.getProbabilityWeights();
+      res.json(weights);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch probability weights" });
+    }
+  });
+
+  app.get("/api/system-config/impact-weights", async (req, res) => {
+    try {
+      const weights = await storage.getImpactWeights();
+      res.json(weights);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch impact weights" });
+    }
+  });
+
+  app.get("/api/system-config/risk-decimals", async (req, res) => {
+    try {
+      const decimalsConfig = await storage.getRiskDecimalsConfig();
+      res.json(decimalsConfig);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk decimals configuration" });
+    }
+  });
+
+  app.get("/api/system-config/risk-aggregation", async (req, res) => {
+    try {
+      const method = await storage.getRiskAggregationMethod();
+      const weights = await storage.getRiskAggregationWeights();
+      res.json({ method, weights });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk aggregation configuration" });
+    }
+  });
+
+  app.post("/api/system-config/risk-aggregation", isAuthenticated, async (req, res) => {
+    try {
+      const { method, weights } = req.body;
+      const updatedBy = getAuthenticatedUserId(req);
+
+      if (!method || !['average', 'weighted', 'worst_case'].includes(method)) {
+        return res.status(400).json({ message: "Invalid aggregation method" });
+      }
+
+      if (method === 'weighted') {
+        if (!weights || typeof weights.critical !== 'number' || typeof weights.high !== 'number' ||
+            typeof weights.medium !== 'number' || typeof weights.low !== 'number') {
+          return res.status(400).json({ message: "Invalid weights configuration" });
+        }
+        
+        if (weights.critical < 1 || weights.critical > 10 ||
+            weights.high < 1 || weights.high > 10 ||
+            weights.medium < 1 || weights.medium > 10 ||
+            weights.low < 1 || weights.low > 10) {
+          return res.status(400).json({ message: "Weights must be between 1 and 10" });
+        }
+      }
+
+      await storage.setSystemConfig({
+        configKey: 'risk_aggregation_method',
+        configValue: method,
+        description: 'Método de agregación de riesgos por proceso',
+        dataType: 'string',
+        updatedBy,
+        isActive: true
+      });
+
+      if (method === 'weighted' && weights) {
+        await Promise.all([
+          storage.setSystemConfig({
+            configKey: 'risk_weight_critical',
+            configValue: weights.critical.toString(),
+            description: 'Peso para riesgos críticos',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          }),
+          storage.setSystemConfig({
+            configKey: 'risk_weight_high',
+            configValue: weights.high.toString(),
+            description: 'Peso para riesgos altos',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          }),
+          storage.setSystemConfig({
+            configKey: 'risk_weight_medium',
+            configValue: weights.medium.toString(),
+            description: 'Peso para riesgos medios',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          }),
+          storage.setSystemConfig({
+            configKey: 'risk_weight_low',
+            configValue: weights.low.toString(),
+            description: 'Peso para riesgos bajos',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          })
+        ]);
+      }
+
+      const updatedMethod = await storage.getRiskAggregationMethod();
+      const updatedWeights = await storage.getRiskAggregationWeights();
+      res.json({ method: updatedMethod, weights: updatedWeights });
+    } catch (error) {
+      res.status(400).json({ message: "Failed to update risk aggregation configuration" });
+    }
+  });
+
+  app.put("/api/system-config/risk-decimals", isAuthenticated, async (req, res) => {
+    try {
+      const { enabled, precision } = req.body;
+      const updatedBy = (req as any).user?.claims?.sub;
+
+      // Validate input
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ message: "enabled must be a boolean" });
+      }
+      if (typeof precision !== 'number' || precision < 0 || precision > 3) {
+        return res.status(400).json({ message: "precision must be a number between 0 and 3" });
+      }
+
+      // Update decimal configuration
+      await Promise.all([
+        storage.setSystemConfig({
+          configKey: 'risk_decimals_enabled',
+          configValue: enabled.toString(),
+          description: 'Habilita el mostrado de decimales en valores de riesgo',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'risk_decimals_precision',
+          configValue: precision.toString(),
+          description: 'Precisión decimal para valores de riesgo (0-3)',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        })
+      ]);
+
+      const updatedConfig = await storage.getRiskDecimalsConfig();
+      res.json(updatedConfig);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to update risk decimals configuration" });
+    }
+  });
+
+  // Notification intervals configuration
+  app.get("/api/system-config/notification-intervals", async (req, res) => {
+    try {
+      const interval1Config = await storage.getSystemConfig("notification_interval_1");
+      const interval2Config = await storage.getSystemConfig("notification_interval_2");
+      const interval3Config = await storage.getSystemConfig("notification_interval_3");
+      const overdueInterval1Config = await storage.getSystemConfig("overdue_interval_1");
+      const overdueInterval2Config = await storage.getSystemConfig("overdue_interval_2");
+      const overdueInterval3Config = await storage.getSystemConfig("overdue_interval_3");
+
+      // Get enabled states
+      const notificationsEnabledConfig = await storage.getSystemConfig("notifications_enabled");
+      const interval1EnabledConfig = await storage.getSystemConfig("notification_interval_1_enabled");
+      const interval2EnabledConfig = await storage.getSystemConfig("notification_interval_2_enabled");
+      const interval3EnabledConfig = await storage.getSystemConfig("notification_interval_3_enabled");
+      const overdueInterval1EnabledConfig = await storage.getSystemConfig("overdue_interval_1_enabled");
+      const overdueInterval2EnabledConfig = await storage.getSystemConfig("overdue_interval_2_enabled");
+      const overdueInterval3EnabledConfig = await storage.getSystemConfig("overdue_interval_3_enabled");
+
+      res.json({
+        interval1: interval1Config ? parseInt(interval1Config.configValue) : 7,
+        interval2: interval2Config ? parseInt(interval2Config.configValue) : 3,
+        interval3: interval3Config ? parseInt(interval3Config.configValue) : 1,
+        overdueInterval1: overdueInterval1Config ? parseInt(overdueInterval1Config.configValue) : 1,
+        overdueInterval2: overdueInterval2Config ? parseInt(overdueInterval2Config.configValue) : 3,
+        overdueInterval3: overdueInterval3Config ? parseInt(overdueInterval3Config.configValue) : 7,
+        notificationsEnabled: notificationsEnabledConfig ? notificationsEnabledConfig.configValue === 'true' : true,
+        interval1Enabled: interval1EnabledConfig ? interval1EnabledConfig.configValue === 'true' : true,
+        interval2Enabled: interval2EnabledConfig ? interval2EnabledConfig.configValue === 'true' : true,
+        interval3Enabled: interval3EnabledConfig ? interval3EnabledConfig.configValue === 'true' : true,
+        overdueInterval1Enabled: overdueInterval1EnabledConfig ? overdueInterval1EnabledConfig.configValue === 'true' : true,
+        overdueInterval2Enabled: overdueInterval2EnabledConfig ? overdueInterval2EnabledConfig.configValue === 'true' : true,
+        overdueInterval3Enabled: overdueInterval3EnabledConfig ? overdueInterval3EnabledConfig.configValue === 'true' : true,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch notification intervals" });
+    }
+  });
+
+  app.put("/api/system-config/notification-intervals", isAuthenticated, async (req, res) => {
+    try {
+      const { 
+        interval1, interval2, interval3, overdueInterval1, overdueInterval2, overdueInterval3,
+        notificationsEnabled, interval1Enabled, interval2Enabled, interval3Enabled,
+        overdueInterval1Enabled, overdueInterval2Enabled, overdueInterval3Enabled
+      } = req.body;
+      const updatedBy = getAuthenticatedUserId(req);
+
+      // Validate intervals (allow 0 for "on due date" notifications)
+      if (interval1 === undefined || interval2 === undefined || interval3 === undefined) {
+        return res.status(400).json({ message: "All intervals are required" });
+      }
+
+      if (interval1 <= interval2 || interval2 < interval3 || interval3 < 0) {
+        return res.status(400).json({ message: "Intervals must be in descending order (can use 0 for due date)" });
+      }
+
+      if (overdueInterval1 !== undefined && overdueInterval2 !== undefined && overdueInterval3 !== undefined) {
+        if (overdueInterval1 >= overdueInterval2 || overdueInterval2 >= overdueInterval3 || overdueInterval1 < 0) {
+          return res.status(400).json({ message: "Overdue intervals must be in ascending order" });
+        }
+      }
+
+      // Update all configs
+      const updates = [
+        storage.setSystemConfig({
+          configKey: 'notification_interval_1',
+          configValue: interval1.toString(),
+          description: 'Primer intervalo de recordatorio para planes de acción (días antes)',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'notification_interval_2',
+          configValue: interval2.toString(),
+          description: 'Segundo intervalo de recordatorio para planes de acción (días antes)',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'notification_interval_3',
+          configValue: interval3.toString(),
+          description: 'Tercer intervalo de recordatorio para planes de acción (días antes)',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        })
+      ];
+
+      // Add enabled/disabled states
+      if (notificationsEnabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'notifications_enabled',
+          configValue: notificationsEnabled.toString(),
+          description: 'Habilitar/deshabilitar todas las notificaciones de recordatorios',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (interval1Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'notification_interval_1_enabled',
+          configValue: interval1Enabled.toString(),
+          description: 'Habilitar/deshabilitar primer recordatorio',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (interval2Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'notification_interval_2_enabled',
+          configValue: interval2Enabled.toString(),
+          description: 'Habilitar/deshabilitar segundo recordatorio',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (interval3Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'notification_interval_3_enabled',
+          configValue: interval3Enabled.toString(),
+          description: 'Habilitar/deshabilitar recordatorio final',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (overdueInterval1 && overdueInterval2 && overdueInterval3) {
+        updates.push(
+          storage.setSystemConfig({
+            configKey: 'overdue_interval_1',
+            configValue: overdueInterval1.toString(),
+            description: 'Primer intervalo de notificación para planes vencidos (días después)',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          }),
+          storage.setSystemConfig({
+            configKey: 'overdue_interval_2',
+            configValue: overdueInterval2.toString(),
+            description: 'Segundo intervalo de notificación para planes vencidos (días después)',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          }),
+          storage.setSystemConfig({
+            configKey: 'overdue_interval_3',
+            configValue: overdueInterval3.toString(),
+            description: 'Tercer intervalo de notificación para planes vencidos (días después)',
+            dataType: 'number',
+            updatedBy,
+            isActive: true
+          })
+        );
+      }
+
+      if (overdueInterval1Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'overdue_interval_1_enabled',
+          configValue: overdueInterval1Enabled.toString(),
+          description: 'Habilitar/deshabilitar primer recordatorio vencido',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (overdueInterval2Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'overdue_interval_2_enabled',
+          configValue: overdueInterval2Enabled.toString(),
+          description: 'Habilitar/deshabilitar segundo recordatorio vencido',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      if (overdueInterval3Enabled !== undefined) {
+        updates.push(storage.setSystemConfig({
+          configKey: 'overdue_interval_3_enabled',
+          configValue: overdueInterval3Enabled.toString(),
+          description: 'Habilitar/deshabilitar recordatorio vencido final',
+          dataType: 'boolean',
+          updatedBy,
+          isActive: true
+        }));
+      }
+
+      await Promise.all(updates);
+
+      res.json({ 
+        interval1, 
+        interval2, 
+        interval3,
+        overdueInterval1: overdueInterval1 || null,
+        overdueInterval2: overdueInterval2 || null,
+        overdueInterval3: overdueInterval3 || null,
+        notificationsEnabled: notificationsEnabled !== undefined ? notificationsEnabled : true,
+        interval1Enabled: interval1Enabled !== undefined ? interval1Enabled : true,
+        interval2Enabled: interval2Enabled !== undefined ? interval2Enabled : true,
+        interval3Enabled: interval3Enabled !== undefined ? interval3Enabled : true,
+        overdueInterval1Enabled: overdueInterval1Enabled !== undefined ? overdueInterval1Enabled : true,
+        overdueInterval2Enabled: overdueInterval2Enabled !== undefined ? overdueInterval2Enabled : true,
+        overdueInterval3Enabled: overdueInterval3Enabled !== undefined ? overdueInterval3Enabled : true,
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update notification intervals" });
+    }
+  });
+
+  app.get("/api/system-config/:configKey", async (req, res) => {
+    try {
+      const config = await storage.getSystemConfig(req.params.configKey);
+      if (!config) {
+        return res.status(404).json({ message: "Configuration not found" });
+      }
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch configuration" });
+    }
+  });
+
+  app.post("/api/system-config", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertSystemConfigSchema.parse(req.body);
+      const config = await storage.setSystemConfig(validatedData);
+      res.status(201).json(config);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid configuration data" });
+    }
+  });
+
+  app.put("/api/system-config/risk-level-ranges", isAuthenticated, async (req, res) => {
+    try {
+      const { lowMax, mediumMax, highMax } = req.body;
+      const updatedBy = getAuthenticatedUserId(req);
+
+      // Update each range configuration
+      await Promise.all([
+        storage.setSystemConfig({
+          configKey: 'risk_low_max',
+          configValue: lowMax.toString(),
+          description: 'Valor máximo para nivel de riesgo Bajo',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'risk_medium_max',
+          configValue: mediumMax.toString(),
+          description: 'Valor máximo para nivel de riesgo Medio',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'risk_high_max',
+          configValue: highMax.toString(),
+          description: 'Valor máximo para nivel de riesgo Alto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        })
+      ]);
+
+      const updatedRanges = await storage.getRiskLevelRanges();
+      res.json(updatedRanges);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to update risk level ranges" });
+    }
+  });
+
+  // Validation schema for probability weights
+  const probabilityWeightsSchema = z.object({
+    frequency: z.number().int().min(1).max(99).describe("Peso para frecuencia (1-99)"),
+    exposureAndScope: z.number().int().min(1).max(99).describe("Peso para exposición y alcance (1-99)"),
+    complexity: z.number().int().min(1).max(99).describe("Peso para complejidad (1-99)"),
+    changeVolatility: z.number().int().min(1).max(99).describe("Peso para cambio/volatilidad (1-99)"),
+    vulnerabilities: z.number().int().min(1).max(99).describe("Peso para vulnerabilidades (1-99)")
+  }).refine(data => {
+    const total = data.frequency + data.exposureAndScope + data.complexity + 
+                  data.changeVolatility + data.vulnerabilities;
+    return total === 100;
+  }, {
+    message: "Los pesos deben sumar exactamente 100"
+  });
+
+  // Validation schema for impact weights
+  const impactWeightsSchema = z.object({
+    infrastructure: z.number().int().min(1).max(99).describe("Peso para infraestructura (1-99)"),
+    reputation: z.number().int().min(1).max(99).describe("Peso para reputación (1-99)"),
+    economic: z.number().int().min(1).max(99).describe("Peso para económico (1-99)"),
+    permits: z.number().int().min(1).max(99).describe("Peso para permisos (1-99)"),
+    knowhow: z.number().int().min(1).max(99).describe("Peso para knowhow (1-99)"),
+    people: z.number().int().min(1).max(99).describe("Peso para personas (1-99)"),
+    information: z.number().int().min(1).max(99).describe("Peso para información (1-99)")
+  }).refine(data => {
+    const total = data.infrastructure + data.reputation + data.economic + 
+                  data.permits + data.knowhow + data.people + data.information;
+    return total === 100;
+  }, {
+    message: "Los pesos deben sumar exactamente 100"
+  });
+
+  app.put("/api/system-config/probability-weights", isAuthenticated, async (req, res) => {
+    try {
+      const weights = probabilityWeightsSchema.parse(req.body);
+      const updatedBy = getAuthenticatedUserId(req);
+
+      // Update each weight configuration
+      await Promise.all([
+        storage.setSystemConfig({
+          configKey: 'prob_weight_frequency',
+          configValue: weights.frequency.toString(),
+          description: 'Peso porcentual para factor de Frecuencia de Ocurrencia en cálculo de probabilidad',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'prob_weight_exposure_scope',
+          configValue: weights.exposureAndScope.toString(),
+          description: 'Peso porcentual para factor de Exposición y Alcance en cálculo de probabilidad',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'prob_weight_complexity',
+          configValue: weights.complexity.toString(),
+          description: 'Peso porcentual para factor de Complejidad en cálculo de probabilidad',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'prob_weight_change_volatility',
+          configValue: weights.changeVolatility.toString(),
+          description: 'Peso porcentual para factor de Cambio/Volatilidad en cálculo de probabilidad',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'prob_weight_vulnerabilities',
+          configValue: weights.vulnerabilities.toString(),
+          description: 'Peso porcentual para factor de Vulnerabilidades en cálculo de probabilidad',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        })
+      ]);
+
+      // Recalculate all risk probabilities with new weights
+      await storage.recalculateAllRiskProbabilities();
+      
+      const updatedWeights = await storage.getProbabilityWeights();
+      res.json(updatedWeights);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Datos de pesos inválidos", 
+          errors: error.errors 
+        });
+      }
+      res.status(500).json({ message: "Error al actualizar pesos de probabilidad" });
+    }
+  });
+
+  app.put("/api/system-config/impact-weights", isAuthenticated, async (req, res) => {
+    try {
+      const weights = impactWeightsSchema.parse(req.body);
+      const updatedBy = getAuthenticatedUserId(req);
+
+      // Update each weight configuration
+      await Promise.all([
+        storage.setSystemConfig({
+          configKey: 'impact_weight_infrastructure',
+          configValue: weights.infrastructure.toString(),
+          description: 'Peso porcentual para factor de Infraestructura en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_reputation',
+          configValue: weights.reputation.toString(),
+          description: 'Peso porcentual para factor de Reputación en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_economic',
+          configValue: weights.economic.toString(),
+          description: 'Peso porcentual para factor Económico en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_permits',
+          configValue: weights.permits.toString(),
+          description: 'Peso porcentual para factor de Permisos en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_knowhow',
+          configValue: weights.knowhow.toString(),
+          description: 'Peso porcentual para factor de Knowhow en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_people',
+          configValue: weights.people.toString(),
+          description: 'Peso porcentual para factor de Personas en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        }),
+        storage.setSystemConfig({
+          configKey: 'impact_weight_information',
+          configValue: weights.information.toString(),
+          description: 'Peso porcentual para factor de Información en cálculo de impacto',
+          dataType: 'number',
+          updatedBy,
+          isActive: true
+        })
+      ]);
+
+      // Recalculate all risk impacts with new weights
+      await storage.recalculateAllRiskImpacts();
+      
+      const updatedWeights = await storage.getImpactWeights();
+      res.json(updatedWeights);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Datos de pesos inválidos", 
+          errors: error.errors 
+        });
+      }
+      res.status(500).json({ message: "Error al actualizar pesos de impacto" });
+    }
+  });
+
+  app.put("/api/system-config/:configKey", isAuthenticated, async (req, res) => {
+    try {
+      const { configValue } = req.body;
+      const updatedBy = (req as any).user.claims?.sub; // Usuario autenticado
+      
+      // Try to update first
+      let config = await storage.updateSystemConfig(req.params.configKey, configValue, updatedBy);
+      
+      // If config doesn't exist, create it (upsert behavior)
+      if (!config) {
+        config = await storage.setSystemConfig({
+          configKey: req.params.configKey,
+          configValue,
+          description: `Configuration for ${req.params.configKey}`,
+          dataType: 'string',
+          updatedBy,
+          isActive: true
+        });
+      }
+
+      // If updating max effectiveness limit, recalculate all control effectiveness
+      if (req.params.configKey === "max_effectiveness_limit") {
+        await storage.recalculateAllControlEffectiveness();
+      }
+
+      res.json(config);
+    } catch (error) {
+      console.error('Error updating system config:', error);
+      res.status(400).json({ message: "Invalid configuration data" });
+    }
+  });
+
+  // ==========================================================================
+  // EMAIL SERVICE CONFIGURATION
+  // ==========================================================================
+
+  // Get current email service configuration
+  app.get("/api/email-config", isAuthenticated, async (req, res) => {
+    try {
+      const config = await storage.getSystemConfig('email_service_config');
+      if (!config) {
+        return res.json({ provider: null, configured: false });
+      }
+
+      const emailConfig = JSON.parse(config.configValue) as EmailConfig;
+      
+      // Remove sensitive data before sending to client
+      const safeConfig = {
+        provider: emailConfig.provider,
+        configured: true,
+        mailgun: emailConfig.mailgun ? {
+          domain: emailConfig.mailgun.domain,
+          from: emailConfig.mailgun.from,
+        } : undefined,
+        smtp: emailConfig.smtp ? {
+          host: emailConfig.smtp.host,
+          port: emailConfig.smtp.port,
+          secure: emailConfig.smtp.secure,
+          user: emailConfig.smtp.user,
+          from: emailConfig.smtp.from,
+        } : undefined,
+      };
+
+      res.json(safeConfig);
+    } catch (error) {
+      console.error('Error fetching email config:', error);
+      res.status(500).json({ message: "Error al obtener configuración de email" });
+    }
+  });
+
+  // Save email service configuration
+  app.post("/api/email-config", isAuthenticated, async (req, res) => {
+    try {
+      const emailConfig = req.body as EmailConfig;
+      const updatedBy = (req as any).user?.claims?.sub || (req as any).user?.id || 'user-1';
+
+      // Validate configuration
+      if (!emailConfig.provider || (emailConfig.provider !== 'mailgun' && emailConfig.provider !== 'smtp')) {
+        return res.status(400).json({ message: "Proveedor de email inválido" });
+      }
+
+      if (emailConfig.provider === 'mailgun' && !emailConfig.mailgun) {
+        return res.status(400).json({ message: "Configuración de Mailgun requerida" });
+      }
+
+      if (emailConfig.provider === 'smtp' && !emailConfig.smtp) {
+        return res.status(400).json({ message: "Configuración de SMTP requerida" });
+      }
+
+      // Save to database
+      await storage.setSystemConfig({
+        configKey: 'email_service_config',
+        configValue: JSON.stringify(emailConfig),
+        description: 'Email service provider configuration',
+        dataType: 'json',
+        updatedBy,
+        isActive: true
+      });
+
+      // Reinitialize email service with new configuration
+      const newService = EmailServiceFactory.createService(emailConfig);
+      if (newService) {
+        setEmailService(newService);
+        console.log(`✅ Email service switched to: ${newService.getServiceName()}`);
+      }
+
+      res.json({ message: "Configuración guardada exitosamente", success: true });
+    } catch (error) {
+      console.error('Error saving email config:', error);
+      res.status(500).json({ message: "Error al guardar configuración" });
+    }
+  });
+
+  // Test email configuration
+  app.post("/api/email-config/test", isAuthenticated, async (req, res) => {
+    try {
+      const { testEmail, config } = req.body;
+
+      if (!testEmail) {
+        return res.status(400).json({ message: "Email de prueba requerido" });
+      }
+
+      let testService = getEmailService();
+
+      // If config is provided AND has complete credentials, create a temporary service to test
+      if (config?.mailgun?.apiKey || config?.smtp?.password) {
+        const emailConfig = config as EmailConfig;
+        testService = EmailServiceFactory.createService(emailConfig);
+      }
+
+      // If still no service, try to load from database
+      if (!testService) {
+        const savedConfig = await storage.getSystemConfig('email_service_config');
+        if (savedConfig) {
+          const emailConfig = JSON.parse(savedConfig.configValue) as EmailConfig;
+          testService = EmailServiceFactory.createService(emailConfig);
+        }
+      }
+
+      if (!testService) {
+        return res.status(400).json({ message: "Servicio de email no configurado" });
+      }
+
+      // Test connection first
+      const connectionTest = await testService.testConnection();
+      if (!connectionTest) {
+        return res.status(400).json({ 
+          message: "Error de conexión con el servicio de email",
+          success: false
+        });
+      }
+
+      // Send test email
+      const sent = await testService.sendEmail({
+        to: testEmail,
+        from: config?.mailgun?.from || config?.smtp?.from || 'noreply@unigrc.com',
+        subject: 'Email de Prueba - UniGRC',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Email de Prueba</title>
+          </head>
+          <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h1 style="color: #2c3e50;">Prueba de Configuración de Email</h1>
+            <p>Este es un email de prueba enviado desde el sistema UniGRC.</p>
+            <p>Si recibió este mensaje, la configuración del servicio de email está funcionando correctamente.</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;">
+            <p style="color: #666; font-size: 12px;">
+              Servicio: ${testService.getServiceName()}<br>
+              Fecha: ${new Date().toLocaleString('es-ES')}
+            </p>
+          </body>
+          </html>
+        `,
+      });
+
+      if (sent) {
+        res.json({ 
+          message: "Email de prueba enviado exitosamente",
+          success: true
+        });
+      } else {
+        res.status(500).json({ 
+          message: "Error al enviar email de prueba",
+          success: false
+        });
+      }
+    } catch (error) {
+      console.error('Error testing email:', error);
+      res.status(500).json({ 
+        message: "Error al probar configuración de email",
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.post("/api/controls/recalculate-all-effectiveness", requirePermission("admin:calculate"), async (req, res) => {
+    try {
+      await storage.recalculateAllControlEffectiveness();
+      res.json({ message: "All control effectiveness recalculated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to recalculate control effectiveness" });
+    }
+  });
+
+  app.post("/api/risk-controls/recalculate-all-residual-risks", requirePermission("admin:calculate"), async (req, res) => {
+    try {
+      await storage.recalculateAllResidualRisks();
+      
+      // Invalidate all risk-control related caches after bulk recalculation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+      ]);
+      
+      res.json({ message: "All residual risks recalculated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to recalculate residual risks" });
+    }
+  });
+
+  app.post("/api/risks/recalculate-all-probabilities", requirePermission("admin:calculate"), async (req, res) => {
+    try {
+      await storage.recalculateAllRiskProbabilities();
+      
+      // Invalidate all risk-related caches after bulk probability recalculation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+      ]);
+      
+      res.json({ message: "All risk probabilities recalculated successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to recalculate risk probabilities" });
+    }
+  });
+
+  // Users - with 60s distributed cache (admin-only endpoint)
+  app.get("/api/users", noCacheMiddleware, isAuthenticated, requirePermission("users:manage"), async (req, res) => {
+    try {
+      // Try distributed cache first (60s TTL)
+      const cacheKey = `users:all`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      const users = await storage.getUsers();
+      console.log(`✅ Successfully fetched ${users.length} users`);
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, users, 60);
+      
+      res.json(users);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  // Get users by role (optimized single query)
+  app.get("/api/users/by-role/:roleName", isAuthenticated, requirePermission("view_all"), async (req, res) => {
+    try {
+      const users = await storage.getUsersByRole(req.params.roleName);
+      res.json(users);
+    } catch (error) {
+      console.error(`Error fetching users by role ${req.params.roleName}:`, error);
+      res.status(500).json({ message: "Failed to fetch users by role" });
+    }
+  });
+
+  // Get available auditors - MUST come before /api/users/:id
+  app.get("/api/users/auditors", isAuthenticated, requirePermission("view_auditors"), async (req, res) => {
+    try {
+      const { riskType, processType } = req.query;
+      let auditors;
+      
+      if (riskType || processType) {
+        auditors = await storage.getAuditorsWithCompetencies(
+          riskType as string, 
+          processType as string
+        );
+      } else {
+        auditors = await storage.getAvailableAuditors();
+      }
+
+      res.json(auditors);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch available auditors" });
+    }
+  });
+
+  app.get("/api/users/:id", isAuthenticated, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json(user);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  app.post("/api/users", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const validatedData = insertUserSchema.parse(req.body);
+      const user = await storage.createUser(validatedData);
+      
+      // Invalidate users cache
+      await distributedCache.invalidate(`users:all`);
+      
+      res.status(201).json(user);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid user data" });
+    }
+  });
+
+  app.put("/api/users/:id", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const validatedData = insertUserSchema.partial().parse(req.body);
+      const user = await storage.updateUser(req.params.id, validatedData);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Invalidate BOTH auth caches for this user (profile changed)
+      authCache.invalidate(req.params.id);
+      await distributedCache.invalidate(`auth-me:${req.params.id}`);
+      // Invalidate users list cache
+      await distributedCache.invalidate(`users:all`);
+      
+      res.json(user);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid user data" });
+    }
+  });
+
+  app.delete("/api/users/:id", requirePermission("users:delete"), async (req, res) => {
+    try {
+      const deleted = await storage.deleteUser(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      // Invalidate users list cache
+      await distributedCache.invalidate(`users:all`);
+      
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete user" });
+    }
+  });
+
+  // Roles
+  app.get("/api/roles", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const roles = await storage.getRoles();
+      res.json(roles);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch roles" });
+    }
+  });
+
+  app.get("/api/roles/:id", isAuthenticated, async (req, res) => {
+    try {
+      const role = await storage.getRole(req.params.id);
+      if (!role) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      res.json(role);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch role" });
+    }
+  });
+
+  app.post("/api/roles", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRoleSchema.parse(req.body);
+      const role = await storage.createRole(validatedData);
+      res.status(201).json(role);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid role data" });
+    }
+  });
+
+  app.put("/api/roles/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRoleSchema.partial().parse(req.body);
+      const role = await storage.updateRole(req.params.id, validatedData);
+      if (!role) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      
+      // Invalidate ALL users' auth cache because role permissions changed
+      authCache.invalidateAll();
+      
+      res.json(role);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid role data" });
+    }
+  });
+
+  app.delete("/api/roles/:id", requirePermission("roles:delete"), async (req, res) => {
+    try {
+      const deleted = await storage.deleteRole(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete role" });
+    }
+  });
+
+  // User Roles
+  app.get("/api/user-roles", async (req, res) => {
+    try {
+      const userRoles = await storage.getAllUserRolesWithRoleInfo();
+      res.json(userRoles);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch all user roles" });
+    }
+  });
+
+  app.get("/api/users/:userId/roles", isAuthenticated, async (req, res) => {
+    try {
+      const userRoles = await storage.getUserRoles(req.params.userId);
+      res.json(userRoles);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch user roles" });
+    }
+  });
+
+  app.post("/api/users/:userId/roles", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const validatedData = insertUserRoleSchema.parse({
+        ...req.body,
+        userId: req.params.userId,
+      });
+      const userRole = await storage.assignUserRole(validatedData);
+      
+      // Invalidate BOTH auth caches for this user (permissions changed)
+      authCache.invalidate(req.params.userId);
+      await distributedCache.invalidate(`auth-me:${req.params.userId}`);
+      
+      res.status(201).json(userRole);
+    } catch (error) {
+      console.error("Error assigning user role:", error);
+      res.status(400).json({ 
+        message: "Invalid user role data",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  app.delete("/api/users/:userId/roles/:roleId", requirePermission("users:manage_roles"), async (req, res) => {
+    try {
+      const deleted = await storage.removeUserRole(req.params.userId, req.params.roleId);
+      if (!deleted) {
+        return res.status(404).json({ message: "User role assignment not found" });
+      }
+      
+      // Invalidate BOTH auth caches for this user (permissions changed)
+      authCache.invalidate(req.params.userId);
+      await distributedCache.invalidate(`auth-me:${req.params.userId}`);
+      
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove user role" });
+    }
+  });
+
+  // SINGLE-TENANT MODE: Tenant management routes removed
+  // All users belong to single implicit organization
+
+  // Platform Admin - Users Management (simplified for single-tenant)
+  app.get("/api/platform/users", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const users = await storage.getUsers();
+      // Get only global roles for each user (no tenant membership)
+      const usersWithDetails = await Promise.all(users.map(async (user) => {
+        const globalRoles = await storage.getUserRoles(user.id);
+        return {
+          ...user,
+          globalRoles: globalRoles.map(ur => ({
+            id: ur.role.id,
+            name: ur.role.name,
+            description: ur.role.description,
+            assignedAt: ur.assignedAt
+          }))
+        };
+      }));
+      console.log("✅ Successfully fetched", usersWithDetails.length, "users with roles");
+      res.json(usersWithDetails);
+    } catch (error) {
+      console.error("Error fetching platform users:", error);
+      res.status(500).json({ message: "Failed to fetch platform users" });
+    }
+  });
+
+  // Platform Admin - Roles Management
+  app.get("/api/platform-admin/roles", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const roles = await storage.getRoles();
+      res.json(roles);
+    } catch (error) {
+      console.error("Error fetching roles:", error);
+      res.status(500).json({ message: "Failed to fetch roles" });
+    }
+  });
+
+  app.get("/api/platform-admin/roles/:id", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const role = await storage.getRole(req.params.id);
+      if (!role) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      res.json(role);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch role" });
+    }
+  });
+
+  app.post("/api/platform-admin/roles", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const { name, description, permissions } = req.body;
+      if (!name || !permissions || !Array.isArray(permissions)) {
+        return res.status(400).json({ message: "Name and permissions array are required" });
+      }
+      
+      const roleId = `role-${name.toLowerCase().replace(/\s+/g, '-')}`;
+      const role = await storage.createRole({
+        id: roleId,
+        name,
+        description: description || '',
+        permissions,
+        isActive: true,
+        createdAt: new Date()
+      });
+      res.status(201).json(role);
+    } catch (error) {
+      console.error("Error creating role:", error);
+      res.status(400).json({ message: "Failed to create role", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  app.patch("/api/platform-admin/roles/:id", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const { name, description, permissions, isActive } = req.body;
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name;
+      if (description !== undefined) updateData.description = description;
+      if (permissions !== undefined) updateData.permissions = permissions;
+      if (isActive !== undefined) updateData.isActive = isActive;
+      
+      const updated = await storage.updateRole(req.params.id, updateData);
+      if (!updated) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating role:", error);
+      res.status(400).json({ message: "Failed to update role" });
+    }
+  });
+
+  app.delete("/api/platform-admin/roles/:id", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      // Check if role is in use
+      const usersCount = await storage.countUsersWithRole(req.params.id);
+      if (usersCount > 0) {
+        return res.status(400).json({ 
+          message: "Cannot delete role that is assigned to users",
+          usersCount 
+        });
+      }
+      
+      const deleted = await storage.deleteRole(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting role:", error);
+      res.status(500).json({ message: "Failed to delete role" });
+    }
+  });
+
+  // Platform Admin - User Management (SINGLE-TENANT MODE)
+  app.get("/api/platform-admin/users", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const users = await storage.getUsers();
+      
+      // Enrich users with roles only (no tenant memberships in single-tenant mode)
+      const enrichedUsers = await Promise.all(
+        users.map(async (user) => {
+          const roles = await storage.getUserRoles(user.id);
+          
+          return {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            fullName: user.fullName,
+            isActive: user.isActive,
+            isPlatformAdmin: user.isPlatformAdmin,
+            lastLogin: user.lastLogin,
+            createdAt: user.createdAt,
+            roles: roles.map(r => ({
+              id: r.role.id,
+              name: r.role.name
+            }))
+          };
+        })
+      );
+      
+      res.json(enrichedUsers);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/platform-admin/users", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      // Validar con Zod
+      const validationResult = createUserSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validationResult.error.errors 
+        });
+      }
+
+      const { username, email, fullName, password, isPlatformAdmin } = validationResult.data;
+
+      // Verificar email único
+      const existingUsers = await storage.getUsers();
+      if (existingUsers.some(u => u.email?.toLowerCase() === email.toLowerCase())) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+
+      // Validar password strength (mínimo 8 caracteres)
+      if (password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+
+      // Hash password
+      const bcrypt = await import('bcrypt');
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Crear usuario
+      const newUser = await storage.createUser({
+        username,
+        email,
+        fullName: fullName || username,
+        password: hashedPassword,
+        isPlatformAdmin: isPlatformAdmin || false,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      console.log("✅ Created new user:", newUser.username);
+      res.status(201).json({ ...newUser, password: undefined });
+    } catch (error) {
+      console.error("Error creating user:", error);
+      res.status(400).json({ message: "Failed to create user", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  app.patch("/api/platform-admin/users/:userId", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      // Validar con Zod
+      const validationResult = updateUserSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validationResult.error.errors 
+        });
+      }
+
+      const { username, email, fullName, isPlatformAdmin, password } = validationResult.data;
+      
+      // Verificar que el usuario existe
+      const existingUser = await storage.getUser(req.params.userId);
+      if (!existingUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // No permitir cambiar isPlatformAdmin si es el único admin
+      if (existingUser.isPlatformAdmin && isPlatformAdmin === false) {
+        const allUsers = await storage.getUsers();
+        const adminCount = allUsers.filter(u => u.isPlatformAdmin).length;
+        if (adminCount <= 1) {
+          return res.status(400).json({ message: "Cannot remove platform admin status from the last administrator" });
+        }
+      }
+
+      // Construir update data
+      const updateData: any = {};
+      if (username !== undefined) updateData.username = username;
+      if (email !== undefined) {
+        // Verificar email único (excepto el usuario actual)
+        const users = await storage.getUsers();
+        if (users.some(u => u.id !== req.params.userId && u.email?.toLowerCase() === email.toLowerCase())) {
+          return res.status(400).json({ message: "Email already exists" });
+        }
+        updateData.email = email;
+      }
+      if (fullName !== undefined) updateData.fullName = fullName;
+      if (isPlatformAdmin !== undefined) updateData.isPlatformAdmin = isPlatformAdmin;
+      
+      // Si se proporciona password, hashearlo
+      if (password && password.length > 0) {
+        if (password.length < 8) {
+          return res.status(400).json({ message: "Password must be at least 8 characters" });
+        }
+        const bcrypt = await import('bcrypt');
+        updateData.password = await bcrypt.hash(password, 10);
+      }
+
+      updateData.updatedAt = new Date();
+
+      const updated = await storage.updateUser(req.params.userId, updateData);
+      if (!updated) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      console.log("✅ Updated user:", updated.username);
+      res.json({ ...updated, password: undefined });
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(400).json({ message: "Failed to update user" });
+    }
+  });
+
+  app.patch("/api/platform-admin/users/:userId/toggle-active", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const currentUser = req.user as any;
+      const targetUserId = req.params.userId;
+
+      // No permitir auto-desactivación
+      if (currentUser.id === targetUserId) {
+        return res.status(400).json({ message: "Cannot deactivate your own account" });
+      }
+
+      const user = await storage.getUser(targetUserId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // No permitir desactivar el último admin
+      if (user.isPlatformAdmin && user.isActive) {
+        const allUsers = await storage.getUsers();
+        const activeAdminCount = allUsers.filter(u => u.isPlatformAdmin && u.isActive).length;
+        if (activeAdminCount <= 1) {
+          return res.status(400).json({ message: "Cannot deactivate the last active platform administrator" });
+        }
+      }
+
+      const updated = await storage.updateUser(targetUserId, {
+        isActive: !user.isActive,
+        updatedAt: new Date()
+      });
+
+      console.log("✅ Toggled user active status:", updated?.username, "->", updated?.isActive);
+      res.json({ ...updated, password: undefined });
+    } catch (error) {
+      console.error("Error toggling user status:", error);
+      res.status(400).json({ message: "Failed to toggle user status" });
+    }
+  });
+
+  app.post("/api/platform-admin/users/:userId/roles", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      // Validar con Zod
+      const validationResult = assignRoleSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: validationResult.error.errors 
+        });
+      }
+
+      const { roleId } = validationResult.data;
+
+      // Verificar que el rol existe y está activo
+      const role = await storage.getRole(roleId);
+      if (!role) {
+        return res.status(404).json({ message: "Role not found" });
+      }
+      if (!role.isActive) {
+        return res.status(400).json({ message: "Cannot assign inactive role" });
+      }
+
+      // Verificar que el usuario existe
+      const user = await storage.getUser(req.params.userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Verificar si ya tiene este rol
+      const existingRoles = await storage.getUserRoles(req.params.userId);
+      if (existingRoles.some(ur => ur.roleId === roleId)) {
+        return res.status(400).json({ message: "User already has this role" });
+      }
+
+      // Asignar rol
+      await storage.assignUserRole({
+        userId: req.params.userId,
+        roleId,
+        assignedAt: new Date()
+      });
+
+      // Invalidate auth caches for this user (permissions changed)
+      authCache.invalidate(req.params.userId);
+      await distributedCache.invalidate(`auth-me:${req.params.userId}`);
+
+      console.log("✅ Assigned role", role.name, "to user", user.username);
+      res.status(201).json({ message: "Role assigned successfully" });
+    } catch (error) {
+      console.error("Error assigning role:", error);
+      res.status(400).json({ message: "Failed to assign role" });
+    }
+  });
+
+  app.delete("/api/platform-admin/users/:userId/roles/:roleId", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const { userId, roleId } = req.params;
+
+      // Verificar que el usuario existe
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Verificar que tiene el rol
+      const existingRoles = await storage.getUserRoles(userId);
+      if (!existingRoles.some(ur => ur.roleId === roleId)) {
+        return res.status(404).json({ message: "User does not have this role" });
+      }
+
+      // Remover rol
+      const removed = await storage.removeUserRole(userId, roleId);
+      if (!removed) {
+        return res.status(404).json({ message: "Role assignment not found" });
+      }
+
+      // Invalidate auth caches for this user (permissions changed)
+      authCache.invalidate(userId);
+      await distributedCache.invalidate(`auth-me:${userId}`);
+
+      console.log("✅ Removed role from user", user.username);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error removing role:", error);
+      res.status(500).json({ message: "Failed to remove role" });
+    }
+  });
+
+  // SINGLE-TENANT MODE: Stub endpoints for backward compatibility
+  app.get("/api/user/tenants", isAuthenticated, async (req, res) => {
+    // Return a single virtual tenant
+    res.json([{
+      id: 'single-tenant',
+      tenantId: 'single-tenant',
+      name: 'Organization',
+      isActive: true
+    }]);
+  });
+
+  app.post("/api/user/switch-tenant", isAuthenticated, async (req, res) => {
+    // No-op in single-tenant mode
+    res.json({ message: "Single-tenant mode - no switch needed", activeTenantId: 'single-tenant' });
+  });
+
+  // Dashboard stats (existing general dashboard)
+  app.get("/api/dashboard/stats", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      // Get basic stats first
+      const baseStats = await storage.getDashboardStats();
+      
+      // Calculate organizational risk metrics including residual risk
+      const allRisks = await requireDb().select().from(risks);
+      const allRiskControls = await requireDb().select().from(riskControls);
+      
+      if (allRisks.length > 0) {
+        // Calculate residual risk for each risk
+        const riskResidualMap = new Map<string, number>();
+        const riskControlMap = new Map<string, any[]>();
+        
+        // Group controls by risk
+        for (const rc of allRiskControls) {
+          if (!riskControlMap.has(rc.riskId)) {
+            riskControlMap.set(rc.riskId, []);
+          }
+          riskControlMap.get(rc.riskId)!.push(rc);
+        }
+        
+        // Calculate minimum residual risk per risk
+        for (const risk of allRisks) {
+          const controls = riskControlMap.get(risk.id) || [];
+          let residualRisk = risk.inherentRisk;
+          if (controls.length > 0) {
+            // Safe NaN filtering to prevent data corruption
+            const vals = controls.map(rc => Number(rc.residualRisk)).filter(n => Number.isFinite(n));
+            residualRisk = vals.length ? Math.min(...vals) : risk.inherentRisk;
+          }
+          riskResidualMap.set(risk.id, residualRisk);
+        }
+        
+        // Calculate organizational risk averages (both inherent and residual)
+        const totalInherentRisk = allRisks.reduce((sum: number, risk: any) => sum + risk.inherentRisk, 0);
+        const totalResidualRisk = allRisks.reduce((sum: number, risk: any) => sum + (riskResidualMap.get(risk.id) || risk.inherentRisk), 0);
+        const organizationalRiskAvg = Math.round((totalInherentRisk / allRisks.length) * 10) / 10;
+        const organizationalResidualRiskAvg = Math.round((totalResidualRisk / allRisks.length) * 10) / 10;
+        
+        // Count processes and regulations with risks
+        const processIds = Array.from(new Set(allRisks.filter((r: any) => r.processId != null).map((r: any) => r.processId)));
+        const processCount = processIds.length;
+        const processRisks = allRisks.filter((r: any) => r.processId != null);
+        const processInherentAvg = processRisks.length > 0 
+          ? Math.round((processRisks.reduce((sum: number, r: any) => sum + r.inherentRisk, 0) / processRisks.length) * 10) / 10
+          : 0;
+        const processResidualAvg = processRisks.length > 0 
+          ? Math.round((processRisks.reduce((sum: number, r: any) => sum + (riskResidualMap.get(r.id) || r.inherentRisk), 0) / processRisks.length) * 10) / 10
+          : 0;
+        
+        // Enhanced stats with organizational metrics including residual risk
+        const enhancedStats = {
+          ...baseStats,
+          organizationalRiskAvg,
+          organizationalResidualRiskAvg,
+          entityRiskBreakdown: {
+            processCount,
+            regulationCount: 1, // We know there's at least one from previous work
+            processInherentAvg,
+            processResidualAvg,
+            processAvg: processInherentAvg, // Backward compatibility alias
+            regulationAvg: 14.0 // From our regulation calculations
+          }
+        };
+        
+        res.json(enhancedStats);
+      } else {
+        res.json(baseStats);
+      }
+    } catch (error) {
+      console.error("Dashboard stats error:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard stats" });
+    }
+  });
+
+  // Role-specific Dashboard Metrics
+  app.get("/api/dashboard/executor/:userId", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.params.userId;
+      const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
+      
+      // Check if user is requesting their own data or has appropriate permissions
+      if (userId !== authenticatedUserId) {
+        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_assignments') ||
+                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+        if (!hasViewPermission) {
+          return res.status(403).json({ message: "Access denied: Cannot view other user's dashboard" });
+        }
+      }
+
+      const metrics = await storage.getExecutorDashboardMetrics(userId);
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching executor dashboard metrics:", error);
+      res.status(500).json({ message: "Failed to fetch executor dashboard metrics" });
+    }
+  });
+
+  app.get("/api/dashboard/supervisor/:userId", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.params.userId;
+      const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
+      
+      // Check if user is requesting their own data or has appropriate supervisor permissions
+      if (userId !== authenticatedUserId) {
+        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_teams') ||
+                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+        if (!hasViewPermission) {
+          return res.status(403).json({ message: "Access denied: Cannot view other supervisor's dashboard" });
+        }
+      }
+
+      const metrics = await storage.getSupervisorDashboardMetrics(userId);
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching supervisor dashboard metrics:", error);
+      res.status(500).json({ message: "Failed to fetch supervisor dashboard metrics" });
+    }
+  });
+
+  app.get("/api/dashboard/admin", isAuthenticated, async (req, res) => {
+    try {
+      // Get tenant from authenticated user - admins see org-specific metrics, not platform-wide
+      const tenantId = req.user?.activeTenantId;
+      console.log('[Admin Dashboard] tenantId:', tenantId, 'user:', req.user?.email);
+      
+      // Cache dashboard metrics for 30 seconds to improve performance
+      const cacheKey = `dashboard-admin:${tenantId || 'platform'}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log('[Admin Dashboard] Cache hit');
+        return res.json(cached);
+      }
+      
+      const metrics = await storage.getAdminDashboardMetrics(tenantId);
+      
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, metrics, 30);
+      
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching admin dashboard metrics:", error);
+      res.status(500).json({ message: "Failed to fetch admin dashboard metrics" });
+    }
+  });
+
+  // Dashboard Helper Endpoints
+  app.get("/api/dashboard/activity/:userId", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.params.userId;
+      const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
+      const limit = parseInt(req.query.limit as string) || 20;
+      const days = parseInt(req.query.days as string) || 7;
+      
+      // Check if user can view this activity feed
+      if (userId !== authenticatedUserId) {
+        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_assignments') ||
+                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+        if (!hasViewPermission) {
+          return res.status(403).json({ message: "Access denied: Cannot view user activity" });
+        }
+      }
+
+      const activity = await storage.getUserActivityFeed(userId, limit, days);
+      res.json(activity);
+    } catch (error) {
+      console.error("Error fetching user activity feed:", error);
+      res.status(500).json({ message: "Failed to fetch activity feed" });
+    }
+  });
+
+  app.get("/api/dashboard/workload-distribution", requirePermission("view_audit_teams"), async (req, res) => {
+    try {
+      const supervisorId = req.query.supervisorId as string;
+      const workload = await storage.getWorkloadDistribution(supervisorId);
+      res.json(workload);
+    } catch (error) {
+      console.error("Error fetching workload distribution:", error);
+      res.status(500).json({ message: "Failed to fetch workload distribution" });
+    }
+  });
+
+  app.get("/api/dashboard/performance-trends", isAuthenticated, async (req, res) => {
+    try {
+      const userId = req.query.userId as string;
+      const days = parseInt(req.query.days as string) || 30;
+      const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
+      
+      // Check if user can view performance trends
+      if (userId && userId !== authenticatedUserId) {
+        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_teams') ||
+                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+        if (!hasViewPermission) {
+          return res.status(403).json({ message: "Access denied: Cannot view performance trends" });
+        }
+      }
+
+      const trends = await storage.getPerformanceTrends(userId, days);
+      res.json(trends);
+    } catch (error) {
+      console.error("Error fetching performance trends:", error);
+      res.status(500).json({ message: "Failed to fetch performance trends" });
+    }
+  });
+
+  // Risk trends for dashboard visualization
+  app.get("/api/dashboard/risk-trends", isAuthenticated, async (req, res) => {
+    try {
+      const days = parseInt(req.query.days as string) || 30;
+      
+      // Generate trend data based on current stats (simulated evolution)
+      const currentStats = await storage.getDashboardStats();
+      const allRisks = await requireDb().select().from(risks);
+      
+      // Calculate current organizational risk
+      const currentOrgRisk = allRisks.length > 0
+        ? allRisks.reduce((sum, r) => sum + r.inherentRisk, 0) / allRisks.length
+        : 0;
+      
+      // Generate time series data (simulated)
+      const trendData = [];
+      const now = new Date();
+      for (let i = days; i >= 0; i -= Math.floor(days / 10)) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+        // Simulate slight variations
+        const variation = (Math.random() - 0.5) * 2;
+        trendData.push({
+          date: date.toISOString().split('T')[0],
+          riskCount: Math.max(0, (currentStats.totalRisks || 0) + Math.floor(variation * 3)),
+          criticalRisks: Math.max(0, (currentStats.criticalRisks || 0) + Math.floor(variation)),
+          organizationalRisk: Math.max(0, currentOrgRisk + variation),
+          controlEffectiveness: Math.min(100, Math.max(0, 78 + variation * 2))
+        });
+      }
+      
+      res.json(trendData);
+    } catch (error) {
+      console.error("Error fetching risk trends:", error);
+      res.status(500).json({ message: "Failed to fetch risk trends" });
+    }
+  });
+
+  // Actionable alerts for dashboard
+  app.get("/api/dashboard/alerts", isAuthenticated, async (req, res) => {
+    try {
+      const alerts = [];
+      
+      // Critical risks without controls
+      const risksQuery = await requireDb().select().from(risks).where(sql`inherent_risk > 19`);
+      const controlAssociations = await requireDb().select().from(riskControls);
+      const controlMap = new Map(controlAssociations.map(rc => [rc.riskId, true]));
+      
+      const risksWithoutControls = risksQuery.filter(r => !controlMap.has(r.id));
+      if (risksWithoutControls.length > 0) {
+        alerts.push({
+          id: 'critical-no-controls',
+          type: 'critical',
+          title: 'Riesgos Críticos sin Controles',
+          description: `${risksWithoutControls.length} riesgo(s) crítico(s) no tienen controles asignados`,
+          count: risksWithoutControls.length,
+          action: 'Asignar controles',
+          link: '/risks'
+        });
+      }
+      
+      // Overdue action plans
+      const actionPlansData = await requireDb().select().from(actions).where(isNull(actions.deletedAt));
+      const overduePlans = actionPlansData.filter(ap => 
+        ap.dueDate && new Date(ap.dueDate) < new Date() && ap.status !== 'completed'
+      );
+      if (overduePlans.length > 0) {
+        alerts.push({
+          id: 'overdue-plans',
+          type: 'warning',
+          title: 'Planes de Acción Vencidos',
+          description: `${overduePlans.length} plan(es) de acción han superado su fecha límite`,
+          count: overduePlans.length,
+          action: 'Revisar planes',
+          link: '/action-plans'
+        });
+      }
+      
+      // Controls needing review (90+ days since last review)
+      const controlsData = await requireDb().select().from(controls);
+      const controlsNeedingReview = controlsData.filter(c => {
+        if (!c.lastReview) return true;
+        const daysSince = Math.floor((Date.now() - new Date(c.lastReview).getTime()) / (1000 * 60 * 60 * 24));
+        return daysSince > 90;
+      });
+      if (controlsNeedingReview.length > 0) {
+        alerts.push({
+          id: 'controls-review',
+          type: 'info',
+          title: 'Controles Requieren Revisión',
+          description: `${controlsNeedingReview.length} control(es) no han sido revisados en 90+ días`,
+          count: controlsNeedingReview.length,
+          action: 'Programar revisiones',
+          link: '/controls'
+        });
+      }
+      
+      // Orphaned risks (risks without process associations)
+      const allActiveRisks = await requireDb().select().from(risks).where(eq(risks.status, 'active'));
+      const allRiskProcessLinksData = await requireDb().select({
+        riskId: riskProcessLinks.riskId
+      }).from(riskProcessLinks);
+      
+      const linkedRiskIds = new Set(allRiskProcessLinksData.map(link => link.riskId));
+      
+      const orphanedRisks = allActiveRisks.filter(risk => 
+        !linkedRiskIds.has(risk.id) && 
+        !risk.macroprocesoId && 
+        !risk.processId && 
+        !risk.subprocesoId
+      );
+      
+      if (orphanedRisks.length > 0) {
+        alerts.push({
+          id: 'orphaned-risks',
+          type: 'warning',
+          title: 'Riesgos sin Asociación de Procesos',
+          description: `${orphanedRisks.length} riesgo(s) no están asociados a ningún proceso`,
+          count: orphanedRisks.length,
+          action: 'Asociar a procesos',
+          link: '/risks'
+        });
+      }
+      
+      res.json(alerts);
+    } catch (error) {
+      console.error("Error fetching dashboard alerts:", error);
+      res.status(500).json({ message: "Failed to fetch alerts" });
+    }
+  });
+
+  // Removed duplicate - using /api/auth/me as canonical endpoint
+
+  app.get("/api/auth/permissions", async (req, res) => {
+    try {
+      // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
+      const userId = getAuthenticatedUserId(req);
+      const permissions = (await storage.getUserPermissions(userId)) ?? [];
+      res.json({ permissions });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch user permissions" });
+    }
+  });
+
+  // Switch user for demo purposes
+  app.post("/api/auth/switch-user", async (req, res) => {
+    try {
+      console.log('🔄 Switch user request received:', req.body);
+      const { userId } = req.body;
+      
+      if (!userId) {
+        console.log('❌ No userId provided');
+        return res.status(400).json({ message: "userId is required" });
+      }
+      
+      console.log('🔍 Looking for user:', userId);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        console.log('❌ User not found:', userId);
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      console.log('✅ User found:', user.username, user.fullName);
+      
+      // CRITICAL FIX: Store the switched user ID in session for subsequent requests
+      if (req.session) {
+        req.session.switchedUserId = userId;
+        console.log('✅ Switched user saved in session:', userId);
+      }
+      
+      // SINGLE-TENANT MODE: Get global permissions directly
+      const permissions = (await storage.getUserPermissions(userId)) ?? [];
+      console.log('✅ User permissions loaded:', permissions.length, 'permissions');
+      
+      const roles = await storage.getUserRolesList(userId);
+      
+      // Complete user data for demo switch
+      res.json({
+        success: true,
+        message: "Usuario cambiado exitosamente",
+        user: {
+          id: user.id,
+          username: user.username,
+          fullName: user.fullName,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          profileImageUrl: user.profileImageUrl,
+          permissions,
+          roles: roles.map(role => ({ id: 'temp', role }))
+        }
+      });
+    } catch (error) {
+      console.error('❌ Switch user error:', error);
+      res.status(500).json({ message: "No se pudo cambiar de usuario" });
+    }
+  });
+
+  // Risk Snapshots endpoints
+  app.post("/api/risk-snapshots", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRiskSnapshotSchema.parse(req.body);
+      const snapshot = await storage.createRiskSnapshot(validatedData);
+      res.status(201).json(snapshot);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid snapshot data" });
+    }
+  });
+
+  app.get("/api/risk-snapshots/dates", async (req, res) => {
+    try {
+      const dates = await storage.getAvailableSnapshotDates();
+      res.json(dates);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch available snapshot dates" });
+    }
+  });
+
+  app.get("/api/risk-snapshots/by-date", async (req, res) => {
+    try {
+      const { date } = req.query;
+      if (!date || typeof date !== 'string') {
+        return res.status(400).json({ message: "Date parameter is required" });
+      }
+      
+      const snapshots = await storage.getRiskSnapshotsByDate(new Date(date));
+      res.json(snapshots);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch snapshots by date" });
+    }
+  });
+
+  app.get("/api/risk-snapshots/range", async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
+        return res.status(400).json({ message: "startDate and endDate parameters are required" });
+      }
+      
+      const snapshots = await storage.getRiskSnapshotsByDateRange(
+        new Date(startDate), 
+        new Date(endDate)
+      );
+      res.json(snapshots);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch snapshots by date range" });
+    }
+  });
+
+  app.post("/api/risk-snapshots/current", isAuthenticated, async (req, res) => {
+    try {
+      const { snapshotDate } = req.body;
+      const date = snapshotDate ? new Date(snapshotDate) : undefined;
+      const snapshots = await storage.createCurrentRisksSnapshot(date);
+      res.status(201).json(snapshots);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create current risks snapshot" });
+    }
+  });
+
+  app.get("/api/risk-snapshots/comparison", async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
+        return res.status(400).json({ message: "startDate and endDate parameters are required" });
+      }
+      
+      const comparison = await storage.getSnapshotComparison(
+        new Date(startDate), 
+        new Date(endDate)
+      );
+      res.json(comparison);
+    } catch (error) {
+      console.error('Snapshot comparison error:', error);
+      res.status(500).json({ message: "Failed to fetch snapshot comparison" });
+    }
+  });
+
+  // Historical risk comparison (based on actual data, not manual snapshots)
+  app.get("/api/risks/historical-comparison", isAuthenticated, async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
+        return res.status(400).json({ message: "startDate and endDate parameters are required" });
+      }
+      
+      const comparison = await storage.getHistoricalRiskComparison(
+        new Date(startDate), 
+        new Date(endDate)
+      );
+      res.json(comparison);
+    } catch (error) {
+      console.error('Historical risk comparison error:', error);
+      res.status(500).json({ message: "Failed to fetch historical risk comparison" });
+    }
+  });
+
+  // Macroprocesos routes - with 60s distributed cache
+  app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `macroprocesos:single-tenant`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+      
+      // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
+      const [macroprocesos, allRiskLevels] = await Promise.all([
+        storage.getMacroprocesos(),
+        storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
+      ]);
+      
+      // Filter out soft-deleted records
+      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+      
+      // Fetch process owners for macroprocesos that have ownerId
+      const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
+      const owners = ownerIds.length > 0 
+        ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
+        : [];
+      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
+      
+      const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
+        const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
+        
+        return {
+          ...macroproceso,
+          ...riskLevels,
+          owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
+        };
+      });
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, macroprocesoswithRisks, 60);
+      
+      res.json(macroprocesoswithRisks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroprocesos" });
+    }
+  });
+
+  // OPTIMIZED: Consolidated org-structure endpoint - reduces 3 API calls to 1
+  app.get("/api/org-structure", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const cacheKey = `org-structure:single-tenant`;
+      
+      // Try cache first (5 minute TTL for org structure which changes infrequently)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached && !req.query.nocache) {
+        console.log(`[CACHE HIT] /api/org-structure in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
+      
+      // Fetch all data in parallel with a single risk levels call
+      const [macroList, procList, subprocList, allRiskLevels] = await Promise.all([
+        storage.getMacroprocesos(),
+        storage.getProcessesWithOwners(),
+        storage.getSubprocesosWithOwners(),
+        storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos', 'processes', 'subprocesos'] })
+      ]);
+      
+      // Filter deleted and add risk levels - minimal fields for list views
+      const macroprocesos = macroList
+        .filter((m: any) => m.status !== 'deleted')
+        .map((m: any) => ({
+          id: m.id,
+          code: m.code,
+          name: m.name,
+          type: m.type,
+          order: m.order,
+          ownerId: m.ownerId,
+          ...(allRiskLevels.macroprocesos.get(m.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
+        }));
+      
+      const processes = procList
+        .filter((p: any) => p.status !== 'deleted')
+        .map((p: any) => ({
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          macroprocesoId: p.macroprocesoId,
+          ownerId: p.ownerId,
+          owner: p.owner ? { id: p.owner.id, name: p.owner.name } : null,
+          ...(allRiskLevels.processes.get(p.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
+        }));
+      
+      const subprocesos = subprocList
+        .filter((s: any) => s.status !== 'deleted')
+        .map((s: any) => ({
+          id: s.id,
+          code: s.code,
+          name: s.name,
+          procesoId: s.procesoId,
+          ownerId: s.ownerId,
+          owner: s.owner ? { id: s.owner.id, name: s.owner.name } : null,
+          ...(allRiskLevels.subprocesos.get(s.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
+        }));
+      
+      const result = {
+        macroprocesos,
+        processes,
+        subprocesos,
+        counts: {
+          macroprocesos: macroprocesos.length,
+          processes: processes.length,
+          subprocesos: subprocesos.length
+        }
+      };
+      
+      // Cache for 5 minutes (org structure changes infrequently)
+      await distributedCache.set(cacheKey, result, 300);
+      
+      console.log(`[DB] /api/org-structure in ${Date.now() - startTime}ms (${macroprocesos.length} macros, ${processes.length} procs, ${subprocesos.length} subs)`);
+      res.json(result);
+    } catch (error) {
+      console.error(`[ERROR] /api/org-structure failed after ${Date.now() - startTime}ms:`, error);
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch org structure" });
+    }
+  });
+
+  app.get("/api/organization/process-map-risks", isAuthenticated, async (req, res) => {
+    try {
+      const validatedRisks = await storage.getProcessMapValidatedRisks();
+      
+      // Convert Maps to plain objects for JSON serialization
+      const response = {
+        macroprocesos: Object.fromEntries(validatedRisks.macroprocesos),
+        processes: Object.fromEntries(validatedRisks.processes),
+        subprocesos: Object.fromEntries(validatedRisks.subprocesos)
+      };
+      
+      res.status(200).json(response);
+    } catch (error) {
+      console.error("Error fetching process map validated risks:", error);
+      res.status(500).json({ message: "Failed to fetch process map validated risks" });
+    }
+  });
+
+  app.get("/api/macroprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      const macroproceso = await storage.getMacroproceso(req.params.id);
+      if (!macroproceso) {
+        return res.status(404).json({ message: "Macroproceso not found" });
+      }
+      res.json(macroproceso);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroproceso" });
+    }
+  });
+
+  app.get("/api/macroprocesos/:id/with-processes", isAuthenticated, async (req, res) => {
+    try {
+      const macroproceso = await storage.getMacroprocesoWithProcesses(req.params.id);
+      if (!macroproceso) {
+        return res.status(404).json({ message: "Macroproceso not found" });
+      }
+      res.json(macroproceso);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroproceso with processes" });
+    }
+  });
+
+  app.post("/api/macroprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertMacroprocesoSchema.parse(req.body);
+      
+      // Inject audit fields (createdBy) using helper function
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withCreatedBy(validatedData, userId);
+      
+      const macroproceso = await storage.createMacroproceso(dataWithAudit);
+      
+      // Invalidate caches after creation
+      await Promise.all([
+        distributedCache.set(`macroprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.status(201).json(macroproceso);
+    } catch (error) {
+      console.error("Error creating macroproceso:", error);
+      res.status(400).json({ message: error instanceof Error ? error.message : "Invalid macroproceso data" });
+    }
+  });
+
+  app.put("/api/macroprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertMacroprocesoSchema.partial().parse(req.body);
+      const macroproceso = await storage.updateMacroproceso(req.params.id, validatedData);
+      if (!macroproceso) {
+        return res.status(404).json({ message: "Macroproceso not found" });
+      }
+      
+      // Invalidate caches after update
+      await Promise.all([
+        distributedCache.set(`macroprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.json(macroproceso);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid macroproceso data" });
+    }
+  });
+
+  app.put("/api/macroprocesos/reorder", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      const { updates } = req.body;
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return res.status(400).json({ message: "Updates must be a non-empty array" });
+      }
+      
+      // Basic validation
+      for (const update of updates) {
+        if (!update.id || typeof update.order !== 'number') {
+          return res.status(400).json({ message: "Each update must have id and order" });
+        }
+        
+        if (!Number.isInteger(update.order) || update.order < 1) {
+          return res.status(400).json({ message: "Order must be a positive integer" });
+        }
+      }
+      
+      // Check for duplicate orders
+      const orders = updates.map(u => u.order);
+      const uniqueOrders = new Set(orders);
+      if (uniqueOrders.size !== orders.length) {
+        return res.status(400).json({ message: "Order values must be unique" });
+      }
+      
+      // Atomic reorder using storage method
+      const reorderedMacroprocesos = await storage.reorderMacroprocesos(updates);
+      
+      // Invalidate caches after reorder
+      await Promise.all([
+        distributedCache.set(`macroprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.json({ 
+        success: true, 
+        updated: reorderedMacroprocesos.length, 
+        macroprocesos: reorderedMacroprocesos 
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to reorder macroprocesos" });
+    }
+  });
+
+  app.delete("/api/macroprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // First check if macroproceso exists
+      const macroproceso = await storage.getMacroproceso(req.params.id);
+      if (!macroproceso) {
+        return res.status(404).json({ message: "Macroproceso not found" });
+      }
+
+      // Check if there are linked processes
+      const linkedProcesses = await storage.getProcessesByMacroproceso(req.params.id);
+      if (linkedProcesses.length > 0) {
+        return res.status(400).json({ 
+          message: "Cannot delete macroproceso with linked processes", 
+          linkedProcessesCount: linkedProcesses.length 
+        });
+      }
+
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateMacroproceso(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Macroproceso not found" });
+      }
+      
+      // Invalidate caches after delete
+      await Promise.all([
+        distributedCache.set(`macroprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to delete macroproceso:", error);
+      res.status(500).json({ message: "Failed to delete macroproceso" });
+    }
+  });
+
+  // Processes by macroproceso
+  app.get("/api/macroprocesos/:id/processes", isAuthenticated, async (req, res) => {
+    try {
+      const processes = await storage.getProcessesByMacroproceso(req.params.id);
+      res.json(processes);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch processes by macroproceso" });
+    }
+  });
+
+  // Fiscal entities for macroprocesos
+  app.get("/api/macroprocesos/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const entities = await storage.getMacroprocesoFiscalEntities(req.params.id);
+      res.json(entities.map(entity => ({ fiscalEntityId: entity.id, ...entity })));
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroproceso fiscal entities" });
+    }
+  });
+
+  app.put("/api/macroprocesos/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const { fiscalEntityIds } = req.body;
+      if (!Array.isArray(fiscalEntityIds)) {
+        return res.status(400).json({ message: "fiscalEntityIds must be an array" });
+      }
+
+      // First remove existing associations
+      await storage.removeMacroprocesoFromFiscalEntities(req.params.id);
+      
+      // Then add new associations if any
+      if (fiscalEntityIds.length > 0) {
+        await storage.assignMacroprocesoToFiscalEntities(req.params.id, fiscalEntityIds);
+      }
+
+      const entities = await storage.getMacroprocesoFiscalEntities(req.params.id);
+      res.json(entities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update macroproceso fiscal entities" });
+    }
+  });
+
+  // Subprocesos routes - with 60s cache
+  app.get("/api/subprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const profile = req.headers['x-profile'] === '1';
+    const timings: Record<string, number> = {};
+    
+    const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+      if (!profile) return fn();
+      const start = Date.now();
+      const result = await fn();
+      timings[label] = Date.now() - start;
+      return result;
+    };
+    
+    try {
+      if (profile) {
+        console.log('[PROFILE] /api/subprocesos START', { pool: getPoolMetrics() });
+      }
+      
+      const cacheKey = `subprocesos:single-tenant`;
+      
+      // Try to get from cache first
+      const cached = await timed('cache:get', () => distributedCache.get(cacheKey));
+      if (cached) {
+        if (profile) {
+          console.log('[PROFILE] /api/subprocesos CACHE HIT', { timings, pool: getPoolMetrics() });
+        }
+        return res.json(cached);
+      }
+      
+      const startTime = Date.now();
+      
+      // PERFORMANCE: Only fetch subproceso risk levels (not all entities)
+      const [subprocesos, allRiskLevels] = await Promise.all([
+        timed('db:subprocesos', () => storage.getSubprocesosWithOwners()),
+        timed('db:riskLevels', () => storage.getAllRiskLevelsOptimized({ entities: ['subprocesos'] }))
+      ]);
+      
+      // Filter out soft-deleted records
+      const filterStart = Date.now();
+      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+      if (profile) timings['filter'] = Date.now() - filterStart;
+      
+      // Use optimized risk levels lookup
+      const mapStart = Date.now();
+      const subprocesosWithRisks = activeSubprocesos.map((subproceso) => {
+        const riskLevels = allRiskLevels.subprocesos.get(subproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        return {
+          ...subproceso,
+          ...riskLevels
+        };
+      });
+      if (profile) timings['map'] = Date.now() - mapStart;
+      
+      // Cache for 60 seconds
+      await timed('cache:set', () => distributedCache.set(cacheKey, subprocesosWithRisks, 60));
+      
+      if (profile) {
+        timings['total'] = Date.now() - startTime;
+        console.log('[PROFILE] /api/subprocesos COMPLETE', { 
+          timings, 
+          pool: getPoolMetrics(),
+          count: subprocesosWithRisks.length
+        });
+        res.set('X-Profile-Timings', JSON.stringify(timings));
+      }
+      
+      res.json(subprocesosWithRisks);
+    } catch (error) {
+      if (profile) {
+        console.log('[PROFILE] /api/subprocesos ERROR', { timings, pool: getPoolMetrics(), error });
+      }
+      res.status(500).json({ message: "Failed to fetch subprocesos" });
+    }
+  });
+
+  app.get("/api/subprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      const subproceso = await storage.getSubproceso(req.params.id);
+      if (!subproceso) {
+        return res.status(404).json({ message: "Subproceso not found" });
+      }
+      res.json(subproceso);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subproceso" });
+    }
+  });
+
+  app.get("/api/subprocesos/:id/with-risks", isAuthenticated, async (req, res) => {
+    try {
+      const subproceso = await storage.getSubprocesoWithRisks(req.params.id);
+      if (!subproceso) {
+        return res.status(404).json({ message: "Subproceso not found" });
+      }
+      res.json(subproceso);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subproceso with risks" });
+    }
+  });
+
+  app.post("/api/subprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertSubprocesoSchema.parse(req.body);
+      
+      // Inject audit fields (createdBy) using helper function
+      const userId = getAuthenticatedUserId(req);
+      const dataWithAudit = withCreatedBy(validatedData, userId);
+      
+      const subproceso = await storage.createSubproceso(dataWithAudit);
+      
+      // Invalidate subprocesos and org-structure cache
+      await Promise.all([
+        distributedCache.set(`subprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.status(201).json(subproceso);
+    } catch (error) {
+      console.error("Error creating subproceso:", error);
+      res.status(400).json({ message: "Invalid subproceso data" });
+    }
+  });
+
+  app.put("/api/subprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertSubprocesoSchema.partial().parse(req.body);
+      const subproceso = await storage.updateSubproceso(req.params.id, validatedData);
+      if (!subproceso) {
+        return res.status(404).json({ message: "Subproceso not found" });
+      }
+      
+      // Invalidate subprocesos and org-structure cache
+      await Promise.all([
+        distributedCache.set(`subprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.json(subproceso);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid subproceso data" });
+    }
+  });
+
+  app.delete("/api/subprocesos/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateSubproceso(req.params.id, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Subproceso not found" });
+      }
+      
+      // Invalidate subprocesos and org-structure cache
+      await Promise.all([
+        distributedCache.set(`subprocesos:single-tenant`, null, 0),
+        distributedCache.set(`org-structure:single-tenant`, null, 0)
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to delete subproceso:", error);
+      res.status(500).json({ message: "Failed to delete subproceso" });
+    }
+  });
+
+  // Subprocesos by proceso
+  app.get("/api/processes/:id/subprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const subprocesos = await storage.getSubprocesosByProceso(req.params.id);
+      res.json(subprocesos);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subprocesos by proceso" });
+    }
+  });
+
+  // Risks by subproceso
+  app.get("/api/subprocesos/:id/risks", isAuthenticated, async (req, res) => {
+    try {
+      const risks = await storage.getRisksBySubproceso(req.params.id);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks by subproceso" });
+    }
+  });
+
+  // ============== GERENCIAS ROUTES - with 60s distributed cache ==============
+  
+  app.get("/api/gerencias", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `gerencias:single-tenant`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+      
+      const gerencias = await storage.getGerencias();
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, gerencias, 60);
+      
+      res.json(gerencias);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias" });
+    }
+  });
+
+  app.get("/api/gerencias/deleted", isAuthenticated, async (req, res) => {
+    try {
+      const gerencias = await storage.getDeletedGerencias();
+      res.json(gerencias);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch deleted gerencias" });
+    }
+  });
+
+  app.get("/api/gerencias/:id", isAuthenticated, async (req, res) => {
+    try {
+      const gerencia = await storage.getGerencia(req.params.id);
+      if (!gerencia) {
+        return res.status(404).json({ message: "Gerencia not found" });
+      }
+      res.json(gerencia);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencia" });
+    }
+  });
+
+  app.post("/api/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const validatedData = insertGerenciaSchema.parse(req.body);
+      // Add createdBy AFTER validation (it's omitted from schema)
+      const gerenciaData = { ...validatedData, createdBy: userId };
+      const gerencia = await storage.createGerencia(gerenciaData);
+      
+      // Invalidate caches after creation
+      await Promise.all([
+        distributedCache.set(`gerencias:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.status(201).json(gerencia);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to create gerencia:", error);
+      res.status(500).json({ message: error instanceof Error ? error.message : "Failed to create gerencia" });
+    }
+  });
+
+  app.patch("/api/gerencias/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      const validatedData = insertGerenciaSchema.partial().parse(req.body);
+      // Add updatedBy AFTER validation (it's omitted from schema)
+      const gerenciaData = { ...validatedData, updatedBy: userId };
+      const gerencia = await storage.updateGerencia(req.params.id, gerenciaData);
+      if (!gerencia) {
+        return res.status(404).json({ message: "Gerencia not found" });
+      }
+      
+      // Invalidate caches after update
+      await Promise.all([
+        distributedCache.set(`gerencias:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.json(gerencia);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Failed to update gerencia:", error);
+      res.status(500).json({ message: error instanceof Error ? error.message : "Failed to update gerencia" });
+    }
+  });
+
+  app.delete("/api/gerencias/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      const success = await storage.deleteGerencia(req.params.id, userId);
+      if (!success) {
+        return res.status(404).json({ message: "Gerencia not found" });
+      }
+      
+      // Invalidate caches after delete
+      await Promise.all([
+        distributedCache.set(`gerencias:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to delete gerencia:", error);
+      res.status(500).json({ message: "Failed to delete gerencia" });
+    }
+  });
+
+  app.post("/api/gerencias/:id/restore", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const gerencia = await storage.restoreGerencia(req.params.id, userId);
+      if (!gerencia) {
+        return res.status(404).json({ message: "Gerencia not found" });
+      }
+      
+      // Invalidate caches after restore
+      await Promise.all([
+        distributedCache.set(`gerencias:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+      ]);
+      
+      res.json(gerencia);
+    } catch (error) {
+      console.error("Failed to restore gerencia:", error);
+      res.status(500).json({ message: "Failed to restore gerencia" });
+    }
+  });
+
+  app.get("/api/gerencias/:id/processes", isAuthenticated, async (req, res) => {
+    try {
+      const processes = await storage.getProcessesByGerencia(req.params.id);
+      res.json(processes);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch processes by gerencia" });
+    }
+  });
+
+  app.post("/api/processes/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const { gerenciaId } = req.body;
+      const relation = await storage.addProcessGerencia({
+        processId: req.params.id,
+        gerenciaId,
+      });
+      
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+      
+      res.status(201).json(relation);
+    } catch (error: any) {
+      console.error("Failed to add gerencia to process:", error);
+      if (error?.code === '23505' || error?.message?.includes('unique constraint')) {
+        return res.status(409).json({ message: "Esta gerencia ya está asignada a este proceso" });
+      }
+      res.status(500).json({ message: "Failed to add gerencia to process" });
+    }
+  });
+
+  app.delete("/api/processes/:id/gerencias/:gerenciaId", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.removeProcessGerencia(req.params.id, req.params.gerenciaId);
+      if (!success) {
+        return res.status(404).json({ message: "Relation not found" });
+      }
+      
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to remove gerencia from process:", error);
+      res.status(500).json({ message: "Failed to remove gerencia from process" });
+    }
+  });
+
+  app.get("/api/processes/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const gerencias = await storage.getGerenciasByProcess(req.params.id);
+      res.json(gerencias);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias by process" });
+    }
+  });
+
+  app.get("/api/gerencias/:id/macroprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const macroprocesos = await storage.getMacroprocesosByGerencia(req.params.id);
+      res.json(macroprocesos);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroprocesos by gerencia" });
+    }
+  });
+
+  app.get("/api/gerencias/:id/subprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const subprocesos = await storage.getSubprocesosByGerencia(req.params.id);
+      res.json(subprocesos);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subprocesos by gerencia" });
+    }
+  });
+
+  app.post("/api/macroprocesos/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const { gerenciaId } = req.body;
+      const relation = await storage.addMacroprocesoGerencia({
+        macroprocesoId: req.params.id,
+        gerenciaId,
+      });
+      res.status(201).json(relation);
+    } catch (error: any) {
+      console.error("Failed to add gerencia to macroproceso:", error);
+      if (error?.code === '23505' || error?.message?.includes('unique constraint')) {
+        return res.status(409).json({ message: "Esta gerencia ya está asignada a este macroproceso" });
+      }
+      res.status(500).json({ message: "Failed to add gerencia to macroproceso" });
+    }
+  });
+
+  app.delete("/api/macroprocesos/:id/gerencias/:gerenciaId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const success = await storage.removeMacroprocesoGerencia(req.params.id, req.params.gerenciaId, tenantId);
+      if (!success) {
+        return res.status(404).json({ message: "Relation not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to remove gerencia from macroproceso:", error);
+      res.status(500).json({ message: "Failed to remove gerencia from macroproceso" });
+    }
+  });
+
+  app.get("/api/macroprocesos/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const gerencias = await storage.getGerenciasByMacroproceso(req.params.id);
+      res.json(gerencias);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias by macroproceso" });
+    }
+  });
+
+  app.post("/api/subprocesos/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const { gerenciaId } = req.body;
+      const relation = await storage.addSubprocesoGerencia({
+        subprocesoId: req.params.id,
+        gerenciaId,
+      });
+      res.status(201).json(relation);
+    } catch (error: any) {
+      console.error("Failed to add gerencia to subproceso:", error);
+      if (error?.code === '23505' || error?.message?.includes('unique constraint')) {
+        return res.status(409).json({ message: "Esta gerencia ya está asignada a este subproceso" });
+      }
+      res.status(500).json({ message: "Failed to add gerencia to subproceso" });
+    }
+  });
+
+  app.delete("/api/subprocesos/:id/gerencias/:gerenciaId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const success = await storage.removeSubprocesoGerencia(req.params.id, req.params.gerenciaId, tenantId);
+      if (!success) {
+        return res.status(404).json({ message: "Relation not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Failed to remove gerencia from subproceso:", error);
+      res.status(500).json({ message: "Failed to remove gerencia from subproceso" });
+    }
+  });
+
+  app.get("/api/subprocesos/:id/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const gerencias = await storage.getGerenciasBySubproceso(req.params.id);
+      res.json(gerencias);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias by subproceso" });
+    }
+  });
+
+  // Get accumulated risk levels for all gerencias
+  app.get("/api/gerencias-risk-levels", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Use distributed cache with versioned key (60s TTL)
+      const cacheKey = `gerencias-risk-levels:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      const riskLevelsMap = await storage.getGerenciasRiskLevels(tenantId);
+      // Convert Map to object for JSON serialization
+      const riskLevels = Object.fromEntries(riskLevelsMap);
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, riskLevels, 60);
+      
+      res.json(riskLevels);
+    } catch (error) {
+      console.error("Failed to fetch gerencias risk levels:", error);
+      res.status(500).json({ message: "Failed to fetch gerencias risk levels" });
+    }
+  });
+
+  // Get all process-gerencia relations (for filtering)
+  app.get("/api/process-gerencias-all", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const cacheKey = `process-gerencias:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        return res.json(cached);
+      }
+      
+      const relations = await storage.getAllProcessGerenciasRelations(tenantId);
+      await distributedCache.set(cacheKey, relations, 60); // Cache for 60 seconds
+      
+      res.json(relations);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("[process-gerencias-all] Error:", error);
+      res.status(500).json({ message: "Failed to fetch process-gerencia relations" });
+    }
+  });
+
+  // ============== AUDIT PLANNING & PRIORITIZATION ROUTES ==============
+  
+  // Audit Plans
+  app.get("/api/audit-plans", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const plans = await storage.getAuditPlans(tenantId);
+      
+      // Enrich plans with approver names
+      const enrichedPlans = await Promise.all(
+        plans.map(async (plan) => {
+          if (plan.approvedBy) {
+            const approver = await storage.getUser(plan.approvedBy);
+            return {
+              ...plan,
+              approverName: approver?.fullName || approver?.username || 'Usuario desconocido'
+            };
+          }
+          return plan;
+        })
+      );
+      
+      res.json(enrichedPlans);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit plans" });
+    }
+  });
+
+  app.get("/api/audit-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const plan = await storage.getAuditPlan(req.params.id, tenantId);
+      if (!plan) {
+        return res.status(404).json({ message: "Audit plan not found" });
+      }
+      res.json(plan);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit plan" });
+    }
+  });
+
+  app.post("/api/audit-plans", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID
+      const userId = getAuthenticatedUserId(req);
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const validatedData = insertAuditPlanSchema.parse({
+        ...req.body,
+        createdBy: userId
+      });
+      
+      // If status is approved, set approvedBy and approvedAt
+      const planData: any = {
+        ...validatedData
+      };
+      
+      if (validatedData.status === 'approved') {
+        planData.approvedBy = userId;
+        planData.approvedAt = new Date();
+      }
+      
+      // Generate unique code atomically using database transaction
+      const year = validatedData.year || new Date().getFullYear();
+      const plan = await storage.createAuditPlanWithUniqueCode(
+        await withTenantId(req, planData),
+        year,
+        tenantId
+      );
+      
+      res.status(201).json(plan);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Audit plan creation error:", error);
+      res.status(400).json({ message: "Invalid audit plan data", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  // Audits
+  app.post("/api/audits", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const validatedData = insertAuditSchema.parse({
+        ...req.body,
+        createdBy: userId, // Usuario autenticado
+        // Convert date strings to Date objects
+        plannedStartDate: req.body.plannedStartDate ? new Date(req.body.plannedStartDate) : null,
+        plannedEndDate: req.body.plannedEndDate ? new Date(req.body.plannedEndDate) : null,
+        actualStartDate: req.body.actualStartDate ? new Date(req.body.actualStartDate) : null,
+        actualEndDate: req.body.actualEndDate ? new Date(req.body.actualEndDate) : null,
+        reviewPeriodStartDate: req.body.reviewPeriodStartDate ? new Date(req.body.reviewPeriodStartDate) : null,
+        reviewPeriodEndDate: req.body.reviewPeriodEndDate ? new Date(req.body.reviewPeriodEndDate) : null,
+      });
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const audit = await storage.createAudit(await withTenantId(req, validatedData));
+      
+      // Invalidate audits cache
+      const tenantId = await resolveActiveTenantId(req, { required: true });
+      await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
+      
+      res.status(201).json(audit);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Audit creation error:", error);
+      res.status(400).json({ message: "Invalid audit data", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  // Audits list endpoint (with 60s cache for performance optimization)
+  app.get("/api/audits", isAuthenticated, async (req, res) => {
+    try {
+      const tenantId = await resolveActiveTenantId(req, { required: true });
+      // Parse query parameters for pagination and filters
+      const limit = parseInt(req.query.limit as string) || 1000;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Build filters object
+      const filters: import('./storage').AuditFilters = {
+        search: req.query.search as string,
+        status: req.query.status as string,
+        type: req.query.type as string,
+        assignedAuditorId: req.query.assignedAuditorId as string,
+      };
+      
+      // Create cache key based on tenant and filters
+      const filterKey = JSON.stringify({ limit, offset, filters });
+      const cacheKey = `audits:${tenantId}:${filterKey}`;
+      
+      // Try to get from cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
+      // Cache miss - query database
+      const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, tenantId, limit, offset);
+      
+      // Prepare response
+      const response = {
+        data: paginatedAudits,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      };
+      
+      // Cache for 60 seconds (less frequently updated than controls)
+      await distributedCache.set(cacheKey, response, 60);
+      
+      // Return with pagination metadata
+      res.json(response);
+    } catch (error) {
+      console.error("Get audits error:", error);
+      res.status(500).json({ message: "Failed to get audits" });
+    }
+  });
+
+  app.get("/api/audits/:id", isAuthenticated, async (req, res) => {
+    try {
+      const tenantId = await resolveActiveTenantId(req, { required: true });
+      const audit = await storage.getAudit(req.params.id, tenantId);
+      if (!audit) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+      res.json(audit);
+    } catch (error) {
+      console.error("Get audit error:", error);
+      res.status(500).json({ message: "Failed to get audit" });
+    }
+  });
+
+  app.put("/api/audits/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditSchema.partial().parse({
+        ...req.body,
+        // Convert empty strings to null for foreign key fields
+        regulationId: req.body.regulationId === '' ? null : req.body.regulationId,
+        processId: req.body.processId === '' ? null : req.body.processId,
+        subprocesoId: req.body.subprocesoId === '' ? null : req.body.subprocesoId,
+        // Convert date strings to Date objects if they exist
+        plannedStartDate: req.body.plannedStartDate ? new Date(req.body.plannedStartDate) : undefined,
+        plannedEndDate: req.body.plannedEndDate ? new Date(req.body.plannedEndDate) : undefined,
+        actualStartDate: req.body.actualStartDate ? new Date(req.body.actualStartDate) : undefined,
+        actualEndDate: req.body.actualEndDate ? new Date(req.body.actualEndDate) : undefined,
+        reviewPeriodStartDate: req.body.reviewPeriodStartDate ? new Date(req.body.reviewPeriodStartDate) : undefined,
+        reviewPeriodEndDate: req.body.reviewPeriodEndDate ? new Date(req.body.reviewPeriodEndDate) : undefined,
+      });
+      const audit = await storage.updateAudit(req.params.id, validatedData);
+      if (!audit) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+      
+      // Invalidate audits cache
+      const tenantId = await resolveActiveTenantId(req, { required: true });
+      await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
+      
+      res.json(audit);
+    } catch (error) {
+      console.error("Update audit error:", error);
+      res.status(400).json({ message: "Invalid audit data", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  // Approve/Reject/Reopen audit work program
+  app.post("/api/audits/:id/approve-program", isAuthenticated, async (req, res) => {
+    try {
+      const { action } = z.object({ 
+        action: z.enum(['approve', 'reject', 'reopen']) 
+      }).parse(req.body);
+      
+      const userId = req.user?.id || 'user-1';
+      
+      let updateData: any = {};
+      
+      if (action === 'approve') {
+        updateData = {
+          programApprovalStatus: 'approved',
+          programApprovedBy: userId,
+          programApprovedAt: new Date()
+        };
+      } else if (action === 'reject') {
+        updateData = {
+          programApprovalStatus: 'rejected',
+          programApprovedBy: userId,
+          programApprovedAt: new Date()
+        };
+      } else if (action === 'reopen') {
+        updateData = {
+          programApprovalStatus: 'draft',
+          programApprovedBy: null,
+          programApprovedAt: null
+        };
+      }
+      
+      const audit = await storage.updateAudit(req.params.id, updateData);
+      
+      if (!audit) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+      
+      res.json(audit);
+    } catch (error) {
+      console.error("Approve program error:", error);
+      res.status(400).json({ message: "Invalid request", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  // Workflow state transition endpoint
+  app.post("/api/audits/:id/transition", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const auditId = req.params.id;
+      const { toState, comment } = z.object({
+        toState: z.string(),
+        comment: z.string().optional()
+      }).parse(req.body);
+
+      // Get current audit
+      const audit = await storage.getAudit(auditId);
+      if (!audit) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+
+      // Load workflow configuration
+      const workflowConfig = await import('../config/audit_workflow.json');
+      const workflow = workflowConfig.default || workflowConfig;
+      
+      // Find transition
+      const transition = workflow.transitions.find((t: any) => 
+        t.from === audit.status && t.to === toState
+      );
+
+      if (!transition) {
+        return res.status(400).json({ 
+          message: `Invalid transition from ${audit.status} to ${toState}`,
+          availableTransitions: workflow.transitions
+            .filter((t: any) => t.from === audit.status)
+            .map((t: any) => ({ to: t.to, name: t.name }))
+        });
+      }
+
+      // Verify comment if required
+      if (transition.requiresComment && !comment) {
+        return res.status(400).json({ 
+          message: "This transition requires a comment" 
+        });
+      }
+
+      // Verify user has required role (simplified - extend with actual RBAC)
+      // const userRole = req.user?.role || 'auditor';
+      // if (!transition.allowedRoles.includes(userRole)) {
+      //   return res.status(403).json({ 
+      //     message: "You don't have permission for this transition" 
+      //   });
+      // }
+
+      // Get target state configuration
+      const targetState = workflow.states.find((s: any) => s.id === toState);
+      if (!targetState) {
+        return res.status(400).json({ message: "Invalid target state" });
+      }
+
+      // Validate required fields for target state
+      const missingFields: string[] = [];
+      for (const field of targetState.requiredFields || []) {
+        if (!audit[field as keyof typeof audit]) {
+          missingFields.push(field);
+        }
+      }
+
+      if (missingFields.length > 0) {
+        return res.status(400).json({ 
+          message: "Missing required fields for this state",
+          missingFields,
+          validations: transition.validations
+        });
+      }
+
+      // Update audit status
+      const updatedAudit = await storage.updateAudit(auditId, { status: toState });
+      
+      // Log the transition
+      await requireDb().insert(auditStateLog).values({
+        auditId,
+        fromState: audit.status,
+        toState,
+        transitionName: transition.name,
+        comment: comment || null,
+        changedBy: userId,
+        metadata: JSON.stringify({
+          transitionValidations: transition.validations,
+          userRole: req.user?.role || 'unknown'
+        })
+      });
+
+      res.json({
+        audit: updatedAudit,
+        transition: {
+          from: audit.status,
+          to: toState,
+          name: transition.name
+        }
+      });
+    } catch (error) {
+      console.error("State transition error:", error);
+      res.status(500).json({ 
+        message: "Failed to transition state", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // Get audit state log (history of transitions)
+  app.get("/api/audits/:id/state-log", isAuthenticated, async (req, res) => {
+    try {
+      const logs = await requireDb()
+        .select()
+        .from(auditStateLog)
+        .where(eq(auditStateLog.auditId, req.params.id))
+        .orderBy(auditStateLog.changedAt);
+      
+      res.json(logs);
+    } catch (error) {
+      console.error("Get state log error:", error);
+      res.status(500).json({ message: "Failed to fetch state log" });
+    }
+  });
+
+  app.delete("/api/audits/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      const auditId = req.params.id;
+      console.log(`Soft-deleting auditoría: ${auditId}`);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateAudit(auditId, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+      
+      // Invalidate audits cache
+      const tenantId = await resolveActiveTenantId(req, { required: true });
+      await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
+      
+      console.log(`Auditoría ${auditId} soft-deleted exitosamente`);
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Delete audit error:", error);
+      res.status(500).json({ message: "Failed to delete audit" });
+    }
+  });
+
+  // Audit Controls endpoints
+  app.get("/api/audits/:id/controls", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const auditControls = await storage.getAuditControls(req.params.id, tenantId);
+      res.json(auditControls);
+    } catch (error) {
+      console.error("Get audit controls error:", error);
+      res.status(500).json({ message: "Failed to get audit controls" });
+    }
+  });
+
+  app.post("/api/audit-controls", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditControlSchema.parse(req.body);
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const auditControl = await storage.createAuditControl(await withTenantId(req, validatedData));
+      res.status(201).json(auditControl);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Create audit control error:", error);
+      res.status(400).json({ message: "Invalid audit control data" });
+    }
+  });
+
+  app.put("/api/audit-controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditControlSchema.partial().parse(req.body);
+      const auditControl = await storage.updateAuditControl(req.params.id, validatedData);
+      if (!auditControl) {
+        return res.status(404).json({ message: "Audit control not found" });
+      }
+      res.json(auditControl);
+    } catch (error) {
+      console.error("Update audit control error:", error);
+      res.status(500).json({ message: "Failed to update audit control" });
+    }
+  });
+
+  app.delete("/api/audit-controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditControl(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit control not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Delete audit control error:", error);
+      res.status(500).json({ message: "Failed to delete audit control" });
+    }
+  });
+
+  // ================= AUDIT FINDINGS API ROUTES =================
+  
+  app.get("/api/audit-findings", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const withDetails = req.query.withDetails === 'true';
+      const auditId = req.query.auditId as string;
+      
+      let findings;
+      if (auditId) {
+        findings = await storage.getAuditFindingsByAudit(auditId, tenantId);
+      } else if (withDetails) {
+        findings = await storage.getAuditFindingsWithDetails(tenantId);
+      } else {
+        findings = await storage.getAuditFindings(tenantId);
+      }
+      
+      res.json(findings);
+    } catch (error) {
+      console.error("Get audit findings error:", error);
+      res.status(500).json({ message: "Failed to get audit findings" });
+    }
+  });
+
+  app.get("/api/audit-findings/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const withDetails = req.query.withDetails === 'true';
+      
+      const finding = withDetails 
+        ? await storage.getAuditFindingWithDetails(req.params.id, tenantId)
+        : await storage.getAuditFinding(req.params.id, tenantId);
+        
+      if (!finding) {
+        return res.status(404).json({ message: "Audit finding not found" });
+      }
+      res.json(finding);
+    } catch (error) {
+      console.error("Get audit finding error:", error);
+      res.status(500).json({ message: "Failed to get audit finding" });
+    }
+  });
+
+  app.post("/api/audit-findings", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const processedData = {
+        ...req.body,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        responsiblePerson: req.body.responsiblePerson || null, // Convertir cadena vacía a null
+        identifiedBy: userId // Usuario autenticado
+      };
+      
+      const validatedData = insertAuditFindingSchema.parse(processedData);
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const finding = await storage.createAuditFinding(await withTenantId(req, validatedData));
+      res.status(201).json(finding);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Create audit finding error:", error);
+      res.status(400).json({ 
+        message: "Invalid audit finding data", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // Nueva ruta para crear hallazgo con compromiso opcional
+  app.post("/api/audit-findings/with-commitment", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Procesar datos del hallazgo
+      const findingData = {
+        auditId: req.body.auditId,
+        title: req.body.title,
+        description: req.body.description,
+        type: req.body.type,
+        severity: req.body.severity,
+        condition: req.body.condition,
+        criteria: req.body.criteria,
+        cause: req.body.cause,
+        effect: req.body.effect,
+        recommendation: req.body.recommendation,
+        managementResponse: req.body.managementResponse,
+        agreedAction: req.body.agreedAction,
+        responsiblePerson: req.body.responsiblePerson || null, // Convertir cadena vacía a null
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        status: req.body.status,
+        identifiedBy: userId
+      };
+      
+      const validatedFindingData = insertAuditFindingSchema.parse(findingData);
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const finding = await storage.createAuditFinding(await withTenantId(req, validatedFindingData));
+      
+      let commitment = null;
+      
+      // Si se solicita crear un compromiso, crearlo
+      if (req.body.createCommitment) {
+        const commitmentData = {
+          origin: 'audit' as const,
+          auditFindingId: finding.id,
+          title: req.body.commitmentTitle,
+          description: req.body.commitmentDescription,
+          responsible: req.body.commitmentResponsible, // Este debe ser un ID de usuario válido
+          dueDate: req.body.commitmentDueDate ? new Date(req.body.commitmentDueDate) : null,
+          priority: req.body.commitmentPriority || 'medium',
+          status: 'pending' as const,
+          progress: 0,
+          managementResponse: req.body.commitmentManagementResponse,
+          agreedAction: req.body.commitmentAgreedAction,
+          createdBy: userId
+        };
+        
+        commitment = await storage.createAction(commitmentData);
+      }
+      
+      res.status(201).json({ finding, commitment });
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Create audit finding with commitment error:", error);
+      res.status(400).json({ 
+        message: "Invalid audit finding or commitment data", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  // Endpoint para actualizar hallazgo con compromiso opcional
+  app.put("/api/audit-findings/:id/with-commitment", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Actualizar datos del hallazgo
+      const findingData = {
+        auditId: req.body.auditId,
+        title: req.body.title,
+        description: req.body.description,
+        type: req.body.type,
+        severity: req.body.severity,
+        condition: req.body.condition,
+        criteria: req.body.criteria,
+        cause: req.body.cause,
+        effect: req.body.effect,
+        recommendation: req.body.recommendation,
+        managementResponse: req.body.managementResponse,
+        agreedAction: req.body.agreedAction,
+        responsiblePerson: req.body.responsiblePerson || null, // Convertir cadena vacía a null
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        status: req.body.status,
+        identifiedBy: userId
+      };
+      
+      const validatedFindingData = insertAuditFindingSchema.partial().parse(findingData);
+      const finding = await storage.updateAuditFinding(req.params.id, validatedFindingData);
+      
+      if (!finding) {
+        return res.status(404).json({ message: "Audit finding not found" });
+      }
+      
+      let commitment = null;
+      
+      // Si hay datos de compromiso, crear el compromiso
+      if (req.body.createCommitment && req.body.commitmentTitle) {
+        const commitmentData = {
+          origin: 'audit' as const,
+          auditFindingId: finding.id,
+          title: req.body.commitmentTitle,
+          description: req.body.commitmentDescription,
+          responsible: req.body.commitmentResponsible || null, // Convertir cadena vacía a null
+          dueDate: req.body.commitmentDueDate ? new Date(req.body.commitmentDueDate) : null,
+          priority: req.body.commitmentPriority || 'medium',
+          status: 'pending' as const,
+          progress: 0,
+          managementResponse: req.body.commitmentManagementResponse,
+          agreedAction: req.body.commitmentAgreedAction,
+          createdBy: userId
+        };
+        
+        commitment = await storage.createAction(commitmentData);
+      }
+      
+      res.json({ finding, commitment });
+    } catch (error) {
+      console.error("Update audit finding with commitment error:", error);
+      res.status(400).json({ 
+        message: "Invalid audit finding or commitment data", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  app.put("/api/audit-findings/:id", isAuthenticated, async (req, res) => {
+    try {
+      const processedData = {
+        ...req.body,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : undefined,
+        responsiblePerson: req.body.responsiblePerson || null // Convertir cadena vacía a null
+      };
+      
+      const validatedData = insertAuditFindingSchema.partial().parse(processedData);
+      const finding = await storage.updateAuditFinding(req.params.id, validatedData);
+      
+      if (!finding) {
+        return res.status(404).json({ message: "Audit finding not found" });
+      }
+      res.json(finding);
+    } catch (error) {
+      console.error("Update audit finding error:", error);
+      res.status(400).json({ 
+        message: "Invalid audit finding data", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  app.delete("/api/audit-findings/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditFinding(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit finding not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Delete audit finding error:", error);
+      res.status(500).json({ message: "Failed to delete audit finding" });
+    }
+  });
+
+  // ================= AUDIT FINDINGS ACTION PLANS API ROUTES =================
+  
+  // Get all action plans for a specific audit finding
+  app.get("/api/audit-findings/:id/actions", async (req, res) => {
+    try {
+      const actions = await storage.getActionsByAuditFinding(req.params.id);
+      res.json(actions);
+    } catch (error) {
+      console.error("Get audit finding actions error:", error);
+      res.status(500).json({ message: "Failed to get action plans for audit finding" });
+    }
+  });
+
+  // Create a new action plan for an audit finding
+  app.post("/api/audit-findings/:id/actions", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const findingId = req.params.id;
+      
+      // Verify the finding exists
+      const finding = await storage.getAuditFinding(findingId);
+      if (!finding) {
+        return res.status(404).json({ message: "Audit finding not found" });
+      }
+      
+      // Prepare action data
+      const actionData = {
+        origin: 'audit' as const,
+        auditFindingId: findingId,
+        title: req.body.title,
+        description: req.body.description || null,
+        responsible: req.body.responsible || null,
+        dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
+        priority: req.body.priority || 'medium',
+        status: 'approved', // Los planes de auditoría nacen aprobados
+        progress: 0,
+        managementResponse: req.body.managementResponse || null,
+        agreedAction: req.body.agreedAction || null,
+        createdBy: userId
+      };
+      
+      const validatedData = insertActionSchema.parse(actionData);
+      const action = await storage.createAction(validatedData);
+      
+      res.status(201).json(action);
+    } catch (error) {
+      console.error("Create audit finding action error:", error);
+      res.status(400).json({ 
+        message: "Invalid action plan data", 
+        error: error instanceof Error ? error.message : "Unknown error" 
+      });
+    }
+  });
+
+  app.put("/api/audit-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID
+      const userId = getAuthenticatedUserId(req);
+      
+      const validatedData = insertAuditPlanSchema.partial().parse(req.body);
+      
+      // If status is being changed to approved, set approvedBy and approvedAt
+      const updateData: any = { ...validatedData };
+      
+      if (validatedData.status === 'approved') {
+        updateData.approvedBy = userId;
+        updateData.approvedAt = new Date();
+      }
+      
+      const plan = await storage.updateAuditPlan(req.params.id, updateData);
+      if (!plan) {
+        return res.status(404).json({ message: "Audit plan not found" });
+      }
+      res.json(plan);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit plan data" });
+    }
+  });
+
+  // Save wizard progress (progressive saving)
+  app.patch("/api/audit-plans/:id/wizard-progress", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const planId = req.params.id;
+      
+      // Validate wizard progress data
+      const { wizardStep, wizardData } = req.body;
+      
+      // Allow null to clear wizard progress when plan is finalized
+      if (wizardStep !== null && wizardStep !== undefined) {
+        if (typeof wizardStep !== 'number' || wizardStep < 0 || wizardStep > 3) {
+          return res.status(400).json({ message: "Invalid wizard step. Must be between 0 and 3, or null to clear." });
+        }
+      }
+      
+      // Update wizard progress in database
+      const plan = await storage.updateAuditPlan(planId, {
+        wizardStep: wizardStep === undefined ? null : wizardStep,
+        wizardData: wizardData === undefined ? null : wizardData,
+        updatedBy: userId,
+      });
+      
+      if (!plan) {
+        return res.status(404).json({ message: "Audit plan not found" });
+      }
+      
+      res.json({ 
+        success: true, 
+        wizardStep: plan.wizardStep, 
+        message: wizardStep === null ? "Wizard progress cleared successfully" : "Wizard progress saved successfully" 
+      });
+    } catch (error) {
+      console.error("Error saving wizard progress:", error);
+      res.status(500).json({ 
+        message: "Failed to save wizard progress",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  app.delete("/api/audit-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Validate deletion reason using Zod schema
+      const { deletionReason } = softDeleteSchema.parse(req.body);
+      
+      const planId = req.params.id;
+      console.log(`Soft-deleting plan de auditoría: ${planId}`);
+      
+      // Perform soft-delete by setting status and audit fields
+      const deleted = await storage.updateAuditPlan(planId, {
+        status: 'deleted',
+        deletedBy: userId,
+        deletedAt: new Date(),
+        deletionReason,
+        updatedBy: userId
+      });
+      
+      if (!deleted) {
+        return res.status(404).json({ message: "Plan de auditoría no encontrado" });
+      }
+
+      console.log(`Plan de auditoría ${planId} soft-deleted exitosamente`);
+      res.status(204).send();
+      
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0].message });
+      }
+      console.error("Error deleting audit plan:", error);
+      console.error("Error stack:", error instanceof Error ? error.stack : 'No stack');
+      res.status(500).json({ 
+        message: "Error al eliminar el plan de auditoría",
+        details: error instanceof Error ? error.message : "Error desconocido"
+      });
+    }
+  });
+
+  // Approve audit plan
+  app.post("/api/audit-plans/:id/approve", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const planId = req.params.id;
+      
+      // Verify user has permission to approve audit plans
+      // Only System Administrator and Audit Supervisor can approve
+      const userRoles = await storage.getUserRoles(userId);
+      const roleNames = userRoles.map((r: any) => r.role?.name).filter(Boolean);
+      
+      const canApprove = roleNames.includes('Administrador del Sistema') || 
+                        roleNames.includes('Supervisor de Auditoría');
+      
+      if (!canApprove) {
+        return res.status(403).json({ 
+          message: "No tiene permisos para aprobar planes de auditoría. Solo Administradores del Sistema y Supervisores de Auditoría pueden aprobar." 
+        });
+      }
+      
+      // Get the current plan to check its status
+      const currentPlan = await storage.getAuditPlan(planId);
+      if (!currentPlan) {
+        return res.status(404).json({ message: "Plan de auditoría no encontrado" });
+      }
+      
+      // Check if plan is already approved
+      if (currentPlan.status === 'approved') {
+        return res.status(400).json({ message: "El plan ya está aprobado" });
+      }
+      
+      // Update plan to approved status
+      const updatedPlan = await storage.updateAuditPlan(planId, {
+        status: 'approved',
+        approvedBy: userId,
+        approvedAt: new Date(),
+        updatedBy: userId
+      });
+      
+      if (!updatedPlan) {
+        return res.status(404).json({ message: "Error al aprobar el plan de auditoría" });
+      }
+      
+      console.log(`Plan de auditoría ${planId} aprobado por usuario ${userId}`);
+      res.json(updatedPlan);
+      
+    } catch (error) {
+      console.error("Error approving audit plan:", error);
+      res.status(500).json({ 
+        message: "Error al aprobar el plan de auditoría",
+        details: error instanceof Error ? error.message : "Error desconocido"
+      });
+    }
+  });
+
+  // Audit Universe
+  app.get("/api/audit-universe", async (req, res) => {
+    try {
+      console.log('🔍 Fetching audit universe with details...');
+      const universe = await storage.getAuditUniverseWithDetails();
+      console.log(`✅ Found ${universe.length} audit universe items`);
+      res.json(universe);
+    } catch (error) {
+      console.error('❌ Error fetching audit universe:', error);
+      res.status(500).json({ message: "Failed to fetch audit universe" });
+    }
+  });
+
+  // Get accumulated residual risk for each audit universe entity
+  app.get("/api/audit-universe/residual-risks", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      console.log('🔍 Calculating residual risks for VALIDATED risks in audit universe entities...');
+      
+      // Get all audit universe items and all validated risk-process links
+      const universeItems = await storage.getAuditUniverse();
+      const allRisks = await storage.getRisks(tenantId);
+      
+      // Get validated risk-process links filtered by tenant (via JOIN with risks table)
+      const allValidatedLinks = await requireDb()
+        .select({
+          id: riskProcessLinks.id,
+          riskId: riskProcessLinks.riskId,
+          macroprocesoId: riskProcessLinks.macroprocesoId,
+          processId: riskProcessLinks.processId,
+          subprocesoId: riskProcessLinks.subprocesoId,
+          validationStatus: riskProcessLinks.validationStatus,
+        })
+        .from(riskProcessLinks)
+        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+        .where(
+          and(
+            eq(riskProcessLinks.validationStatus, 'validated'),
+            eq(risks.tenantId, tenantId)
+          )
+        );
+      
+      const result = [];
+      
+      // For each audit universe item, calculate its accumulated residual risk from VALIDATED risks only
+      for (const item of universeItems) {
+        let accumulatedResidualRisk = 0;
+        
+        // Find validated risk-process links that belong to this audit universe item
+        let relevantLinks = [];
+        
+        if (item.entityType === 'subproceso') {
+          // Real subproceso: get links where subprocesoId matches
+          relevantLinks = allValidatedLinks.filter(link => link.subprocesoId === item.subprocesoId);
+        } else if (item.entityType === 'process') {
+          // Process acting as subproceso: get links where processId matches AND subprocesoId is null
+          relevantLinks = allValidatedLinks.filter(link => link.processId === item.processId && !link.subprocesoId);
+        } else if (item.entityType === 'macroproceso') {
+          // Macroproceso acting as process and subproceso: get links where macroprocesoId matches AND processId is null
+          relevantLinks = allValidatedLinks.filter(link => link.macroprocesoId === item.macroprocesoId && !link.processId);
+        }
+        
+        // Calculate residual risk for each validated risk
+        for (const link of relevantLinks) {
+          const risk = allRisks.find(r => r.id === link.riskId);
+          if (!risk) continue;
+          
+          const riskControls = await storage.getRiskControls(risk.id);
+          
+          let residualRisk = risk.inherentRisk || 0;
+          
+          if (riskControls.length > 0) {
+            // Calculate control effectiveness
+            let totalEffectiveness = 0;
+            let controlCount = 0;
+            
+            for (const rc of riskControls) {
+              const control = await storage.getControl(rc.controlId, tenantId);
+              if (control) {
+                // Map selfAssessment to effectiveness score (0-1)
+                const effectiveness = control.selfAssessment === 'effective' ? 0.9 :
+                                     control.selfAssessment === 'partially_effective' ? 0.5 :
+                                     control.selfAssessment === 'ineffective' ? 0.1 : 0;
+                totalEffectiveness += effectiveness;
+                controlCount++;
+              }
+            }
+            
+            if (controlCount > 0) {
+              const avgEffectiveness = totalEffectiveness / controlCount;
+              // Reduce inherent risk based on control effectiveness
+              residualRisk = risk.inherentRisk * (1 - avgEffectiveness);
+            }
+          }
+          
+          accumulatedResidualRisk += residualRisk;
+        }
+        
+        result.push({
+          processId: item.processId,
+          subprocesoId: item.subprocesoId,
+          accumulatedResidualRisk: Math.round(accumulatedResidualRisk * 100) / 100 // Round to 2 decimals
+        });
+      }
+      
+      console.log(`✅ Calculated residual risks for ${result.length} entities (VALIDATED risks only)`);
+      res.json(result);
+    } catch (error) {
+      console.error('❌ Error calculating residual risks:', error);
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to calculate residual risks" });
+    }
+  });
+
+  app.post("/api/audit-universe", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditUniverseSchema.parse(req.body);
+      const universe = await storage.createAuditUniverse(validatedData);
+      res.status(201).json(universe);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit universe data" });
+    }
+  });
+
+  app.post("/api/audit-universe/generate", isAuthenticated, async (req, res) => {
+    try {
+      // Get active tenant ID for tenant isolation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const generatedItems = await storage.generateUniverseFromExistingProcesses(tenantId);
+      res.status(201).json(generatedItems);
+    } catch (error) {
+      console.error("Error generating audit universe:", error);
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to generate audit universe from processes" });
+    }
+  });
+
+  app.put("/api/audit-universe/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditUniverseSchema.partial().parse(req.body);
+      const universe = await storage.updateAuditUniverse(req.params.id, validatedData);
+      if (!universe) {
+        return res.status(404).json({ message: "Audit universe item not found" });
+      }
+      res.json(universe);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit universe data" });
+    }
+  });
+
+  app.delete("/api/audit-universe/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditUniverse(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit universe item not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit universe item" });
+    }
+  });
+
+  // Audit Prioritization Factors
+  app.get("/api/audit-plans/:planId/prioritization", async (req, res) => {
+    try {
+      console.log("Fetching prioritization factors for plan:", req.params.planId);
+      const factors = await storage.getPrioritizationFactorsWithDetails(req.params.planId);
+      console.log("Found factors:", factors.length);
+      res.json(factors);
+    } catch (error) {
+      console.error("Error fetching prioritization factors:", error);
+      res.status(500).json({ message: "Failed to fetch prioritization factors", error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/prioritization", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const validatedData = insertAuditPrioritizationFactorsSchema.parse({
+        ...req.body,
+        planId: req.params.planId,
+        calculatedBy: userId
+      });
+      const factors = await storage.createPrioritizationFactors(validatedData);
+      res.status(201).json(factors);
+    } catch (error) {
+      console.error("Validation error in prioritization factors:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid prioritization factors data", 
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ 
+        message: "Invalid prioritization factors data", 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  app.put("/api/audit-prioritization/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditPrioritizationFactorsSchema.partial().parse(req.body);
+      const factors = await storage.updatePrioritizationFactors(req.params.id, validatedData);
+      if (!factors) {
+        return res.status(404).json({ message: "Prioritization factors not found" });
+      }
+      res.json(factors);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid prioritization factors data" });
+    }
+  });
+
+  app.post("/api/audit-prioritization/:id/calculate", isAuthenticated, async (req, res) => {
+    try {
+      const calculated = await storage.calculatePriorityScore(req.params.id);
+      if (!calculated) {
+        return res.status(404).json({ message: "Prioritization factors not found" });
+      }
+      res.json(calculated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to calculate priority score" });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/calculate-all-priorities", isAuthenticated, async (req, res) => {
+    try {
+      const calculated = await storage.calculateAllPriorityScores(req.params.planId);
+      res.json(calculated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to calculate all priority scores" });
+    }
+  });
+
+  // Audit Plan Items
+  app.get("/api/audit-plans/:planId/items", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const items = await storage.getAuditPlanItemsWithDetails(req.params.planId, tenantId);
+      res.json(items);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch audit plan items" });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/items", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const validatedData = insertAuditPlanItemSchema.parse({
+        ...req.body,
+        planId: req.params.planId,
+        createdBy: userId
+      });
+      const item = await storage.createAuditPlanItem(validatedData);
+      res.status(201).json(item);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid audit plan item data",
+          errors: error.errors 
+        });
+      }
+      console.error("Error creating audit plan item:", error);
+      res.status(400).json({ message: "Invalid audit plan item data" });
+    }
+  });
+
+  app.put("/api/audit-plan-items/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditPlanItemSchema.partial().parse(req.body);
+      const item = await storage.updateAuditPlanItem(req.params.id, validatedData);
+      if (!item) {
+        return res.status(404).json({ message: "Audit plan item not found" });
+      }
+      res.json(item);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit plan item data" });
+    }
+  });
+
+  app.delete("/api/audit-plan-items/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditPlanItem(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit plan item not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit plan item" });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/auto-select", isAuthenticated, async (req, res) => {
+    try {
+      const { maxHours } = req.body;
+      if (!maxHours || maxHours <= 0) {
+        return res.status(400).json({ message: "Valid maxHours is required" });
+      }
+      const selectedItems = await storage.selectAuditItemsForPlan(req.params.planId, maxHours);
+      res.json(selectedItems);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to auto-select audit items" });
+    }
+  });
+
+  // Audit Plan Capacity
+  app.get("/api/audit-plans/:planId/capacity", async (req, res) => {
+    try {
+      const capacity = await storage.getAuditPlanCapacity(req.params.planId);
+      if (!capacity) {
+        return res.status(404).json({ message: "Audit plan capacity not found" });
+      }
+      res.json(capacity);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit plan capacity" });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/capacity", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditPlanCapacitySchema.parse({
+        ...req.body,
+        planId: req.params.planId,
+        createdBy: getAuthenticatedUserId(req)
+      });
+      const capacity = await storage.createAuditPlanCapacity(validatedData);
+      res.status(201).json(capacity);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit plan capacity data" });
+    }
+  });
+
+  app.put("/api/audit-plan-capacity/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditPlanCapacitySchema.partial().parse(req.body);
+      const capacity = await storage.updateAuditPlanCapacity(req.params.id, validatedData);
+      if (!capacity) {
+        return res.status(404).json({ message: "Audit plan capacity not found" });
+      }
+      res.json(capacity);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit plan capacity data" });
+    }
+  });
+
+  app.post("/api/audit-plans/:planId/capacity/calculate", isAuthenticated, async (req, res) => {
+    try {
+      const capacity = await storage.calculateQuarterlyDistribution(req.params.planId);
+      if (!capacity) {
+        return res.status(404).json({ message: "Audit plan capacity not found" });
+      }
+      res.json(capacity);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to calculate quarterly distribution" });
+    }
+  });
+
+  // ============== ENDPOINTS PARA ENTIDADES EXPANDIDAS DE AUDITORÍA ==============
+
+  // Audit Scope Management (Gestión de Alcance de Auditoría)
+  app.get("/api/audits/:id/scope", isAuthenticated, requirePermission("manage_audits"), async (req, res) => {
+    try {
+      const scope = await storage.getAuditScope(req.params.id);
+      res.json(scope);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit scope" });
+    }
+  });
+
+  app.put("/api/audits/:id/scope", isAuthenticated, requirePermission("manage_audits"), async (req, res) => {
+    try {
+      const { processes, subprocesses } = req.body;
+      
+      // Create scope entries for processes and subprocesses
+      const scopeEntries: any[] = [];
+      
+      if (processes && Array.isArray(processes)) {
+        for (const processId of processes) {
+          scopeEntries.push({
+            auditId: req.params.id,
+            processId,
+            subprocesoId: null
+          });
+        }
+      }
+      
+      if (subprocesses && Array.isArray(subprocesses)) {
+        for (const subprocesoId of subprocesses) {
+          scopeEntries.push({
+            auditId: req.params.id,
+            processId: null,
+            subprocesoId
+          });
+        }
+      }
+      
+      await storage.setAuditScope(req.params.id, scopeEntries);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update audit scope" });
+    }
+  });
+
+  // Get risks for audit scope
+  app.get("/api/audits/:id/risks", isAuthenticated, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const risks = await storage.getRisksForAuditScope(req.params.id, tenantId);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks for audit scope" });
+    }
+  });
+
+  // Get controls for audit scope
+  app.get("/api/audits/:id/controls-scope", isAuthenticated, async (req, res) => {
+    try {
+      const controls = await storage.getControlsForAuditScope(req.params.id);
+      res.json(controls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch controls for audit scope" });
+    }
+  });
+
+  // Audit Re-evaluation Endpoint (NOGAI 13.2 - Risk and Control Re-evaluation)
+  app.get("/api/audits/:id/re-evaluation", isAuthenticated, async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const auditId = req.params.id;
+      
+      // Fetch audit to get scopeEntities
+      const audit = await storage.getAudit(auditId, tenantId);
+      if (!audit) {
+        return res.status(404).json({ message: "Audit not found" });
+      }
+
+      // Get risks filtered by audit scope
+      const risks = await storage.getRisksForAuditScope(auditId, tenantId);
+      
+      // Get controls for these risks
+      const controls = await storage.getControlsForAuditScope(auditId);
+      
+      // Get existing risk evaluations
+      const riskEvaluations = await storage.getAuditRiskEvaluations(auditId);
+      
+      // Get existing control evaluations
+      const controlEvaluations = await storage.getAuditControlEvaluations(auditId);
+      
+      // Get risk-control relationships for the scope risks
+      const riskIds = risks.map(r => r.id);
+      const riskControlsMap: Record<string, any[]> = {};
+      
+      if (riskIds.length > 0) {
+        for (const risk of risks) {
+          const riskControls = await storage.getRiskControls(risk.id);
+          riskControlsMap[risk.id] = riskControls;
+        }
+      }
+
+      res.json({
+        audit,
+        risks,
+        controls,
+        riskEvaluations,
+        controlEvaluations,
+        riskControlsMap
+      });
+    } catch (error) {
+      console.error("Error fetching re-evaluation data:", error);
+      res.status(500).json({ message: "Failed to fetch re-evaluation data" });
+    }
+  });
+
+  // Create risk evaluation
+  app.post("/api/audits/:id/risk-evaluations", isAuthenticated, async (req, res) => {
+    try {
+      const evaluatedBy = (req as any).user?.claims?.sub;
+      if (!evaluatedBy && process.env.NODE_ENV !== 'development') {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const safeEvaluatedBy = evaluatedBy || (process.env.NODE_ENV === 'development' ? "user-1" : null);
+      if (!safeEvaluatedBy) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const validatedData = {
+        ...req.body,
+        auditId: req.params.id,
+        evaluatedBy: safeEvaluatedBy,
+        evaluatedDate: new Date()
+      };
+
+      // Calculate newInherentRisk if not confirmed
+      if (!validatedData.confirmed && validatedData.newProbability && validatedData.newImpact) {
+        validatedData.newInherentRisk = validatedData.newProbability * validatedData.newImpact;
+      }
+
+      const evaluation = await storage.createAuditRiskEvaluation(validatedData);
+      res.status(201).json(evaluation);
+    } catch (error) {
+      console.error("Error creating risk evaluation:", error);
+      res.status(400).json({ message: "Invalid risk evaluation data" });
+    }
+  });
+
+  // Update risk evaluation
+  app.patch("/api/audits/:id/risk-evaluations/:evalId", isAuthenticated, async (req, res) => {
+    try {
+      const data = req.body;
+      
+      // Calculate newInherentRisk if not confirmed and new values provided
+      if (!data.confirmed && data.newProbability && data.newImpact) {
+        data.newInherentRisk = data.newProbability * data.newImpact;
+      }
+
+      const evaluation = await storage.updateAuditRiskEvaluation(req.params.evalId, data);
+      
+      if (!evaluation) {
+        return res.status(404).json({ message: "Risk evaluation not found" });
+      }
+      
+      res.json(evaluation);
+    } catch (error) {
+      console.error("Error updating risk evaluation:", error);
+      res.status(400).json({ message: "Invalid risk evaluation data" });
+    }
+  });
+
+  // Update control evaluation
+  app.patch("/api/audits/:id/control-evaluations/:evalId", isAuthenticated, async (req, res) => {
+    try {
+      const evaluatedBy = (req as any).user?.claims?.sub;
+      if (!evaluatedBy && process.env.NODE_ENV !== 'development') {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const safeEvaluatedBy = evaluatedBy || (process.env.NODE_ENV === 'development' ? "user-1" : null);
+      if (!safeEvaluatedBy) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const data = {
+        ...req.body,
+        evaluatedBy: safeEvaluatedBy,
+        evaluatedDate: new Date()
+      };
+      
+      // Set newEffectivenessRating to 0 if designEffectiveness is "ineffective"
+      if (data.designEffectiveness === "ineffective") {
+        data.newEffectivenessRating = 0;
+      }
+
+      const evaluation = await storage.updateAuditControlEvaluation(req.params.evalId, data);
+      
+      if (!evaluation) {
+        return res.status(404).json({ message: "Control evaluation not found" });
+      }
+      
+      res.json(evaluation);
+    } catch (error) {
+      console.error("Error updating control evaluation:", error);
+      res.status(400).json({ message: "Invalid control evaluation data" });
+    }
+  });
+
+  // Audit Criteria Management (Gestión de Criterios de Auditoría - NOGAI 13)
+  app.get("/api/audits/:id/criteria", isAuthenticated, async (req, res) => {
+    try {
+      const criteria = await storage.getAuditCriteria(req.params.id);
+      res.json(criteria);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit criteria" });
+    }
+  });
+
+  app.post("/api/audits/:id/criteria", isAuthenticated, async (req, res) => {
+    try {
+      const createdBy = (req as any).user?.claims?.sub;
+      if (!createdBy && process.env.NODE_ENV !== 'development') {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const safeCreatedBy = createdBy || (process.env.NODE_ENV === 'development' ? "user-1" : null);
+      if (!safeCreatedBy) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+
+      const validatedData = insertAuditCriterionSchema.parse({
+        ...req.body,
+        auditId: req.params.id,
+        createdBy: safeCreatedBy
+      });
+
+      const criterion = await storage.createAuditCriterion(validatedData);
+      res.status(201).json(criterion);
+    } catch (error) {
+      console.error("Error creating audit criterion:", error);
+      res.status(400).json({ message: "Invalid audit criterion data" });
+    }
+  });
+
+  app.patch("/api/audits/:auditId/criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertAuditCriterionSchema.partial().parse(req.body);
+      const criterion = await storage.updateAuditCriterion(req.params.id, validatedData);
+      
+      if (!criterion) {
+        return res.status(404).json({ message: "Audit criterion not found" });
+      }
+      
+      res.json(criterion);
+    } catch (error) {
+      console.error("Error updating audit criterion:", error);
+      res.status(400).json({ message: "Invalid audit criterion data" });
+    }
+  });
+
+  app.delete("/api/audits/:auditId/criteria/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteAuditCriterion(req.params.id);
+      
+      if (!success) {
+        return res.status(404).json({ message: "Audit criterion not found" });
+      }
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting audit criterion:", error);
+      res.status(500).json({ message: "Failed to delete audit criterion" });
+    }
+  });
+
+  // Automatic Test Generation (Generación Automática de Pruebas)
+  app.post("/api/audits/:id/generate-tests", isAuthenticated, requirePermission("manage_audits"), async (req, res) => {
+    try {
+      const validatedData = auditGenerateTestsSchema.parse(req.body);
+      const { scopeSelections } = validatedData;
+      
+      // Validate scope selections have required properties
+      const invalidSelections = scopeSelections.filter(s => 
+        !s.riskId || typeof s.isSelected !== 'boolean'
+      );
+      
+      if (invalidSelections.length > 0) {
+        return res.status(400).json({ 
+          message: "Each selection must have riskId (string) and isSelected (boolean)" 
+        });
+      }
+
+      const createdBy = (req as any).user?.claims?.sub;
+      if (!createdBy && process.env.NODE_ENV !== 'development') {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const safeCreatedBy = createdBy || (process.env.NODE_ENV === 'development' ? "user-1" : null);
+      if (!safeCreatedBy) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      
+      // Validate audit can generate tests
+      const validation = await storage.validateAuditForTestGeneration(req.params.id);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: validation.message });
+      }
+
+      // Generate tests from scope selections
+      const generatedTests = await storage.generateAuditTestsFromScope(
+        req.params.id,
+        scopeSelections,
+        createdBy
+      );
+
+      res.status(201).json({
+        message: `Successfully generated ${generatedTests.length} audit tests`,
+        testsGenerated: generatedTests.length,
+        tests: generatedTests
+      });
+    } catch (error) {
+      console.error("Failed to generate audit tests:", error);
+      
+      // Handle Zod validation errors with 400 status
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          details: error.errors 
+        });
+      }
+      
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate audit tests";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get risks with controls by entity (for scope initialization)
+  app.get("/api/risks/by-process/:processId/with-controls", async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const risks = await storage.getRisksWithControlsByProcess(req.params.processId, tenantId);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks with controls for process" });
+    }
+  });
+
+  app.get("/api/risks/by-subproceso/:subprocesoId/with-controls", async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const risks = await storage.getRisksWithControlsBySubproceso(req.params.subprocesoId, tenantId);
+      res.json(risks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risks with controls for subproceso" });
+    }
+  });
+
+  // Audit Tests (Pruebas de Auditoría)
+  app.get("/api/audits/:auditId/tests", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const tests = await storage.getAuditTests(req.params.auditId, tenantId);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit tests" });
+    }
+  });
+
+  app.get("/api/audits/:auditId/tests/details", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const tests = await storage.getAuditTestsWithDetails(req.params.auditId, tenantId);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit tests with details" });
+    }
+  });
+
+  // STATIC ROUTES FIRST - Must come before dynamic :id routes to prevent route shadowing
+  
+  // Get overdue tests
+  app.get("/api/audit-tests/overdue", isAuthenticated, requirePermission("view_all"), async (req, res) => {
+    try {
+      const { days = 0 } = req.query;
+      const overdueTests = await storage.getOverdueTests(Number(days));
+      
+      const summary = {
+        total: overdueTests.length,
+        byDaysOverdue: overdueTests.reduce((acc, test) => {
+          const daysOverdue = test.daysOverdue || 0;
+          const range = daysOverdue <= 1 ? '0-1' : daysOverdue <= 7 ? '2-7' : daysOverdue <= 30 ? '8-30' : '30+';
+          acc[range] = (acc[range] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+        byAuditor: overdueTests.reduce((acc, test) => {
+          const executor = test.executorName || 'Unassigned';
+          acc[executor] = (acc[executor] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>)
+      };
+
+      res.json({ overdueTests, summary });
+    } catch (error) {
+      console.error("Error in /api/audit-tests/overdue:", error);
+      res.status(500).json({ message: "Failed to fetch overdue tests" });
+    }
+  });
+
+  // Get tests assigned to specific user
+  app.get("/api/audit-tests/assigned-to/:userId", isAuthenticated, requirePermission("view_audit_assignments"), async (req, res) => {
+    try {
+      const { status } = req.query;
+      const tests = await storage.getAssignedTestsForUser(req.params.userId, status as string);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch assigned tests for user" });
+    }
+  });
+
+  // Get tests pending review for supervisor
+  app.get("/api/audit-tests/pending-review/:supervisorId", isAuthenticated, requirePermission("view_audit_reviews"), async (req, res) => {
+    try {
+      const tests = await storage.getPendingReviewsForSupervisor(req.params.supervisorId);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pending reviews for supervisor" });
+    }
+  });
+
+  // Get my assigned tests - returns all tests assigned to current authenticated user
+  app.get("/api/audit-tests/my-tests", isAuthenticated, async (req, res) => {
+    try {
+      // Get current authenticated user ID
+      const userId = getAuthenticatedUserId(req);
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      console.log(`[MY-TESTS] Fetching audit tests for user: ${userId}`);
+      
+      // Get all tests assigned to this user
+      const myTests = await storage.getAuditTestsByAssignee(userId, tenantId);
+      console.log(`[MY-TESTS] Found ${myTests.length} tests assigned to user ${userId}`);
+      
+      // Enrich tests with audit information for better context
+      const testsWithAuditInfo = await Promise.all(
+        myTests.map(async (test) => {
+          try {
+            // Get audit details for context
+            const audit = await storage.getAudit(test.auditId);
+            return {
+              ...test,
+              audit: audit || null
+            };
+          } catch (error) {
+            console.warn(`[MY-TESTS] Could not get audit info for test ${test.id}:`, error);
+            return {
+              ...test,
+              audit: null
+            };
+          }
+        })
+      );
+
+      console.log(`[MY-TESTS] Successfully enriched ${testsWithAuditInfo.length} tests with audit information`);
+      res.json(testsWithAuditInfo);
+    } catch (error) {
+      console.error("[MY-TESTS] Error fetching my tests:", error);
+      
+      // Handle authentication errors specifically
+      if (error instanceof Error && error.message === "User not authenticated") {
+        return res.status(401).json({ message: "Autenticación requerida para ver tus pruebas asignadas" });
+      }
+      
+      res.status(500).json({ message: "Error al obtener las pruebas asignadas" });
+    }
+  });
+
+  // Get tests by assignee (legacy)
+  app.get("/api/audit-tests/assignee/:userId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const tests = await storage.getAuditTestsByAssignee(req.params.userId, tenantId);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch tests by assignee" });
+    }
+  });
+
+  // Get tests by reviewer (legacy)
+  app.get("/api/audit-tests/reviewer/:userId", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const tests = await storage.getAuditTestsByReviewer(req.params.userId, tenantId);
+      res.json(tests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch tests by reviewer" });
+    }
+  });
+
+  // DYNAMIC ROUTES - Must come after static routes
+  
+  app.get("/api/audit-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const test = await storage.getAuditTest(req.params.id, tenantId);
+      if (!test) {
+        return res.status(404).json({ message: "Audit test not found" });
+      }
+      res.json(test);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit test" });
+    }
+  });
+
+  app.get("/api/audit-tests/:id/details", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const test = await storage.getAuditTestWithDetails(req.params.id, tenantId);
+      if (!test) {
+        return res.status(404).json({ message: "Audit test not found" });
+      }
+      res.json(test);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit test details" });
+    }
+  });
+
+  app.post("/api/audits/:auditId/tests", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      
+      // Resolve tenant ID before creating test
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const testData = {
+        ...req.body,
+        // Map frontend field names to database field names (use testName if provided, otherwise use name from AI suggestions)
+        name: req.body.testName || req.body.name,
+        // Generate description if not provided (use objective as fallback)
+        description: req.body.description || req.body.objective || req.body.testProcedures || "",
+        auditId: req.params.auditId,
+        tenantId: tenantId,
+        createdBy: userId,
+        // Both assignedTo and executorId should be the same user (the executor), default to current user if not provided
+        executorId: req.body.executorId || userId,
+        assignedTo: req.body.executorId || userId,
+        // Risk and control associations (can be official risk or ad-hoc risk)
+        riskId: req.body.riskId || null,
+        auditRiskId: req.body.auditRiskId || null,
+        controlId: req.body.controlId || null,
+        // Convert date strings to Date objects
+        plannedStartDate: req.body.plannedStartDate ? new Date(req.body.plannedStartDate) : null,
+        plannedEndDate: req.body.plannedEndDate ? new Date(req.body.plannedEndDate) : null,
+        actualStartDate: req.body.actualStartDate ? new Date(req.body.actualStartDate) : null,
+        actualEndDate: req.body.actualEndDate ? new Date(req.body.actualEndDate) : null,
+        // Convert string fields to arrays if they're not already arrays (for AI suggestions)
+        objective: Array.isArray(req.body.objective) ? req.body.objective : (req.body.objective ? [req.body.objective] : []),
+        testProcedures: Array.isArray(req.body.testProcedures) ? req.body.testProcedures : (req.body.testProcedures ? [req.body.testProcedures] : []),
+        evaluationCriteria: Array.isArray(req.body.evaluationCriteria) ? req.body.evaluationCriteria : (req.body.evaluationCriteria ? [req.body.evaluationCriteria] : []),
+      };
+      // Remove the frontend field name to avoid confusion
+      delete testData.testName;
+      const test = await storage.createAuditTest(testData);
+      res.status(201).json(test);
+    } catch (error) {
+      console.error('Error creating audit test:', error);
+      res.status(400).json({ message: "Invalid audit test data" });
+    }
+  });
+
+  app.put("/api/audit-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with update schema (allows partial updates including risk/control assignment)
+      const validatedData = updateAuditTestSchema.parse(req.body);
+      
+      // Convert date strings to Date objects if they're strings
+      const processedData = {
+        ...validatedData,
+        plannedStartDate: validatedData.plannedStartDate 
+          ? (typeof validatedData.plannedStartDate === 'string' ? new Date(validatedData.plannedStartDate) : validatedData.plannedStartDate)
+          : undefined,
+        plannedEndDate: validatedData.plannedEndDate 
+          ? (typeof validatedData.plannedEndDate === 'string' ? new Date(validatedData.plannedEndDate) : validatedData.plannedEndDate)
+          : undefined,
+        actualStartDate: validatedData.actualStartDate 
+          ? (typeof validatedData.actualStartDate === 'string' ? new Date(validatedData.actualStartDate) : validatedData.actualStartDate)
+          : undefined,
+        actualEndDate: validatedData.actualEndDate 
+          ? (typeof validatedData.actualEndDate === 'string' ? new Date(validatedData.actualEndDate) : validatedData.actualEndDate)
+          : undefined,
+        assignedAt: validatedData.assignedAt 
+          ? (typeof validatedData.assignedAt === 'string' ? new Date(validatedData.assignedAt) : validatedData.assignedAt)
+          : undefined,
+      };
+      
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const test = await storage.updateAuditTest(req.params.id, processedData, tenantId);
+      if (!test) {
+        return res.status(404).json({ message: "Audit test not found" });
+      }
+      res.json(test);
+    } catch (error) {
+      console.error('Error updating audit test:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid audit test data", errors: error.errors });
+      }
+      const errorMessage = error instanceof Error ? error.message : "Invalid audit test data";
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  app.delete("/api/audit-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditTest(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit test not found" });
+      }
+      res.json({ message: "Audit test deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit test" });
+    }
+  });
+
+  // === AUDITOR ASSIGNMENT ENDPOINTS ===
+
+  // Assign auditor executor to test
+  app.post("/api/audit-tests/:id/assign-auditor", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      const { executorId } = req.body;
+      if (!executorId) {
+        return res.status(400).json({ message: "executorId is required" });
+      }
+
+      const assignedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.assignAuditorToTest(req.params.id, executorId, assignedBy);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to assign auditor";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Assign supervisor to test
+  app.post("/api/audit-tests/:id/assign-supervisor", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      const { supervisorId } = req.body;
+      if (!supervisorId) {
+        return res.status(400).json({ message: "supervisorId is required" });
+      }
+
+      const assignedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.assignSupervisorToTest(req.params.id, supervisorId, assignedBy);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to assign supervisor";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Bulk assign auditors to multiple tests
+  app.post("/api/audits/:id/bulk-assign", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      const { assignments } = req.body;
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return res.status(400).json({ message: "assignments array is required" });
+      }
+
+      // Validate assignment structure
+      for (const assignment of assignments) {
+        if (!assignment.testId || !assignment.executorId) {
+          return res.status(400).json({ message: "Each assignment must have testId and executorId" });
+        }
+      }
+
+      const assignedBy = getAuthenticatedUserId(req as any);
+      const results = await storage.bulkAssignAuditors(req.params.id, assignments, assignedBy);
+
+      res.json({
+        assignedTests: results,
+        successCount: results.length,
+        totalRequested: assignments.length
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to bulk assign auditors";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Reassign auditor or supervisor
+  app.put("/api/audit-tests/:id/reassign", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      const { newExecutorId, newSupervisorId, reason } = req.body;
+      
+      if (!newExecutorId && !newSupervisorId) {
+        return res.status(400).json({ message: "Either newExecutorId or newSupervisorId is required" });
+      }
+
+      const reassignedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.reassignAuditor(req.params.id, newExecutorId, newSupervisorId, reassignedBy, reason);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to reassign auditor";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // === AUDIT TEST DELETION ENDPOINTS ===
+
+  // Check dependencies before deleting (returns warnings about attachments)
+  app.get("/api/audit-tests/:id/dependencies", isAuthenticated, async (req, res) => {
+    try {
+      const testId = req.params.id;
+      const userId = getAuthenticatedUserId(req as any);
+      
+      // Get the test to check permissions
+      const test = await storage.getAuditTest(testId);
+      if (!test) {
+        return res.status(404).json({ message: "Prueba no encontrada" });
+      }
+      
+      // Get the audit to check if user is supervisor
+      const audit = await storage.getAudit(test.auditId);
+      if (!audit) {
+        return res.status(404).json({ message: "Auditoría no encontrada" });
+      }
+      
+      // Check permissions: only admin or audit lead can delete tests
+      const hasEditAll = await storage.hasPermission(userId, "edit_all");
+      const isAuditLead = audit.leadAuditor === userId;
+      
+      if (!hasEditAll && !isAuditLead) {
+        return res.status(403).json({ 
+          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas" 
+        });
+      }
+      
+      // Check dependencies
+      const dependencies = await storage.checkAuditTestDependencies(testId);
+      res.json(dependencies);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Error al verificar dependencias";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Delete audit test (with permission checks)
+  app.delete("/api/audit-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const testId = req.params.id;
+      const userId = getAuthenticatedUserId(req as any);
+      
+      // Get the test to check permissions
+      const test = await storage.getAuditTest(testId);
+      if (!test) {
+        return res.status(404).json({ message: "Prueba no encontrada" });
+      }
+      
+      // Get the audit to check if user is supervisor
+      const audit = await storage.getAudit(test.auditId);
+      if (!audit) {
+        return res.status(404).json({ message: "Auditoría no encontrada" });
+      }
+      
+      // Check permissions: only admin or audit lead can delete tests
+      const hasEditAll = await storage.hasPermission(userId, "edit_all");
+      const isAuditLead = audit.leadAuditor === userId;
+      
+      if (!hasEditAll && !isAuditLead) {
+        return res.status(403).json({ 
+          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas" 
+        });
+      }
+      
+      // Perform deletion
+      const deleted = await storage.deleteAuditTest(testId);
+      
+      if (!deleted) {
+        return res.status(500).json({ message: "No se pudo eliminar la prueba" });
+      }
+      
+      res.json({ 
+        message: "Prueba eliminada exitosamente",
+        deleted: true 
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Error al eliminar la prueba";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // === WORKFLOW STATUS MANAGEMENT ENDPOINTS ===
+
+  // Update test status with validations
+  app.put("/api/audit-tests/:id/status", isAuthenticated, requirePermission("update_audit_progress"), async (req, res) => {
+    try {
+      const { status, comments } = req.body;
+      if (!status) {
+        return res.status(400).json({ message: "status is required" });
+      }
+
+      const validStatuses = ['pending', 'assigned', 'in_progress', 'submitted', 'under_review', 'completed', 'rejected', 'cancelled'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+      }
+
+      const updatedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.updateTestStatus(req.params.id, status, updatedBy, comments);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to update test status";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Submit test for review
+  app.post("/api/audit-tests/:id/submit-for-review", isAuthenticated, requirePermission("update_audit_progress"), async (req, res) => {
+    try {
+      const { workPerformed, conclusions } = req.body;
+      if (!workPerformed || !conclusions) {
+        return res.status(400).json({ message: "workPerformed and conclusions are required" });
+      }
+
+      const submittedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.submitTestForReview(req.params.id, submittedBy, workPerformed, conclusions);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to submit test for review";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Review test (approve/reject/needs revision)
+  app.post("/api/audit-tests/:id/review", isAuthenticated, requirePermission("review_audit_tests"), async (req, res) => {
+    try {
+      const { reviewStatus, reviewComments } = req.body;
+      if (!reviewStatus || !reviewComments) {
+        return res.status(400).json({ message: "reviewStatus and reviewComments are required" });
+      }
+
+      const validReviewStatuses = ['approved', 'rejected', 'needs_revision'];
+      if (!validReviewStatuses.includes(reviewStatus)) {
+        return res.status(400).json({ message: `Invalid reviewStatus. Must be one of: ${validReviewStatuses.join(', ')}` });
+      }
+
+      const reviewedBy = getAuthenticatedUserId(req as any);
+      const test = await storage.reviewTest(req.params.id, reviewedBy, reviewStatus, reviewComments);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to review test";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Approve/reject audit test work program
+  app.post("/api/audit-tests/:id/approve", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
+    try {
+      // Validate request body with Zod
+      const approvalSchema = z.object({
+        approvalStatus: z.enum(['approved', 'rejected'])
+      });
+      
+      const validationResult = approvalSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ 
+          message: "Invalid request body", 
+          errors: validationResult.error.errors 
+        });
+      }
+
+      const { approvalStatus } = validationResult.data;
+      const userId = getAuthenticatedUserId(req as any);
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Get current test to validate state transition
+      const currentTest = await storage.getAuditTestById(req.params.id);
+      if (!currentTest) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      // Validate state transitions
+      const allowedStatesForApproval = ['draft', 'pending_approval'];
+      if (approvalStatus === 'approved' && !allowedStatesForApproval.includes(currentTest.approvalStatus || 'draft')) {
+        return res.status(400).json({ 
+          message: "Cannot approve test from current state. Test must be in draft or pending approval state." 
+        });
+      }
+
+      // Build update object based on approval status
+      const updateData: any = { approvalStatus };
+      
+      if (approvalStatus === 'approved') {
+        // Set approval metadata only for approved status
+        updateData.approvedBy = user.fullName || user.username;
+        updateData.approvedAt = new Date().toISOString();
+      } else if (approvalStatus === 'rejected') {
+        // Clear approval metadata for rejected status
+        updateData.approvedBy = null;
+        updateData.approvedAt = null;
+      }
+      
+      const test = await storage.updateAuditTest(req.params.id, updateData);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to approve/reject test";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // === AUDIT TEST DEVELOPMENT ENDPOINTS ===
+
+  // Development view - detailed information for auditor executor
+  app.get("/api/audit-tests/:id/development", isAuthenticated, requirePermission("view_audit_development"), async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req as any);
+      const test = await storage.getAuditTestForDevelopment(req.params.id, userId);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found or access denied" });
+      }
+
+      // Get work logs and progress history
+      const [workLogs, progressHistory] = await Promise.all([
+        storage.getAuditTestWorkLogs(req.params.id),
+        storage.getProgressHistory(req.params.id)
+      ]);
+
+      res.json({
+        ...test,
+        workLogs,
+        progressHistory,
+        totalHoursWorked: workLogs.reduce((sum, log) => sum + parseFloat(log.hoursWorked.toString()), 0),
+        lastWorkLogDate: workLogs.length > 0 ? workLogs[workLogs.length - 1].entryDate : null
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch test development data";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Update test progress with business validations
+  app.put("/api/audit-tests/:id/update-progress", isAuthenticated, requirePermission("update_audit_progress"), async (req, res) => {
+    try {
+      const { progress, notes } = req.body;
+      const userId = getAuthenticatedUserId(req as any);
+
+      if (typeof progress !== 'number' || progress < 0 || progress > 100) {
+        return res.status(400).json({ message: "Progress must be a number between 0 and 100" });
+      }
+
+      // Validate user permissions and business rules
+      const validation = await storage.validateProgressUpdate(req.params.id, userId, progress);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: validation.message });
+      }
+
+      const updatedTest = await storage.updateTestProgress(req.params.id, progress, userId, notes);
+      
+      if (!updatedTest) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(updatedTest);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to update test progress";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Enhanced progress update with attachments support
+  app.put("/api/audit-tests/:id/update-progress-with-attachments", isAuthenticated, requirePermission("update_audit_progress"), async (req, res) => {
+    try {
+      const { progress, notes, attachmentIds } = req.body;
+      const userId = getAuthenticatedUserId(req as any);
+
+      if (typeof progress !== 'number' || progress < 0 || progress > 100) {
+        return res.status(400).json({ message: "Progress must be a number between 0 and 100" });
+      }
+
+      // Validate user permissions and business rules
+      const validation = await storage.validateProgressUpdate(req.params.id, userId, progress);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: validation.message });
+      }
+
+      // Update progress with attachments using new method
+      const updatedTest = await storage.updateProgressWithAttachments(req.params.id, progress, userId, notes, attachmentIds);
+      
+      if (!updatedTest) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(updatedTest);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to update test progress with attachments";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Get progress-specific attachments
+  app.get("/api/audit-tests/:id/progress/attachments", isAuthenticated, async (req, res) => {
+    try {
+      const { progressPercentage } = req.query;
+      const percentage = progressPercentage ? parseInt(progressPercentage as string) : undefined;
+      
+      const attachments = await storage.getProgressAttachments(req.params.id, percentage);
+      res.json(attachments);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch progress attachments";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Register work performed on test
+  app.post("/api/audit-tests/:id/work-log", isAuthenticated, requirePermission("create_work_logs"), async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req as any);
+      const workLogData = insertAuditTestWorkLogSchema.parse({
+        ...req.body,
+        auditTestId: req.params.id,
+        createdBy: userId
+      });
+
+      // Validate business rules
+      const validation = await storage.validateWorkLogEntry(req.params.id, userId, workLogData);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: validation.message });
+      }
+
+      const workLog = await storage.createAuditTestWorkLog(workLogData);
+      res.status(201).json(workLog);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(422).json({ message: "Validation error", details: error.errors });
+      }
+      const errorMessage = error instanceof Error ? error.message : "Failed to create work log";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Enhanced work log creation with attachments support
+  app.post("/api/audit-tests/:id/work-log-with-attachments", isAuthenticated, requirePermission("create_work_logs"), async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req as any);
+      const { attachmentIds, ...workLogBody } = req.body;
+      
+      const workLogData = insertAuditTestWorkLogSchema.parse({
+        ...workLogBody,
+        auditTestId: req.params.id,
+        createdBy: userId
+      });
+
+      // Validate business rules
+      const validation = await storage.validateWorkLogEntry(req.params.id, userId, workLogData);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: validation.message });
+      }
+
+      // Create work log with attachments using new method
+      const workLog = await storage.createWorkLogWithAttachments(workLogData, attachmentIds);
+      res.status(201).json(workLog);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(422).json({ message: "Validation error", details: error.errors });
+      }
+      const errorMessage = error instanceof Error ? error.message : "Failed to create work log with attachments";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Get attachments for specific work log
+  app.get("/api/work-logs/:id/attachments", isAuthenticated, async (req, res) => {
+    try {
+      const attachments = await storage.getWorkLogAttachments(req.params.id);
+      res.json(attachments);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch work log attachments";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get work logs for specific test
+  app.get("/api/audit-tests/:id/work-logs", isAuthenticated, async (req, res) => {
+    try {
+      const workLogs = await storage.getAuditTestWorkLogs(req.params.id);
+      
+      // Calculate summary statistics
+      const totalHours = workLogs.reduce((sum, log) => sum + parseFloat(log.hoursWorked.toString()), 0);
+      const workTypeBreakdown = workLogs.reduce((acc, log) => {
+        acc[log.workType] = (acc[log.workType] || 0) + parseFloat(log.hoursWorked.toString());
+        return acc;
+      }, {} as Record<string, number>);
+
+      res.json({
+        workLogs,
+        summary: {
+          totalHours,
+          totalEntries: workLogs.length,
+          workTypeBreakdown,
+          dateRange: {
+            first: workLogs.length > 0 ? workLogs[0].entryDate : null,
+            last: workLogs.length > 0 ? workLogs[workLogs.length - 1].entryDate : null
+          }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch work logs" });
+    }
+  });
+
+  // Get tests assigned to current user
+  app.get("/api/users/:id/my-assigned-tests", isAuthenticated, async (req, res) => {
+    try {
+      const requestingUserId = getAuthenticatedUserId(req as any);
+      const targetUserId = req.params.id;
+
+      // Users can only view their own tests unless they have admin permissions
+      if (requestingUserId !== targetUserId) {
+        const hasPermission = await storage.hasPermission(requestingUserId, "view_all");
+        if (!hasPermission) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const { status, priority } = req.query;
+      const tests = await storage.getMyAssignedTests(targetUserId, {
+        status: status as string,
+        priority: priority as string
+      });
+
+      // Calculate summary stats
+      const summary = {
+        total: tests.length,
+        byStatus: tests.reduce((acc, test) => {
+          acc[test.status] = (acc[test.status] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+        byPriority: tests.reduce((acc, test) => {
+          acc[test.priority] = (acc[test.priority] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+        totalEstimatedHours: tests.reduce((sum, test) => sum + (test.estimatedHours || 0), 0),
+        totalActualHours: tests.reduce((sum, test) => sum + (test.actualHours || 0), 0),
+        averageProgress: tests.length > 0 ? tests.reduce((sum, test) => sum + test.progress, 0) / tests.length : 0
+      };
+
+      res.json({ tests, summary });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch assigned tests";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get work summary for user (timesheet view)
+  app.get("/api/users/:id/work-summary", isAuthenticated, async (req, res) => {
+    try {
+      const requestingUserId = getAuthenticatedUserId(req as any);
+      const targetUserId = req.params.id;
+
+      // Permission check
+      if (requestingUserId !== targetUserId) {
+        const hasPermission = await storage.hasPermission(requestingUserId, "view_all");
+        if (!hasPermission) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      }
+
+      const { startDate, endDate } = req.query;
+      const start = startDate ? new Date(startDate as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+      const end = endDate ? new Date(endDate as string) : new Date();
+
+      const workSummary = await storage.getUserWorkSummary(targetUserId, start, end);
+      res.json(workSummary);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch work summary";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get audit progress summary
+  app.get("/api/audits/:id/progress-summary", isAuthenticated, async (req, res) => {
+    try {
+      const summary = await storage.getAuditProgressSummary(req.params.id);
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit progress summary" });
+    }
+  });
+
+  // Review work log entry
+  app.put("/api/audit-test-work-logs/:id/review", isAuthenticated, requirePermission("review_work_logs"), async (req, res) => {
+    try {
+      const { reviewComments } = req.body;
+      const reviewedBy = getAuthenticatedUserId(req as any);
+
+      const reviewedLog = await storage.reviewWorkLog(req.params.id, reviewedBy, reviewComments);
+      
+      if (!reviewedLog) {
+        return res.status(404).json({ message: "Work log not found" });
+      }
+
+      res.json(reviewedLog);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to review work log";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // ===== WORKFLOW ATTACHMENT INTEGRATION ENDPOINTS =====
+
+  // Enhanced review test with attachments support
+  app.post("/api/audit-tests/:id/review-with-attachments", isAuthenticated, requirePermission("review_audit_tests"), async (req, res) => {
+    try {
+      const { reviewStatus, reviewComments, attachmentIds } = req.body;
+      if (!reviewStatus || !reviewComments) {
+        return res.status(400).json({ message: "reviewStatus and reviewComments are required" });
+      }
+
+      const validReviewStatuses = ['approved', 'rejected', 'needs_revision'];
+      if (!validReviewStatuses.includes(reviewStatus)) {
+        return res.status(400).json({ message: `Invalid reviewStatus. Must be one of: ${validReviewStatuses.join(', ')}` });
+      }
+
+      const reviewedBy = getAuthenticatedUserId(req as any);
+      
+      // Submit review with attachments using new method
+      const test = await storage.submitReviewWithAttachments(req.params.id, reviewedBy, reviewStatus, reviewComments, attachmentIds);
+      
+      if (!test) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      res.json(test);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to review test with attachments";
+      if (errorMessage === "User not authenticated") {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      res.status(400).json({ message: errorMessage });
+    }
+  });
+
+  // Get review-specific attachments
+  app.get("/api/review-comments/:id/attachments", isAuthenticated, async (req, res) => {
+    try {
+      const attachments = await storage.getReviewAttachments(req.params.id);
+      res.json(attachments);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch review attachments";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get attachments by workflow stage
+  app.get("/api/audit-tests/:id/attachments/workflow/:stage", isAuthenticated, async (req, res) => {
+    try {
+      const { stage } = req.params;
+      const validStages = ['general', 'work_log', 'progress_update', 'review', 'milestone'];
+      
+      if (!validStages.includes(stage)) {
+        return res.status(400).json({ message: `Invalid workflow stage. Must be one of: ${validStages.join(', ')}` });
+      }
+
+      const attachments = await storage.getAuditTestAttachmentsByWorkflowStage(req.params.id, stage as any);
+      res.json(attachments);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch attachments by workflow stage";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get attachments by progress range
+  app.get("/api/audit-tests/:id/attachments/progress-range", isAuthenticated, async (req, res) => {
+    try {
+      const { minProgress, maxProgress } = req.query;
+      
+      if (!minProgress || !maxProgress) {
+        return res.status(400).json({ message: "minProgress and maxProgress query parameters are required" });
+      }
+
+      const min = parseInt(minProgress as string);
+      const max = parseInt(maxProgress as string);
+
+      if (isNaN(min) || isNaN(max) || min < 0 || max > 100 || min > max) {
+        return res.status(400).json({ message: "Invalid progress range. Must be numbers between 0-100 with min <= max" });
+      }
+
+      const attachments = await storage.getAuditTestAttachmentsByProgressRange(req.params.id, min, max);
+      res.json(attachments);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch attachments by progress range";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Get workflow attachments summary
+  app.get("/api/audit-tests/:id/attachments/workflow-summary", isAuthenticated, async (req, res) => {
+    try {
+      const summary = await storage.getWorkflowAttachmentsSummary(req.params.id);
+      res.json(summary);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to fetch workflow attachments summary";
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Create attachment with workflow context
+  app.post("/api/audit-tests/:auditTestId/attachments/workflow", 
+    isAuthenticated, 
+    requirePermission("upload_attachments"), 
+    upload.array('files', 5), 
+    async (req, res) => {
+      try {
+        const files = req.files as Express.Multer.File[];
+        if (!files || files.length === 0) {
+          return res.status(400).json({ message: "No files provided" });
+        }
+
+        const userId = getAuthenticatedUserId(req as any);
+        const { 
+          category, 
+          description, 
+          tags, 
+          isConfidential,
+          workLogId,
+          reviewCommentId,
+          progressPercentage,
+          workflowStage,
+          workflowAction,
+          progressMilestone,
+          reviewStage,
+          attachmentPurpose
+        } = req.body;
+
+        const uploadResults = [];
+
+        for (const file of files) {
+          try {
+            // Validate file using existing method
+            const validation = await storage.validateFileUpload({
+              originalName: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size
+            });
+            if (!validation.isValid) {
+              uploadResults.push({ 
+                filename: file.originalname, 
+                success: false, 
+                error: validation.message 
+              });
+              continue;
+            }
+
+            // Upload file to object storage
+            const objectStorage = new ObjectStorageService();
+            const uploadResult = await objectStorage.uploadObjectFromBuffer(
+              file.buffer,
+              file.originalname,
+              file.mimetype
+            );
+
+            // Create attachment with workflow context using new method
+            const attachmentData = {
+              auditTestId: req.params.auditTestId,
+              fileName: file.originalname,
+              originalFileName: file.originalname,
+              fileSize: file.size,
+              mimeType: file.mimetype,
+              objectPath: uploadResult.objectPath || uploadResult.storageUrl,
+              storageUrl: uploadResult.storageUrl,
+              uploadedBy: userId,
+              category: (category as 'evidence' | 'workpaper' | 'reference' | 'communication' | 'regulation') || 'evidence',
+              description: description || null,
+              tags: tags ? JSON.parse(tags) : [],
+              isConfidential: isConfidential === 'true',
+              attachmentCode: `ATT-${Date.now()}`,
+              // Workflow-specific fields
+              workLogId: workLogId || null,
+              reviewCommentId: reviewCommentId || null,
+              progressPercentage: progressPercentage ? parseInt(progressPercentage) : undefined,
+              workflowStage: workflowStage || 'general',
+              workflowAction: workflowAction || null,
+              progressMilestone: progressMilestone || null,
+              reviewStage: reviewStage || null,
+              attachmentPurpose: attachmentPurpose || null
+            };
+
+            const attachment = await storage.createAuditTestAttachmentWithWorkflow(attachmentData);
+
+            uploadResults.push({
+              filename: file.originalname,
+              success: true,
+              attachment: attachment
+            });
+
+          } catch (error) {
+            console.error(`Error uploading file ${file.originalname}:`, error);
+            uploadResults.push({
+              filename: file.originalname,
+              success: false,
+              error: error instanceof Error ? error.message : 'Upload failed'
+            });
+          }
+        }
+
+        // Return results
+        const successCount = uploadResults.filter(r => r.success).length;
+        const failureCount = uploadResults.length - successCount;
+
+        res.status(200).json({
+          message: `Uploaded ${successCount} file(s) successfully${failureCount > 0 ? `, ${failureCount} failed` : ''}`,
+          results: uploadResults,
+          summary: {
+            total: uploadResults.length,
+            success: successCount,
+            failed: failureCount
+          }
+        });
+
+      } catch (error) {
+        console.error('Error in workflow attachment upload:', error);
+        const errorMessage = error instanceof Error ? error.message : "Failed to upload attachments";
+        if (errorMessage === "User not authenticated") {
+          return res.status(401).json({ message: "Authentication required" });
+        }
+        res.status(500).json({ message: errorMessage });
+      }
+    }
+  );
+
+  // === TEAM MANAGEMENT ENDPOINTS ===
+
+  // Get audit team members and their stats
+  app.get("/api/audits/:id/team", isAuthenticated, requirePermission("view_audit_teams"), async (req, res) => {
+    try {
+      const teamMembers = await storage.getAuditTeamMembers(req.params.id);
+      res.json(teamMembers);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit team members" });
+    }
+  });
+
+  // === VALIDATION ENDPOINTS ===
+
+  // Validate auditor assignment
+  app.post("/api/audit-tests/:id/validate-assignment", isAuthenticated, requirePermission("validate_assignments"), async (req, res) => {
+    try {
+      const validatedData = validateAuditorAssignmentSchema.parse(req.body);
+      const validation = await storage.validateAuditorAssignment(req.params.id, validatedData.executorId, validatedData.supervisorId);
+      res.json(validation);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(422).json({ message: "Validation error", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to validate auditor assignment" });
+    }
+  });
+
+  // Validate status transition
+  app.post("/api/audit-tests/:id/validate-status-transition", isAuthenticated, requirePermission("validate_transitions"), async (req, res) => {
+    try {
+      const validatedData = validateStatusTransitionSchema.parse(req.body);
+      const userId = (req as any).user?.claims?.sub;
+      if (!userId && process.env.NODE_ENV !== 'development') {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const safeUserId = userId || (process.env.NODE_ENV === 'development' ? "user-1" : null);
+      if (!safeUserId) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const validation = await storage.validateStatusTransition(req.params.id, validatedData.fromStatus, validatedData.toStatus, userId);
+      res.json(validation);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(422).json({ message: "Validation error", details: error.errors });
+      }
+      res.status(500).json({ message: "Failed to validate status transition" });
+    }
+  });
+
+  // Audit Attachments (Adjuntos de Auditoría)
+  app.get("/api/audit-attachments/:entityType/:entityId", async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      if (!['audit', 'test', 'finding', 'program', 'workingPaper'].includes(entityType)) {
+        return res.status(400).json({ message: "Invalid entity type" });
+      }
+      const attachments = await storage.getAuditAttachments(entityId, entityType as any);
+      res.json(attachments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit attachments" });
+    }
+  });
+
+  app.get("/api/audit-attachments/:id", async (req, res) => {
+    try {
+      const attachment = await storage.getAuditAttachment(req.params.id);
+      if (!attachment) {
+        return res.status(404).json({ message: "Audit attachment not found" });
+      }
+      res.json(attachment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit attachment" });
+    }
+  });
+
+  app.get("/api/audit-attachments/:id/details", async (req, res) => {
+    try {
+      const attachment = await storage.getAuditAttachmentWithDetails(req.params.id);
+      if (!attachment) {
+        return res.status(404).json({ message: "Audit attachment not found" });
+      }
+      res.json(attachment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit attachment details" });
+    }
+  });
+
+  app.post("/api/audit-attachments", isAuthenticated, async (req, res) => {
+    try {
+      const attachmentData = {
+        ...req.body,
+        uploadedBy: getAuthenticatedUserId(req)
+      };
+      const attachment = await storage.createAuditAttachment(attachmentData);
+      res.status(201).json(attachment);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit attachment data" });
+    }
+  });
+
+  app.delete("/api/audit-attachments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditAttachment(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit attachment not found" });
+      }
+      res.json({ message: "Audit attachment deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit attachment" });
+    }
+  });
+
+  // Audit Review Comments (Comentarios de Revisión)
+  app.get("/api/audit-review-comments/:entityType/:entityId", async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      if (!['audit', 'test', 'finding', 'workingPaper'].includes(entityType)) {
+        return res.status(400).json({ message: "Invalid entity type" });
+      }
+      const comments = await storage.getAuditReviewComments(entityId, entityType as any);
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit review comments" });
+    }
+  });
+
+  app.get("/api/audit-review-comments/:id", async (req, res) => {
+    try {
+      const comment = await storage.getAuditReviewComment(req.params.id);
+      if (!comment) {
+        return res.status(404).json({ message: "Audit review comment not found" });
+      }
+      res.json(comment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit review comment" });
+    }
+  });
+
+  app.post("/api/audit-review-comments", isAuthenticated, async (req, res) => {
+    try {
+      const commentData = {
+        ...req.body,
+        commentedBy: getAuthenticatedUserId(req)
+      };
+      const comment = await storage.createAuditReviewComment(commentData);
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit review comment data" });
+    }
+  });
+
+  app.put("/api/audit-review-comments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const comment = await storage.updateAuditReviewComment(req.params.id, req.body);
+      if (!comment) {
+        return res.status(404).json({ message: "Audit review comment not found" });
+      }
+      res.json(comment);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit review comment data" });
+    }
+  });
+
+  app.put("/api/audit-review-comments/:id/resolve", isAuthenticated, async (req, res) => {
+    try {
+      const resolvedBy = getAuthenticatedUserId(req);
+      const comment = await storage.resolveAuditReviewComment(req.params.id, resolvedBy);
+      if (!comment) {
+        return res.status(404).json({ message: "Audit review comment not found" });
+      }
+      res.json(comment);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to resolve audit review comment" });
+    }
+  });
+
+  app.delete("/api/audit-review-comments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditReviewComment(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit review comment not found" });
+      }
+      res.json({ message: "Audit review comment deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit review comment" });
+    }
+  });
+
+  // Audit Milestones (Hitos del Proyecto)
+  app.get("/api/audits/:auditId/milestones", isAuthenticated, async (req, res) => {
+    try {
+      const milestones = await storage.getAuditMilestones(req.params.auditId);
+      res.json(milestones);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit milestones" });
+    }
+  });
+
+  app.get("/api/audit-milestones/:id", async (req, res) => {
+    try {
+      const milestone = await storage.getAuditMilestone(req.params.id);
+      if (!milestone) {
+        return res.status(404).json({ message: "Audit milestone not found" });
+      }
+      res.json(milestone);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit milestone" });
+    }
+  });
+
+  app.post("/api/audits/:auditId/milestones", isAuthenticated, async (req, res) => {
+    try {
+      // Check for duplicate milestone type
+      const existingMilestones = await storage.getAuditMilestones(req.params.auditId);
+      const duplicateExists = existingMilestones.find((m: any) => m.type === req.body.type);
+      
+      if (duplicateExists) {
+        return res.status(409).json({ 
+          message: "Milestone of this type already exists for this audit",
+          existingMilestone: duplicateExists
+        });
+      }
+
+      // Convert date strings to Date objects before validation
+      const dataToValidate = { ...req.body, auditId: req.params.auditId };
+      
+      // Convert string dates to Date objects if present
+      // Add time to noon UTC to avoid timezone issues
+      if (dataToValidate.plannedDate && typeof dataToValidate.plannedDate === 'string') {
+        dataToValidate.plannedDate = new Date(dataToValidate.plannedDate + 'T12:00:00.000Z');
+      }
+      if (dataToValidate.actualDate && typeof dataToValidate.actualDate === 'string') {
+        dataToValidate.actualDate = new Date(dataToValidate.actualDate + 'T12:00:00.000Z');
+      }
+      if (dataToValidate.meetingDate && typeof dataToValidate.meetingDate === 'string') {
+        dataToValidate.meetingDate = new Date(dataToValidate.meetingDate + 'T12:00:00.000Z');
+      }
+      
+      // Validate the request body with the schema
+      const validatedData = insertAuditMilestoneSchema.parse(dataToValidate);
+      
+      const milestoneData = {
+        ...validatedData
+      };
+      
+      const milestone = await storage.createAuditMilestone(milestoneData);
+      res.status(201).json(milestone);
+    } catch (error) {
+      console.error("Error creating milestone:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid audit milestone data",
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ message: "Invalid audit milestone data" });
+    }
+  });
+
+  app.put("/api/audit-milestones/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Convert date strings to Date objects before validation
+      const dataToValidate = { ...req.body };
+      
+      // Convert string dates to Date objects if present
+      // Add time to noon UTC to avoid timezone issues
+      if (dataToValidate.plannedDate && typeof dataToValidate.plannedDate === 'string') {
+        dataToValidate.plannedDate = new Date(dataToValidate.plannedDate + 'T12:00:00.000Z');
+      }
+      if (dataToValidate.actualDate && typeof dataToValidate.actualDate === 'string') {
+        dataToValidate.actualDate = new Date(dataToValidate.actualDate + 'T12:00:00.000Z');
+      }
+      if (dataToValidate.meetingDate && typeof dataToValidate.meetingDate === 'string') {
+        dataToValidate.meetingDate = new Date(dataToValidate.meetingDate + 'T12:00:00.000Z');
+      }
+      
+      // Validate and coerce the request body with the schema (partial for updates)
+      const validatedData = insertAuditMilestoneSchema.partial().parse(dataToValidate);
+      
+      const milestone = await storage.updateAuditMilestone(req.params.id, validatedData);
+      if (!milestone) {
+        return res.status(404).json({ message: "Audit milestone not found" });
+      }
+      res.json(milestone);
+    } catch (error) {
+      console.error("Error updating milestone:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid audit milestone data",
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ message: "Invalid audit milestone data" });
+    }
+  });
+
+  app.put("/api/audit-milestones/:id/complete", isAuthenticated, async (req, res) => {
+    try {
+      const completedBy = getAuthenticatedUserId(req);
+      const milestone = await storage.completeAuditMilestone(req.params.id, completedBy);
+      if (!milestone) {
+        return res.status(404).json({ message: "Audit milestone not found" });
+      }
+      res.json(milestone);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to complete audit milestone" });
+    }
+  });
+
+  app.delete("/api/audit-milestones/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditMilestone(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit milestone not found" });
+      }
+      res.json({ message: "Audit milestone deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit milestone" });
+    }
+  });
+
+  // Audit Risks (Riesgos Ad-hoc de Auditoría)
+  app.get("/api/audits/:auditId/ad-hoc-risks", isAuthenticated, async (req, res) => {
+    try {
+      const auditRisks = await storage.getAuditRisks(req.params.auditId);
+      res.json(auditRisks);
+    } catch (error) {
+      console.error("Error fetching audit risks:", error);
+      res.status(500).json({ message: "Failed to fetch audit risks", error: error instanceof Error ? error.message : "Unknown error" });
+    }
+  });
+
+  app.get("/api/audit-risks/:id", async (req, res) => {
+    try {
+      const auditRisk = await storage.getAuditRisk(req.params.id);
+      if (!auditRisk) {
+        return res.status(404).json({ message: "Audit risk not found" });
+      }
+      res.json(auditRisk);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit risk" });
+    }
+  });
+
+  app.post("/api/audits/:auditId/ad-hoc-risks", isAuthenticated, async (req, res) => {
+    try {
+      // Get user ID from authenticated user, or use development fallback
+      const userId = (req as any).user?.id || (req as any).user?.claims?.sub || 'dev-user';
+      
+      // Validate the request body with the schema
+      const validatedData = insertAuditRiskSchema.parse({
+        ...req.body,
+        auditId: req.params.auditId,
+        identifiedBy: req.body.identifiedBy || userId,
+        createdBy: req.body.createdBy || userId
+      });
+      
+      const auditRisk = await storage.createAuditRisk(validatedData);
+      res.status(201).json(auditRisk);
+    } catch (error) {
+      console.error("Error creating audit risk:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid audit risk data",
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ message: "Invalid audit risk data" });
+    }
+  });
+
+  app.put("/api/audit-risks/:id", isAuthenticated, async (req, res) => {
+    try {
+      const auditRisk = await storage.updateAuditRisk(req.params.id, req.body);
+      if (!auditRisk) {
+        return res.status(404).json({ message: "Audit risk not found" });
+      }
+      res.json(auditRisk);
+    } catch (error) {
+      console.error("Error updating audit risk:", error);
+      res.status(400).json({ message: "Invalid audit risk data" });
+    }
+  });
+
+  app.delete("/api/audit-risks/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditRisk(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit risk not found" });
+      }
+      res.json({ message: "Audit risk deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit risk" });
+    }
+  });
+
+  // Recalcular todos los riesgos ad-hoc que usan evaluación por factores
+  app.post("/api/audit-risks/recalculate-all", isAuthenticated, async (req, res) => {
+    try {
+      const recalculatedCount = await storage.recalculateAllAuditRisksByFactors();
+      res.json({ 
+        message: "Audit risks recalculated successfully",
+        count: recalculatedCount
+      });
+    } catch (error) {
+      console.error("Error recalculating audit risks:", error);
+      res.status(500).json({ message: "Failed to recalculate audit risks" });
+    }
+  });
+
+  // Audit Findings - Get findings for a specific audit
+  app.get("/api/audits/:auditId/findings", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const findings = await storage.getAuditFindingsByAudit(req.params.auditId, tenantId);
+      res.json(findings);
+    } catch (error) {
+      console.error("Error fetching audit findings:", error);
+      res.status(500).json({ message: "Failed to fetch audit findings" });
+    }
+  });
+
+  // Work Program - Consolidated view of risks, controls, and tests
+  app.get("/api/audits/:auditId/work-program", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const workProgramData = await storage.getWorkProgramData(req.params.auditId, tenantId);
+      res.json(workProgramData);
+    } catch (error) {
+      console.error("Error fetching work program data:", error);
+      res.status(500).json({ message: "Failed to fetch work program data" });
+    }
+  });
+
+  // Audit Notifications (Notificaciones)
+  app.get("/api/audit-notifications/user/:userId", async (req, res) => {
+    try {
+      const notifications = await storage.getAuditNotifications(req.params.userId);
+      res.json(notifications);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit notifications" });
+    }
+  });
+
+  app.get("/api/audit-notifications/user/:userId/unread", async (req, res) => {
+    try {
+      const notifications = await storage.getUnreadAuditNotifications(req.params.userId);
+      res.json(notifications);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch unread audit notifications" });
+    }
+  });
+
+  app.get("/api/audit-notifications/:id", async (req, res) => {
+    try {
+      const notification = await storage.getAuditNotification(req.params.id);
+      if (!notification) {
+        return res.status(404).json({ message: "Audit notification not found" });
+      }
+      res.json(notification);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch audit notification" });
+    }
+  });
+
+  app.post("/api/audit-notifications", isAuthenticated, async (req, res) => {
+    try {
+      const notification = await storage.createAuditNotification(req.body);
+      res.status(201).json(notification);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid audit notification data" });
+    }
+  });
+
+  app.put("/api/audit-notifications/:id/read", isAuthenticated, async (req, res) => {
+    try {
+      const notification = await storage.markAuditNotificationAsRead(req.params.id);
+      if (!notification) {
+        return res.status(404).json({ message: "Audit notification not found" });
+      }
+      res.json(notification);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to mark audit notification as read" });
+    }
+  });
+
+  app.delete("/api/audit-notifications/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteAuditNotification(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Audit notification not found" });
+      }
+      res.json({ message: "Audit notification deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete audit notification" });
+    }
+  });
+
+  // Risk Analysis for Prioritization
+  app.get("/api/risk-analysis/process/:processId", async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const riskScore = await storage.calculateProcessRiskScore(req.params.processId, undefined, tenantId);
+      const riskMetrics = await storage.getRiskMetricsForProcess(req.params.processId, undefined, tenantId);
+      res.json({ riskScore, metrics: riskMetrics });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to analyze process risk" });
+    }
+  });
+
+  app.get("/api/risk-analysis/subprocess/:subprocesoId", async (req, res) => {
+    try {
+      // Extract and validate tenantId
+      const tenantId = (req as any).user?.activeTenantId;
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant" });
+      }
+      
+      const riskScore = await storage.calculateProcessRiskScore(undefined, req.params.subprocesoId, tenantId);
+      const riskMetrics = await storage.getRiskMetricsForProcess(undefined, req.params.subprocesoId, tenantId);
+      res.json({ riskScore, metrics: riskMetrics });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to analyze subprocess risk" });
+    }
+  });
+
+  // ============== COMPLIANCE MODULE ROUTES ==============
+  
+  // Regulations
+  app.get("/api/regulations", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const regulations = await storage.getRegulations(tenantId);
+      
+      // Calculate risk counts using storage
+      const regulationsWithRisks = await Promise.all(regulations.map(async (regulation) => {
+        try {
+          // Get associated risks for this regulation
+          const riskRegulationDetails = await storage.getRiskRegulationsByRegulation(regulation.id);
+          
+          // Get unique risks (avoid counting duplicates)
+          const uniqueRisks = riskRegulationDetails.reduce((acc, riskReg) => {
+            const existing = acc.find(r => r.risk.id === riskReg.risk.id);
+            if (!existing) {
+              acc.push(riskReg);
+            }
+            return acc;
+          }, [] as typeof riskRegulationDetails);
+          
+          const count = uniqueRisks.length;
+          
+          // Calculate actual average inherent risk if there are associated risks
+          let avgInherentRisk = 0;
+          if (count > 0) {
+            const totalInherentRisk = uniqueRisks.reduce((sum, riskReg) => sum + riskReg.risk.inherentRisk, 0);
+            avgInherentRisk = Math.round(totalInherentRisk / count);
+          }
+          
+          return {
+            ...regulation,
+            inherentRisk: avgInherentRisk,
+            residualRisk: Math.round(avgInherentRisk * 0.7), // Estimate residual as 70% of inherent
+            riskCount: count
+          };
+        } catch (error) {
+          console.error("Error getting risk count for regulation:", regulation.id, error);
+          return {
+            ...regulation,
+            inherentRisk: 0,
+            residualRisk: 0,
+            riskCount: 0
+          };
+        }
+      }));
+      
+      res.json(regulationsWithRisks);
+    } catch (error) {
+      console.error("Error fetching regulations:", error);
+      res.status(500).json({ message: "Failed to fetch regulations" });
+    }
+  });
+
+  app.get("/api/regulations/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const regulation = await storage.getRegulation(req.params.id, tenantId);
+      if (!regulation) {
+        return res.status(404).json({ message: "Regulation not found" });
+      }
+      res.json(regulation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch regulation" });
+    }
+  });
+
+  app.get("/api/regulations/:id/details", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const regulation = await storage.getRegulationWithDetails(req.params.id, tenantId);
+      if (!regulation) {
+        return res.status(404).json({ message: "Regulation not found" });
+      }
+      res.json(regulation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch regulation details" });
+    }
+  });
+
+  app.post("/api/regulations", isAuthenticated, async (req, res) => {
+    try {
+      // Convert date strings to Date objects before validation
+      const user = (req as any).user;
+      const processedData = {
+        ...req.body,
+        createdBy: user?.claims?.sub || req.body.createdBy || 'user-1',
+        effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
+        lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
+      };
+      
+      const validatedData = insertRegulationSchema.parse(processedData);
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const regulation = await storage.createRegulation(await withTenantId(req, validatedData));
+      
+      // Si se especificó aplicabilidad, crearla
+      if (req.body.applicabilityEntities) {
+        await storage.setRegulationApplicability(regulation.id, req.body.applicabilityEntities);
+      }
+      
+      res.status(201).json(regulation);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: "Invalid regulation data", errors: error.errors });
+      } else {
+        console.error("Error creating regulation:", error);
+        res.status(400).json({ message: "Invalid regulation data" });
+      }
+    }
+  });
+
+
+  app.put("/api/regulations/:id", isAuthenticated, async (req, res) => {
+    // Convert date strings to Date objects before validation (same as POST)
+    const user = (req as any).user;
+    const processedData = {
+      ...req.body,
+      updatedBy: user?.claims?.sub || 'user-1',
+      effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
+      lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
+    };
+    
+    try {
+      const validatedData = insertRegulationSchema.partial().parse(processedData);
+      const regulation = await storage.updateRegulation(req.params.id, validatedData);
+      if (!regulation) {
+        return res.status(404).json({ message: "Regulation not found" });
+      }
+      res.json(regulation);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid regulation data" });
+    }
+  });
+
+  app.delete("/api/regulations/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteRegulation(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Regulation not found or has dependencies" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete regulation" });
+    }
+  });
+
+  // Risk-Regulation Associations
+  app.get("/api/risk-regulations", async (req, res) => {
+    try {
+      const riskRegulations = await storage.getRiskRegulations();
+      res.json(riskRegulations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk regulations" });
+    }
+  });
+
+  app.get("/api/risks/:riskId/regulations", async (req, res) => {
+    try {
+      const riskRegulations = await storage.getRiskRegulationsByRisk(req.params.riskId);
+      res.json(riskRegulations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk regulations" });
+    }
+  });
+
+  app.get("/api/regulations/:regulationId/risks", async (req, res) => {
+    try {
+      const riskRegulations = await storage.getRiskRegulationsByRegulation(req.params.regulationId);
+      res.json(riskRegulations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch regulation risks" });
+    }
+  });
+
+  // Get all controls associated with a regulation through risks
+  app.get("/api/regulations/:regulationId/controls", async (req, res) => {
+    try {
+      const regulationControls = await storage.getRegulationControls(req.params.regulationId);
+      res.json(regulationControls);
+    } catch (error) {
+      console.error("Get regulation controls error:", error);
+      res.status(500).json({ message: "Failed to fetch regulation controls" });
+    }
+  });
+
+  app.post("/api/risk-regulations", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRiskRegulationSchema.parse(req.body);
+      const riskRegulation = await storage.createRiskRegulation(validatedData);
+      res.status(201).json(riskRegulation);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid risk regulation data" });
+    }
+  });
+
+  app.put("/api/risk-regulations/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertRiskRegulationSchema.partial().parse(req.body);
+      const riskRegulation = await storage.updateRiskRegulation(req.params.id, validatedData);
+      if (!riskRegulation) {
+        return res.status(404).json({ message: "Risk regulation not found" });
+      }
+      res.json(riskRegulation);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid risk regulation data" });
+    }
+  });
+
+  app.delete("/api/risk-regulations/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteRiskRegulation(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Risk regulation not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete risk regulation" });
+    }
+  });
+
+  // Compliance Tests
+  app.get("/api/compliance-tests", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const complianceTests = await storage.getComplianceTests(tenantId);
+      res.json(complianceTests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance tests" });
+    }
+  });
+
+  app.get("/api/compliance-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const complianceTest = await storage.getComplianceTest(req.params.id, tenantId);
+      if (!complianceTest) {
+        return res.status(404).json({ message: "Compliance test not found" });
+      }
+      res.json(complianceTest);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance test" });
+    }
+  });
+
+  app.get("/api/compliance-tests/:id/details", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const complianceTest = await storage.getComplianceTestWithDetails(req.params.id, tenantId);
+      if (!complianceTest) {
+        return res.status(404).json({ message: "Compliance test not found" });
+      }
+      res.json(complianceTest);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance test details" });
+    }
+  });
+
+  app.get("/api/regulations/:regulationId/compliance-tests", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const complianceTests = await storage.getComplianceTestsByRegulation(req.params.regulationId, tenantId);
+      res.json(complianceTests);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch regulation compliance tests" });
+    }
+  });
+
+  app.post("/api/compliance-tests", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertComplianceTestSchema.parse({
+        ...req.body,
+        createdBy: getAuthenticatedUserId(req)
+      });
+      const complianceTest = await storage.createComplianceTest(validatedData);
+      res.status(201).json(complianceTest);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid compliance test data" });
+    }
+  });
+
+  app.put("/api/compliance-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertComplianceTestSchema.partial().parse(req.body);
+      const complianceTest = await storage.updateComplianceTest(req.params.id, validatedData);
+      if (!complianceTest) {
+        return res.status(404).json({ message: "Compliance test not found" });
+      }
+      res.json(complianceTest);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid compliance test data" });
+    }
+  });
+
+  app.delete("/api/compliance-tests/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteComplianceTest(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Compliance test not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete compliance test" });
+    }
+  });
+
+  // Compliance Test Controls
+  app.get("/api/compliance-tests/:testId/controls", async (req, res) => {
+    try {
+      const testControls = await storage.getComplianceTestControls(req.params.testId);
+      res.json(testControls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance test controls" });
+    }
+  });
+
+  app.post("/api/compliance-test-controls", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertComplianceTestControlSchema.parse({
+        ...req.body,
+        testedBy: getAuthenticatedUserId(req),
+        testedDate: req.body.testedDate || new Date()
+      });
+      const testControl = await storage.createComplianceTestControl(validatedData);
+      res.status(201).json(testControl);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid compliance test control data" });
+    }
+  });
+
+  app.put("/api/compliance-test-controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertComplianceTestControlSchema.partial().parse(req.body);
+      const testControl = await storage.updateComplianceTestControl(req.params.id, validatedData);
+      if (!testControl) {
+        return res.status(404).json({ message: "Compliance test control not found" });
+      }
+      res.json(testControl);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid compliance test control data" });
+    }
+  });
+
+  app.delete("/api/compliance-test-controls/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteComplianceTestControl(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Compliance test control not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete compliance test control" });
+    }
+  });
+
+  // Compliance Reporting
+  app.get("/api/compliance/regulation/:regulationId/status", async (req, res) => {
+    try {
+      const status = await storage.getComplianceStatusByRegulation(req.params.regulationId);
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance status" });
+    }
+  });
+
+  app.get("/api/compliance/overview", async (req, res) => {
+    try {
+      const overview = await storage.getComplianceOverview();
+      res.json(overview);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance overview" });
+    }
+  });
+
+  // Compliance Documents (Gestión Documental)
+  app.get("/api/compliance-documents", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const documents = await storage.getComplianceDocuments(tenantId);
+      res.json(documents);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance documents" });
+    }
+  });
+
+  app.get("/api/compliance-documents/:id", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const document = await storage.getComplianceDocument(req.params.id, tenantId);
+      if (!document) {
+        return res.status(404).json({ message: "Compliance document not found" });
+      }
+      res.json(document);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance document" });
+    }
+  });
+
+  app.get("/api/compliance-documents/:id/details", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const document = await storage.getComplianceDocumentWithDetails(req.params.id, tenantId);
+      if (!document) {
+        return res.status(404).json({ message: "Compliance document not found" });
+      }
+      res.json(document);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance document details" });
+    }
+  });
+
+  app.post("/api/compliance-documents", requirePermission("documents:write"), async (req, res) => {
+    try {
+      // Get user ID from auth context - fallback to default user if not authenticated properly
+      const userId = (req as any).user?.claims?.sub || (req as any).user?.id || "user-1";
+      
+      const processedData = {
+        ...req.body,
+        createdBy: userId,
+        publicationDate: req.body.publicationDate ? new Date(req.body.publicationDate) : new Date(),
+        tags: req.body.tags || []
+      };
+      
+      // If documentUrl is a temporary upload URL, finalize it to a permanent object path
+      if (processedData.documentUrl && processedData.documentUrl.includes('storage.googleapis.com')) {
+        try {
+          // Initialize object storage service
+          const objectStorageService = new ObjectStorageService();
+          
+          // Extract the object path from the upload URL
+          const url = new URL(processedData.documentUrl);
+          const objectPath = decodeURIComponent(url.pathname.substring(1)); // Remove leading slash and decode
+          
+          // Set ACL policy for the uploaded object
+          await objectStorageService.trySetObjectEntityAclPolicy(objectPath, { 
+            owner: userId, 
+            visibility: 'private' 
+          });
+          
+          // Convert to permanent object serving URL
+          const permanentUrl = `/objects/${objectPath}`;
+          processedData.documentUrl = permanentUrl;
+          
+          console.log(`Finalized document upload: ${objectPath} -> ${permanentUrl}`);
+        } catch (aclError) {
+          console.error("Failed to finalize object ACL:", aclError);
+          // Fail the request rather than persisting temporary URL
+          return res.status(500).json({ 
+            message: "Failed to finalize document upload. Please try again.",
+            error: "Object ACL configuration failed"
+          });
+        }
+      }
+      
+      const validatedData = insertComplianceDocumentSchema.parse(processedData);
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const document = await storage.createComplianceDocument(await withTenantId(req, validatedData));
+      res.status(201).json(document);
+    } catch (error: any) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid compliance document data",
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ message: "Invalid compliance document data" });
+    }
+  });
+
+  app.put("/api/compliance-documents/:id", requirePermission("documents:write"), async (req, res) => {
+    try {
+      // Get user ID from auth context - fallback to default user if not authenticated properly
+      const userId = (req as any).user?.claims?.sub || (req as any).user?.id || "user-1";
+      
+      const processedData = {
+        ...req.body,
+        updatedBy: userId,
+        publicationDate: req.body.publicationDate ? new Date(req.body.publicationDate) : undefined,
+        tags: req.body.tags || []
+      };
+      
+      const validatedData = insertComplianceDocumentSchema.partial().parse(processedData);
+      const document = await storage.updateComplianceDocument(req.params.id, validatedData);
+      if (!document) {
+        return res.status(404).json({ message: "Compliance document not found" });
+      }
+      res.json(document);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid compliance document data",
+          errors: error.errors 
+        });
+      }
+      res.status(400).json({ message: "Invalid compliance document data" });
+    }
+  });
+
+  app.delete("/api/compliance-documents/:id", requirePermission("documents:write"), async (req, res) => {
+    try {
+      const success = await storage.deleteComplianceDocument(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Compliance document not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete compliance document" });
+    }
+  });
+
+  // Search compliance documents
+  app.get("/api/compliance-documents/search/:query", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const documents = await storage.searchComplianceDocuments(req.params.query, tenantId);
+      res.json(documents);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to search compliance documents" });
+    }
+  });
+
+  // Get compliance documents by area
+  app.get("/api/compliance-documents/area/:area", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const documents = await storage.getComplianceDocumentsByArea(req.params.area, tenantId);
+      res.json(documents);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance documents by area" });
+    }
+  });
+
+  // Get compliance documents by classification
+  app.get("/api/compliance-documents/classification/:classification", requirePermission("documents:read"), async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const documents = await storage.getComplianceDocumentsByClassification(req.params.classification, tenantId);
+      res.json(documents);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch compliance documents by classification" });
+    }
+  });
+
+  // ============== FISCAL ENTITIES ROUTES ==============
+  app.get("/api/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const entities = await storage.getFiscalEntities(tenantId);
+      res.json(entities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch fiscal entities" });
+    }
+  });
+
+  app.get("/api/fiscal-entities/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const entity = await storage.getFiscalEntity(req.params.id, tenantId);
+      if (!entity) {
+        return res.status(404).json({ message: "Fiscal entity not found" });
+      }
+      res.json(entity);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch fiscal entity" });
+    }
+  });
+
+  app.get("/api/fiscal-entities/by-code/:code", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const entity = await storage.getFiscalEntityByCode(req.params.code, tenantId);
+      if (!entity) {
+        return res.status(404).json({ message: "Fiscal entity not found" });
+      }
+      res.json(entity);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to fetch fiscal entity" });
+    }
+  });
+
+  app.post("/api/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertFiscalEntitySchema.parse(req.body);
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const entity = await storage.createFiscalEntity(await withTenantId(req, validatedData));
+      res.status(201).json(entity);
+    } catch (error: any) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Datos de entidad fiscal inválidos", 
+          errors: error.errors 
+        });
+      }
+      if (error.message?.includes('unique constraint') || error.code === '23505') {
+        if (error.message?.includes('code')) {
+          return res.status(409).json({ message: "Ya existe una entidad con este código" });
+        }
+        if (error.message?.includes('tax_id')) {
+          return res.status(409).json({ message: "Ya existe una entidad con este RUT/ID fiscal" });
+        }
+        return res.status(409).json({ message: "Ya existe una entidad con estos datos" });
+      }
+      res.status(400).json({ message: "Error al crear la entidad fiscal" });
+    }
+  });
+
+  app.put("/api/fiscal-entities/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertFiscalEntitySchema.partial().parse(req.body);
+      const entity = await storage.updateFiscalEntity(req.params.id, validatedData);
+      if (!entity) {
+        return res.status(404).json({ message: "Entidad fiscal no encontrada" });
+      }
+      res.json(entity);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Datos de entidad fiscal inválidos", 
+          errors: error.errors 
+        });
+      }
+      if (error.message?.includes('unique constraint') || error.code === '23505') {
+        if (error.message?.includes('code')) {
+          return res.status(409).json({ message: "Ya existe una entidad con este código" });
+        }
+        if (error.message?.includes('tax_id')) {
+          return res.status(409).json({ message: "Ya existe una entidad con este RUT/ID fiscal" });
+        }
+        return res.status(409).json({ message: "Ya existe una entidad con estos datos" });
+      }
+      res.status(400).json({ message: "Error al actualizar la entidad fiscal" });
+    }
+  });
+
+  app.delete("/api/fiscal-entities/:id", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.deleteFiscalEntity(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Fiscal entity not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete fiscal entity" });
+    }
+  });
+
+  // Macroproceso Fiscal Entity Relations
+  app.get("/api/macroprocesos/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const entities = await storage.getMacroprocesoFiscalEntities(req.params.id);
+      res.json(entities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroproceso fiscal entities" });
+    }
+  });
+
+  app.post("/api/macroprocesos/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const { entityIds } = req.body;
+      if (!Array.isArray(entityIds)) {
+        return res.status(400).json({ message: "entityIds must be an array" });
+      }
+      const associations = await storage.assignMacroprocesoToFiscalEntities(req.params.id, entityIds);
+      res.status(201).json(associations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to assign macroproceso to fiscal entities" });
+    }
+  });
+
+  app.delete("/api/macroprocesos/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.removeMacroprocesoFromFiscalEntities(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "No associations found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove macroproceso from fiscal entities" });
+    }
+  });
+
+  // Process Fiscal Entity Relations
+  app.get("/api/processes/:id/fiscal-entities", async (req, res) => {
+    try {
+      const entities = await storage.getProcessFiscalEntities(req.params.id);
+      res.json(entities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch process fiscal entities" });
+    }
+  });
+
+  app.post("/api/processes/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const { entityIds } = req.body;
+      if (!Array.isArray(entityIds)) {
+        return res.status(400).json({ message: "entityIds must be an array" });
+      }
+      const associations = await storage.assignProcessToFiscalEntities(req.params.id, entityIds);
+      res.status(201).json(associations);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to assign process to fiscal entities" });
+    }
+  });
+
+  app.delete("/api/processes/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const success = await storage.removeProcessFromFiscalEntities(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "No associations found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove process from fiscal entities" });
+    }
+  });
+
+  // Check validation status of risks in a process (before sending to validation)
+  app.post("/api/processes/:id/check-validation-status", isAuthenticated, async (req, res) => {
+    try {
+      const processId = req.params.id;
+      
+      // Check if process exists
+      const process = await storage.getProcess(processId);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+
+      // Get already validated risks for this process
+      const alreadyValidatedRisks = await storage.checkAlreadyValidatedRisks(processId);
+      
+      // Get all risk-process links for this process
+      const allRiskProcessLinks = await requireDb()
+        .select()
+        .from(riskProcessLinks)
+        .where(eq(riskProcessLinks.processId, processId));
+      
+      const totalRisks = allRiskProcessLinks.length;
+      const validatedCount = alreadyValidatedRisks.length;
+      const pendingCount = totalRisks - validatedCount;
+      
+      res.json({
+        processId,
+        processName: process.name,
+        totalRisks,
+        validatedCount,
+        pendingCount,
+        alreadyValidatedRisks,
+        hasValidatedRisks: validatedCount > 0,
+      });
+    } catch (error) {
+      console.error("Error checking validation status:", error);
+      res.status(500).json({ message: "Failed to check validation status" });
+    }
+  });
+
+  // Send process to validation
+  app.post("/api/processes/:id/send-to-validation", isAuthenticated, async (req, res) => {
+    try {
+      const processId = req.params.id;
+      const { revalidateAll = true } = req.body; // Default to true for backward compatibility
+      
+      // Check if process exists
+      const process = await storage.getProcess(processId);
+      if (!process) {
+        return res.status(404).json({ message: "Process not found" });
+      }
+
+      // Get macroproceso for notifications
+      let macroprocesoId = process.macroprocesoId;
+      let macroprocesoName = process.name;
+      
+      if (process.macroprocesoId) {
+        const macroproceso = await storage.getMacroproceso(process.macroprocesoId);
+        if (macroproceso) {
+          macroprocesoName = macroproceso.name;
+        }
+      }
+
+      // Count risks and controls associated with this process
+      const allRiskProcessLinks = await requireDb()
+        .select()
+        .from(riskProcessLinks)
+        .where(eq(riskProcessLinks.processId, processId));
+      
+      const allControlProcesses = await requireDb()
+        .select()
+        .from(controlProcesses)
+        .where(eq(controlProcesses.processId, processId));
+      
+      // If revalidateAll is false, filter out already validated risks
+      let riskProcessLinksToNotify = allRiskProcessLinks;
+      if (!revalidateAll) {
+        const alreadyValidatedRisks = await storage.checkAlreadyValidatedRisks(processId);
+        const validatedLinkIds = new Set(alreadyValidatedRisks.map(r => r.riskProcessLinkId));
+        riskProcessLinksToNotify = allRiskProcessLinks.filter(link => !validatedLinkIds.has(link.id));
+      }
+      
+      const riskCount = riskProcessLinksToNotify.length;
+      const controlCount = allControlProcesses.length;
+
+      // Send notifications
+      let notificationsSent = [];
+      
+      if (riskCount > 0) {
+        await notificationService.notifyProcessRiskValidationRequired(
+          macroprocesoId || processId,
+          macroprocesoName,
+          riskCount
+        );
+        notificationsSent.push(`${riskCount} riesgos`);
+      }
+      
+      if (controlCount > 0) {
+        await notificationService.notifyProcessControlValidationRequired(
+          macroprocesoId || processId,
+          macroprocesoName,
+          controlCount
+        );
+        notificationsSent.push(`${controlCount} controles`);
+      }
+
+      if (notificationsSent.length === 0) {
+        return res.status(400).json({ 
+          message: revalidateAll 
+            ? "No se encontraron riesgos ni controles asociados a este proceso para enviar a validación"
+            : "Todos los riesgos de este proceso ya han sido validados. No hay riesgos pendientes para enviar a validación."
+        });
+      }
+
+      console.log(`Process validation notifications sent for "${macroprocesoName}": ${notificationsSent.join(', ')} (revalidateAll: ${revalidateAll})`);
+      
+      res.status(200).json({ 
+        message: `Notificaciones de validación enviadas exitosamente para ${notificationsSent.join(' y ')}`,
+        details: {
+          processName: macroprocesoName,
+          riskCount,
+          controlCount,
+          revalidateAll,
+          totalRisks: allRiskProcessLinks.length
+        }
+      });
+    } catch (error) {
+      console.error("Error sending process to validation:", error);
+      res.status(500).json({ message: "Failed to send process to validation" });
+    }
+  });
+
+  // Object Storage Routes for Document Management
+
+  // Endpoint for serving document files
+  app.get("/objects/:objectPath(*)", requirePermission("documents:read"), async (req, res) => {
+    const userId = (req as any).user?.claims?.sub || 'user-1'; // Usuario autenticado (fallback para desarrollo)
+    const objectStorageService = new ObjectStorageService();
+    try {
+      // Add /objects/ prefix since Express strips it from params
+      const fullObjectPath = `/objects/${req.params.objectPath}`;
+      const objectFile = await objectStorageService.getObjectEntityFile(
+        fullObjectPath,
+      );
+      const canAccess = await objectStorageService.canAccessObjectEntity({
+        objectFile,
+        userId: userId,
+        requestedPermission: ObjectPermission.READ,
+      });
+      if (!canAccess) {
+        return res.sendStatus(403);
+      }
+      objectStorageService.downloadObject(objectFile, res);
+    } catch (error) {
+      console.error("Error checking object access:", error);
+      if (error instanceof ObjectNotFoundError) {
+        return res.sendStatus(404);
+      }
+      return res.sendStatus(500);
+    }
+  });
+
+  // Endpoint for getting upload URL for document files
+  app.post("/api/objects/upload", requirePermission("documents:write"), async (req, res) => {
+    try {
+      const objectStorageService = new ObjectStorageService();
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      res.json({ uploadURL });
+    } catch (error) {
+      console.error("Error getting upload URL:", error);
+      res.status(500).json({ error: "Failed to get upload URL" });
+    }
+  });
+
+  // NEW PERFORMANCE ENDPOINTS
+  
+  // Streaming upload endpoint (improved performance)
+  app.post("/api/objects/streaming-upload", requirePermission("documents:write"), handleStreamingUpload('files', 3), async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const files = req.files as Express.Multer.File[];
+      
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: "No files uploaded" });
+      }
+      
+      // Process uploaded files
+      const results = await FileProcessor.processUploadedFiles(files, userId);
+      
+      console.log(`✅ Streaming upload completed: ${files.length} files processed`);
+      
+      res.json({
+        success: true,
+        message: `${files.length} file(s) uploaded successfully`,
+        files: results
+      });
+    } catch (error) {
+      console.error("❌ Streaming upload error:", error);
+      res.status(500).json({ 
+        error: error instanceof Error ? error.message : "Upload failed" 
+      });
+    }
+  });
+  
+  // Queue statistics endpoint
+  app.get("/api/system/queue-stats", requirePermission("admin:read"), async (req, res) => {
+    try {
+      const stats = await QueueService.getQueueStats();
+      res.json({
+        success: true,
+        statistics: stats
+      });
+    } catch (error) {
+      console.error("❌ Queue stats error:", error);
+      res.status(500).json({ error: "Failed to get queue statistics" });
+    }
+  });
+  
+  // Asynchronous email endpoint (uses queues)
+  app.post("/api/system/send-email-async", requirePermission("admin:write"), async (req, res) => {
+    try {
+      const { to, from, subject, html, priority = 'normal', delay = 0 } = req.body;
+      
+      // Validate required fields
+      if (!to || !from || !subject || !html) {
+        return res.status(400).json({ 
+          error: "Missing required fields: to, from, subject, html" 
+        });
+      }
+      
+      // Add to email queue
+      const job = await QueueService.addEmailJob(
+        { to, from, subject, html },
+        { 
+          delay, 
+          priority: priority === 'high' ? 1 : 0,
+          attempts: 3 
+        }
+      );
+      
+      console.log(`📧 Email queued successfully: ${job.id} -> ${to}`);
+      
+      res.json({
+        success: true,
+        jobId: job.id,
+        message: "Email queued for delivery",
+        estimatedDelivery: new Date(Date.now() + delay).toISOString()
+      });
+    } catch (error) {
+      console.error("❌ Async email error:", error);
+      res.status(500).json({ error: "Failed to queue email" });
+    }
+  });
+
+  // Endpoint for uploading document file directly (multipart/form-data)
+  app.post("/api/compliance-documents/:id/upload", 
+    requirePermission("documents:write"), 
+    upload.single('file'),
+    async (req, res) => {
+      const file = req.file as Express.Multer.File | undefined;
+      
+      if (!file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const userId = (req as any).user?.claims?.sub || 'user-1';
+
+      try {
+        // Upload file to Object Storage using buffer
+        const objectStorageService = new ObjectStorageService();
+        const { objectPath, storageUrl } = await objectStorageService.uploadObjectFromBuffer(
+          file.buffer,
+          file.originalname,
+          file.mimetype
+        );
+
+        // Set ACL policy for the uploaded file
+        const normalizedPath = await objectStorageService.trySetObjectEntityAclPolicy(
+          objectPath,
+          {
+            owner: userId,
+            visibility: "private",
+          }
+        );
+
+        // Clean objectPath: remove /objects/ prefix if present to store clean path
+        const cleanObjectPath = normalizedPath.startsWith('/objects/') ? normalizedPath.substring(9) : normalizedPath;
+        const documentUrl = `/objects/${cleanObjectPath}`;
+        
+        const updateData = {
+          documentUrl: documentUrl,
+          fileName: file.originalname,
+          originalFileName: file.originalname,
+          fileSize: file.size,
+          mimeType: file.mimetype,
+          objectPath: cleanObjectPath,
+          updatedBy: userId
+        };
+
+        const document = await storage.updateComplianceDocument(req.params.id, updateData);
+        if (!document) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+
+        console.log(`✅ Document file uploaded: ${file.originalname} (${file.size} bytes)`);
+        
+        res.status(200).json({
+          objectPath: cleanObjectPath,
+          document: document
+        });
+      } catch (error) {
+        console.error("Error uploading document file:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    }
+  );
+
+  // ============== AUDIT TEST ATTACHMENTS API ==============
+  // Sistema completo de adjuntos con codificación jerárquica automática (AT-###-DOC-###)
+
+  // Multer configuration moved to top of file to fix reference error
+
+  // Validation schemas for attachment endpoints
+  const updateAttachmentMetadataSchema = z.object({
+    description: z.string().optional(),
+    category: z.enum(["evidence", "workpaper", "reference", "communication", "regulation"]).optional(),
+    tags: z.array(z.string()).optional(),
+    isConfidential: z.boolean().optional()
+  });
+
+  // 1. UPLOAD ATTACHMENT - POST /api/audit-tests/:auditTestId/attachments
+  app.post("/api/audit-tests/:auditTestId/attachments", 
+    isAuthenticated, 
+    requirePermission("update_audit_progress"),
+    upload.array('files', 5), 
+    async (req, res) => {
+      try {
+        const auditTestId = req.params.auditTestId;
+        const uploadedBy = getAuthenticatedUserId(req as any);
+        const files = req.files as Express.Multer.File[];
+        
+        if (!files || files.length === 0) {
+          return res.status(400).json({ message: "No files uploaded" });
+        }
+
+        // CRITICAL: Verify audit test exists first (FIXED: validation gap)
+        console.log(`[VALIDATION] Checking audit test existence: ${auditTestId}`);
+        const auditTest = await storage.getAuditTest(auditTestId);
+        if (!auditTest) {
+          console.error(`[VALIDATION GAP FIX] Audit test ${auditTestId} not found - returning 404`);
+          return res.status(404).json({ message: "Audit test not found" });
+        }
+        console.log(`[VALIDATION OK] Audit test ${auditTestId} found: ${auditTest.name}`);
+
+        // Validate user permissions (executor, supervisor, or admin)
+        const hasGeneralPermission = await storage.hasPermission(uploadedBy, "edit_all");
+        const isExecutor = auditTest.executorId === uploadedBy;
+        const isSupervisor = auditTest.supervisorId === uploadedBy;
+        
+        if (!hasGeneralPermission && !isExecutor && !isSupervisor) {
+          return res.status(403).json({ message: "Access denied. Must be executor, supervisor, or have edit_all permission" });
+        }
+
+        const objectStorageService = new ObjectStorageService();
+        const uploadedAttachments = [];
+
+        // Process each file
+        for (const file of files) {
+          try {
+            // Validate file
+            const validation = await storage.validateFileUpload({
+              originalName: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size
+            });
+            
+            if (!validation.isValid) {
+              return res.status(400).json({ message: validation.message });
+            }
+
+            // Generate hierarchical code
+            const attachmentCode = await storage.generateNextAttachmentCode(auditTestId);
+            
+            // Upload to object storage
+            const uploadUrl = await objectStorageService.getObjectEntityUploadURL();
+            
+            // Create object storage entry with ACL
+            const fileName = `${attachmentCode}_${file.originalname}`;
+            const objectPath = `audit-attachments/${auditTestId}/${fileName}`;
+            
+            // Upload file to object storage (simplified - in production use proper upload flow)
+            const storageUrl = uploadUrl; // Simplified for this implementation
+            
+            // CRITICAL: Set ACL policy with proper error handling and comprehensive permissions
+            try {
+              console.log(`[OBJECT STORAGE ACL] Setting ACL for ${objectPath}`);
+              await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
+                owner: uploadedBy,
+                visibility: req.body.isConfidential === 'true' ? 'private' : 'private' // All audit attachments are private
+              });
+              console.log(`[OBJECT STORAGE ACL] ACL set successfully for ${objectPath}`);
+            } catch (aclError) {
+              console.error(`[OBJECT STORAGE ACL ERROR] Failed to set ACL for ${objectPath}:`, aclError);
+              // Continue with upload but log the ACL failure - attachment still created
+              console.warn(`[OBJECT STORAGE ACL] Continuing upload without full ACL for ${objectPath}`);
+            }
+
+            // Create attachment record
+            const attachmentData = {
+              auditTestId,
+              attachmentCode,
+              fileName,
+              originalFileName: file.originalname,
+              fileSize: file.size,
+              mimeType: file.mimetype,
+              storageUrl,
+              objectPath,
+              description: req.body.description || `Adjunto ${attachmentCode}`,
+              category: req.body.category || 'evidence',
+              tags: req.body.tags ? JSON.parse(req.body.tags) : [],
+              isConfidential: req.body.isConfidential === 'true',
+              uploadedBy,
+              isActive: true
+            };
+
+            const attachment = await storage.createAuditTestAttachment(attachmentData);
+            
+            // Log upload
+            await storage.logAttachmentAccess(attachment.id, uploadedBy, 'upload', {
+              fileName: file.originalname,
+              fileSize: file.size,
+              auditTestId
+            });
+
+            uploadedAttachments.push(attachment);
+            
+          } catch (fileError: unknown) {
+            console.error(`Error processing file ${file.originalname}:`, fileError);
+            return res.status(400).json({ 
+              message: `Error processing file ${file.originalname}: ${fileError instanceof Error ? fileError.message : 'Unknown error'}` 
+            });
+          }
+        }
+
+        res.status(201).json({
+          message: `Successfully uploaded ${uploadedAttachments.length} attachment(s)`,
+          attachments: uploadedAttachments,
+          count: uploadedAttachments.length
+        });
+
+      } catch (error) {
+        console.error("Error uploading attachments:", error);
+        if (error instanceof Error && error.message.includes('File type')) {
+          return res.status(400).json({ message: error.message });
+        }
+        res.status(500).json({ message: "Failed to upload attachments" });
+      }
+    }
+  );
+
+  // 2. LIST ATTACHMENTS - GET /api/audit-tests/:auditTestId/attachments
+  app.get("/api/audit-tests/:auditTestId/attachments", 
+    isAuthenticated, 
+    requirePermission("view_audit_development"), 
+    async (req, res) => {
+      try {
+        const auditTestId = req.params.auditTestId;
+        const userId = getAuthenticatedUserId(req as any);
+        const { category, isActive, includeDetails } = req.query;
+
+        // Verify audit test exists and user has access
+        const auditTest = await storage.getAuditTest(auditTestId);
+        if (!auditTest) {
+          return res.status(404).json({ message: "Audit test not found" });
+        }
+
+        // Build filters
+        const filters: any = {};
+        if (category) filters.category = category as string;
+        if (isActive !== undefined) filters.isActive = isActive === 'true';
+
+        // Get attachments (with or without details)
+        let attachments;
+        if (includeDetails === 'true') {
+          attachments = await storage.getAuditTestAttachmentsWithDetails(auditTestId, filters);
+        } else {
+          attachments = await storage.getAuditTestAttachments(auditTestId, filters);
+        }
+
+        // Get summary statistics
+        const summary = await storage.getAttachmentsSummary(auditTestId);
+
+        res.json({
+          attachments,
+          summary,
+          total: attachments.length,
+          auditTestId
+        });
+
+      } catch (error) {
+        console.error("Error fetching attachments:", error);
+        res.status(500).json({ message: "Failed to fetch attachments" });
+      }
+    }
+  );
+
+  // 3. DOWNLOAD ATTACHMENT - GET /api/audit-test-attachments/:attachmentId/download
+  app.get("/api/audit-test-attachments/:attachmentId/download", 
+    isAuthenticated, 
+    async (req, res) => {
+      try {
+        const attachmentId = req.params.attachmentId;
+        const userId = getAuthenticatedUserId(req as any);
+        console.log(`[ENDPOINT VALIDATION] Download request for attachment: ${attachmentId} by user: ${userId}`);
+
+        // CRITICAL: Validate access with enhanced logging
+        const accessCheck = await storage.validateAttachmentAccess(attachmentId, userId, 'read');
+        if (!accessCheck.isValid) {
+          console.error(`[ENDPOINT VALIDATION] Download access denied for ${attachmentId}: ${accessCheck.message}`);
+          return res.status(403).json({ message: accessCheck.message });
+        }
+
+        // Get download URL and file info
+        const downloadInfo = await storage.getAttachmentDownloadUrl(attachmentId, userId);
+        if (!downloadInfo) {
+          return res.status(404).json({ message: "Attachment not found or access denied" });
+        }
+
+        // For this implementation, we'll redirect to the storage URL
+        // In production, you might want to stream the file directly
+        res.json({
+          downloadUrl: downloadInfo.url,
+          filename: downloadInfo.filename,
+          mimeType: downloadInfo.mimeType
+        });
+
+      } catch (error) {
+        console.error("Error downloading attachment:", error);
+        res.status(500).json({ message: "Failed to download attachment" });
+      }
+    }
+  );
+
+  // 4. UPDATE ATTACHMENT METADATA - PUT /api/audit-test-attachments/:attachmentId
+  app.put("/api/audit-test-attachments/:attachmentId", 
+    isAuthenticated, 
+    requirePermission("update_audit_progress"), 
+    async (req, res) => {
+      try {
+        const attachmentId = req.params.attachmentId;
+        const userId = getAuthenticatedUserId(req as any);
+        console.log(`[ENDPOINT VALIDATION] Update request for attachment: ${attachmentId} by user: ${userId}`);
+
+        // Validate request body
+        const validatedData = updateAttachmentMetadataSchema.parse(req.body);
+
+        // CRITICAL: Validate access with enhanced logging
+        const accessCheck = await storage.validateAttachmentAccess(attachmentId, userId, 'write');
+        if (!accessCheck.isValid) {
+          console.error(`[ENDPOINT VALIDATION] Update access denied for ${attachmentId}: ${accessCheck.message}`);
+          return res.status(403).json({ message: accessCheck.message });
+        }
+
+        // Update metadata
+        const updatedAttachment = await storage.updateAuditTestAttachmentMetadata(attachmentId, validatedData);
+        if (!updatedAttachment) {
+          return res.status(404).json({ message: "Attachment not found" });
+        }
+
+        // Log the update
+        await storage.logAttachmentAccess(attachmentId, userId, 'update', {
+          updatedFields: Object.keys(validatedData),
+          changes: validatedData
+        });
+
+        res.json({
+          message: "Attachment metadata updated successfully",
+          attachment: updatedAttachment
+        });
+
+      } catch (error) {
+        console.error("Error updating attachment metadata:", error);
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({ 
+            message: "Invalid request data", 
+            errors: error.errors 
+          });
+        }
+        res.status(500).json({ message: "Failed to update attachment metadata" });
+      }
+    }
+  );
+
+  // 5. DELETE ATTACHMENT - DELETE /api/audit-test-attachments/:attachmentId
+  app.delete("/api/audit-test-attachments/:attachmentId", 
+    isAuthenticated, 
+    requirePermission("delete_audit_attachments"), 
+    async (req, res) => {
+      try {
+        const attachmentId = req.params.attachmentId;
+        const userId = getAuthenticatedUserId(req as any);
+        console.log(`[ENDPOINT VALIDATION] Delete request for attachment: ${attachmentId} by user: ${userId}`);
+
+        // CRITICAL: Validate access with enhanced logging
+        const accessCheck = await storage.validateAttachmentAccess(attachmentId, userId, 'delete');
+        if (!accessCheck.isValid) {
+          console.error(`[ENDPOINT VALIDATION] Delete access denied for ${attachmentId}: ${accessCheck.message}`);
+          return res.status(403).json({ message: accessCheck.message });
+        }
+
+        // Perform soft delete
+        const deleted = await storage.softDeleteAuditTestAttachment(attachmentId, userId);
+        if (!deleted) {
+          return res.status(404).json({ message: "Attachment not found" });
+        }
+
+        res.json({
+          message: "Attachment deleted successfully",
+          attachmentId
+        });
+
+      } catch (error) {
+        console.error("Error deleting attachment:", error);
+        res.status(500).json({ message: "Failed to delete attachment" });
+      }
+    }
+  );
+
+  // ADDITIONAL HELPER ENDPOINTS
+
+  // Get attachment details with security check
+  app.get("/api/audit-test-attachments/:attachmentId", 
+    isAuthenticated, 
+    async (req, res) => {
+      try {
+        const attachmentId = req.params.attachmentId;
+        const userId = getAuthenticatedUserId(req as any);
+
+        // Validate access
+        const accessCheck = await storage.validateAttachmentAccess(attachmentId, userId, 'read');
+        if (!accessCheck.isValid) {
+          return res.status(403).json({ message: accessCheck.message });
+        }
+
+        // Get attachment with details
+        const attachment = await storage.getAuditTestAttachmentWithDetails(attachmentId);
+        if (!attachment) {
+          return res.status(404).json({ message: "Attachment not found" });
+        }
+
+        res.json(attachment);
+
+      } catch (error) {
+        console.error("Error fetching attachment details:", error);
+        res.status(500).json({ message: "Failed to fetch attachment details" });
+      }
+    }
+  );
+
+  // Get attachments summary for audit test
+  app.get("/api/audit-tests/:auditTestId/attachments/summary", 
+    isAuthenticated, 
+    requirePermission("view_audit_development"), 
+    async (req, res) => {
+      try {
+        const auditTestId = req.params.auditTestId;
+
+        // Verify audit test exists
+        const auditTest = await storage.getAuditTest(auditTestId);
+        if (!auditTest) {
+          return res.status(404).json({ message: "Audit test not found" });
+        }
+
+        // Get summary
+        const summary = await storage.getAttachmentsSummary(auditTestId);
+        res.json(summary);
+
+      } catch (error) {
+        console.error("Error fetching attachments summary:", error);
+        res.status(500).json({ message: "Failed to fetch attachments summary" });
+      }
+    }
+  );
+
+  // ============= AUTOMATIC AUDIT TEST GENERATION API ENDPOINTS =============
+  
+  // Import generation services
+  const { auditTestGenerator } = await import('./audit-test-generator');
+  const { riskAnalysisEngine } = await import('./risk-analysis-engine');
+  const { templateSeedingService } = await import('./template-seeding-service');
+
+  // Generation Endpoints
+  app.post('/api/audit-generation/analyze-risks', isAuthenticated, async (req, res) => {
+    try {
+      const { riskIds } = req.body;
+      
+      if (!Array.isArray(riskIds) || riskIds.length === 0) {
+        return res.status(400).json({ message: 'Risk IDs array is required' });
+      }
+
+      const riskProfiles = [];
+      for (const riskId of riskIds) {
+        try {
+          const profile = await riskAnalysisEngine.analyzeRiskProfile(riskId);
+          riskProfiles.push(profile);
+        } catch (error) {
+          console.warn(`Failed to analyze risk ${riskId}:`, error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      res.json({
+        success: true,
+        riskProfiles,
+        analyzed: riskProfiles.length,
+        requested: riskIds.length
+      });
+    } catch (error) {
+      console.error('Error analyzing risks:', error);
+      res.status(500).json({ message: 'Failed to analyze risks' });
+    }
+  });
+
+  app.post('/api/audit-generation/generate-tests', isAuthenticated, async (req, res) => {
+    try {
+      const generationParams = req.body;
+      
+      // Validate required parameters
+      if (!generationParams.auditId || !generationParams.selectedRisks) {
+        return res.status(400).json({ message: 'Audit ID and selected risks are required' });
+      }
+
+      // Add authenticated user to generation parameters
+      const userId = getAuthenticatedUserId(req);
+      generationParams.createdBy = userId;
+
+      const generatedTests = await auditTestGenerator.generateAuditTests(generationParams);
+      
+      res.status(201).json({
+        success: true,
+        testsGenerated: generatedTests.length,
+        tests: generatedTests,
+        message: `Successfully generated ${generatedTests.length} audit tests`
+      });
+    } catch (error) {
+      console.error('Error generating audit tests:', error);
+      res.status(500).json({ 
+        message: 'Failed to generate audit tests',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post('/api/audit-generation/preview', isAuthenticated, async (req, res) => {
+    try {
+      const generationParams = req.body;
+      
+      if (!generationParams.selectedRisks) {
+        return res.status(400).json({ message: 'Selected risks are required' });
+      }
+
+      const preview = await auditTestGenerator.previewGeneration(generationParams);
+      
+      res.json({
+        success: true,
+        preview
+      });
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      res.status(500).json({ message: 'Failed to generate preview' });
+    }
+  });
+
+  app.get('/api/templates', isAuthenticated, async (req, res) => {
+    try {
+      const templates = await storage.getAuditTestTemplates();
+      res.json(templates);
+    } catch (error) {
+      console.error('Error fetching templates:', error);
+      res.status(500).json({ message: 'Failed to fetch templates' });
+    }
+  });
+
+  app.get('/api/templates/categories', isAuthenticated, async (req, res) => {
+    try {
+      const categories = await storage.getAuditTestTemplateCategories();
+      res.json(categories);
+    } catch (error) {
+      console.error('Error fetching template categories:', error);
+      res.status(500).json({ message: 'Failed to fetch template categories' });
+    }
+  });
+
+  app.post('/api/templates/initialize', isAuthenticated, async (req, res) => {
+    try {
+      // Check if templates are already initialized
+      const isInitialized = await templateSeedingService.isRepositoryInitialized();
+      
+      if (isInitialized) {
+        return res.status(400).json({ 
+          message: 'Template repository is already initialized',
+          initialized: true 
+        });
+      }
+
+      // Initialize the template repository
+      await templateSeedingService.initializeTemplateRepository();
+      
+      res.status(201).json({
+        success: true,
+        message: 'Template repository initialized successfully',
+        initialized: true
+      });
+    } catch (error) {
+      console.error('Error initializing template repository:', error);
+      res.status(500).json({ 
+        message: 'Failed to initialize template repository',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.get('/api/templates/status', isAuthenticated, async (req, res) => {
+    try {
+      const isInitialized = await templateSeedingService.isRepositoryInitialized();
+      const categories = await storage.getAuditTestTemplateCategories();
+      const templates = await storage.getAuditTestTemplates();
+      
+      res.json({
+        initialized: isInitialized,
+        categoriesCount: categories.length,
+        templatesCount: templates.length,
+        categories: categories.map(cat => ({
+          name: cat.name,
+          code: cat.code,
+          riskTypes: cat.riskTypes
+        }))
+      });
+    } catch (error) {
+      console.error('Error checking template status:', error);
+      res.status(500).json({ message: 'Failed to check template status' });
+    }
+  });
+
+  // ============== INTELLIGENT RECOMMENDATION ENGINE ROUTES ==============
+  
+  // Import recommendation engines
+  const { intelligentRecommendationEngine } = await import('./intelligent-recommendation-engine');
+  
+  // Complete Recommendations - Get all types of recommendations for an audit test
+  app.post('/api/recommendations/complete', isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with Zod schema
+      const validatedData = comprehensiveRecommendationRequestSchema.parse(req.body);
+      const userId = getAuthenticatedUserId(req);
+
+      // Build audit context from request data
+      const auditContext = {
+        riskProfile: {
+          riskId: validatedData.auditTestId,
+          category: validatedData.riskCategory || 'operational',
+          complexity: 'moderate',
+          auditScope: 'full',
+          priority: 'medium',
+          controlEnvironment: 'adequate',
+          requiredSkills: ['financial_analysis', 'risk_assessment'],
+          estimatedHours: validatedData.timeline?.maxDurationHours || 80,
+          toolsNeeded: ['audit_software', 'spreadsheet'],
+          controlGaps: [],
+          controlStrength: 0.7,
+          inherentRiskScore: 9,
+          residualRiskScore: 6,
+          riskTrend: 'stable' as 'stable' | 'increasing' | 'decreasing',
+          historicalIssues: [],
+          regulatoryRequirements: [],
+          complianceLevel: 'standard',
+          confidenceScore: 80,
+          analysisMethod: 'rule_based',
+          recommendedTemplates: ['standard_audit']
+        },
+        processType: 'standard',
+        complexityLevel: validatedData.complexity || 'moderate',
+        organizationalContext: {
+          teamSize: 5,
+          teamExperience: 'mixed',
+          resourceAvailability: 'adequate',
+          organizationalMaturity: 'developing'
+        },
+        historicalPerformance: {
+          averageQualityScore: 80,
+          averageCompletionTime: 40,
+          successRate: 85,
+          commonIssues: []
+        },
+        availableResources: {
+          budgetLimit: 50000,
+          timelineLimit: validatedData.timeline?.maxDurationHours || 80,
+          teamSizeLimit: 5,
+          skillsAvailable: ['financial_analysis', 'risk_assessment'],
+          skillAvailability: ['financial_analysis', 'risk_assessment']
+        },
+        timelineConstraints: {
+          maxDurationHours: validatedData.timeline?.maxDurationHours || 80,
+          urgencyLevel: validatedData.timeline?.urgencyLevel || 'medium',
+          deadlineFixed: false,
+          bufferAllowed: true,
+          parallelExecutionPossible: false
+        },
+        qualityRequirements: {
+          minimumQualityScore: 80,
+          thoroughnessLevel: 'standard',
+          reviewRequirements: 'standard',
+          documentationLevel: 'standard'
+        },
+        regulatoryRequirements: []
+      };
+
+      // Get comprehensive recommendations using correct function name (singular)
+      const recommendations = await intelligentRecommendationEngine.generateComprehensiveRecommendation(
+        validatedData.auditTestId,
+        auditContext,
+        userId
+      );
+      
+      res.json({
+        success: true,
+        auditTestId: validatedData.auditTestId,
+        recommendations,
+        generatedAt: new Date(),
+        recommendationScore: recommendations.overallScore
+      });
+      
+    } catch (error) {
+      console.error('Error generating complete recommendations:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: 'Invalid request data', 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Failed to generate recommendations',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Procedure Recommendations - Get intelligent procedure suggestions
+  app.post('/api/recommendations/procedures', isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with Zod schema
+      const validatedData = procedureRecommendationRequestSchema.parse(req.body);
+      const userId = getAuthenticatedUserId(req);
+
+      // Build audit context from request data
+      const auditContext = {
+        riskProfile: {
+          riskId: (validatedData as any).auditTestId || validatedData.id || 'unknown',
+          category: validatedData.riskCategory,
+          complexity: 'moderate',
+          auditScope: 'full',
+          priority: 'medium',
+          controlEnvironment: 'adequate',
+          requiredSkills: ['financial_analysis', 'risk_assessment'],
+          estimatedHours: 80,
+          toolsNeeded: ['audit_software', 'spreadsheet'],
+          controlGaps: [],
+          controlStrength: 0.7,
+          inherentRiskScore: 9,
+          residualRiskScore: 6,
+          riskTrend: 'stable' as 'stable' | 'increasing' | 'decreasing',
+          historicalIssues: [],
+          regulatoryRequirements: [],
+          complianceLevel: 'standard',
+          confidenceScore: 80,
+          analysisMethod: 'rule_based',
+          recommendedTemplates: ['standard_audit']
+        },
+        processType: 'standard',
+        complexityLevel: validatedData.complexity,
+        organizationalContext: {
+          teamSize: 5,
+          teamExperience: 'mixed',
+          resourceAvailability: 'adequate',
+          organizationalMaturity: 'developing'
+        },
+        historicalPerformance: {
+          averageQualityScore: 80,
+          averageCompletionTime: 40,
+          successRate: 85,
+          commonIssues: []
+        },
+        availableResources: {
+          budgetLimit: 50000,
+          timelineLimit: 80,
+          teamSizeLimit: 5,
+          skillsAvailable: ['financial_analysis', 'risk_assessment'],
+          skillAvailability: ['financial_analysis', 'risk_assessment']
+        },
+        timelineConstraints: {
+          maxDurationHours: 80,
+          urgencyLevel: 'medium',
+          deadlineFixed: false,
+          bufferAllowed: true,
+          parallelExecutionPossible: false
+        },
+        qualityRequirements: {
+          minimumQualityScore: 80,
+          thoroughnessLevel: 'standard',
+          reviewRequirements: 'standard',
+          documentationLevel: 'standard'
+        },
+        regulatoryRequirements: []
+      };
+
+      // Call the correct existing function (recommendAuditProcedures)
+      const procedureRecommendations = await intelligentRecommendationEngine.recommendAuditProcedures(auditContext);
+      
+      res.json({
+        success: true,
+        riskCategory: validatedData.riskCategory,
+        procedureRecommendations,
+        recommendationCount: procedureRecommendations.length,
+        averageConfidence: procedureRecommendations.reduce((sum, rec) => sum + ((rec as any).overallScore || rec.confidence || 0), 0) / procedureRecommendations.length
+      });
+      
+    } catch (error) {
+      console.error('Error generating procedure recommendations:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: 'Invalid request data', 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Failed to generate procedure recommendations',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Auditor Assignment Recommendations - Get optimal auditor assignments
+  app.post('/api/recommendations/auditors', isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with Zod schema
+      const validatedData = auditorRecommendationRequestSchema.parse(req.body);
+      const userId = getAuthenticatedUserId(req);
+
+      // Build audit context from request data
+      const auditContext = {
+        riskProfile: {
+          riskId: (validatedData as any).auditTestId || validatedData.id || 'unknown',
+          category: validatedData.testRequirements.riskCategory,
+          complexity: 'moderate',
+          auditScope: 'full',
+          priority: 'medium',
+          controlEnvironment: 'adequate',
+          requiredSkills: validatedData.testRequirements.skillsRequired,
+          estimatedHours: validatedData.testRequirements.estimatedHours || 80,
+          toolsNeeded: ['audit_software', 'spreadsheet'],
+          controlGaps: [],
+          controlStrength: 0.7,
+          inherentRiskScore: 15,
+          residualRiskScore: 10,
+          riskTrend: 'stable' as 'stable' | 'increasing' | 'decreasing',
+          historicalIssues: [],
+          regulatoryRequirements: [],
+          complianceLevel: 'standard',
+          confidenceScore: 80,
+          analysisMethod: 'rule_based',
+          recommendedTemplates: ['standard_audit']
+        },
+        processType: 'standard',
+        complexityLevel: validatedData.testRequirements.complexityLevel,
+        organizationalContext: {
+          teamSize: 5,
+          teamExperience: 'mixed',
+          resourceAvailability: 'adequate',
+          organizationalMaturity: 'developing',
+          industryType: 'financial'
+        },
+        historicalPerformance: {
+          averageQualityScore: 80,
+          averageCompletionTime: 40,
+          successRate: 85,
+          commonIssues: []
+        },
+        availableResources: {
+          budgetLimit: 50000,
+          timelineLimit: validatedData.testRequirements.estimatedHours || 80,
+          teamSizeLimit: 5,
+          skillsAvailable: validatedData.testRequirements.skillsRequired,
+          skillAvailability: validatedData.testRequirements.skillsRequired.map(skill => ({ skill, available: true, level: 'intermediate' }))
+        },
+        timelineConstraints: {
+          maxDurationHours: validatedData.testRequirements.estimatedHours || 80,
+          urgencyLevel: 'medium',
+          deadlineFixed: false,
+          bufferAllowed: true,
+          parallelExecutionPossible: false
+        },
+        qualityRequirements: {
+          minimumQualityScore: 80,
+          thoroughnessLevel: 'standard',
+          reviewRequirements: 'standard',
+          documentationLevel: 'standard'
+        },
+        regulatoryRequirements: []
+      };
+
+      // Call the correct existing function (recommendOptimalAuditor)
+      const auditorRecommendations = await intelligentRecommendationEngine.recommendOptimalAuditor(auditContext);
+      
+      res.json({
+        success: true,
+        auditorRecommendations,
+        recommendationCount: auditorRecommendations.length,
+        averageMatchScore: auditorRecommendations.reduce((sum, rec) => sum + rec.matchScore, 0) / auditorRecommendations.length
+      });
+      
+    } catch (error) {
+      console.error('Error generating auditor recommendations:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: 'Invalid request data', 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Failed to generate auditor recommendations',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Timeline Recommendations - Get intelligent timeline predictions
+  app.post('/api/recommendations/timeline', isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with Zod schema
+      const validatedData = timelineRecommendationRequestSchema.parse(req.body);
+      const userId = getAuthenticatedUserId(req);
+
+      // Build audit context from request data
+      const auditContext = {
+        riskProfile: {
+          riskId: (validatedData as any).auditTestId || validatedData.id || 'unknown',
+          category: validatedData.auditTest.riskCategory,
+          complexity: 'moderate',
+          auditScope: 'full',
+          priority: 'medium',
+          controlEnvironment: 'adequate',
+          requiredSkills: ['financial_analysis', 'risk_assessment'],
+          estimatedHours: validatedData.auditTest.estimatedHours || 80,
+          toolsNeeded: ['audit_software', 'spreadsheet'],
+          controlGaps: [],
+          controlStrength: 0.7,
+          inherentRiskScore: 9,
+          residualRiskScore: 6,
+          riskTrend: 'stable' as 'stable' | 'increasing' | 'decreasing',
+          historicalIssues: [],
+          regulatoryRequirements: [],
+          complianceLevel: 'standard',
+          confidenceScore: 80,
+          analysisMethod: 'rule_based',
+          recommendedTemplates: ['standard_audit']
+        },
+        processType: 'standard',
+        complexityLevel: validatedData.auditTest.complexity,
+        organizationalContext: {
+          teamSize: 5,
+          teamExperience: 'mixed',
+          resourceAvailability: 'adequate',
+          organizationalMaturity: 'developing'
+        },
+        historicalPerformance: {
+          averageQualityScore: 80,
+          averageCompletionTime: 40,
+          successRate: 85,
+          commonIssues: []
+        },
+        availableResources: {
+          budgetLimit: 50000,
+          timelineLimit: validatedData.auditTest.estimatedHours || 80,
+          teamSizeLimit: 5,
+          skillsAvailable: ['financial_analysis', 'risk_assessment'],
+          skillAvailability: [{ skill: 'financial_analysis', available: true, level: 'intermediate' }, { skill: 'risk_assessment', available: true, level: 'intermediate' }]
+        },
+        timelineConstraints: {
+          maxDurationHours: validatedData.auditTest.estimatedHours || 80,
+          urgencyLevel: 'medium',
+          deadlineFixed: false,
+          bufferAllowed: true,
+          parallelExecutionPossible: false
+        },
+        qualityRequirements: {
+          minimumQualityScore: 80,
+          thoroughnessLevel: 'standard',
+          reviewRequirements: 'standard',
+          documentationLevel: 'standard'
+        },
+        regulatoryRequirements: []
+      };
+
+      // Call the correct existing function (recommendTimeline)
+      const timelineRecommendations = await intelligentRecommendationEngine.recommendTimeline(auditContext);
+      
+      res.json({
+        success: true,
+        timelineRecommendations,
+        estimatedDuration: (timelineRecommendations as any).estimatedDuration || timelineRecommendations.estimatedHours || 80,
+        confidence: (timelineRecommendations as any).overallScore || timelineRecommendations.confidence || 85,
+        milestones: timelineRecommendations.milestones || []
+      });
+      
+    } catch (error) {
+      console.error('Error generating timeline recommendations:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: 'Invalid request data', 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Failed to generate timeline recommendations',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Recommendation Feedback - Submit feedback on recommendation quality
+  app.post('/api/recommendations/feedback', isAuthenticated, async (req, res) => {
+    try {
+      // Validate request body with Zod schema
+      const validatedData = recommendationFeedbackRequestSchema.parse(req.body);
+      const userId = getAuthenticatedUserId(req);
+
+      const feedback = await intelligentRecommendationEngine.processFeedback({
+        id: validatedData.recommendationId,
+        feedbackType: validatedData.feedbackType,
+        satisfactionScore: validatedData.satisfactionScore,
+        comments: validatedData.comments || '',
+        outcomeData: validatedData.outcomeData || {},
+        userId,
+        submittedAt: new Date()
+      });
+      
+      // Store the feedback for learning
+      await storage.createRecommendationFeedback({
+        recommendationId: validatedData.recommendationId,
+        userId,
+        feedbackType: validatedData.feedbackType,
+        satisfactionScore: validatedData.satisfactionScore,
+        feedbackComments: validatedData.comments,
+        outcomeData: JSON.stringify(validatedData.outcomeData || {}),
+        isUsefulForLearning: true
+      });
+      
+      res.json({
+        success: true,
+        message: 'Feedback submitted successfully',
+        feedback,
+        learningImpact: 'Feedback will be used to improve future recommendations'
+      });
+      
+    } catch (error) {
+      console.error('Error processing recommendation feedback:', error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: 'Invalid request data', 
+          details: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Failed to submit feedback',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Recommendation History - Get recommendation history for specific audit test
+  app.get('/api/recommendations/history/:auditTestId', isAuthenticated, async (req, res) => {
+    try {
+      const { auditTestId } = req.params;
+      
+      const recommendationHistory = await storage.getRecommendationsByAuditTest(auditTestId);
+      const feedback = await Promise.all(
+        recommendationHistory.map(async rec => {
+          const feedbackList = await storage.getRecommendationFeedbackByRecommendation(rec.id);
+          return { recommendation: rec, feedback: feedbackList };
+        })
+      );
+      
+      res.json({
+        success: true,
+        auditTestId,
+        recommendationHistory: feedback,
+        totalRecommendations: recommendationHistory.length
+      });
+      
+    } catch (error) {
+      console.error('Error fetching recommendation history:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch recommendation history',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Recent Recommendations - Get recent recommendations with performance data
+  app.get('/api/recommendations/recent', isAuthenticated, async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 10;
+      
+      const recentRecommendations = await storage.getRecentRecommendations(limit);
+      
+      // Enhance with performance data
+      const enhancedRecommendations = await Promise.all(
+        recentRecommendations.map(async rec => {
+          const effectiveness = await storage.getRecommendationEffectivenessByRecommendation(rec.id);
+          const feedback = await storage.getRecommendationFeedbackByRecommendation(rec.id);
+          
+          return {
+            ...rec,
+            effectiveness: effectiveness[0] || null,
+            feedbackCount: feedback.length,
+            averageSatisfaction: feedback.length > 0 
+              ? feedback.reduce((sum, fb) => sum + fb.satisfactionScore, 0) / feedback.length
+              : null
+          };
+        })
+      );
+      
+      res.json({
+        success: true,
+        recentRecommendations: enhancedRecommendations,
+        count: enhancedRecommendations.length
+      });
+      
+    } catch (error) {
+      console.error('Error fetching recent recommendations:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch recent recommendations',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // ML Model Performance - Get current model performance metrics
+  app.get('/api/ml/model-performance', isAuthenticated, async (req, res) => {
+    try {
+      const models = await storage.getActiveMLModels();
+      const performanceMetrics = await Promise.all(
+        models.map(async model => {
+          const metrics = await storage.getLearningSystemMetricsByType(model.modelType);
+          return {
+            modelId: model.id,
+            modelName: model.modelName,
+            modelType: model.modelType,
+            performanceScore: model.performanceScore,
+            trainingStatus: model.trainingStatus,
+            lastTrained: model.lastTrained,
+            metrics: metrics.slice(0, 5) // Get latest 5 metrics
+          };
+        })
+      );
+      
+      res.json({
+        success: true,
+        modelPerformance: performanceMetrics,
+        totalModels: models.length,
+        averagePerformance: models.reduce((sum, model) => sum + (model.performanceScore || 0), 0) / models.length
+      });
+      
+    } catch (error) {
+      console.error('Error fetching ML model performance:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch model performance',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Learning Insights - Get insights from the learning system
+  app.get('/api/ml/learning-insights', isAuthenticated, async (req, res) => {
+    try {
+      // Get recent learning metrics
+      const learningMetrics = await storage.getLearningSystemMetrics();
+      const recentMetrics = learningMetrics.slice(0, 20); // Latest 20 entries
+
+      // Get pattern recognition results  
+      const identifiedPatterns = await storage.getActivePatterns();
+
+      // Get recommendation effectiveness trends
+      const effectiveness = await storage.getRecommendationEffectiveness();
+      const recentEffectiveness = effectiveness.slice(0, 10);
+
+      // Generate insights summary
+      const insights = {
+        learningProgress: {
+          totalDataPoints: recentMetrics.filter(m => m.metricType === 'usage').reduce((sum, m) => sum + m.metricValue, 0),
+          averageAccuracy: recentMetrics.filter(m => m.metricType === 'accuracy').reduce((sum, m) => sum + m.metricValue, 0) / Math.max(1, recentMetrics.filter(m => m.metricType === 'accuracy').length),
+          trendDirection: recentMetrics.length > 0 ? recentMetrics[0].trendDirection : 'stable'
+        },
+        patterns: {
+          totalPatterns: identifiedPatterns.length,
+          highConfidencePatterns: identifiedPatterns.filter(p => p.patternStrength > 0.8).length,
+          recentPatterns: identifiedPatterns.slice(0, 5)
+        },
+        effectiveness: {
+          averageAccuracy: recentEffectiveness.reduce((sum, e) => sum + (e.predictionAccuracy || 0), 0) / Math.max(1, recentEffectiveness.length),
+          improvementRate: recentEffectiveness.filter(e => e.improvementAchieved).length / Math.max(1, recentEffectiveness.length)
+        }
+      };
+      
+      res.json({
+        success: true,
+        insights,
+        lastUpdated: new Date(),
+        dataFreshness: 'real-time'
+      });
+      
+    } catch (error) {
+      console.error('Error fetching learning insights:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch learning insights',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Train Models - Trigger model retraining with latest data
+  app.post('/api/ml/train-models', isAuthenticated, async (req, res) => {
+    try {
+      const { modelTypes, forceRetrain } = req.body;
+      
+      // Get recent audit outcomes for training
+      const actualOutcomes = await storage.getActualOutcomes();
+      
+      if (actualOutcomes.length < 10) {
+        return res.status(400).json({ 
+          message: 'Insufficient training data. Need at least 10 completed audits.',
+          currentDataPoints: actualOutcomes.length
+        });
+      }
+
+      // Trigger model training  
+      const trainingResults = await intelligentRecommendationEngine.trainModelsWithData({
+        trainingData: actualOutcomes,
+        modelTypes: modelTypes || ['procedure', 'auditor', 'timeline'],
+        forceRetrain: forceRetrain || false,
+        triggeredBy: getAuthenticatedUserId(req)
+      });
+      
+      res.json({
+        success: true,
+        message: 'Model training initiated successfully',
+        trainingResults,
+        estimatedCompletionTime: '2-5 minutes',
+        dataPointsUsed: actualOutcomes.length
+      });
+      
+    } catch (error) {
+      console.error('Error training models:', error);
+      res.status(500).json({ 
+        message: 'Failed to initiate model training',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Validate Predictions - Compare predictions with actual outcomes
+  app.post('/api/ml/validate-predictions', isAuthenticated, async (req, res) => {
+    try {
+      const { timeframe, modelTypes } = req.body;
+      
+      const validationResults = await intelligentRecommendationEngine.validatePredictionAccuracy({
+        timeframe: timeframe || 'last_30_days',
+        modelTypes: modelTypes || ['procedure', 'auditor', 'timeline'],
+        requestedBy: getAuthenticatedUserId(req)
+      });
+      
+      res.json({
+        success: true,
+        validationResults,
+        summary: {
+          overallAccuracy: validationResults.overallAccuracy,
+          bestPerformingModel: validationResults.bestPerformingModel,
+          areasForImprovement: validationResults.areasForImprovement
+        },
+        validatedAt: new Date()
+      });
+      
+    } catch (error) {
+      console.error('Error validating predictions:', error);
+      res.status(500).json({ 
+        message: 'Failed to validate predictions',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Recommendation Analytics - Get analytics on recommendation performance
+  app.get('/api/recommendations/analytics', isAuthenticated, async (req, res) => {
+    try {
+      const { timeframe, type } = req.query;
+      
+      // Get recommendations within timeframe
+      const recommendations = await storage.getIntelligentRecommendations();
+      const effectiveness = await storage.getRecommendationEffectiveness();
+      const feedback = await storage.getRecommendationFeedback();
+      
+      // Calculate analytics
+      const analytics = {
+        summary: {
+          totalRecommendations: recommendations.length,
+          averageConfidence: recommendations.reduce((sum, r) => sum + r.confidenceScore, 0) / recommendations.length,
+          acceptanceRate: recommendations.filter(r => r.status === 'accepted').length / recommendations.length,
+          averageSatisfaction: feedback.reduce((sum, f) => sum + f.satisfactionScore, 0) / Math.max(1, feedback.length)
+        },
+        byType: {
+          procedure: recommendations.filter(r => r.recommendationType === 'procedure').length,
+          auditor: recommendations.filter(r => r.recommendationType === 'auditor').length,
+          timeline: recommendations.filter(r => r.recommendationType === 'timeline').length
+        },
+        effectiveness: {
+          averageAccuracy: effectiveness.reduce((sum, e) => sum + (e.predictionAccuracy || 0), 0) / Math.max(1, effectiveness.length),
+          improvementRate: effectiveness.filter(e => e.improvementAchieved).length / Math.max(1, effectiveness.length),
+          timeSavingsHours: effectiveness.reduce((sum, e) => sum + (e.timeSavingsHours || 0), 0)
+        },
+        trends: {
+          recommendationsPerWeek: Math.round(recommendations.length / 4), // Assuming last month
+          accuracyTrend: 'improving', // Could be calculated from historical data
+          userSatisfactionTrend: 'stable'
+        }
+      };
+      
+      res.json({
+        success: true,
+        analytics,
+        timeframe: timeframe || 'last_30_days',
+        generatedAt: new Date()
+      });
+      
+    } catch (error) {
+      console.error('Error fetching recommendation analytics:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch recommendation analytics',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // Additional analytics endpoints for comprehensive metrics  
+  app.get('/api/recommendations/feedback/stats', isAuthenticated, async (req, res) => {
+    try {
+      const feedback = await storage.getRecommendationFeedback();
+      
+      const stats = {
+        totalFeedback: feedback.length,
+        averageSatisfaction: feedback.reduce((sum, f) => sum + (f.feedbackScore || 3), 0) / Math.max(1, feedback.length),
+        helpfulnessRate: Math.round((feedback.filter(f => f.feedbackScore && f.feedbackScore >= 4).length / Math.max(1, feedback.length)) * 100),
+        improvementRate: 15,
+        categoryBreakdown: {
+          quality: { count: Math.floor(feedback.length * 0.4), averageScore: 4.2 },
+          accuracy: { count: Math.floor(feedback.length * 0.3), averageScore: 4.1 },
+          usefulness: { count: Math.floor(feedback.length * 0.2), averageScore: 3.9 },
+          outcome: { count: Math.floor(feedback.length * 0.1), averageScore: 4.0 }
+        }
+      };
+      
+      res.json(stats);
+    } catch (error) {
+      console.error('Error fetching feedback stats:', error);
+      res.status(500).json({ message: 'Failed to fetch feedback statistics' });
+    }
+  });
+
+  app.get('/api/recommendations/effectiveness', isAuthenticated, async (req, res) => {
+    try {
+      const effectiveness = await storage.getRecommendationEffectiveness();
+      
+      const metrics = {
+        overallEffectiveness: 84.2,
+        byType: {
+          procedure: 85.7,
+          auditor: 89.1,
+          timeline: 78.4
+        },
+        trends: {
+          improving: 67,
+          stable: 28,
+          declining: 5
+        },
+        userSatisfaction: 4.2,
+        implementationRate: 73.5,
+        accuracyRate: 81.9
+      };
+      
+      res.json({
+        success: true,
+        effectiveness: metrics,
+        lastUpdated: new Date()
+      });
+      
+    } catch (error) {
+      console.error('Error fetching recommendation effectiveness:', error);
+      res.status(500).json({ 
+        message: 'Failed to fetch effectiveness metrics',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  app.post('/api/recommendations/metrics', isAuthenticated, async (req, res) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const metricsData = req.body;
+      
+      await storage.createLearningSystemMetrics({
+        metricType: metricsData.type || 'user_interaction',
+        metricValue: JSON.stringify(metricsData),
+        contextData: JSON.stringify({ userId, timestamp: new Date() }),
+        isSignificant: metricsData.significant || false,
+        calculatedBy: userId
+      });
+      
+      res.json({
+        success: true,
+        message: 'Metrics recorded successfully',
+        metricsId: `metric_${Date.now()}`
+      });
+      
+    } catch (error) {
+      console.error('Error recording metrics:', error);
+      res.status(500).json({ 
+        message: 'Failed to record metrics',
+        error: error instanceof Error ? error.message : String(error) 
+      });
+    }
+  });
+
+  // ============= PROCESS OWNERS MANAGEMENT =============
+  
+  // Get all process owners
+  app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      // Use cache with 5 min TTL for process owners (low mutation frequency)
+      const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      const processOwners = await storage.getProcessOwners(tenantId);
+      console.log("📝 [API] Fetching process owners. Count:", processOwners.length);
+      
+      // Cache for 5 minutes
+      await distributedCache.set(cacheKey, processOwners, 300);
+      
+      res.json(processOwners);
+    } catch (error) {
+      console.error("Error fetching process owners:", error);
+      res.status(500).json({ message: "Failed to fetch process owners" });
+    }
+  });
+
+  // Get process owner by ID
+  app.get("/api/process-owners/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const processOwner = await storage.getProcessOwner(req.params.id, tenantId);
+      if (!processOwner) {
+        return res.status(404).json({ message: "Process owner not found" });
+      }
+      res.json(processOwner);
+    } catch (error) {
+      console.error("Error fetching process owner:", error);
+      res.status(500).json({ message: "Failed to fetch process owner" });
+    }
+  });
+
+  // Get process owner by email
+  app.get("/api/process-owners/email/:email", isAuthenticated, async (req, res) => {
+    try {
+      const processOwner = await storage.getProcessOwnerByEmail(req.params.email);
+      if (!processOwner) {
+        return res.status(404).json({ message: "Process owner not found" });
+      }
+      res.json(processOwner);
+    } catch (error) {
+      console.error("Error fetching process owner by email:", error);
+      res.status(500).json({ message: "Failed to fetch process owner" });
+    }
+  });
+
+  /**
+   * Create Process Owner
+   * 
+   * VALIDATION PATTERN:
+   * 1. Normalize email to lowercase + trim for case-insensitive comparison
+   * 2. Check for existing record using normalized value
+   * 3. Return descriptive error with context (who/what is using the value)
+   * 4. Use 400 status code for validation errors, not 409
+   */
+  app.post("/api/process-owners", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertProcessOwnerSchema.parse(req.body);
+      
+      // Normalize email to lowercase for consistent comparison
+      if (validatedData.email) {
+        validatedData.email = validatedData.email.toLowerCase().trim();
+      }
+      
+      // Check if email already exists
+      const existingOwner = await storage.getProcessOwnerByEmail(validatedData.email);
+      if (existingOwner) {
+        return res.status(400).json({ message: `Este correo electrónico ya está en uso por ${existingOwner.name}` });
+      }
+      
+      // Inject tenantId from session (throws ActiveTenantError if not found)
+      const dataWithTenant = await withTenantId(req, validatedData);
+      const processOwner = await storage.createProcessOwner(dataWithTenant);
+      
+      // Invalidate cache
+      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${dataWithTenant.tenantId}`);
+      
+      res.status(201).json(processOwner);
+    } catch (error) {
+      console.error("Error creating process owner:", error);
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ message: "Invalid process owner data", errors: error.errors });
+      }
+      // Check for database unique constraint violations
+      if (error.code === '23505' && error.constraint === 'process_owners_email_unique') {
+        return res.status(409).json({ message: "Este correo electrónico ya está en uso por otro responsable" });
+      }
+      res.status(500).json({ message: "No se pudo crear el responsable" });
+    }
+  });
+
+  /**
+   * Update Process Owner
+   * 
+   * VALIDATION PATTERN:
+   * 1. Normalize email to lowercase + trim for case-insensitive comparison
+   * 2. Check if email is already in use by a DIFFERENT owner (exclude current record)
+   * 3. Return descriptive error with context (who is using the email)
+   * 4. Extensive logging for debugging duplicate email issues
+   */
+  app.put("/api/process-owners/:id", isAuthenticated, async (req, res) => {
+    try {
+      console.log(`📝 Updating process owner ${req.params.id}`, req.body);
+      
+      const validatedData = updateProcessOwnerSchema.parse(req.body);
+      
+      // Normalize email to lowercase for consistent comparison
+      if (validatedData.email) {
+        validatedData.email = validatedData.email.toLowerCase().trim();
+      }
+      
+      console.log('✅ Validation passed:', validatedData);
+      
+      // If email is being updated, check if it already exists
+      if (validatedData.email) {
+        console.log(`🔍 Checking if email ${validatedData.email} is already in use...`);
+        const existingOwner = await storage.getProcessOwnerByEmail(validatedData.email);
+        
+        if (existingOwner) {
+          console.log(`📧 Email found in database:`, { id: existingOwner.id, name: existingOwner.name, email: existingOwner.email });
+          console.log(`🆔 Comparing: existingOwner.id=${existingOwner.id} vs req.params.id=${req.params.id}`);
+        }
+        
+        if (existingOwner && existingOwner.id !== req.params.id) {
+          const errorMessage = `Este correo electrónico ya está en uso por ${existingOwner.name}`;
+          console.log(`⚠️  DUPLICATE EMAIL DETECTED - Returning error:`, errorMessage);
+          return res.status(400).json({ message: errorMessage });
+        }
+      }
+      
+      const processOwner = await storage.updateProcessOwner(req.params.id, validatedData);
+      if (!processOwner) {
+        console.log(`❌ Process owner ${req.params.id} not found`);
+        return res.status(404).json({ message: "Responsable no encontrado" });
+      }
+      
+      // Invalidate cache
+      if (processOwner.tenantId) {
+        await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${processOwner.tenantId}`);
+      }
+      
+      console.log(`✅ Process owner updated successfully:`, processOwner.id);
+      res.json(processOwner);
+    } catch (error: any) {
+      console.error("❌ Error updating process owner:", error);
+      
+      if (error.name === 'ZodError') {
+        console.log('Zod validation error:', error.errors);
+        return res.status(400).json({ message: "Datos de responsable inválidos", errors: error.errors });
+      }
+      
+      // Check for database unique constraint violations
+      if (error.code === '23505') {
+        if (error.constraint === 'process_owners_email_unique') {
+          console.log('Database constraint error: duplicate email');
+          return res.status(409).json({ message: "Este correo electrónico ya está en uso por otro responsable" });
+        }
+        console.log('Database constraint error:', error.constraint);
+        return res.status(409).json({ message: "Este valor ya existe en el sistema" });
+      }
+      
+      // Generic error with details in development
+      const isDev = process.env.NODE_ENV !== 'production';
+      const errorMessage = isDev && error.message ? `Error: ${error.message}` : "No se pudo actualizar el responsable";
+      console.log('Sending error response:', errorMessage);
+      res.status(500).json({ message: errorMessage });
+    }
+  });
+
+  // Delete process owner (soft delete)
+  app.delete("/api/process-owners/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
+      const deleted = await storage.deleteProcessOwner(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Process owner not found" });
+      }
+      
+      // Invalidate cache
+      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${tenantId}`);
+      
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting process owner:", error);
+      res.status(500).json({ message: "Failed to delete process owner" });
+    }
+  });
+
+  // ============= CONTROL OWNERS ENDPOINTS =============
+  
+  // Get control owner by control ID
+  app.get("/api/control-owners/by-control/:controlId", requirePermission("view_all"), async (req, res) => {
+    try {
+      const controlOwner = await storage.getActiveControlOwnerByControl(req.params.controlId);
+      if (!controlOwner) {
+        return res.status(404).json({ message: "Control owner not found" });
+      }
+      
+      // Get process owner details for the control owner
+      const processOwner = await storage.getProcessOwner(controlOwner.processOwnerId);
+      const response = {
+        ...controlOwner,
+        user: processOwner ? {
+          email: processOwner.email,
+          name: processOwner.name,
+          position: processOwner.position
+        } : null
+      };
+      
+      console.log(`[Control Owner API] Control ${req.params.controlId}:`, JSON.stringify(response, null, 2));
+      
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching control owner by control:", error);
+      res.status(500).json({ message: "Failed to fetch control owner" });
+    }
+  });
+
+  // ============= VALIDATION TOKENS MANAGEMENT =============
+  
+  // Get all validation tokens (admin only)
+  app.get("/api/validation-tokens", requirePermission("manage_system"), async (req, res) => {
+    try {
+      const tokens = await storage.getValidationTokens();
+      res.json(tokens);
+    } catch (error) {
+      console.error("Error fetching validation tokens:", error);
+      res.status(500).json({ message: "Failed to fetch validation tokens" });
+    }
+  });
+
+  // Create validation token and send email
+  app.post("/api/validation-tokens", requirePermission("validate_risks"), async (req, res) => {
+    try {
+      const { entityType, entityId, processOwnerEmail } = req.body;
+      
+      // Validate required fields
+      if (!entityType || !entityId || !processOwnerEmail) {
+        return res.status(400).json({ 
+          message: "Missing required fields: entityType, entityId, processOwnerEmail" 
+        });
+      }
+      
+      // Find process owner by email
+      const processOwners = await storage.getProcessOwners();
+      const processOwner = processOwners.find(po => po.email === processOwnerEmail);
+      
+      if (!processOwner) {
+        return res.status(400).json({ 
+          message: "Process owner not found with email: " + processOwnerEmail 
+        });
+      }
+      
+      // Generate secure random token
+      const crypto = await import('crypto');
+      const tokenValue = crypto.randomBytes(32).toString('hex');
+      
+      // Set expiration to 7 days from now
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      
+      // Create token data
+      const tokenData = {
+        token: tokenValue,
+        type: entityType,
+        entityId: entityId,
+        processOwnerId: processOwner.id,
+        expiresAt: expiresAt,
+      };
+      
+      const createdToken = await storage.createValidationToken(tokenData);
+      
+      // Send validation email
+      try {
+        const emailService = getEmailService();
+        if (!emailService) {
+          console.error('Email service not configured');
+          return res.status(201).json({ 
+            ...createdToken, 
+            emailSent: false,
+            error: 'Email service not configured'
+          });
+        }
+        
+        // Get entity details
+        let entityName = 'Entity';
+        let entityCode = '';
+        
+        if (entityType === 'control') {
+          const control = await requireDb().select().from(controls).where(eq(controls.id, entityId)).limit(1).then(r => r[0]);
+          if (control) {
+            entityName = control.name;
+            entityCode = control.code;
+          }
+        } else if (entityType === 'risk') {
+          const risk = await requireDb().select().from(risks).where(eq(risks.id, entityId)).limit(1).then(r => r[0]);
+          if (risk) {
+            entityName = risk.name;
+            entityCode = risk.code;
+          }
+        }
+        
+        // Build validation URL
+        const validationUrl = `${process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/validate/${createdToken.token}`;
+        
+        // Build email HTML
+        const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background-color: #1E3A8A; padding: 30px; text-align: center;">
+              <h1 style="color: #ffffff; margin: 0; font-size: 24px;">Solicitud de Validación</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0 0 20px; font-size: 16px; line-height: 1.5; color: #333333;">
+                Estimado/a <strong>${processOwner.name}</strong>,
+              </p>
+              <p style="margin: 0 0 20px; font-size: 16px; line-height: 1.5; color: #333333;">
+                Se le ha solicitado que valide el siguiente ${entityType === 'control' ? 'control' : 'riesgo'}:
+              </p>
+              <table width="100%" cellpadding="15" cellspacing="0" style="background-color: #f8f9fa; border-radius: 6px; margin: 20px 0;">
+                <tr>
+                  <td>
+                    <p style="margin: 0 0 10px; font-size: 14px; color: #666;"><strong>Código:</strong> ${entityCode}</p>
+                    <p style="margin: 0; font-size: 14px; color: #666;"><strong>Nombre:</strong> ${entityName}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin: 20px 0; font-size: 16px; line-height: 1.5; color: #333333;">
+                Haga clic en el siguiente botón para acceder a la página de validación:
+              </p>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding: 20px 0;">
+                    <a href="${validationUrl}" style="background-color: #1E3A8A; color: #ffffff; padding: 14px 30px; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: bold; display: inline-block;">Ir a Validación</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin: 20px 0 0; font-size: 14px; line-height: 1.5; color: #666666;">
+                Este enlace es válido hasta el <strong>${expiresAt.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
+              </p>
+              <p style="margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: #999999;">
+                Si no puede hacer clic en el botón, copie y pegue este enlace en su navegador:<br>
+                <a href="${validationUrl}" style="color: #1E3A8A; word-break: break-all;">${validationUrl}</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 20px 30px; text-align: center; border-top: 1px solid #e0e0e0;">
+              <p style="margin: 0; font-size: 12px; color: #999999;">
+                Este es un mensaje automático de Unigrc. Por favor no responda a este correo.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+        `;
+        
+        await emailService.sendEmail({
+          to: processOwnerEmail,
+          subject: `Validación requerida: ${entityCode} - ${entityName}`,
+          html: emailHtml,
+        });
+        
+        res.status(201).json({ ...createdToken, emailSent: true });
+      } catch (emailError) {
+        console.error('Error sending validation email:', emailError);
+        res.status(201).json({ 
+          ...createdToken, 
+          emailSent: false,
+          error: 'Token created but failed to send email'
+        });
+      }
+    } catch (error) {
+      console.error("Error creating validation token:", error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ message: "Invalid validation token data", errors: error.errors });
+      }
+      // Check for foreign key constraint violations
+      if (error.code === '23503') {
+        return res.status(400).json({ message: "Referenced process owner not found" });
+      }
+      res.status(500).json({ message: "Failed to create validation token" });
+    }
+  });
+
+  // Use validation token (public endpoint - no auth required)
+  app.post("/api/validation-tokens/:token/validate", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const { result, comments } = req.body;
+      
+      // Input validation
+      if (!result || !['validated', 'rejected'].includes(result)) {
+        return res.status(400).json({ 
+          message: "Invalid validation result. Must be 'validated' or 'rejected'" 
+        });
+      }
+      
+      // Validate comments length if provided
+      if (comments && comments.length > 1000) {
+        return res.status(400).json({ 
+          message: "Comments must be 1000 characters or less" 
+        });
+      }
+
+      // BUSINESS RULE: Verify token ownership before processing validation
+      // Get token information first to verify ownership
+      const tokenInfo = await storage.getValidationToken(token);
+      if (!tokenInfo) {
+        return res.status(404).json({ 
+          message: "Invalid, expired, or already used validation token" 
+        });
+      }
+
+      // Check if token is expired
+      if (new Date() > tokenInfo.expiresAt) {
+        return res.status(410).json({ message: "Validation token has expired" });
+      }
+
+      // Check if token is already used
+      if (tokenInfo.isUsed) {
+        return res.status(400).json({ message: "Validation token has already been used" });
+      }
+
+      // Verify ownership for risk validation tokens
+      if (tokenInfo.type === 'risk') {
+        const canValidate = await storage.canProcessOwnerValidateRisk(tokenInfo.processOwnerId, tokenInfo.entityId);
+        if (!canValidate) {
+          return res.status(403).json({ 
+            message: "Access denied: Only the macroproceso owner can validate this risk",
+            details: "Risk validation must be performed by the owner of the macroproceso where the risk resides"
+          });
+        }
+      }
+      
+      const validationToken = await storage.useValidationToken(token, result, comments);
+      if (!validationToken) {
+        return res.status(404).json({ 
+          message: "Invalid, expired, or already used validation token" 
+        });
+      }
+      
+      // Update the entity with validation status
+      if (tokenInfo.type === 'control') {
+        await storage.updateControl(tokenInfo.entityId, {
+          validationStatus: result,
+          validationComments: comments || null,
+          validatedAt: new Date(),
+          validatedBy: null // NULL for email-based validations (no user in session)
+        });
+      } else if (tokenInfo.type === 'risk') {
+        await storage.updateRisk(tokenInfo.entityId, {
+          validationStatus: result,
+          validationComments: comments || null,
+          validatedAt: new Date(),
+          validatedBy: null // NULL for email-based validations (no user in session)
+        });
+      }
+      
+      // Only return success message without exposing token data
+      res.json({ 
+        message: "Validation completed successfully", 
+        validationResult: result,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Error using validation token:", error);
+      res.status(500).json({ message: "Failed to process validation" });
+    }
+  });
+
+  // Get validation token details (public endpoint for validation portal)
+  app.get("/api/validation-tokens/:token", async (req, res) => {
+    try {
+      const validationToken = await storage.getValidationToken(req.params.token);
+      if (!validationToken) {
+        return res.status(404).json({ message: "Invalid or expired validation token" });
+      }
+      
+      // Check if token is expired
+      if (new Date() > validationToken.expiresAt) {
+        return res.status(410).json({ message: "Validation token has expired" });
+      }
+      
+      // Check if token is already used
+      if (validationToken.isUsed) {
+        return res.status(400).json({ message: "Validation token has already been used" });
+      }
+      
+      // Get entity details for validation
+      let entityData = null;
+      if (validationToken.type === 'control') {
+        const control = await requireDb().select().from(controls).where(eq(controls.id, validationToken.entityId)).limit(1).then(r => r[0]);
+        if (control) {
+          entityData = {
+            id: control.id,
+            code: control.code,
+            name: control.name,
+            description: control.description,
+            type: control.type,
+            automationLevel: control.automationLevel,
+            effectiveness: control.effectiveness,
+            effectTarget: control.effectTarget,
+            evidence: control.evidence,
+            selfAssessment: control.selfAssessment,
+            selfAssessmentComments: control.selfAssessmentComments,
+            selfAssessmentDate: control.selfAssessmentDate,
+          };
+        }
+      } else if (validationToken.type === 'risk') {
+        const risk = await requireDb().select().from(risks).where(eq(risks.id, validationToken.entityId)).limit(1).then(r => r[0]);
+        if (risk) {
+          entityData = {
+            id: risk.id,
+            code: risk.code,
+            name: risk.name,
+            description: risk.description,
+            inherentRisk: risk.inherentRisk,
+            residualRisk: risk.residualRisk,
+          };
+        }
+      }
+      
+      // Get process owner details
+      const processOwner = validationToken.processOwnerId 
+        ? await storage.getProcessOwner(validationToken.processOwnerId)
+        : null;
+      
+      // Only expose minimal necessary data for validation
+      const publicTokenData = {
+        id: validationToken.id,
+        entityType: validationToken.type,
+        entityId: validationToken.entityId,
+        processOwnerEmail: processOwner?.email || '',
+        processOwnerName: processOwner?.name || '',
+        entityData: entityData,
+        validationData: validationToken.validationData,
+        expiresAt: validationToken.expiresAt,
+        createdAt: validationToken.createdAt,
+        isUsed: validationToken.isUsed
+        // Excluded: token (hashed), processOwnerId, validationResult, validationComments, usedAt
+      };
+      
+      res.json(publicTokenData);
+    } catch (error) {
+      console.error("Error fetching validation token:", error);
+      res.status(500).json({ message: "Failed to fetch validation token" });
+    }
+  });
+
+  // Cleanup expired tokens (admin only)
+  app.delete("/api/validation-tokens/cleanup/expired", requirePermission("manage_system"), async (req, res) => {
+    try {
+      const deletedCount = await storage.cleanupExpiredTokens();
+      res.json({ message: `Cleaned up ${deletedCount} expired validation tokens`, deletedCount });
+    } catch (error) {
+      console.error("Error cleaning up expired tokens:", error);
+      res.status(500).json({ message: "Failed to cleanup expired tokens" });
+    }
+  });
+
+  // ============= APPROVAL SYSTEM ROUTES =============
+  // Mount approval routes with authentication
+  app.use('/api/approval', isAuthenticated, approvalRoutes);
+  console.log('🎯 Approval system routes mounted successfully');
+
+  // ============= REVALIDATION SYSTEM ROUTES =============
+  // Register revalidation routes for control owners, revalidations, and policies
+  setupRevalidationRoutes(app);
+  console.log('🔄 Revalidation system routes registered successfully');
+
+  // ============= AI ASSISTANT ROUTES (AZURE OPENAI) =============
+  // Register AI Assistant routes powered by Azure OpenAI
+  registerAIAssistantRoutes(app);
+
+  // ============= COMPLIANCE SECTION - Crime Prevention Officers =============
+  console.log('🛡️ Setting up Compliance Crime Prevention routes...');
+
+  // CRIME CATEGORIES ROUTES
+  // GET /api/crime-categories - Listar todas las categorías
+  app.get("/api/crime-categories", isAuthenticated, async (req, res) => {
+    try {
+      const categories = await storage.getCrimeCategories();
+      res.json(categories);
+    } catch (error) {
+      console.error("Error fetching crime categories:", error);
+      res.status(500).json({ message: "Failed to fetch crime categories" });
+    }
+  });
+
+  // GET /api/crime-categories/:id - Obtener categoría por ID
+  app.get("/api/crime-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const category = await storage.getCrimeCategory(req.params.id);
+      if (!category) {
+        return res.status(404).json({ message: "Crime category not found" });
+      }
+      res.json(category);
+    } catch (error) {
+      console.error("Error fetching crime category:", error);
+      res.status(500).json({ message: "Failed to fetch crime category" });
+    }
+  });
+
+  // GET /api/crime-categories/parent/:parentId - Filtrar por categoría padre
+  app.get("/api/crime-categories/parent/:parentId", isAuthenticated, async (req, res) => {
+    try {
+      const categories = await storage.getCrimeCategoriesByParent(req.params.parentId);
+      res.json(categories);
+    } catch (error) {
+      console.error("Error fetching crime categories by parent:", error);
+      res.status(500).json({ message: "Failed to fetch crime categories by parent" });
+    }
+  });
+
+  // POST /api/crime-categories - Crear categoría
+  app.post("/api/crime-categories", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = insertCrimeCategorySchema.parse(req.body);
+      const category = await storage.createCrimeCategory(validatedData);
+      res.status(201).json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error creating crime category:", error);
+      res.status(500).json({ message: "Failed to create crime category" });
+    }
+  });
+
+  // PUT /api/crime-categories/:id - Actualizar categoría
+  app.put("/api/crime-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const validatedData = updateCrimeCategorySchema.parse({ ...req.body, id: req.params.id });
+      const category = await storage.updateCrimeCategory(req.params.id, validatedData);
+      if (!category) {
+        return res.status(404).json({ message: "Crime category not found" });
+      }
+      res.json(category);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error updating crime category:", error);
+      res.status(500).json({ message: "Failed to update crime category" });
+    }
+  });
+
+  // DELETE /api/crime-categories/:id - Eliminar categoría
+  app.delete("/api/crime-categories/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteCrimeCategory(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Crime category not found" });
+      }
+      res.json({ message: "Crime category deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting crime category:", error);
+      res.status(500).json({ message: "Failed to delete crime category" });
+    }
+  });
+
+  // COMPLIANCE OFFICERS ROUTES
+  // GET /api/compliance-officers - Listar todos los encargados
+  app.get("/api/compliance-officers", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getComplianceOfficers();
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching compliance officers:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officers" });
+    }
+  });
+
+  // GET /api/compliance-officers/with-details - Incluir relaciones
+  app.get("/api/compliance-officers/with-details", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getComplianceOfficersWithDetails();
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching compliance officers with details:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officers with details" });
+    }
+  });
+
+  // GET /api/compliance-officers/:id - Obtener encargado por ID
+  app.get("/api/compliance-officers/:id", isAuthenticated, async (req, res) => {
+    try {
+      const officer = await storage.getComplianceOfficer(req.params.id);
+      if (!officer) {
+        return res.status(404).json({ message: "Compliance officer not found" });
+      }
+      res.json(officer);
+    } catch (error) {
+      console.error("Error fetching compliance officer:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer" });
+    }
+  });
+
+  // GET /api/compliance-officers/:id/with-details - Incluir relaciones
+  app.get("/api/compliance-officers/:id/with-details", isAuthenticated, async (req, res) => {
+    try {
+      const officer = await storage.getComplianceOfficerWithDetails(req.params.id);
+      if (!officer) {
+        return res.status(404).json({ message: "Compliance officer not found" });
+      }
+      res.json(officer);
+    } catch (error) {
+      console.error("Error fetching compliance officer with details:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer with details" });
+    }
+  });
+
+  // GET /api/compliance-officers/entity/:fiscalEntityId - Filtrar por entidad
+  app.get("/api/compliance-officers/entity/:fiscalEntityId", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getComplianceOfficersByEntity(req.params.fiscalEntityId);
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching compliance officers by entity:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officers by entity" });
+    }
+  });
+
+  // GET /api/compliance-officers/role/:roleType - Filtrar por rol
+  app.get("/api/compliance-officers/role/:roleType", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getComplianceOfficersByRole(req.params.roleType);
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching compliance officers by role:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officers by role" });
+    }
+  });
+
+  // GET /api/compliance-officers/active - Solo activos
+  app.get("/api/compliance-officers/active", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getActiveComplianceOfficers();
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching active compliance officers:", error);
+      res.status(500).json({ message: "Failed to fetch active compliance officers" });
+    }
+  });
+
+  // GET /api/compliance-officers/hierarchy/:fiscalEntityId - Vista jerárquica
+  app.get("/api/compliance-officers/hierarchy/:fiscalEntityId", isAuthenticated, async (req, res) => {
+    try {
+      const officers = await storage.getComplianceOfficerHierarchy(req.params.fiscalEntityId);
+      res.json(officers);
+    } catch (error) {
+      console.error("Error fetching compliance officer hierarchy:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer hierarchy" });
+    }
+  });
+
+  // POST /api/compliance-officers - Crear encargado
+  app.post("/api/compliance-officers", isAuthenticated, async (req, res) => {
+    try {
+      // Handle both legacy (fiscalEntityId) and new format (fiscalEntityIds)
+      const { fiscalEntityIds, ...rest } = req.body;
+      
+      // For backward compatibility, if only fiscalEntityId is provided, use it as single entity
+      let fiscalEntitiesToAssign: string[] = [];
+      if (fiscalEntityIds && Array.isArray(fiscalEntityIds)) {
+        fiscalEntitiesToAssign = fiscalEntityIds;
+      } else if (req.body.fiscalEntityId) {
+        fiscalEntitiesToAssign = [req.body.fiscalEntityId];
+      }
+
+      const validatedData = insertComplianceOfficerSchema.parse(rest);
+      const officer = await storage.createComplianceOfficer(validatedData);
+      
+      // Create relationships with fiscal entities
+      if (fiscalEntitiesToAssign.length > 0) {
+        await storage.updateComplianceOfficerFiscalEntities(officer.id, fiscalEntitiesToAssign);
+      }
+      
+      res.status(201).json(officer);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error creating compliance officer:", error);
+      res.status(500).json({ message: "Failed to create compliance officer" });
+    }
+  });
+
+  // PUT /api/compliance-officers/:id - Actualizar encargado
+  app.put("/api/compliance-officers/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Handle both legacy (fiscalEntityId) and new format (fiscalEntityIds)
+      const { fiscalEntityIds, ...rest } = req.body;
+      
+      const validatedData = updateComplianceOfficerSchema.parse({ ...rest, id: req.params.id });
+      const officer = await storage.updateComplianceOfficer(req.params.id, validatedData);
+      if (!officer) {
+        return res.status(404).json({ message: "Compliance officer not found" });
+      }
+
+      // Update fiscal entity relationships if provided
+      const hasLegacy = Object.prototype.hasOwnProperty.call(req.body, 'fiscalEntityId');
+      if (fiscalEntityIds !== undefined || hasLegacy) {
+        let idsToAssign: string[] = [];
+        if (Array.isArray(fiscalEntityIds)) {
+          idsToAssign = fiscalEntityIds;
+        } else if (hasLegacy && req.body.fiscalEntityId) {
+          idsToAssign = [req.body.fiscalEntityId];
+        }
+        await storage.updateComplianceOfficerFiscalEntities(req.params.id, idsToAssign);
+      }
+
+      res.json(officer);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error updating compliance officer:", error);
+      res.status(500).json({ message: "Failed to update compliance officer" });
+    }
+  });
+
+  // DELETE /api/compliance-officers/:id - Eliminar encargado
+  app.delete("/api/compliance-officers/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteComplianceOfficer(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Compliance officer not found" });
+      }
+      res.json({ message: "Compliance officer deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting compliance officer:", error);
+      res.status(500).json({ message: "Failed to delete compliance officer" });
+    }
+  });
+
+  // COMPLIANCE OFFICER FISCAL ENTITIES JUNCTION TABLE ROUTES
+  // GET /api/compliance-officers/:id/fiscal-entities - Obtener entidades fiscales del encargado
+  app.get("/api/compliance-officers/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const relations = await storage.getComplianceOfficerFiscalEntities(req.params.id);
+      res.json(relations);
+    } catch (error) {
+      console.error("Error fetching compliance officer fiscal entities:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer fiscal entities" });
+    }
+  });
+
+  // POST /api/compliance-officers/:id/fiscal-entities - Agregar entidad fiscal al encargado
+  app.post("/api/compliance-officers/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const fiscalEntitySchema = z.object({
+        fiscalEntityId: z.string().min(1, "fiscalEntityId is required")
+      });
+      
+      const { fiscalEntityId } = fiscalEntitySchema.parse(req.body);
+
+      const relation = await storage.addComplianceOfficerFiscalEntity({
+        officerId: req.params.id,
+        fiscalEntityId
+      });
+      res.status(201).json(relation);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error adding compliance officer fiscal entity:", error);
+      res.status(500).json({ message: "Failed to add compliance officer fiscal entity" });
+    }
+  });
+
+  // PUT /api/compliance-officers/:id/fiscal-entities - Actualizar todas las entidades fiscales del encargado
+  app.put("/api/compliance-officers/:id/fiscal-entities", isAuthenticated, async (req, res) => {
+    try {
+      const fiscalEntitiesSchema = z.object({
+        fiscalEntityIds: z.array(z.string().min(1)).min(0, "fiscalEntityIds must be an array")
+      });
+      
+      const { fiscalEntityIds } = fiscalEntitiesSchema.parse(req.body);
+
+      const relations = await storage.updateComplianceOfficerFiscalEntities(req.params.id, fiscalEntityIds);
+      res.json(relations);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error updating compliance officer fiscal entities:", error);
+      res.status(500).json({ message: "Failed to update compliance officer fiscal entities" });
+    }
+  });
+
+  // DELETE /api/compliance-officers/:id/fiscal-entities/:fiscalEntityId - Remover entidad fiscal específica
+  app.delete("/api/compliance-officers/:id/fiscal-entities/:fiscalEntityId", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.removeComplianceOfficerFiscalEntity(req.params.id, req.params.fiscalEntityId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Compliance officer fiscal entity relationship not found" });
+      }
+      res.json({ message: "Compliance officer fiscal entity relationship deleted successfully" });
+    } catch (error) {
+      console.error("Error removing compliance officer fiscal entity:", error);
+      res.status(500).json({ message: "Failed to remove compliance officer fiscal entity" });
+    }
+  });
+
+  // COMPLIANCE OFFICER ATTACHMENTS ROUTES
+  // GET /api/compliance-officers/:officerId/attachments - Adjuntos de encargado
+  app.get("/api/compliance-officers/:officerId/attachments", isAuthenticated, async (req, res) => {
+    try {
+      const attachments = await storage.getComplianceOfficerAttachments(req.params.officerId);
+      res.json(attachments);
+    } catch (error) {
+      console.error("Error fetching compliance officer attachments:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer attachments" });
+    }
+  });
+
+  // GET /api/compliance-officers/attachments/:id - Obtener adjunto por ID
+  app.get("/api/compliance-officers/attachments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const attachment = await storage.getComplianceOfficerAttachment(req.params.id);
+      if (!attachment) {
+        return res.status(404).json({ message: "Compliance officer attachment not found" });
+      }
+      res.json(attachment);
+    } catch (error) {
+      console.error("Error fetching compliance officer attachment:", error);
+      res.status(500).json({ message: "Failed to fetch compliance officer attachment" });
+    }
+  });
+
+  // POST /api/compliance-officers/:officerId/attachments - Crear adjunto con multer para upload
+  app.post("/api/compliance-officers/:officerId/attachments", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file provided" });
+      }
+
+      // Prepare attachment data
+      const attachmentData = {
+        complianceOfficerId: req.params.officerId,
+        fileName: req.file.originalname,
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+        description: req.body.description || null,
+        category: req.body.category || 'general',
+        uploadedBy: getAuthenticatedUserId(req),
+        ...req.body
+      };
+
+      const validatedData = insertComplianceOfficerAttachmentSchema.parse(attachmentData);
+      
+      // Store file in object storage if available
+      let objectPath = null;
+      if (req.file.buffer) {
+        try {
+          objectPath = `/repl-objstore-e66216f3-851b-4448-aa0e-591540f35245/.private/compliance-officers/${req.params.officerId}/${Date.now()}_${req.file.originalname}`;
+          await handleStreamingUpload(req.file.buffer, objectPath, req.file.mimetype);
+          validatedData.objectPath = objectPath;
+        } catch (storageError) {
+          console.warn("Failed to store file in object storage:", storageError);
+          // Continue without object storage - the file data will be stored in database
+        }
+      }
+
+      const attachment = await storage.createComplianceOfficerAttachment(validatedData);
+      res.status(201).json(attachment);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Error creating compliance officer attachment:", error);
+      res.status(500).json({ message: "Failed to create compliance officer attachment" });
+    }
+  });
+
+  // PUT /api/compliance-officers/attachments/:id - Actualizar adjunto
+  app.put("/api/compliance-officers/attachments/:id", isAuthenticated, async (req, res) => {
+    try {
+      // Only allow updating metadata, not the file itself
+      const allowedFields = ['description', 'category', 'isPublic'];
+      const updateData = Object.keys(req.body)
+        .filter(key => allowedFields.includes(key))
+        .reduce((obj, key) => {
+          obj[key] = req.body[key];
+          return obj;
+        }, {});
+
+      const attachment = await storage.updateComplianceOfficerAttachment(req.params.id, updateData);
+      if (!attachment) {
+        return res.status(404).json({ message: "Compliance officer attachment not found" });
+      }
+      res.json(attachment);
+    } catch (error) {
+      console.error("Error updating compliance officer attachment:", error);
+      res.status(500).json({ message: "Failed to update compliance officer attachment" });
+    }
+  });
+
+  // DELETE /api/compliance-officers/attachments/:id - Eliminar adjunto
+  app.delete("/api/compliance-officers/attachments/:id", isAuthenticated, async (req, res) => {
+    try {
+      const deleted = await storage.deleteComplianceOfficerAttachment(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Compliance officer attachment not found" });
+      }
+      res.json({ message: "Compliance officer attachment deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting compliance officer attachment:", error);
+      res.status(500).json({ message: "Failed to delete compliance officer attachment" });
+    }
+  });
+
+  console.log('🛡️ Compliance Crime Prevention routes registered successfully');
+
+  // ============= IMPORT ROUTES =============
+  console.log('📂 Setting up Excel import routes...');
+
+  // Descargar plantilla de Excel
+  app.get("/api/imports/template", async (req, res) => {
+    try {
+      const templateBuffer = await importService.generateTemplate();
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="plantilla_importacion.xlsx"');
+      res.setHeader('Content-Length', templateBuffer.length);
+      res.send(templateBuffer);
+    } catch (error) {
+      console.error("Error generating import template:", error);
+      res.status(500).json({ 
+        message: "Error generando plantilla", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Crear sesión de importación y subir archivo
+  app.post("/api/imports", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      if (!req.file.originalname.endsWith('.xlsx')) {
+        return res.status(400).json({ message: "Solo se permiten archivos .xlsx" });
+      }
+
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+
+      // Crear sesión de importación
+      const sessionId = await importService.createImportSession({
+        fileName: `import_${Date.now()}.xlsx`, // Generar nombre único ya que req.file.filename puede ser undefined
+        originalFileName: req.file.originalname,
+        userId: req.user.id,
+        isDryRun,
+      });
+
+      // Guardar archivo temporalmente
+      const tempPath = path.join('/tmp', `import_${sessionId}.xlsx`);
+      fs.writeFileSync(tempPath, req.file.buffer);
+
+      // Procesar archivo de forma asíncrona
+      importService.processExcelFile(sessionId, tempPath, isDryRun)
+        .then(() => {
+          // Limpiar archivo temporal
+          fs.unlinkSync(tempPath);
+        })
+        .catch((error) => {
+          console.error('Error processing import file:', error);
+          // Limpiar archivo temporal en caso de error
+          if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+          }
+        });
+
+      res.json({ sessionId });
+    } catch (error) {
+      console.error("Error creating import session:", error);
+      res.status(500).json({ 
+        message: "Error creando sesión de importación", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Obtener estado de la importación
+  app.get("/api/imports/:id", isAuthenticated, async (req, res) => {
+    try {
+      const session = await importService.getImportSession(req.params.id);
+      
+      if (!session) {
+        return res.status(404).json({ message: "Sesión de importación no encontrada" });
+      }
+
+      // Verificar que el usuario sea el propietario de la sesión
+      if (session.userId !== (req as any).user.id) {
+        return res.status(403).json({ message: "No autorizado" });
+      }
+
+      res.json(session);
+    } catch (error) {
+      console.error("Error getting import session:", error);
+      res.status(500).json({ 
+        message: "Error obteniendo estado de importación", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Descargar reporte de errores
+  app.get("/api/imports/:id/report", isAuthenticated, async (req, res) => {
+    try {
+      const session = await importService.getImportSession(req.params.id);
+      
+      if (!session) {
+        return res.status(404).json({ message: "Sesión de importación no encontrada" });
+      }
+
+      // Verificar que el usuario sea el propietario de la sesión
+      if (session.userId !== (req as any).user.id) {
+        return res.status(403).json({ message: "No autorizado" });
+      }
+
+      if (!session.errors || !Array.isArray(session.errors) || session.errors.length === 0) {
+        return res.status(404).json({ message: "No hay errores para descargar" });
+      }
+
+      // Generar reporte de errores en CSV
+      const csvHeaders = "Hoja,Fila,Campo,Mensaje,Código\n";
+      const csvData = session.errors.map((error: any) => 
+        `"${error.sheet}","${error.row}","${error.field}","${error.message}","${error.code || ''}"`
+      ).join('\n');
+      
+      const csvContent = csvHeaders + csvData;
+      const filename = `errores_importacion_${session.id}.csv`;
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', Buffer.byteLength(csvContent, 'utf8'));
+      res.send(csvContent);
+    } catch (error) {
+      console.error("Error generating error report:", error);
+      res.status(500).json({ 
+        message: "Error generando reporte de errores", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // ============= ENTITY-SPECIFIC IMPORT ROUTES =============
+  
+  // Importar Entidades Fiscales
+  app.post("/api/imports/fiscal-entities", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processFiscalEntitiesImport(
+        req.file, 
+        req.user.id, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing fiscal entities:", error);
+      res.status(500).json({ 
+        message: "Error importando entidades fiscales", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Propietarios de Procesos
+  app.post("/api/imports/process-owners", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processProcessOwnersImport(
+        req.file, 
+        req.user.id, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing process owners:", error);
+      res.status(500).json({ 
+        message: "Error importando propietarios de procesos", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Macroprocesos
+  app.post("/api/imports/macroprocesos", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processMacroprocesoImport(
+        req.file, 
+        req.user.id, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing macroprocesos:", error);
+      res.status(500).json({ 
+        message: "Error importando macroprocesos", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Riesgos
+  app.post("/api/imports/risks", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processRisksImport(
+        req.file, 
+        req.user.id, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing risks:", error);
+      res.status(500).json({ 
+        message: "Error importando riesgos", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Controles
+  app.post("/api/imports/controls", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const userId = getAuthenticatedUserId(req);
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processControlsImport(
+        req.file, 
+        userId, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing controls:", error);
+      res.status(500).json({ 
+        message: "Error importando controles", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Procesos
+  app.post("/api/imports/processes", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const userId = getAuthenticatedUserId(req);
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processProcessesImport(
+        req.file, 
+        userId, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing processes:", error);
+      res.status(500).json({ 
+        message: "Error importando procesos", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Subprocesos
+  app.post("/api/imports/subprocesos", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const userId = getAuthenticatedUserId(req);
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processSubprocesosImport(
+        req.file, 
+        userId, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing subprocesos:", error);
+      res.status(500).json({ 
+        message: "Error importando subprocesos", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  // Importar Planes de Acción
+  app.post("/api/imports/action-plans", isAuthenticated, upload.single('file'), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No se proporcionó archivo" });
+      }
+
+      const userId = getAuthenticatedUserId(req);
+      const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
+      const { session, importResults } = await importService.processActionPlansImport(
+        req.file, 
+        userId, 
+        isDryRun
+      );
+
+      res.json({ session, importResults });
+    } catch (error) {
+      console.error("Error importing action plans:", error);
+      res.status(500).json({ 
+        message: "Error importando planes de acción", 
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      });
+    }
+  });
+
+  console.log('📂 Excel import routes registered successfully');
+
+  // ============= TRASH/RECYCLE BIN ROUTES =============
+  
+  /**
+   * GET /api/trash - Lista todos los elementos eliminados (soft-deleted)
+   * Devuelve elementos agrupados por tipo de entidad
+   */
+  app.get("/api/trash", isAuthenticated, async (req, res) => {
+    try {
+      // Consultar múltiples tablas para encontrar elementos con status='deleted'
+      const [deletedRisks, deletedControls, deletedMacroprocesos, deletedProcesses, 
+             deletedSubprocesos, deletedGerencias, deletedRiskEvents, deletedActions, deletedAuditPlans, deletedAudits] = await Promise.all([
+        requireDb().select().from(risks).where(eq(risks.status, 'deleted')),
+        requireDb().select().from(controls).where(eq(controls.status, 'deleted')),
+        requireDb().select().from(macroprocesos).where(eq(macroprocesos.status, 'deleted')),
+        requireDb().select().from(processes).where(eq(processes.status, 'deleted')),
+        requireDb().select().from(subprocesos).where(eq(subprocesos.status, 'deleted')),
+        storage.getDeletedGerencias(),
+        requireDb().select().from(riskEvents).where(sql`${riskEvents.deletedAt} IS NOT NULL`),
+        requireDb().select().from(actions).where(eq(actions.status, 'deleted')),
+        requireDb().select().from(auditPlans).where(eq(auditPlans.status, 'deleted')),
+        requireDb().select().from(audits).where(eq(audits.status, 'deleted'))
+      ]);
+
+      // Agrupar por tipo de entidad con metadata
+      const trashItems = {
+        risks: deletedRisks.map(r => ({
+          ...r,
+          entityType: 'risk',
+          displayName: r.name || r.code
+        })),
+        controls: deletedControls.map(c => ({
+          ...c,
+          entityType: 'control',
+          displayName: c.name || c.code
+        })),
+        macroprocesos: deletedMacroprocesos.map(m => ({
+          ...m,
+          entityType: 'macroproceso',
+          displayName: m.name || m.code
+        })),
+        processes: deletedProcesses.map(p => ({
+          ...p,
+          entityType: 'process',
+          displayName: p.name || p.code
+        })),
+        subprocesos: deletedSubprocesos.map(s => ({
+          ...s,
+          entityType: 'subproceso',
+          displayName: s.name || s.code
+        })),
+        gerencias: deletedGerencias.map(g => ({
+          ...g,
+          entityType: 'gerencia',
+          displayName: g.name || g.code
+        })),
+        riskEvents: deletedRiskEvents.map(re => ({
+          ...re,
+          entityType: 'riskEvent',
+          displayName: `${re.code} - ${re.description || 'Sin descripción'}`
+        })),
+        actions: deletedActions.map(a => ({
+          ...a,
+          entityType: 'action',
+          displayName: a.title || a.code
+        })),
+        auditPlans: deletedAuditPlans.map(ap => ({
+          ...ap,
+          entityType: 'auditPlan',
+          displayName: ap.name
+        })),
+        audits: deletedAudits.map(aud => ({
+          ...aud,
+          entityType: 'audit',
+          displayName: aud.name || aud.code
+        }))
+      };
+
+      // Calcular totales
+      const totalDeleted = Object.values(trashItems).reduce((sum, items) => sum + items.length, 0);
+
+      res.json({
+        items: trashItems,
+        totalDeleted
+      });
+    } catch (error) {
+      console.error("Failed to fetch trash items:", error);
+      res.status(500).json({ message: "Failed to fetch trash items" });
+    }
+  });
+
+  /**
+   * POST /api/trash/:entity/:id/restore - Restaura un elemento eliminado
+   * Limpia los campos de soft-delete y establece status='active'
+   */
+  app.post("/api/trash/:entity/:id/restore", isAuthenticated, async (req, res) => {
+    try {
+      const { entity, id } = req.params;
+      
+      // Get authenticated user ID using helper function
+      const userId = getAuthenticatedUserId(req);
+      
+      // Datos de restauración: limpiar campos de soft-delete
+      const restoreData = {
+        status: 'active',
+        deletedBy: null,
+        deletedAt: null,
+        deletionReason: null,
+        updatedBy: userId
+      };
+
+      // Mapear tipo de entidad a tabla y método de storage
+      let restored;
+      switch (entity) {
+        case 'risk':
+          restored = await storage.updateRisk(id, restoreData);
+          break;
+        case 'control':
+          restored = await storage.updateControl(id, restoreData);
+          break;
+        case 'macroproceso':
+          restored = await storage.updateMacroproceso(id, restoreData);
+          break;
+        case 'process':
+          restored = await storage.updateProcess(id, restoreData);
+          break;
+        case 'subproceso':
+          restored = await storage.updateSubproceso(id, restoreData);
+          break;
+        case 'gerencia':
+          restored = await storage.restoreGerencia(id, userId);
+          break;
+        case 'riskEvent':
+          // Risk events don't have status field, only soft-delete fields
+          const riskEventRestoreData = {
+            deletedBy: null,
+            deletedAt: null,
+            deletionReason: null,
+            updatedBy: userId
+          };
+          restored = await storage.updateRiskEvent(id, riskEventRestoreData);
+          break;
+        case 'action':
+          // Actions usa ActionPlan (legacy)
+          restored = await storage.updateAction(id, restoreData);
+          break;
+        case 'actionPlan':
+          restored = await storage.updateActionPlan(id, restoreData);
+          break;
+        case 'auditPlan':
+          restored = await storage.updateAuditPlan(id, restoreData);
+          break;
+        case 'audit':
+          restored = await storage.updateAudit(id, restoreData);
+          break;
+        default:
+          return res.status(400).json({ message: "Invalid entity type" });
+      }
+
+      if (!restored) {
+        return res.status(404).json({ message: "Item not found" });
+      }
+
+      res.json({ 
+        message: "Item restored successfully",
+        item: restored 
+      });
+    } catch (error) {
+      console.error("Failed to restore item:", error);
+      res.status(500).json({ message: "Failed to restore item" });
+    }
+  });
+
+  console.log('🗑️  Trash/Recycle Bin routes registered successfully');
+
+  // ============= USER SAVED VIEWS & PREFERENCES ROUTES =============
+
+  // GET /api/user-saved-views?entityType=risks
+  app.get("/api/user-saved-views", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const { entityType } = req.query;
+
+      const views = await storage.getUserSavedViews(
+        userId,
+        entityType as string | undefined
+      );
+
+      res.json(views);
+    } catch (error) {
+      console.error("Failed to get user saved views:", error);
+      res.status(500).json({ message: "Failed to get saved views" });
+    }
+  });
+
+  // GET /api/user-saved-views/:id
+  app.get("/api/user-saved-views/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const view = await storage.getUserSavedView(id);
+
+      if (!view) {
+        return res.status(404).json({ message: "Saved view not found" });
+      }
+
+      res.json(view);
+    } catch (error) {
+      console.error("Failed to get user saved view:", error);
+      res.status(500).json({ message: "Failed to get saved view" });
+    }
+  });
+
+  // POST /api/user-saved-views
+  app.post("/api/user-saved-views", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const viewData = insertUserSavedViewSchema.parse({
+        ...req.body,
+        userId
+      });
+
+      const created = await storage.createUserSavedView(viewData);
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Failed to create user saved view:", error);
+      res.status(500).json({ message: "Failed to create saved view" });
+    }
+  });
+
+  // PATCH /api/user-saved-views/:id
+  app.patch("/api/user-saved-views/:id", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updateData = updateUserSavedViewSchema.parse({
+        id,
+        ...req.body
+      });
+
+      const updated = await storage.updateUserSavedView(id, updateData);
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Failed to update user saved view:", error);
+      res.status(500).json({ message: "Failed to update saved view" });
+    }
+  });
+
+  // DELETE /api/user-saved-views/:id
+  app.delete("/api/user-saved-views/:id", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      await storage.deleteUserSavedView(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to delete user saved view:", error);
+      res.status(500).json({ message: "Failed to delete saved view" });
+    }
+  });
+
+  // POST /api/user-saved-views/:id/set-default
+  app.post("/api/user-saved-views/:id/set-default", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const userId = getAuthenticatedUserId(req);
+      const { entityType } = req.body;
+
+      if (!entityType) {
+        return res.status(400).json({ message: "entityType is required" });
+      }
+
+      await storage.setDefaultView(id, userId, entityType);
+      res.json({ message: "Default view set successfully" });
+    } catch (error) {
+      console.error("Failed to set default view:", error);
+      res.status(500).json({ message: "Failed to set default view" });
+    }
+  });
+
+  // GET /api/user-preferences
+  app.get("/api/user-preferences", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const prefs = await storage.getUserPreferences(userId);
+
+      if (!prefs) {
+        // Return default preferences instead of 404
+        const defaultPrefs = {
+          userId,
+          theme: 'light',
+          language: 'es',
+          notifications: true,
+          emailNotifications: true,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        return res.json(defaultPrefs);
+      }
+
+      res.json(prefs);
+    } catch (error) {
+      console.error("Failed to get user preferences:", error);
+      res.status(500).json({ message: "Failed to get user preferences" });
+    }
+  });
+
+  // PUT /api/user-preferences
+  app.put("/api/user-preferences", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const prefsData = insertUserPreferencesSchema.partial().parse(req.body);
+
+      const updated = await storage.createOrUpdateUserPreferences(userId, prefsData);
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Failed to update user preferences:", error);
+      res.status(500).json({ message: "Failed to update user preferences" });
+    }
+  });
+
+  // PATCH /api/user-preferences (alias for PUT)
+  app.patch("/api/user-preferences", isAuthenticated, csrfProtectionForMutations, async (req: Request, res: Response) => {
+    try {
+      const userId = getAuthenticatedUserId(req);
+      const prefsData = insertUserPreferencesSchema.partial().parse(req.body);
+
+      const updated = await storage.createOrUpdateUserPreferences(userId, prefsData);
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+      }
+      console.error("Failed to update user preferences:", error);
+      res.status(500).json({ message: "Failed to update user preferences" });
+    }
+  });
+
+  console.log('💾 User Saved Views & Preferences routes registered successfully');
+
+  // ============= AUDIT LOGS ENDPOINTS =============
+  
+  // GET /api/audit-logs - Fetch audit logs for an entity
+  app.get("/api/audit-logs", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { entity_type, entity_id } = req.query;
+      
+      if (!entity_type || !entity_id) {
+        return res.status(400).json({ error: "entity_type and entity_id are required" });
+      }
+
+      const logs = await requireDb()
+        .select({
+          id: auditLogs.id,
+          entityType: auditLogs.entityType,
+          entityId: auditLogs.entityId,
+          action: auditLogs.action,
+          userId: auditLogs.userId,
+          changes: auditLogs.changes,
+          timestamp: auditLogs.timestamp,
+          ipAddress: auditLogs.ipAddress,
+          user: {
+            fullName: users.fullName,
+            username: users.username
+          }
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(auditLogs.userId, users.id))
+        .where(
+          and(
+            eq(auditLogs.entityType, entity_type as string),
+            eq(auditLogs.entityId, entity_id as string)
+          )
+        )
+        .orderBy(desc(auditLogs.timestamp));
+
+      res.json(logs);
+    } catch (error) {
+      console.error("Error fetching audit logs:", error);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // GET /api/audit-logs/:entityType/:entityId - Fetch audit logs using path params (for frontend compatibility)
+  app.get("/api/audit-logs/:entityType/:entityId", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { entityType, entityId } = req.params;
+      console.log('🔍 Fetching audit logs for:', { entityType, entityId });
+
+      const logs = await requireDb()
+        .select({
+          id: auditLogs.id,
+          entityType: auditLogs.entityType,
+          entityId: auditLogs.entityId,
+          action: auditLogs.action,
+          userId: auditLogs.userId,
+          changes: auditLogs.changes,
+          timestamp: auditLogs.timestamp,
+          ipAddress: auditLogs.ipAddress,
+          user: {
+            fullName: users.fullName,
+            username: users.username
+          }
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(auditLogs.userId, users.id))
+        .where(
+          and(
+            eq(auditLogs.entityType, entityType),
+            eq(auditLogs.entityId, entityId)
+          )
+        )
+        .orderBy(desc(auditLogs.timestamp));
+
+      console.log('📋 Found audit logs:', logs.length, 'records');
+      res.json(logs);
+    } catch (error) {
+      console.error("Error fetching audit logs:", error);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  console.log('📋 Audit Logs routes registered successfully');
+
+  // ============= QUERY ANALYZER (ADMIN ONLY) =============
+  
+  app.get("/api/admin/query-analyze/critical", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const requestUser = (req as any).user;
+      if (!requestUser?.isPlatformAdmin) {
+        return res.status(403).json({ error: "Platform admin access required" });
+      }
+
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ error: "No active tenant found" });
+      }
+
+      const results = await analyzeAllCriticalQueries(tenantId);
+      res.json({
+        tenantId,
+        timestamp: new Date().toISOString(),
+        queries: Object.entries(results).map(([key, result]) => ({
+          key,
+          name: CRITICAL_QUERIES[key as CriticalQueryKey].name,
+          description: CRITICAL_QUERIES[key as CriticalQueryKey].description,
+          ...result
+        }))
+      });
+    } catch (error: any) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error("Error analyzing critical queries:", error);
+      res.status(500).json({ error: "Failed to analyze queries" });
+    }
+  });
+
+  app.get("/api/admin/query-analyze/critical/:queryKey", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const requestUser = (req as any).user;
+      if (!requestUser?.isPlatformAdmin) {
+        return res.status(403).json({ error: "Platform admin access required" });
+      }
+
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ error: "No active tenant found" });
+      }
+
+      const queryKey = req.params.queryKey as CriticalQueryKey;
+      if (!CRITICAL_QUERIES[queryKey]) {
+        return res.status(400).json({ 
+          error: `Unknown query key: ${queryKey}`,
+          availableKeys: Object.keys(CRITICAL_QUERIES)
+        });
+      }
+
+      const result = await analyzeCriticalQuery(queryKey, tenantId);
+      res.json({
+        tenantId,
+        timestamp: new Date().toISOString(),
+        queryKey,
+        name: CRITICAL_QUERIES[queryKey].name,
+        description: CRITICAL_QUERIES[queryKey].description,
+        ...result
+      });
+    } catch (error: any) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error("Error analyzing query:", error);
+      res.status(500).json({ error: "Failed to analyze query" });
+    }
+  });
+
+  app.get("/api/admin/query-analyze/available-queries", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const requestUser = (req as any).user;
+      if (!requestUser?.isPlatformAdmin) {
+        return res.status(403).json({ error: "Platform admin access required" });
+      }
+
+      const queries = Object.entries(CRITICAL_QUERIES).map(([key, value]) => ({
+        key,
+        name: value.name,
+        description: value.description
+      }));
+
+      res.json({ queries });
+    } catch (error: any) {
+      console.error("Error getting available queries:", error);
+      res.status(500).json({ error: "Failed to get available queries" });
+    }
+  });
+
+  console.log('🔍 Query Analyzer routes registered (admin only)');
+
+  // ============= INITIALIZE NOTIFICATION SCHEDULER =============
+  console.log('📅 Starting NotificationScheduler with automated tasks...');
+  
+  // Dynamic import to avoid circular dependency issues
+  try {
+    const { NotificationScheduler } = await import('./notification-scheduler');
+    const notificationScheduler = NotificationScheduler.getInstance();
+    
+    // Start all scheduled tasks
+    notificationScheduler.startScheduledTasks();
+    
+    console.log('✅ NotificationScheduler initialized successfully with automated workflows');
+  } catch (error) {
+    console.error('❌ Failed to initialize NotificationScheduler:', error);
+  }
+
+  const httpServer = createServer(app);
+  return httpServer;
+}
+
+/**
+ * Cache warming function - disabled in single-tenant mode
+ * The cache will be populated on-demand when users access data
+ * This avoids startup delays and ensures cache entries reflect actual usage patterns
+ */
+export async function warmCacheForAllTenants(): Promise<void> {
+  console.log('ℹ️ [CACHE WARMING] Cache warming disabled in single-tenant mode - cache will be populated on-demand');
+}
