@@ -5235,28 +5235,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+      // Single-tenant mode: no tenantId needed
       // Parse pagination parameters
       const limit = parseInt(req.query.limit as string) || 100; // Default 100 events
       const offset = parseInt(req.query.offset as string) || 0;
       
       // Fetch events with pagination (basic data only for list view)
+      // Single-tenant mode: no tenantId filtering needed
       const [events, totalCount] = await Promise.all([
         requireDb().select().from(riskEvents)
-          .where(and(
-            eq(riskEvents.tenantId, tenantId),
-            isNull(riskEvents.deletedAt)
-          ))
+          .where(isNull(riskEvents.deletedAt))
           .orderBy(desc(riskEvents.eventDate))
           .limit(limit)
           .offset(offset),
         requireDb().select({ count: sql<number>`count(*)` })
           .from(riskEvents)
-          .where(and(
-            eq(riskEvents.tenantId, tenantId),
-            isNull(riskEvents.deletedAt)
-          ))
+          .where(isNull(riskEvents.deletedAt))
       ]);
       
       // Load related entities for all events in parallel
@@ -5323,9 +5317,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events/:id", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
-      const event = await storage.getRiskEvent(req.params.id, tenantId);
+      // Single-tenant mode: no tenantId needed
+      const event = await storage.getRiskEvent(req.params.id);
       if (!event) {
         return res.status(404).json({ message: "Risk event not found" });
       }
@@ -5384,9 +5377,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events/type/:eventType", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
-      const events = await storage.getRiskEventsByType(req.params.eventType, tenantId);
+      // Single-tenant mode: no tenantId needed
+      const events = await storage.getRiskEventsByType(req.params.eventType);
       // Add legacy fields for backward compatibility during transition
       const eventsWithLegacy = events.map(event => ({
         ...event,
@@ -5404,9 +5396,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events/status/:status", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
-      const events = await storage.getRiskEventsByStatus(req.params.status, tenantId);
+      // Single-tenant mode: no tenantId needed
+      const events = await storage.getRiskEventsByStatus(req.params.status);
       // Add legacy fields for backward compatibility during transition
       const eventsWithLegacy = events.map(event => ({
         ...event,
@@ -5424,9 +5415,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events/process/:processId", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
-      const events = await storage.getRiskEventsByProcess(req.params.processId, tenantId);
+      // Single-tenant mode: no tenantId needed
+      const events = await storage.getRiskEventsByProcess(req.params.processId);
       // Add legacy fields for backward compatibility during transition
       const eventsWithLegacy = events.map(event => ({
         ...event,
@@ -5444,9 +5434,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-events/risk/:riskId", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
-      const events = await storage.getRiskEventsByRisk(req.params.riskId, tenantId);
+      // Single-tenant mode: no tenantId needed
+      const events = await storage.getRiskEventsByRisk(req.params.riskId);
       // Add legacy fields for backward compatibility during transition
       const eventsWithLegacy = events.map(event => ({
         ...event,
@@ -5517,8 +5506,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get tenant ID from authenticated user (FIX: destructure properly)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      // Get existing risk event for audit logging
-      const existingEvent = await storage.getRiskEvent(req.params.id, tenantId);
+      // Get existing risk event for audit logging (single-tenant mode)
+      const existingEvent = await storage.getRiskEvent(req.params.id);
       if (!existingEvent) {
         return res.status(404).json({ message: "Risk event not found" });
       }
