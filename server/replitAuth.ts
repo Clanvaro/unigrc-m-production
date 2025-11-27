@@ -140,6 +140,41 @@ export async function setupAuth(app: Express) {
   app.use(getSession());
   app.use(passport.initialize());
   
+  // CRITICAL: Define serializers BEFORE passport.session() and OUTSIDE any conditional blocks
+  // These must always be defined for both Replit Auth and local auth to work
+  passport.serializeUser((user: Express.User, cb) => {
+    try {
+      const sessionData = {
+        id: user.id,
+        email: user.email || '',
+        activeTenantId: user.activeTenantId || 'single-tenant',
+        isPlatformAdmin: user.isPlatformAdmin === true
+      };
+      console.log('[Passport] Serializing user:', sessionData.id);
+      cb(null, sessionData);
+    } catch (err) {
+      console.error('[Passport] Serialize error:', err);
+      cb(err as Error, null);
+    }
+  });
+  
+  passport.deserializeUser(async (sessionData: any, cb) => {
+    try {
+      const user = {
+        id: sessionData.id,
+        email: sessionData.email || '',
+        activeTenantId: sessionData.activeTenantId || 'single-tenant',
+        isPlatformAdmin: sessionData.isPlatformAdmin === true,
+        permissions: [] as string[]
+      };
+      console.log('[Passport] Deserializing user:', user.id);
+      cb(null, user as Express.User);
+    } catch (err) {
+      console.error('[Passport] Deserialize error:', err);
+      cb(err as Error, null);
+    }
+  });
+  
   // Wrap passport.session() with timing instrumentation to detect session store latency
   app.use((req, res, next) => {
     const sessionStart = Date.now();
@@ -303,42 +338,6 @@ export async function setupAuth(app: Express) {
     );
     passport.use(strategy);
   }
-
-  // Serialize only user ID to minimize session storage size
-  passport.serializeUser((user: Express.User, cb) => {
-    try {
-      // Create a minimal session object with only essential data
-      const sessionData = {
-        id: user.id,
-        email: user.email || '',
-        activeTenantId: user.activeTenantId || 'single-tenant',
-        isPlatformAdmin: user.isPlatformAdmin === true
-      };
-      console.log('[Passport] Serializing user:', sessionData.id);
-      cb(null, sessionData);
-    } catch (err) {
-      console.error('[Passport] Serialize error:', err);
-      cb(err as Error, null);
-    }
-  });
-  
-  passport.deserializeUser(async (sessionData: any, cb) => {
-    try {
-      // Restore minimal user object from session
-      const user = {
-        id: sessionData.id,
-        email: sessionData.email || '',
-        activeTenantId: sessionData.activeTenantId || 'single-tenant',
-        isPlatformAdmin: sessionData.isPlatformAdmin === true,
-        permissions: [] as string[] // Will be loaded on demand
-      };
-      console.log('[Passport] Deserializing user:', user.id);
-      cb(null, user as Express.User);
-    } catch (err) {
-      console.error('[Passport] Deserialize error:', err);
-      cb(err as Error, null);
-    }
-  });
 
   app.get("/api/login", (req, res, next) => {
     // Use the first domain from REPLIT_DOMAINS or req.hostname as fallback
