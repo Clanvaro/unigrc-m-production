@@ -5473,22 +5473,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         createdBy: userId
       };
       
-      // Inject tenantId from session (throws ActiveTenantError if not found)
-      const event = await storage.createRiskEvent(await withTenantId(req, eventWithAudit));
+      // Single-tenant mode: create event directly without tenant injection
+      const event = await storage.createRiskEvent(eventWithAudit);
       
       // Handle related entities if provided
       if (req.body.relatedEntities && Array.isArray(req.body.relatedEntities)) {
         await storage.setRiskEventEntities(event.id, req.body.relatedEntities);
       }
       
-      // Invalidate risk caches (risk event affects residual risk calculations)
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
+      // Send response immediately, then invalidate caches asynchronously
+      res.status(201).json(event);
+      
+      // Fire-and-forget cache invalidation (don't block response)
+      Promise.all([
         invalidateRiskControlCaches(),
         invalidateRiskEventsPageDataCache()
-      ]);
-      
-      res.status(201).json(event);
+      ]).catch(err => console.error('Cache invalidation failed:', err));
     } catch (error) {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
@@ -5503,10 +5503,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/risk-events/:id", isAuthenticated, async (req, res) => {
     try {
-      // Get tenant ID from authenticated user (FIX: destructure properly)
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      // Single-tenant mode: no tenant resolution needed
       
-      // Get existing risk event for audit logging (single-tenant mode)
+      // Get existing risk event for audit logging
       const existingEvent = await storage.getRiskEvent(req.params.id);
       if (!existingEvent) {
         return res.status(404).json({ message: "Risk event not found" });
