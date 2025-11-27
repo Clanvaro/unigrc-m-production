@@ -19550,7 +19550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const processOwner = await storage.createProcessOwner(dataWithTenant);
       
       // Invalidate cache
-      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${dataWithTenant.tenantId}`);
+      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
       
       res.status(201).json(processOwner);
     } catch (error) {
@@ -19615,9 +19615,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Invalidate cache
-      if (processOwner.tenantId) {
-        await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${processOwner.tenantId}`);
-      }
+      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
       
       console.log(`✅ Process owner updated successfully:`, processOwner.id);
       res.json(processOwner);
