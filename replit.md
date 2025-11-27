@@ -35,6 +35,16 @@ Reduced auth API calls from ~10+ per navigation to 1 per session:
 - `handleSessionExpired()` clears queryClient and redirects to /login immediately
 - Result: Single `/api/auth/me` call per session instead of multiple calls per page navigation
 
+## Production Database Schema Sync (Nov 27, 2025) - RESOLVED
+
+Fixed critical production errors by syncing missing columns in risk_events table:
+- Added 18 missing columns: control_id, process_id, involved_persons, event_type, severity, status, reported_by, investigated_by, resolution_notes, estimated_loss, actual_loss, causas, consecuencias, created_by, updated_by, deleted_by, deleted_at, deletion_reason
+- Resolved "column does not exist" errors in /api/risk-events/page-data endpoint
+- All production endpoints now return 200 OK status
+- Admin dashboard fully operational with all metrics loaded
+- Database schema now fully synchronized with codebase expectations
+- Status: **Production fully operational** ✅
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
