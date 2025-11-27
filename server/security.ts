@@ -41,45 +41,9 @@ export const apiMutationLimiter = rateLimit({
 // ============= HELMET (Security Headers) =============
 
 export const helmetConfig = helmet({
-  // Content Security Policy
-  contentSecurityPolicy: isDevelopment ? false : {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: [
-        "'self'",
-        "'unsafe-inline'", // TEMPORARY: Required for Vite production build
-        // TODO: Replace with nonce-based approach for better security
-      ].filter(Boolean),
-      styleSrc: [
-        "'self'",
-        "'unsafe-inline'", // Required for styled-components and inline styles
-        "https://fonts.googleapis.com",
-      ],
-      fontSrc: [
-        "'self'",
-        "https://fonts.gstatic.com",
-        "data:",
-      ],
-      imgSrc: [
-        "'self'",
-        "data:",
-        "blob:",
-        "https:",
-      ],
-      connectSrc: [
-        "'self'",
-        isDevelopment ? "ws://localhost:*" : "", // WebSocket for Vite HMR in dev
-        isDevelopment ? "ws://127.0.0.1:*" : "",
-        isDevelopment ? "http://localhost:*" : "",
-        "https://*.replit.com",
-        "https://*.replit.dev",
-      ].filter(Boolean),
-      frameSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: isProduction ? [] : null,
-    },
-    reportOnly: isDevelopment, // Report-only mode in dev, enforce in prod
-  },
+  // Content Security Policy - disabled to avoid CSP errors in production
+  // The app is served in iframes on Replit/Render which have their own CSP
+  contentSecurityPolicy: false,
   
   // Other security headers
   crossOriginEmbedderPolicy: false, // Disable to allow external resources
