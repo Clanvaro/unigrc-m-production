@@ -2447,7 +2447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Cache miss - query database
-      const risks = await storage.getPendingValidationRisks(tenantId);
+      const risks = await storage.getPendingValidationRisks();
       
       // Cache for 15 seconds (critical validation data needs fresher updates)
       await distributedCache.set(cacheKey, risks, 15);
@@ -2639,7 +2639,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Cache miss - query database
       console.log('🔍 Routes: Getting pending validation controls...');
-      const controls = await storage.getPendingValidationControls(tenantId);
+      const controls = await storage.getPendingValidationControls();
       console.log(`📊 Routes: Found ${controls.length} pending validation controls`);
       
       // Cache for 15 seconds (critical validation data needs fresher updates)
@@ -3824,7 +3824,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const riskProcesses = await storage.getRiskProcessLinksWithDetails(tenantId);
+      const riskProcesses = await storage.getRiskProcessLinksWithDetails();
       
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, riskProcesses, 60);
@@ -5955,7 +5955,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/control-evaluation-criteria", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const criteria = await storage.getControlEvaluationCriteria(tenantId);
+      const criteria = await storage.getControlEvaluationCriteria();
       res.json(criteria);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -6087,7 +6087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/control-evaluation-criteria-with-options", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const criteriaWithOptions = await storage.getControlEvaluationsByCriteria(tenantId);
+      const criteriaWithOptions = await storage.getControlEvaluationsByCriteria();
       
       // Transform data to match frontend expectations (label, score, description instead of name, weight)
       const transformedData = criteriaWithOptions.map(({ criteria, options }) => ({
@@ -6663,7 +6663,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risk-controls", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const allRiskControls = await storage.getAllRiskControls(tenantId);
+      const allRiskControls = await storage.getAllRiskControls();
       res.json(allRiskControls);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch all risk controls" });
@@ -6705,7 +6705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       if (storage.getAllRiskControlsWithDetails) {
-        const riskControls = await storage.getAllRiskControlsWithDetails(tenantId);
+        const riskControls = await storage.getAllRiskControlsWithDetails();
         
         // Cache for 60 seconds
         await distributedCache.set(cacheKey, riskControls, 60);
@@ -6833,7 +6833,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const actionPlans = await storage.getActionPlans(tenantId);
+      const actionPlans = await storage.getActionPlans();
       
       // Early return if no plans - avoid unnecessary queries
       if (actionPlans.length === 0) {
@@ -10699,7 +10699,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risk-categories", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const categories = await storage.getRiskCategories(tenantId);
+      const categories = await storage.getRiskCategories();
       res.json(categories);
     } catch (error) {
       console.error("Error fetching risk categories:", error);
@@ -12425,7 +12425,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const metrics = await storage.getAdminDashboardMetrics(tenantId);
+      const metrics = await storage.getAdminDashboardMetrics();
       
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, metrics, 30);
@@ -13668,7 +13668,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const riskLevelsMap = await storage.getGerenciasRiskLevels(tenantId);
+      const riskLevelsMap = await storage.getGerenciasRiskLevels();
       // Convert Map to object for JSON serialization
       const riskLevels = Object.fromEntries(riskLevelsMap);
       
@@ -13694,7 +13694,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const relations = await storage.getAllProcessGerenciasRelations(tenantId);
+      const relations = await storage.getAllProcessGerenciasRelations();
       await distributedCache.set(cacheKey, relations, 60); // Cache for 60 seconds
       
       res.json(relations);
@@ -13712,8 +13712,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Audit Plans
   app.get("/api/audit-plans", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const plans = await storage.getAuditPlans(tenantId);
+      // Single-tenant mode: no tenantId needed
+      const plans = await storage.getAuditPlans();
       
       // Enrich plans with approver names
       const enrichedPlans = await Promise.all(
@@ -14186,11 +14186,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       let findings;
       if (auditId) {
-        findings = await storage.getAuditFindingsByAudit(auditId, tenantId);
+        findings = await storage.getAuditFindingsByAudit(auditId);
       } else if (withDetails) {
-        findings = await storage.getAuditFindingsWithDetails(tenantId);
+        findings = await storage.getAuditFindingsWithDetails();
       } else {
-        findings = await storage.getAuditFindings(tenantId);
+        findings = await storage.getAuditFindings();
       }
       
       res.json(findings);
@@ -14753,7 +14753,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get active tenant ID for tenant isolation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const generatedItems = await storage.generateUniverseFromExistingProcesses(tenantId);
+      const generatedItems = await storage.generateUniverseFromExistingProcesses();
       res.status(201).json(generatedItems);
     } catch (error) {
       console.error("Error generating audit universe:", error);
@@ -17054,7 +17054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const regulations = await storage.getRegulations(tenantId);
+      const regulations = await storage.getRegulations();
       
       // Calculate risk counts using storage
       const regulationsWithRisks = await Promise.all(regulations.map(async (regulation) => {
@@ -17281,7 +17281,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const complianceTests = await storage.getComplianceTests(tenantId);
+      const complianceTests = await storage.getComplianceTests();
       res.json(complianceTests);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch compliance tests" });
@@ -17438,7 +17438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const documents = await storage.getComplianceDocuments(tenantId);
+      const documents = await storage.getComplianceDocuments();
       res.json(documents);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch compliance documents" });
@@ -17617,7 +17617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const entities = await storage.getFiscalEntities(tenantId);
+      const entities = await storage.getFiscalEntities();
       res.json(entities);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch fiscal entities" });
@@ -19449,7 +19449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      const processOwners = await storage.getProcessOwners(tenantId);
+      const processOwners = await storage.getProcessOwners();
       console.log("📝 [API] Fetching process owners. Count:", processOwners.length);
       
       // Cache for 5 minutes
