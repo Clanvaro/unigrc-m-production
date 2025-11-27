@@ -1935,7 +1935,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risks", isAuthenticated, async (req, res) => {
     try {
       console.log("Risk creation request body:", JSON.stringify(req.body, null, 2));
-      const validatedData = baseInsertRiskSchema.parse(req.body);
+      const validatedData = insertRiskSchema.parse(req.body);
       
       // Extract probabilityOverride and directProbability from validated data  
       const { probabilityOverride, directProbability, ...riskData } = validatedData;
