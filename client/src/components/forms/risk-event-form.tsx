@@ -107,10 +107,22 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
     }
   }, [event]);
 
-  // Expanded entities calculation
+  // Expanded entities calculation - convert from local prefix format to expandScopeEntities format
   const expandedScope = useMemo(() => {
+    const convertedEntities = selectedEntities.map(entity => {
+      if (entity.startsWith('macro:')) {
+        return `macroproceso-${entity.substring(6)}`;
+      }
+      if (entity.startsWith('process:')) {
+        return `process-${entity.substring(8)}`;
+      }
+      if (entity.startsWith('subproceso:')) {
+        return `subproceso-${entity.substring(11)}`;
+      }
+      return entity;
+    });
     return expandScopeEntities(
-      selectedEntities,
+      convertedEntities,
       macroprocesos as Macroproceso[],
       processes as Process[],
       subprocesos as Subproceso[]
@@ -427,9 +439,9 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
                       {selectedEntities.length > 0 
                         ? (() => {
                             const counts = {
-                              macros: expandedScope?.macroprocesos?.length || 0,
-                              processes: expandedScope?.processes?.length || 0,
-                              subprocesos: expandedScope?.subprocesos?.length || 0
+                              macros: expandedScope?.displayGroups?.macroprocesos?.length || 0,
+                              processes: expandedScope?.displayGroups?.procesos?.length || 0,
+                              subprocesos: expandedScope?.displayGroups?.subprocesos?.length || 0
                             };
                             const parts = [];
                             if (counts.macros > 0) parts.push(`${counts.macros} macroproceso${counts.macros > 1 ? 's' : ''}`);
@@ -467,7 +479,7 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
                         .map((macro: Macroproceso) => {
                           const macroProcesses = (processes as Process[]).filter(p => p.macroprocesoId === macro.id);
                           const isSelected = selectedEntities.includes(`macro:${macro.id}`);
-                          const isAutoIncluded = expandedScope?.macroprocesos?.some(m => m.id === macro.id) && !isSelected;
+                          const isAutoIncluded = expandedScope?.displayGroups?.macroprocesos?.some(m => m.id === macro.id) && !isSelected;
 
                           return (
                             <div key={macro.id} className="space-y-2">
@@ -495,7 +507,7 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
                                   {macroProcesses.map((proceso: Process) => {
                                     const procesoSubs = (subprocesos as Subproceso[]).filter(s => s.procesoId === proceso.id);
                                     const isProcSelected = selectedEntities.includes(`process:${proceso.id}`);
-                                    const isProcAutoIncluded = expandedScope?.processes?.some(p => p.id === proceso.id) && !isProcSelected;
+                                    const isProcAutoIncluded = expandedScope?.displayGroups?.procesos?.some(p => p.id === proceso.id) && !isProcSelected;
 
                                     return (
                                       <div key={proceso.id} className="space-y-2">
@@ -522,7 +534,7 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
                                           <div className="ml-6 space-y-1">
                                             {procesoSubs.map((sub: Subproceso) => {
                                               const isSubSelected = selectedEntities.includes(`subproceso:${sub.id}`);
-                                              const isSubAutoIncluded = expandedScope?.subprocesos?.some(s => s.id === sub.id) && !isSubSelected;
+                                              const isSubAutoIncluded = expandedScope?.displayGroups?.subprocesos?.some(s => s.id === sub.id) && !isSubSelected;
 
                                               return (
                                                 <div key={sub.id} className="flex items-center gap-2">
@@ -570,17 +582,17 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
               </Dialog>
               {selectedEntities.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {(expandedScope?.macroprocesos || []).map((macro: Macroproceso) => (
+                  {(expandedScope?.displayGroups?.macroprocesos || []).map((macro) => (
                     <Badge key={`display-macro-${macro.id}`} variant="secondary">
                       {macro.code}
                     </Badge>
                   ))}
-                  {(expandedScope?.processes || []).map((proc: Process) => (
+                  {(expandedScope?.displayGroups?.procesos || []).map((proc) => (
                     <Badge key={`display-process-${proc.id}`} variant="secondary">
                       {proc.code}
                     </Badge>
                   ))}
-                  {(expandedScope?.subprocesos || []).map((sub: Subproceso) => (
+                  {(expandedScope?.displayGroups?.subprocesos || []).map((sub) => (
                     <Badge key={`display-sub-${sub.id}`} variant="secondary">
                       {sub.code}
                     </Badge>
