@@ -10720,8 +10720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const category = await storage.getRiskCategory(req.params.id, tenantId);
+      const category = await storage.getRiskCategory(req.params.id);
       if (!category) {
         return res.status(404).json({ message: "Risk category not found" });
       }
@@ -10734,8 +10733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/risk-categories", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const validatedData = insertRiskCategorySchema.parse({ ...req.body, tenantId });
+      const validatedData = insertRiskCategorySchema.parse(req.body);
       const category = await storage.createRiskCategory(validatedData);
       res.status(201).json(category);
     } catch (error) {
@@ -10749,9 +10747,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
       const validatedData = insertRiskCategorySchema.partial().parse(req.body);
-      const category = await storage.updateRiskCategory(req.params.id, tenantId, validatedData);
+      const category = await storage.updateRiskCategory(req.params.id, validatedData);
       if (!category) {
         return res.status(404).json({ message: "Risk category not found" });
       }
@@ -10767,8 +10764,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/risk-categories/:id", isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const deleted = await storage.deleteRiskCategory(req.params.id, tenantId);
+      const deleted = await storage.deleteRiskCategory(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Risk category not found" });
       }
