@@ -560,9 +560,9 @@ function requirePlatformAdmin() {
         user = await storage.getUserByEmail(userEmail);
       }
 
-      console.log("[Platform Admin Check] User found:", user?.username, "isPlatformAdmin:", user?.isPlatformAdmin);
+      console.log("[Platform Admin Check] User found:", user?.username, "isAdmin:", user?.isAdmin);
       
-      if (!user || !user.isPlatformAdmin) {
+      if (!user || !user.isAdmin) {
         console.log("[Platform Admin Check] Access denied - not a platform admin");
         return res.status(403).json({ message: "Acceso denegado: se requiere ser administrador de plataforma" });
       }
