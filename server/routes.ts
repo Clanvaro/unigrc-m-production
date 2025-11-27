@@ -1542,7 +1542,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         timed('db:macroprocesos', () => storage.getMacroprocesos(tenantId)),
         timed('db:subprocesos', () => storage.getSubprocesosWithOwners(tenantId)),
         timed('db:processes', () => storage.getProcesses(tenantId)),
-        timed('db:processOwners', () => storage.getProcessOwners(tenantId)),
+        timed('db:processOwners', () => storage.getProcessOwners()),
         timed('db:riskCategories', () => storage.getRiskCategories(tenantId)),
         timed('db:riskProcessLinks', () => storage.getRiskProcessLinksWithDetails(tenantId)),
         timed('db:riskControls', () => storage.getAllRiskControlsWithDetails(tenantId)),
@@ -1761,7 +1761,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timedQuery('riskControlsWithDetails', () => storage.getAllRiskControlsWithDetails(tenantId)),
             timedQuery('actionPlans', () => storage.getActionPlans(tenantId)),
             timedQuery('controls', () => storage.getControls(tenantId)),
-            timedQuery('processOwners', () => storage.getProcessOwners(tenantId)),
+            timedQuery('processOwners', () => storage.getProcessOwners()),
             timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges', tenantId).then(config => 
               config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
             )),
