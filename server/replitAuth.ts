@@ -32,7 +32,15 @@ export function getSession() {
   const pgStore = connectPg(session);
   
   // Use pooled connection for session store for better performance under load
-  const databaseUrl = process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+  let databaseUrl = process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+  
+  // Remove channel_binding parameter if present (can cause issues with some drivers)
+  if (databaseUrl) {
+    databaseUrl = databaseUrl.replace(/[&?]channel_binding=[^&]*/g, '');
+  }
+  
+  console.log('[Session] Initializing PostgreSQL session store');
+  console.log('[Session] Database URL configured:', databaseUrl ? 'Yes (hidden)' : 'No');
   
   const sessionStore = new pgStore({
     conString: databaseUrl,
@@ -40,7 +48,21 @@ export function getSession() {
     ttl: sessionTtl,
     tableName: "sessions",
     pruneSessionInterval: 24 * 60 * 60, // Auto-cleanup expired sessions every 24 hours (in seconds)
+    errorLog: (err: Error) => {
+      console.error('[Session Store Error]', err.message);
+      console.error('[Session Store Error Stack]', err.stack);
+    },
   });
+  
+  // Log when store is ready
+  sessionStore.on?.('connect', () => {
+    console.log('[Session] PostgreSQL session store connected');
+  });
+  
+  sessionStore.on?.('error', (err: Error) => {
+    console.error('[Session] Store error:', err.message);
+  });
+  
   return session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
