@@ -5124,10 +5124,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Consolidated endpoint for risk events page - reduces API calls from 3 to 1
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      // Single-tenant mode: no tenantId needed
       
       // Cache key for consolidated risk events page data
-      const cacheKey = `risk-events-page-data:${CACHE_VERSION}:${tenantId}`;
+      const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant`;
       
       // Try to get from cache
       const cached = await distributedCache.get<any>(cacheKey);
