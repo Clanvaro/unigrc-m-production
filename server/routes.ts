@@ -5781,7 +5781,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Cache miss - query database with optimized paginated method
       const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(
-        tenantId,
         filters,
         limit,
         offset

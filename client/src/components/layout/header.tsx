@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { Search, Plus, Download, SlidersHorizontal, X, Menu, Calendar, AlertTriangle, ChevronDown, MoreVertical, RefreshCw, Settings, Filter, Eye, Clock, Sun, Moon } from "lucide-react";
+import { Search, Plus, Download, SlidersHorizontal, X, Menu, Calendar, AlertTriangle, ChevronDown, MoreVertical, RefreshCw, Settings, Filter, Eye, Clock, Sun, Moon, BarChart3, CheckCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
