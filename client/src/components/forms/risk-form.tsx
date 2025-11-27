@@ -105,7 +105,7 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
   const form = useForm<RiskFormData>({
     resolver: zodResolver(baseInsertRiskSchema.extend({
       processAssociations: z.array(z.any()).min(1, {
-        message: "Debe asociar al menos un proceso",
+        message: "Debe seleccionar al menos un Macroproceso, Proceso o Subproceso para asociar este riesgo. Use el selector de procesos para agregar asociaciones.",
       }),
     })),
     defaultValues: {
@@ -581,7 +581,7 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
 
       return { previousRisks, previousRisksWithDetails, tempId: null };
     },
-    onError: (err, variables, context: any) => {
+    onError: (err: any, variables, context: any) => {
       // Rollback on error
       if (context?.previousRisks) {
         queryClient.setQueryData(["/api/risks"], context.previousRisks);
@@ -590,9 +590,25 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
         queryClient.setQueryData(["/api/risks-with-details"], context.previousRisksWithDetails);
       }
 
+      // Extract specific error message from server response
+      let errorMessage = `No se pudo ${risk ? "actualizar" : "crear"} el riesgo.`;
+      
+      if (err?.message) {
+        // Check for specific validation errors
+        if (err.message.includes("proceso") || err.message.includes("macroproceso") || err.message.includes("subproceso")) {
+          errorMessage = "Debe seleccionar al menos un proceso (Macroproceso, Proceso o Subproceso) antes de guardar.";
+        } else if (err.message.includes("nombre") || err.message.includes("name")) {
+          errorMessage = "El nombre del riesgo es requerido.";
+        } else if (err.message.includes("categoría") || err.message.includes("category")) {
+          errorMessage = "Debe seleccionar al menos una categoría de riesgo.";
+        } else {
+          errorMessage = err.message;
+        }
+      }
+
       toast({
-        title: "Error",
-        description: `No se pudo ${risk ? "actualizar" : "crear"} el riesgo.`,
+        title: "Error al guardar",
+        description: errorMessage,
         variant: "destructive",
       });
     },
