@@ -169,6 +169,9 @@ export default function GerenciasOrganigrama({
   // Fetch risk levels for all gerencias
   const { data: riskLevels, isLoading: isLoadingRiskLevels } = useQuery<Record<string, {inherentRisk: number, residualRisk: number, riskCount: number}>>({
     queryKey: ['/api/gerencias-risk-levels'],
+    staleTime: 1000 * 60 * 5, // 5 minutes - risk levels change infrequently (mutations invalidate cache)
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   // Calcular el layout jerárquico

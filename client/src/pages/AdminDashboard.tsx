@@ -99,7 +99,9 @@ export default function AdminDashboard() {
     queryKey: ['/api/dashboard/admin'],
     enabled: !!currentUser?.id,
     refetchInterval: 10 * 60 * 1000, // Refresh every 10 minutes
-    staleTime: 60000, // 1 minute - dashboard data, moderate change frequency
+    staleTime: 1000 * 60 * 5, // 5 minutes - dashboard data changes infrequently
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   // All data extractions - must be before any conditional returns

@@ -136,9 +136,9 @@ function ProcessMapContent() {
     subprocesos: Record<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>
   }>({
     queryKey: ["/api/organization/process-map-risks"],
-    staleTime: 60000, // 1 minute - aggregated calculations, moderate change frequency
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 1000 * 60 * 5, // 5 minutes - aggregated calculations change infrequently
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const useProcessSummary = (processId: string, enabled: boolean = false) => {
@@ -2227,7 +2227,9 @@ function GerenciasContent() {
 
   const { data: processGerenciasRelations = [] } = useQuery<any[]>({
     queryKey: ["/api/process-gerencias-all"],
-    staleTime: 0, // Always fetch fresh data after mutations
+    staleTime: 1000 * 60 * 5, // 5 minutes - structural data changes infrequently (mutations invalidate cache)
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const createGerenciaMutation = useMutation({

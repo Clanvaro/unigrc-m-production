@@ -216,7 +216,9 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
-    staleTime: 30000, // 30 seconds - matches server cache TTL
+    staleTime: 1000 * 60 * 5, // 5 minutes - structural data changes infrequently
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   
   // Extract individual data from consolidated response
