@@ -27,7 +27,7 @@ The system now operates in single-tenant mode, designed for a single organizatio
 - Frontend removed TenantSwitcher component and activeTenant dependencies
 - Session-based authentication with Replit Auth and local authentication support
 
-### Implementation Details
+### Implementation Details (Nov 27, 2025 - Final Fixes)
 - `resolveActiveTenant(req)` function returns fixed `{ tenantId: 'default', userId }` for all requests
 - `withTenantId()` function is now a no-op that returns data unchanged (no longer injects tenantId)
 - All storage interface methods (`IStorage`) have been updated to remove tenantId parameters
@@ -37,6 +37,9 @@ The system now operates in single-tenant mode, designed for a single organizatio
 - Escalation management (`escalation-management.ts`) updated: removed tenantId from sendEscalationNotifications and all notification calls
 - Approval engine (`approval-engine.ts`) updated: removed tenantId from notification calls
 - Notification scheduler (`notification-scheduler.ts`) updated: removed tenantId from notification batching
+- **Database Defaults**: All tables with `tenant_id` columns now have DEFAULT 'default' constraint to support single-tenant inserts
+- **Process Owners API Fixes**: Fixed `getProcessOwners()` calls in routes.ts (lines 1548, 1767, 19726) to remove tenantId parameter
+- **Cache Invalidation Fixed**: Process owner POST/PUT endpoints now correctly invalidate cache with key `'process-owners:v2:default'` instead of trying to access non-existent tenantId
 
 ## Control Self-Assessment (CSA) Module Removal (Nov 27, 2025)
 
