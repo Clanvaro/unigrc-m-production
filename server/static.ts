@@ -17,9 +17,32 @@ export function serveStatic(app: Express) {
   // In production (bundled), look for dist/public
   // In development, look for client folder (Vite dev server handles it)
   const isProduction = process.env.NODE_ENV === "production";
+  
+  // Log environment info for debugging
+  log(`NODE_ENV: ${process.env.NODE_ENV}`, "static");
+  log(`isProduction: ${isProduction}`, "static");
+  log(`process.cwd(): ${process.cwd()}`, "static");
+  
   const distPath = isProduction 
     ? path.resolve(process.cwd(), "dist", "public")
     : path.resolve(import.meta.dirname, "public");
+
+  log(`Resolved distPath: ${distPath}`, "static");
+  
+  // List files in the dist directory for debugging
+  if (isProduction) {
+    try {
+      const distDir = path.resolve(process.cwd(), "dist");
+      if (fs.existsSync(distDir)) {
+        const files = fs.readdirSync(distDir);
+        log(`Files in dist/: ${files.join(", ")}`, "static");
+      } else {
+        log(`dist/ directory does not exist at ${distDir}`, "static");
+      }
+    } catch (e) {
+      log(`Error listing dist/: ${e}`, "static");
+    }
+  }
 
   if (!fs.existsSync(distPath)) {
     log(`Build directory not found: ${distPath}`, "static");
@@ -29,6 +52,14 @@ export function serveStatic(app: Express) {
       );
     }
     return; // In dev, Vite handles serving
+  }
+
+  // List files in public for debugging
+  try {
+    const publicFiles = fs.readdirSync(distPath);
+    log(`Files in ${distPath}: ${publicFiles.join(", ")}`, "static");
+  } catch (e) {
+    log(`Error listing public files: ${e}`, "static");
   }
 
   log(`Serving static files from: ${distPath}`, "static");
