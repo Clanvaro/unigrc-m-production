@@ -109,6 +109,10 @@ const allowedOrigins = [
   // Production Replit domains
   ...(process.env.REPLIT_DOMAINS?.split(',').map(domain => `https://${domain}`) || []),
   
+  // Production Render domains
+  'https://unigrc.onrender.com',
+  ...(process.env.RENDER_EXTERNAL_URL ? [process.env.RENDER_EXTERNAL_URL] : []),
+  
   // AWS Production domains (CloudFront, ALB, EC2, ECS, Elastic Beanstalk)
   ...(process.env.AWS_ALLOWED_ORIGINS?.split(',') || []),
   ...(process.env.CLOUDFRONT_DOMAIN ? [`https://${process.env.CLOUDFRONT_DOMAIN}`] : []),
@@ -127,6 +131,11 @@ export const corsConfig: CorsOptions = {
     
     // Check whitelist
     if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Check Render patterns (*.onrender.com)
+    if (origin.endsWith('.onrender.com')) {
       return callback(null, true);
     }
     
