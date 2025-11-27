@@ -1651,8 +1651,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[CACHE ${bypassCache ? 'BYPASS' : 'MISS'}] /api/risks key=${cacheKey.slice(0, 50)}...`);
       
-      // Cache miss - query database
-      const { risks: paginatedRisks, total } = await storage.getRisksPaginated(tenantId, filters, limit, offset);
+      // Cache miss - query database (single-tenant mode - no tenantId needed)
+      const { risks: paginatedRisks, total } = await storage.getRisksPaginated(filters, limit, offset);
       
       console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total}`);
       
@@ -1696,8 +1696,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cachedData);
       }
       
-      // Fetch basic risks only for list view - use paginated endpoint for performance
-      const { risks: paginatedRisks, total } = await storage.getRisksPaginated(tenantId, {}, 1000, 0);
+      // Fetch basic risks only for list view - use paginated endpoint for performance (single-tenant mode)
+      const { risks: paginatedRisks, total } = await storage.getRisksPaginated({}, 1000, 0);
       
       // Filter out soft-deleted records (only return active records)
       const activeRisks = paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
