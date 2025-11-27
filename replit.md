@@ -68,6 +68,19 @@ The Whistleblower module has been completely removed from the system:
 - Removed whistleblower permissions from role-form.tsx and roles.tsx
 - Deleted whistleblower page files: whistleblower-report.tsx, whistleblower-track.tsx, whistleblower-dashboard.tsx, whistleblower-case-details.tsx
 
+## Production Bug Fixes (Nov 27, 2025 - Late Evening)
+
+Fixed critical issues in production environment:
+- **user_roles table schema fixes**: Added missing `id` and `assigned_at` columns in Neon database to match Drizzle schema
+  - Column `id`: VARCHAR with gen_random_uuid() default for unique identification
+  - Column `assigned_at`: TIMESTAMP with NOW() default for audit tracking
+  - These columns were present in development but missing in production, causing /api/user-roles 500 errors
+- **Risk categories endpoint fix**: Corrected parameter passing in PUT /api/risk-categories/:id endpoint (routes.ts line 10754)
+  - Previous: `storage.updateRiskCategory(req.params.id, tenantId, validatedData)` - passed 3 params but function accepts 2
+  - Fixed: `storage.updateRiskCategory(req.params.id, validatedData)` - removed single-tenant tenantId parameter
+  - Fixed empty UPDATE SQL query generation that was causing "syntax error at or near WHERE" errors
+- **Authentication**: Configured proper bcrypt password hash for admin user (Valencia.araneda@gmail.com / Admin2024!)
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
@@ -108,7 +121,7 @@ Production deployment successfully completed with full database synchronization:
 - **Synchronization Method**: Exported schema from Replit using pg_dump, created 103 missing tables in Render
 - **Tables per module**: approval_*, audit_*, compliance_*, escalation_*, notification_*, user_preferences, working_papers, etc.
 - **Authentication**: Session-based with local credentials (Valencia.araneda@gmail.com / Admin2024!)
-- **Login Verification**: Tested 11/27/2025 18:35 UTC - Login working correctly on production
+- **Login Verification**: Tested 11/27/2025 20:15 UTC - Login and user-roles endpoints working correctly on production
 
 # External Dependencies
 
