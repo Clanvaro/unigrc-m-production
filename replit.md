@@ -99,9 +99,24 @@ The Whistleblower module has been completely removed from the system:
     - Thresholds: >50ms auth, >100ms session/tenant resolution, >500ms total request = SLOW warnings
 -   **Neon Scale to Zero Mitigation (Nov 27, 2025)**: Aggressive keep-alive pings every 20 seconds (reduced from 45s) to prevent Neon database from sleeping. Neon's Scale to Zero feature suspends the database after ~5 minutes of inactivity, causing 30-60 second cold start delays. **Recommended**: Disable Scale to Zero in Neon console for production workloads.
 
+## Render Deployment & Database Synchronization (Nov 27, 2025 - Completed)
+
+Production deployment successfully completed with full database synchronization:
+- **Render Service**: UNIGRC (Node/Starter) - https://unigrc.onrender.com
+- **Production Database**: Neon (us-west-2 Oregon) - `ep-muddy-breeze-aft589fg-pooler`
+- **Database Status**: 146 tables synced between Replit (dev) and Render (prod)
+- **Synchronization Method**: Exported schema from Replit using pg_dump, created 103 missing tables in Render
+- **Tables per module**: approval_*, audit_*, compliance_*, escalation_*, notification_*, user_preferences, working_papers, etc.
+- **Authentication**: Session-based with local credentials (Valencia.araneda@gmail.com / Admin2024!)
+- **Login Verification**: Tested 11/27/2025 18:35 UTC - Login working correctly on production
+
 # External Dependencies
 
--   **Neon Database**: Serverless PostgreSQL hosting. Production uses `ep-morning-darkness-ahm85ch3-pooler` (us-east-1). Development uses `DATABASE_URL` directly. The `server/db.ts` prioritizes `DATABASE_URL` over `POOLED_DATABASE_URL` to ensure consistent connections.
+-   **Neon Database**: Serverless PostgreSQL hosting. 
+    - Production (Render): `ep-muddy-breeze-aft589fg-pooler` (us-west-2 Oregon)
+    - Development (Replit): `DATABASE_URL` via Replit integration
+    - Connection strategy: `server/db.ts` prioritizes `DATABASE_URL` over `POOLED_DATABASE_URL`
+-   **Render Hosting**: Node.js web service for production deployment.
 -   **Replit Integration**: Development environment tools and Replit Auth.
 -   **Google Fonts**: Inter font family.
 -   **Recharts**: For dashboard analytics and visualizations.
