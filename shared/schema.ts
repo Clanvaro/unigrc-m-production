@@ -915,12 +915,10 @@ export const baseInsertRiskSchema = createInsertSchema(risks).omit({
 });
 
 // Schema with validation for creating risks
-export const insertRiskSchema = baseInsertRiskSchema.refine((data) => {
-  // Al menos uno de macroprocesoId, processId o subprocesoId debe estar presente
-  return data.macroprocesoId || data.processId || data.subprocesoId;
-}, {
-  message: "Un riesgo debe estar asociado a un macroproceso, proceso o subproceso",
-});
+// NOTE: La validación de proceso asociado se eliminó porque el sistema usa 
+// risk_process_links (asociaciones múltiples) en lugar de campos directos.
+// La asociación de procesos se valida en el frontend antes de enviar.
+export const insertRiskSchema = baseInsertRiskSchema;
 
 // Schema específico para validación de riesgos
 export const validateRiskSchema = z.object({
