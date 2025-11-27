@@ -1535,15 +1535,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskControlsWithDetails,
         processGerenciasRelations
       ] = await Promise.all([
-        timed('db:gerencias', () => storage.getGerencias(tenantId)),
-        timed('db:macroprocesos', () => storage.getMacroprocesos(tenantId)),
-        timed('db:subprocesos', () => storage.getSubprocesosWithOwners(tenantId)),
-        timed('db:processes', () => storage.getProcesses(tenantId)),
+        timed('db:gerencias', () => storage.getGerencias()),
+        timed('db:macroprocesos', () => storage.getMacroprocesos()),
+        timed('db:subprocesos', () => storage.getSubprocesosWithOwners()),
+        timed('db:processes', () => storage.getProcesses()),
         timed('db:processOwners', () => storage.getProcessOwners()),
-        timed('db:riskCategories', () => storage.getRiskCategories(tenantId)),
-        timed('db:riskProcessLinks', () => storage.getRiskProcessLinksWithDetails(tenantId)),
-        timed('db:riskControls', () => storage.getAllRiskControlsWithDetails(tenantId)),
-        timed('db:processGerencias', () => storage.getAllProcessGerenciasRelations(tenantId))
+        timed('db:riskCategories', () => storage.getRiskCategories()),
+        timed('db:riskProcessLinks', () => storage.getRiskProcessLinksWithDetails()),
+        timed('db:riskControls', () => storage.getAllRiskControlsWithDetails()),
+        timed('db:processGerencias', () => storage.getAllProcessGerenciasRelations())
       ]);
       
       // Measure DB query phase
@@ -1749,17 +1749,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
             processOwners,
             riskLevelRanges,
           ] = await Promise.all([
-            timedQuery('risksWithDetails', () => storage.getRisksWithDetails(tenantId)),
-            timedQuery('processes', () => storage.getProcesses(tenantId)),
-            timedQuery('macroprocesos', () => storage.getMacroprocesos(tenantId)),
-            timedQuery('subprocesos', () => storage.getSubprocesos(tenantId)),
-            timedQuery('gerencias', () => storage.getGerencias(tenantId)),
-            timedQuery('riskCategories', () => storage.getRiskCategories(tenantId)),
-            timedQuery('riskControlsWithDetails', () => storage.getAllRiskControlsWithDetails(tenantId)),
-            timedQuery('actionPlans', () => storage.getActionPlans(tenantId)),
-            timedQuery('controls', () => storage.getControls(tenantId)),
+            timedQuery('risksWithDetails', () => storage.getRisksWithDetails()),
+            timedQuery('processes', () => storage.getProcesses()),
+            timedQuery('macroprocesos', () => storage.getMacroprocesos()),
+            timedQuery('subprocesos', () => storage.getSubprocesos()),
+            timedQuery('gerencias', () => storage.getGerencias()),
+            timedQuery('riskCategories', () => storage.getRiskCategories()),
+            timedQuery('riskControlsWithDetails', () => storage.getAllRiskControlsWithDetails()),
+            timedQuery('actionPlans', () => storage.getActionPlans()),
+            timedQuery('controls', () => storage.getControls()),
             timedQuery('processOwners', () => storage.getProcessOwners()),
-            timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges', tenantId).then(config => 
+            timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges').then(config => 
               config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
             )),
           ]);
@@ -5141,7 +5141,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
       
-      // Fetch all data in parallel
+      // Fetch all data in parallel (single-tenant mode - no tenantId filtering)
       const [
         eventsData,
         totalCountResult,
@@ -5150,24 +5150,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ] = await Promise.all([
         // Events with pagination
         requireDb().select().from(riskEvents)
-          .where(and(
-            eq(riskEvents.tenantId, tenantId),
-            isNull(riskEvents.deletedAt)
-          ))
+          .where(isNull(riskEvents.deletedAt))
           .orderBy(desc(riskEvents.eventDate))
           .limit(limit)
           .offset(offset),
         // Total count
         requireDb().select({ count: sql<number>`count(*)` })
           .from(riskEvents)
-          .where(and(
-            eq(riskEvents.tenantId, tenantId),
-            isNull(riskEvents.deletedAt)
-          )),
+          .where(isNull(riskEvents.deletedAt)),
         // Risks for reference
-        storage.getRisks(tenantId),
+        storage.getRisks(),
         // Processes for reference
-        storage.getProcesses(tenantId)
+        storage.getProcesses()
       ]);
       
       // Load related entities for all events in parallel
@@ -6340,7 +6334,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const controls = await storage.getControls(tenantId);
+      const controls = await storage.getControls();
       const assessments = controls
         .filter(control => control.selfAssessment)
         .map(control => ({
@@ -6363,7 +6357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       
-      const controls = await storage.getControls(tenantId);
+      const controls = await storage.getControls();
       const totalControls = controls.length;
       const completedAssessments = controls.filter(control => control.selfAssessment).length;
       const completionPercentage = totalControls > 0 ? Math.round((completedAssessments / totalControls) * 100) : 0;
@@ -8335,9 +8329,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const { reportType, format, title, startDate, endDate } = req.body;
       
-      // Get data based on report type
-      const risksData = await storage.getRisks(tenantId);
-      const controlsData = await storage.getControls(tenantId);
+      // Get data based on report type (single-tenant mode)
+      const risksData = await storage.getRisks();
+      const controlsData = await storage.getControls();
       const actionPlansData = await storage.getActionPlans();
       const processesData = await requireDb().select().from(processes);
       
@@ -14667,11 +14661,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log('🔍 Calculating residual risks for VALIDATED risks in audit universe entities...');
       
-      // Get all audit universe items and all validated risk-process links
+      // Get all audit universe items and all validated risk-process links (single-tenant mode)
       const universeItems = await storage.getAuditUniverse();
-      const allRisks = await storage.getRisks(tenantId);
+      const allRisks = await storage.getRisks();
       
-      // Get validated risk-process links filtered by tenant (via JOIN with risks table)
+      // Get validated risk-process links (single-tenant mode - no tenant filtering)
       const allValidatedLinks = await requireDb()
         .select({
           id: riskProcessLinks.id,
@@ -14683,12 +14677,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(riskProcessLinks)
         .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-        .where(
-          and(
-            eq(riskProcessLinks.validationStatus, 'validated'),
-            eq(risks.tenantId, tenantId)
-          )
-        );
+        .where(eq(riskProcessLinks.validationStatus, 'validated'));
       
       const result = [];
       
