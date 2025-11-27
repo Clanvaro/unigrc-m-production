@@ -754,7 +754,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           lastName: dbUser.lastName,
           fullName: dbUser.fullName,
           profileImageUrl: dbUser.profileImageUrl,
-          isAdmin: dbUser.isAdmin ?? false
+          isAdmin: dbUser.isAdmin ?? false,
+          isPlatformAdmin: dbUser.isPlatformAdmin ?? dbUser.isAdmin ?? false
         },
         permissions: userPermissions || []
       };
