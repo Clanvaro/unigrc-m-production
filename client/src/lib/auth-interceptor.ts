@@ -46,8 +46,8 @@ export function handleAuthError(error: AuthError): void {
   }
 }
 
-// Handle session expiration
-function handleSessionExpired(): void {
+// Handle session expiration (exported for direct use in auth queries)
+export function handleSessionExpired(): void {
   console.warn('🔐 Session expired, redirecting to login...');
   
   // Clear all cached data

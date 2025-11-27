@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { handleAuthError, handleSessionExpired } from "@/lib/auth-interceptor";
 
 interface User {
   id: string;
@@ -27,6 +28,13 @@ export function useAuth() {
       });
       
       if (!response.ok) {
+        // For 401 on the auth endpoint, session is definitely expired - redirect immediately
+        if (response.status === 401) {
+          // Only redirect if we're not already on login page
+          if (window.location.pathname !== '/login') {
+            handleSessionExpired();
+          }
+        }
         return {
           authenticated: false,
           user: null,
@@ -36,9 +44,11 @@ export function useAuth() {
       
       return response.json();
     },
-    staleTime: 1 * 1000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 5 * 60 * 1000, // 5 minutes - auth data rarely changes
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
+    refetchOnMount: false, // Don't refetch on every component mount
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
+    refetchOnReconnect: true, // DO refetch on network reconnect to detect session expiration
     retry: false,
   });
 
