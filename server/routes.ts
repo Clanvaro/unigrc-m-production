@@ -848,15 +848,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SINGLE-TENANT MODE: Use constant tenant ID
       const SINGLE_TENANT_ID = 'single-tenant';
       
-      // Create session user object (ensure no undefined values for JSON serialization)
+      // Create minimal session user object (permissions loaded on demand by middleware)
       const sessionUser = {
         id: user.id,
-        username: user.username || 'unknown',
-        email: user.email || 'no-email@unknown.com',
-        fullName: user.fullName || 'Unknown User',
+        email: user.email || '',
         isPlatformAdmin: user.isPlatformAdmin === true,
-        activeTenantId: SINGLE_TENANT_ID,
-        permissions: userPermissions || []
+        activeTenantId: SINGLE_TENANT_ID
       };
 
       console.log('[Local Auth] Session user data:', {
