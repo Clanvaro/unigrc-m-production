@@ -704,8 +704,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize email service from configuration
   await initializeEmailService(storage);
 
-  // Shared handler for current user endpoint - with 10s cache
+  // Shared handler for current user endpoint - with in-memory cache (5 min TTL)
   // SINGLE-TENANT MODE: Simplified auth handler without tenant logic
+  // OPTIMIZED: Uses authCache to avoid DB queries on every request
   const getCurrentUserHandler = async (req: any, res: any) => {
     try {
       const user = req.user as any;
@@ -731,7 +732,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Get user data and permissions
+      // OPTIMIZATION: Check in-memory cache first (5 min TTL)
+      const cached = authCache.get(userId);
+      if (cached) {
+        const response = {
+          authenticated: true,
+          user: {
+            id: cached.user.id,
+            email: cached.user.email,
+            firstName: cached.user.firstName,
+            lastName: cached.user.lastName,
+            fullName: cached.user.fullName,
+            profileImageUrl: cached.user.profileImageUrl,
+            isAdmin: cached.user.isAdmin ?? false,
+            isPlatformAdmin: cached.user.isPlatformAdmin ?? cached.user.isAdmin ?? false
+          },
+          permissions: cached.permissions || []
+        };
+        return res.json(response);
+      }
+      
+      // Cache miss - fetch from database
       const [dbUser, userPermissions] = await Promise.all([
         storage.getUser(userId),
         storage.getUserPermissions(userId)
@@ -744,6 +765,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           permissions: []
         });
       }
+      
+      // Store in cache for next request
+      authCache.set(userId, {
+        user: dbUser,
+        tenants: [],
+        permissions: userPermissions || [],
+        cachedAt: Date.now()
+      });
       
       const response = {
         authenticated: true,

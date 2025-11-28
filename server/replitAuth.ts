@@ -133,11 +133,52 @@ async function upsertUser(
   }
 }
 
+// Routes that should skip session/passport middleware (static assets, Vite HMR)
+const shouldSkipSession = (path: string): boolean => {
+  // Skip session for:
+  // - Vite HMR and dev files
+  // - Node modules served by Vite
+  // - Static assets (images, fonts, etc.)
+  // - Source files served by Vite dev server
+  return (
+    path.startsWith('/@') ||
+    path.startsWith('/node_modules/') ||
+    path.startsWith('/@fs/') ||
+    path.startsWith('/src/') ||
+    path.endsWith('.tsx') ||
+    path.endsWith('.ts') ||
+    path.endsWith('.css') ||
+    path.endsWith('.js') ||
+    path.endsWith('.map') ||
+    path.endsWith('.png') ||
+    path.endsWith('.jpg') ||
+    path.endsWith('.jpeg') ||
+    path.endsWith('.gif') ||
+    path.endsWith('.svg') ||
+    path.endsWith('.ico') ||
+    path.endsWith('.woff') ||
+    path.endsWith('.woff2') ||
+    path.endsWith('.ttf') ||
+    path.endsWith('.eot')
+  );
+};
+
 export async function setupAuth(app: Express) {
   // Trust only the first proxy (Replit's GCE load balancer)
   // This ensures secure cookies work in production without opening rate-limit bypass vulnerabilities
   app.set("trust proxy", 1);
-  app.use(getSession());
+  
+  // Get session middleware instance
+  const sessionMiddleware = getSession();
+  
+  // OPTIMIZATION: Skip session middleware for static assets to reduce DB queries
+  app.use((req, res, next) => {
+    if (shouldSkipSession(req.path)) {
+      return next();
+    }
+    return sessionMiddleware(req, res, next);
+  });
+  
   app.use(passport.initialize());
   
   // CRITICAL: Define serializers BEFORE passport.session() and OUTSIDE any conditional blocks
@@ -176,7 +217,13 @@ export async function setupAuth(app: Express) {
   });
   
   // Wrap passport.session() with timing instrumentation to detect session store latency
+  // OPTIMIZATION: Skip passport.session() for static assets (same as session middleware)
   app.use((req, res, next) => {
+    // Skip passport session for static assets - they don't need user context
+    if (shouldSkipSession(req.path)) {
+      return next();
+    }
+    
     const sessionStart = Date.now();
     passport.session()(req, res, (err) => {
       const sessionTime = Date.now() - sessionStart;
