@@ -139,25 +139,21 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const [findingTypeFilter, setFindingTypeFilter] = useState("all");
   const [findingAuditFilter, setFindingAuditFilter] = useState("all");
 
-  // Consolidated risks page data - uses same query as risks.tsx to share cache
+  // Lightweight risks page data - uses same query as risks.tsx to share cache
   // This eliminates duplicate API calls when on the risks page
-  interface RisksPageData {
+  interface PageDataLite {
     gerencias: any[];
     macroprocesos: any[];
     subprocesos: any[];
     processes: any[];
-    processOwners: any[];
     riskCategories: any[];
-    riskProcessLinks: any[];
-    riskControlsWithDetails: any[];
     processGerencias: any[];
-    macroprocesoGerencias: any[];
   }
   
-  const { data: risksPageData } = useQuery<RisksPageData>({
-    queryKey: ["/api/risks/page-data"],
+  const { data: risksPageData } = useQuery<PageDataLite>({
+    queryKey: ["/api/risks/page-data-lite"],
     queryFn: async () => {
-      const response = await fetch("/api/risks/page-data");
+      const response = await fetch("/api/risks/page-data-lite");
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
@@ -193,7 +189,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    enabled: needsProcessData
+    enabled: needsProcessData || location === "/risks", // Also needed for risks page exports
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
   });
 
   const { data: gerencias = [] } = useQuery<any[]>({
@@ -243,12 +241,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     enabled: location === "/matrix"
   });
 
-  // Risks page data for export - extracted from consolidated query
-  // This uses cached data from risksPageData instead of separate API calls
-  const riskProcessLinks = risksPageData?.riskProcessLinks || [];
-  const allRiskControls = risksPageData?.riskControlsWithDetails || [];
-  
-  // For risks export, we need to fetch all risks (not paginated) - this is only for export
+  // For risks export, we need to fetch all risks (not paginated)
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: any }>({
     queryKey: ["/api/risks", "export"],
     queryFn: async () => {
@@ -262,14 +255,42 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     enabled: location === "/risks"
   });
   const allRisks = risksResponse?.data || [];
+  
+  // Risk relations for export - loaded on demand only for export functionality
+  interface ExportRelationsData {
+    riskProcessLinks: any[];
+    riskControls: any[];
+  }
+  
+  const { data: exportRelations } = useQuery<ExportRelationsData>({
+    queryKey: ["/api/risks/batch-relations", "export", allRisks.map((r: any) => r.id)],
+    queryFn: async () => {
+      if (allRisks.length === 0) return { riskProcessLinks: [], riskControls: [] };
+      const riskIds = allRisks.map((r: any) => r.id);
+      const response = await fetch("/api/risks/batch-relations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ riskIds }),
+        credentials: "include"
+      });
+      if (!response.ok) throw new Error("Failed to fetch risk relations");
+      return response.json();
+    },
+    enabled: location === "/risks" && allRisks.length > 0,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
+  });
+  
+  const riskProcessLinks = exportRelations?.riskProcessLinks || [];
+  const allRiskControls = exportRelations?.riskControls || [];
 
-  // Combine data sources - use page-data when on /risks, otherwise use individual queries
+  // Combine data sources - use page-data-lite when on /risks, otherwise use individual queries
   // This prevents duplicate API calls when on the risks page
   const effectiveProcesses = location === "/risks" ? (risksPageData?.processes || []) : processes;
   const effectiveMacroprocesos = location === "/risks" ? (risksPageData?.macroprocesos || []) : macroprocesos;
   const effectiveSubprocesos = location === "/risks" ? (risksPageData?.subprocesos || []) : subprocesos;
   const effectiveGerencias = location === "/risks" ? (risksPageData?.gerencias || []) : gerencias;
-  const effectiveProcessOwners = location === "/risks" ? (risksPageData?.processOwners || []) : processOwners;
+  const effectiveProcessOwners = processOwners; // processOwners are loaded separately now
 
   // Reset filters when changing pages
   useEffect(() => {

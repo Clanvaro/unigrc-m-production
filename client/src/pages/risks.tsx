@@ -195,25 +195,21 @@ export default function Risks() {
     setCurrentPage(1);
   }, [filters]);
 
-  // ============== CONSOLIDATED PAGE DATA ==============
-  // Single API call to fetch all metadata needed for the risks page
-  interface RisksPageData {
+  // ============== LIGHTWEIGHT PAGE DATA (filters only) ==============
+  // Fast initial load with only filter/dropdown data - no heavy JOINs
+  interface PageDataLite {
     gerencias: any[];
     macroprocesos: any[];
     subprocesos: any[];
     processes: any[];
-    processOwners: any[];
     riskCategories: any[];
-    riskProcessLinks: any[];
-    riskControlsWithDetails: any[];
     processGerencias: any[];
-    macroprocesoGerencias: any[];
   }
   
-  const { data: pageData, isLoading: isPageDataLoading } = useQuery<RisksPageData>({
-    queryKey: ["/api/risks/page-data"],
+  const { data: pageDataLite, isLoading: isPageDataLoading } = useQuery<PageDataLite>({
+    queryKey: ["/api/risks/page-data-lite"],
     queryFn: async () => {
-      const response = await fetch("/api/risks/page-data");
+      const response = await fetch("/api/risks/page-data-lite");
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
@@ -222,17 +218,14 @@ export default function Risks() {
     refetchOnReconnect: false,
   });
   
-  // Extract individual data from consolidated response
-  const gerencias = pageData?.gerencias || [];
-  const macroprocesos = pageData?.macroprocesos || [];
-  const subprocesos = pageData?.subprocesos || [];
-  const processes = pageData?.processes || [];
-  const processOwners = pageData?.processOwners || [];
-  const riskCategories = pageData?.riskCategories || [];
-  const allRiskProcessLinks = pageData?.riskProcessLinks || [];
-  const allRiskControls = pageData?.riskControlsWithDetails || [];
-  const processGerencias = pageData?.processGerencias || [];
-  const macroprocesoGerencias = pageData?.macroprocesoGerencias || [];
+  // Extract individual data from lightweight response
+  const gerencias = pageDataLite?.gerencias || [];
+  const macroprocesos = pageDataLite?.macroprocesos || [];
+  const subprocesos = pageDataLite?.subprocesos || [];
+  const processes = pageDataLite?.processes || [];
+  const riskCategories = pageDataLite?.riskCategories || [];
+  const processGerencias = pageDataLite?.processGerencias || [];
+  const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
 
   // ============== RISKS DATA (paginated) ==============
   const { data: risksResponse, isLoading: isRisksLoading, refetch: refetchRisks } = useQuery<{ data: any[], pagination: { limit: number, offset: number, total: number } }>({
@@ -254,7 +247,47 @@ export default function Risks() {
   });
   const risks = risksResponse?.data || [];
   const totalPages = risksResponse?.pagination ? Math.ceil(risksResponse.pagination.total / pageSize) : 0;
-  const isLoading = isPageDataLoading || isRisksLoading;
+  
+  // ============== BATCH LOAD RELATIONS FOR VISIBLE RISKS ==============
+  // Load processLinks and controls only for the risks currently displayed
+  const riskIds = risks.map((r: any) => r.id);
+  
+  interface BatchRelationsData {
+    riskProcessLinks: any[];
+    riskControls: any[];
+  }
+  
+  const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
+    queryKey: ["/api/risks/batch-relations", riskIds],
+    queryFn: async () => {
+      if (riskIds.length === 0) return { riskProcessLinks: [], riskControls: [] };
+      const response = await fetch("/api/risks/batch-relations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ riskIds }),
+        credentials: "include"
+      });
+      if (!response.ok) throw new Error("Failed to fetch risk relations");
+      return response.json();
+    },
+    enabled: riskIds.length > 0,
+    staleTime: 1000 * 15, // 15 seconds
+  });
+  
+  // Extract relations from batch response
+  const allRiskProcessLinks = batchRelations?.riskProcessLinks || [];
+  const allRiskControls = batchRelations?.riskControls || [];
+  
+  // Process owners - load when we have risks (needed for responsibles calculation)
+  const { data: processOwnersData, isLoading: isProcessOwnersLoading } = useQuery<any[]>({
+    queryKey: ["/api/process-owners"],
+    enabled: risks.length > 0, // Load when we have risks to display
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
+  });
+  const processOwners = processOwnersData || [];
+  
+  const isLoading = isPageDataLoading || isRisksLoading || isRelationsLoading || isProcessOwnersLoading;
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
   

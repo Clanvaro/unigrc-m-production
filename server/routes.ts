@@ -1607,6 +1607,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============== LIGHTWEIGHT RISKS PAGE DATA (for filters only) ==============
+  // This endpoint provides only the essential data for the risks page grid and filters
+  // Heavy JOINs (riskProcessLinks, riskControlsWithDetails) are loaded on-demand
+  app.get("/api/risks/page-data-lite", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try cache first (60 second TTL - longer since this data changes less frequently)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CACHE MISS] ${cacheKey} - fetching lite data in parallel`);
+      
+      // Fetch only essential data for filters (no heavy JOINs)
+      const [
+        gerencias,
+        macroprocesos,
+        subprocesos,
+        processes,
+        riskCategories,
+        processGerenciasRelations
+      ] = await Promise.all([
+        storage.getGerencias(),
+        storage.getMacroprocesos(),
+        storage.getSubprocesosWithOwners(),
+        storage.getProcesses(),
+        storage.getRiskCategories(),
+        storage.getAllProcessGerenciasRelations()
+      ]);
+      
+      // Filter out soft-deleted records
+      const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
+      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+      const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
+      
+      const response = {
+        gerencias: activeGerencias,
+        macroprocesos: activeMacroprocesos,
+        subprocesos: activeSubprocesos,
+        processes: activeProcesses,
+        riskCategories,
+        processGerencias: processGerenciasRelations
+      };
+      
+      // Cache for 60 seconds (this data changes infrequently)
+      await distributedCache.set(cacheKey, response, 60);
+      
+      console.log(`[PERF] /api/risks/page-data-lite COMPLETE in ${Date.now() - requestStart}ms`, {
+        counts: {
+          gerencias: activeGerencias.length,
+          macroprocesos: activeMacroprocesos.length,
+          subprocesos: activeSubprocesos.length,
+          processes: activeProcesses.length
+        }
+      });
+      
+      res.json(response);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("[ERROR] /api/risks/page-data-lite failed:", error);
+      res.status(500).json({ message: "Failed to fetch risks page data" });
+    }
+  });
+
   // Risks
   app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
@@ -1868,6 +1941,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(risk);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch risk" });
+    }
+  });
+
+  // Batch load relations for visible risks (on-demand loading for paginated view)
+  app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const { riskIds } = req.body;
+      
+      if (!Array.isArray(riskIds) || riskIds.length === 0) {
+        return res.json({ riskProcessLinks: [], riskControls: [] });
+      }
+      
+      // Limit batch size to prevent abuse
+      const limitedIds = riskIds.slice(0, 100);
+      const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}`;
+      
+      // Try cache first (15 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+      
+      // Fetch relations for the specified risks in parallel
+      const [allProcessLinks, allRiskControls] = await Promise.all([
+        storage.getRiskProcessLinksWithDetails(),
+        storage.getAllRiskControlsWithDetails()
+      ]);
+      
+      // Filter to only the requested risks
+      const filteredLinks = allProcessLinks.filter((link: any) => limitedIds.includes(link.riskId));
+      const filteredControls = allRiskControls.filter((rc: any) => limitedIds.includes(rc.riskId));
+      
+      const response = {
+        riskProcessLinks: filteredLinks,
+        riskControls: filteredControls
+      };
+      
+      // Cache for 15 seconds
+      await distributedCache.set(cacheKey, response, 15);
+      
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching batch relations:", error);
+      res.status(500).json({ message: "Failed to fetch risk relations" });
+    }
+  });
+
+  // Get full details for a risk including controls and process links (on-demand loading)
+  app.get("/api/risks/:id/full-details", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const riskId = req.params.id;
+      const cacheKey = `risk-full-details:${CACHE_VERSION}:${riskId}`;
+      
+      // Try cache first (30 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+      
+      // Fetch risk, controls, and process links in parallel
+      const [riskControls, processLinks] = await Promise.all([
+        storage.getRiskControls(riskId),
+        storage.getRiskProcessLinks(riskId)
+      ]);
+      
+      const response = {
+        riskId,
+        controls: riskControls,
+        processLinks
+      };
+      
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, response, 30);
+      
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching risk full details:", error);
+      res.status(500).json({ message: "Failed to fetch risk details" });
     }
   });
 
