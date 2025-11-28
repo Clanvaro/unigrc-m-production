@@ -7,10 +7,11 @@ import * as schema from "@shared/schema";
 let pool: Pool | null = null;
 let db: ReturnType<typeof drizzle> | null = null;
 
-// Database URL priority: RENDER_DATABASE_URL > DATABASE_URL > POOLED_DATABASE_URL
-// RENDER_DATABASE_URL is for Render PostgreSQL hosting
-// DATABASE_URL is the default Replit/Neon connection
-const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.DATABASE_URL || process.env.POOLED_DATABASE_URL;
+// Database URL priority: RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
+// RENDER_DATABASE_URL is for Render PostgreSQL hosting (always-on, no cold start)
+// POOLED_DATABASE_URL is for Neon pooled connections (better scalability)
+// DATABASE_URL is the fallback direct Neon connection
+const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
 
 // Detect if using Render PostgreSQL (non-Neon)
 const isRenderDb = databaseUrl?.includes('render.com') || databaseUrl?.includes('oregon-postgres.render.com') || false;
