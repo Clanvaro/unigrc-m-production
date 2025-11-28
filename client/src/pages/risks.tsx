@@ -36,8 +36,6 @@ import { RiskValidationStatus } from "@/components/RiskValidationStatus";
 import { ValidationHistoryModal } from "@/components/ValidationHistoryModal";
 import { RiskValidationHistory } from "@/components/RiskValidationHistory";
 import { RisksPageSkeleton } from "@/components/skeletons/risks-page-skeleton";
-import { RisksByProcess } from "@/components/RisksByProcess";
-import { RisksByOwner } from "@/components/RisksByOwner";
 
 // Type for responsible with validation status
 interface ResponsibleWithValidation {
@@ -307,6 +305,13 @@ export default function Risks() {
   
   // Detailed loading state - only when user requests details
   const isDetailedLoading = needsDetailedData && (isRelationsLoading || isProcessOwnersLoading);
+
+  // Load detailed data when switching to "detalle" tab
+  useEffect(() => {
+    if (activeTab === "detalle") {
+      setNeedsDetailedData(true);
+    }
+  }, [activeTab]);
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
   
@@ -2188,23 +2193,85 @@ export default function Risks() {
           )}
         </TabsContent>
 
-        {/* Tab: Detalle - full data with batch-relations, grouped views */}
-        <TabsContent value="detalle" className="flex-1 overflow-auto mt-0">
+        {/* Tab: Detalle - full data with batch-relations, complete table */}
+        <TabsContent value="detalle" className="flex-1 flex flex-col overflow-hidden mt-0">
           {activeTab === "detalle" && (
-            <div className="space-y-6">
-              <Tabs defaultValue="by-process" className="w-full">
-                <TabsList>
-                  <TabsTrigger value="by-process">Por Proceso</TabsTrigger>
-                  <TabsTrigger value="by-owner">Por Responsable</TabsTrigger>
-                </TabsList>
-                <TabsContent value="by-process" className="mt-4">
-                  <RisksByProcess />
-                </TabsContent>
-                <TabsContent value="by-owner" className="mt-4">
-                  <RisksByOwner />
-                </TabsContent>
-              </Tabs>
-            </div>
+            <>
+              {isLoading ? (
+                <Card className="flex-1 flex flex-col overflow-hidden">
+                  <CardContent className="p-4">
+                    <RisksPageSkeleton />
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="flex-1 flex flex-col overflow-hidden">
+                  <CardContent className="p-0 h-full flex flex-col">
+                    <div className="flex-1 overflow-hidden">
+                      <VirtualizedTable
+                        data={displayData}
+                        columns={columns}
+                        estimatedRowHeight={65}
+                        overscan={5}
+                        getRowKey={(risk) => risk.id}
+                        isLoading={isLoading}
+                        ariaLabel="Tabla de riesgos detallada"
+                        ariaDescribedBy="risks-detail-table-description"
+                      />
+                      <div id="risks-detail-table-description" className="sr-only">
+                        Tabla detallada con {displayData.length} riesgos incluyendo proceso, responsable y estado de validación.
+                      </div>
+                    </div>
+
+                    {/* Pagination controls */}
+                    {!testMode50k && risksResponse && risksResponse.pagination && risksResponse.pagination.total > 0 && (
+                      <div className="border-t px-4 py-2 flex items-center justify-between text-[15px]">
+                        <div className="text-sm text-muted-foreground">
+                          Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, risksResponse.pagination.total)} de {risksResponse.pagination.total} riesgos
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                            disabled={currentPage === 1}
+                          >
+                            Anterior
+                          </Button>
+                          <span className="text-sm">
+                            Página {currentPage} de {totalPages}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                            disabled={currentPage === totalPages}
+                          >
+                            Siguiente
+                          </Button>
+                        </div>
+                        <Select
+                          value={pageSize.toString()}
+                          onValueChange={(value) => {
+                            setPageSize(Number(value));
+                            setCurrentPage(1);
+                          }}
+                        >
+                          <SelectTrigger className="w-[180px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="10">10 por página</SelectItem>
+                            <SelectItem value="25">25 por página</SelectItem>
+                            <SelectItem value="50">50 por página</SelectItem>
+                            <SelectItem value="100">100 por página</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </>
           )}
         </TabsContent>
       </Tabs>
