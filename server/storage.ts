@@ -555,6 +555,7 @@ export interface IStorage {
   }>;
   getAllRiskControls(): Promise<RiskControl[]>;
   getAllRiskControlsWithDetails(): Promise<(RiskControl & { control: Control })[]>;
+  getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]>;
   getRiskControls(riskId: string): Promise<(RiskControl & { control: Control })[]>;
   getControlRisks(controlId: string): Promise<(RiskControl & { risk: Risk })[]>;
   createRiskControl(riskControl: InsertRiskControl): Promise<RiskControl>;
@@ -8395,6 +8396,30 @@ export class DatabaseStorage extends MemStorage {
       controlId: a.controlId,
       residualRisk: a.residualRisk,
       control: a.control!
+    }));
+  }
+
+  async getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]> {
+    if (riskIds.length === 0) return [];
+    
+    // Direct query with WHERE IN for efficiency
+    const results = await db.select({
+      riskControl: riskControls,
+      control: controls
+    })
+    .from(riskControls)
+    .innerJoin(controls, eq(riskControls.controlId, controls.id))
+    .where(and(
+      inArray(riskControls.riskId, riskIds),
+      isNull(controls.deletedAt)
+    ));
+    
+    return results.map(r => ({
+      id: r.riskControl.id,
+      riskId: r.riskControl.riskId,
+      controlId: r.riskControl.controlId,
+      residualRisk: r.riskControl.residualRisk,
+      control: r.control
     }));
   }
 
