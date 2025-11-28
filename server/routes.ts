@@ -486,6 +486,12 @@ function requirePermission(permission: string) {
       };
     }
     
+    // SINGLE-TENANT ADMIN BYPASS: Admins have all permissions
+    // Check both isAdmin (schema property) and isPlatformAdmin (legacy)
+    if (req.user?.isAdmin || req.user?.isPlatformAdmin) {
+      return next();
+    }
+    
     try {
       // Check for exact permission match
       const hasExactPermission = await storage.hasPermission(userId, permission);
@@ -526,58 +532,23 @@ function requirePermission(permission: string) {
 }
 
 // Platform admin middleware - verifica que el usuario sea platform admin
+// OPTIMIZADO: Usa req.user.isAdmin/isPlatformAdmin de la sesión, sin consultas a BD
 function requirePlatformAdmin() {
-  return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
-    const requestUser = req.user as any;
-
-    // Short-circuit if req.user already has isPlatformAdmin flag set by isAuthenticated middleware
-    if (requestUser?.isPlatformAdmin === true) {
-      console.log("[Platform Admin Check] Access granted via req.user flag");
-      return next();
+  return (req: Request & { user?: any }, res: Response, next: NextFunction) => {
+    const user = req.user;
+    
+    // Verificar autenticación
+    if (!user) {
+      return res.status(401).json({ message: "Autenticación requerida" });
     }
-
-    // Extract user identifiers from various auth sources
-    let userId = requestUser?.claims?.sub ?? requestUser?.id;
-    let userEmail = requestUser?.claims?.email ?? requestUser?.email;
-
-    // Development fallback
-    if (!userId) {
-      if (process.env.NODE_ENV === "development") {
-        userId = "user-1";
-      } else {
-        return res.status(401).json({ message: "Autenticación requerida" });
-      }
+    
+    // Verificar flag isAdmin o isPlatformAdmin de la sesión (ya populado por Passport)
+    // Ambos flags son válidos dependiendo de cómo se deserializó la sesión
+    if (!user.isAdmin && !user.isPlatformAdmin) {
+      return res.status(403).json({ message: "Acceso denegado: se requiere ser administrador de plataforma" });
     }
-
-    try {
-      console.log("[Platform Admin Check] Checking user in database:", userId, "email:", userEmail);
-      // Verify platform admin status from database
-      let user = await storage.getUser(userId);
-      
-      // Fallback to email lookup if ID lookup fails
-      if (!user && userEmail) {
-        console.log("[Platform Admin Check] User not found by ID, trying by email:", userEmail);
-        user = await storage.getUserByEmail(userEmail);
-      }
-
-      console.log("[Platform Admin Check] User found:", user?.username, "isAdmin:", user?.isAdmin);
-      
-      if (!user || !user.isAdmin) {
-        console.log("[Platform Admin Check] Access denied - not a platform admin");
-        return res.status(403).json({ message: "Acceso denegado: se requiere ser administrador de plataforma" });
-      }
-
-      // Cache the platform admin flag in req.user for subsequent middleware
-      if (requestUser) {
-        requestUser.isPlatformAdmin = true;
-      }
-
-      console.log("[Platform Admin Check] Access granted");
-      return next();
-    } catch (error) {
-      console.error("[Platform Admin Check] Error verifying platform admin status:", error);
-      return res.status(500).json({ message: "Error al verificar permisos de plataforma" });
-    }
+    
+    next();
   };
 }
 

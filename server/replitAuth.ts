@@ -651,7 +651,8 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
           userEmail = dbUser.email || userEmail;
           username = dbUser.username || username;
           fullName = dbUser.fullName || fullName;
-          isPlatformAdmin = dbUser.isPlatformAdmin || false;
+          // Check both isAdmin (from schema) and isPlatformAdmin (legacy) for compatibility
+          isPlatformAdmin = dbUser.isAdmin || dbUser.isPlatformAdmin || false;
           
           const activeTenant = cachedData.tenants.find(t => t.isActive) || cachedData.tenants[0];
           if (activeTenant) {
@@ -672,7 +673,8 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
             userEmail = dbUser.email || userEmail;
             username = dbUser.username || username;
             fullName = dbUser.fullName || fullName;
-            isPlatformAdmin = dbUser.isPlatformAdmin || false;
+            // Check both isAdmin (from schema) and isPlatformAdmin (legacy) for compatibility
+            isPlatformAdmin = dbUser.isAdmin || dbUser.isPlatformAdmin || false;
           }
           
           const tenantsStart = Date.now();
@@ -715,6 +717,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
         fullName,
         activeTenantId,
         permissions,
+        isAdmin: isPlatformAdmin,
         isPlatformAdmin
       };
       

@@ -17,6 +17,7 @@ export function usePermissions() {
       firstName?: string;
       lastName?: string;
       profileImageUrl?: string;
+      isAdmin?: boolean;
       isPlatformAdmin?: boolean;
     } | null;
     permissions?: string[];
@@ -32,6 +33,7 @@ export function usePermissions() {
     firstName: authResponse.user.firstName,
     lastName: authResponse.user.lastName,
     profileImageUrl: authResponse.user.profileImageUrl,
+    isAdmin: authResponse.user.isAdmin,
     isPlatformAdmin: authResponse.user.isPlatformAdmin
   } : undefined;
 
@@ -85,6 +87,11 @@ export function usePermissions() {
   };
 
   const isAdmin = (): boolean => {
+    // Check admin flags directly from user session (single-tenant mode)
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
+    // Fallback to permission-based check
     return hasPermission("manage_users") && hasPermission("manage_roles");
   };
 
