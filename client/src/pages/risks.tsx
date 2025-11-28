@@ -2088,7 +2088,7 @@ export default function Risks() {
         </div>
 
         {/* Tab: Básica - fast loading using optimized endpoint */}
-        <TabsContent value="basica" className="flex-1 flex flex-col overflow-hidden mt-0">
+        <TabsContent value="basica" className="flex-1 flex flex-col overflow-hidden mt-0 data-[state=active]:flex">
           {isLoading ? (
             <Card className="flex-1 flex flex-col overflow-hidden">
               <CardContent className="p-4">
@@ -2096,10 +2096,8 @@ export default function Risks() {
               </CardContent>
             </Card>
           ) : (
-            <>
-              {/* Risks Table - Virtualized */}
-              <Card className="flex-1 flex flex-col overflow-hidden">
-                <CardContent className="p-0 h-full flex flex-col">
+            <Card className="flex-1 flex flex-col overflow-hidden">
+              <CardContent className="p-0 flex-1 flex flex-col">
                   <div className="flex-1 overflow-hidden">
                     <VirtualizedTable
                       data={displayData}
