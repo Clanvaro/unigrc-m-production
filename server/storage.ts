@@ -3077,6 +3077,21 @@ export class MemStorage implements IStorage {
     });
   }
 
+  async getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]> {
+    if (riskIds.length === 0) return [];
+    const riskIdSet = new Set(riskIds);
+    const riskControls = Array.from(this.riskControls.values())
+      .filter(rc => riskIdSet.has(rc.riskId));
+    
+    return riskControls.map(riskControl => {
+      const control = this.controls.get(riskControl.controlId);
+      return {
+        ...riskControl,
+        control: control as Control
+      };
+    });
+  }
+
   async getControlRisks(controlId: string): Promise<(RiskControl & { risk: Risk })[]> {
     const controlRisks = Array.from(this.riskControls.values())
       .filter(rc => rc.controlId === controlId);
