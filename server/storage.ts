@@ -356,6 +356,7 @@ export interface IStorage {
   // RiskProcessLinks - Nueva implementación con responsables independientes
   getRiskProcessLinks(): Promise<RiskProcessLink[]>;
   getRiskProcessLinksWithDetails(): Promise<RiskProcessLinkWithDetails[]>;
+  getRiskProcessLinksByRiskIds(riskIds: string[]): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByRisk(riskId: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByProcess(macroprocesoId?: string, processId?: string, subprocesoId?: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLink(id: string): Promise<RiskProcessLink | undefined>;
@@ -19727,6 +19728,43 @@ export class DatabaseStorage extends MemStorage {
     }));
   }
   
+  async getRiskProcessLinksByRiskIds(riskIds: string[]): Promise<RiskProcessLinkWithDetails[]> {
+    if (riskIds.length === 0) return [];
+    
+    const results = await db.select({
+      riskProcessLink: riskProcessLinks,
+      risk: risks,
+      macroproceso: macroprocesos,
+      process: processes,
+      subproceso: subprocesos,
+      responsibleUser: {
+        id: processOwners.id,
+        fullName: processOwners.name,
+        email: processOwners.email
+      },
+      validatedByUser: users
+    })
+    .from(riskProcessLinks)
+    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+    .where(inArray(riskProcessLinks.riskId, riskIds))
+    .orderBy(riskProcessLinks.createdAt);
+    
+    return results.map(result => ({
+      ...result.riskProcessLink,
+      risk: result.risk!,
+      macroproceso: result.macroproceso || undefined,
+      process: result.process || undefined,
+      subproceso: result.subproceso || undefined,
+      responsibleUser: result.responsibleUser || undefined,
+      validatedByUser: result.validatedByUser || undefined,
+    }));
+  }
+
   async getRiskProcessLinksByRisk(riskId: string): Promise<RiskProcessLinkWithDetails[]> {
     const results = await db.select({
       riskProcessLink: riskProcessLinks,
