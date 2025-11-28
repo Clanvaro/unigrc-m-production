@@ -32,7 +32,6 @@ import {
   type ControlEvaluation, type InsertControlEvaluation,
   type ControlAssessmentHistory, type InsertControlAssessmentHistory,
   type RiskControl, type InsertRiskControl,
-  type ActionPlan, type InsertActionPlan,
   type ActionPlanRisk, type InsertActionPlanRisk,
   type ActionPlanAttachment, type InsertActionPlanAttachment,
   type ActionEvidence, type InsertActionEvidence,
@@ -198,6 +197,10 @@ const pool = poolNullable!;
 import { calculateProbability, type ProbabilityFactors, type ProbabilityWeights } from "@shared/probability-calculation";
 import { calculateImpact, type ImpactFactors, type ImpactWeights } from "@shared/impact-calculation";
 import { calculateAggregatedValidationStatus } from "@shared/risk-validation-helpers";
+
+// Type aliases for backward compatibility (ActionPlan was renamed to Action)
+type ActionPlan = Action;
+type InsertActionPlan = InsertAction;
 
 // Filter interfaces for paginated queries
 export interface RiskFilters {
