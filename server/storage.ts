@@ -380,6 +380,10 @@ export interface IStorage {
   getValidationHistory(riskProcessLinkId: string): Promise<RiskProcessLinkValidationHistoryWithDetails[]>;
   checkAlreadyValidatedRisks(processId: string): Promise<{ riskProcessLinkId: string; riskCode: string; riskName: string; validationStatus: string; validatedAt: Date | null; validatedBy: string | null; }[]>;
   
+  // Efficient aggregation methods using SQL GROUP BY (for tabbed risk views)
+  getRisksGroupedByProcess(): Promise<{ processId: string; processName: string; processCode: string; macroprocesoId: string | null; macroprocesoName: string | null; riskCount: number; riskIds: string[] }[]>;
+  getRisksGroupedByOwner(): Promise<{ ownerId: string; ownerName: string; ownerEmail: string; riskCount: number; riskIds: string[] }[]>;
+  
   // RiskProcessLink migration methods
   migrateRisksToRiskProcessLinks(): Promise<{ success: boolean; migratedCount: number; errors: string[] }>;
   cleanupLegacyRiskFields(): Promise<{ success: boolean; updatedCount: number; errors: string[] }>;
@@ -20337,6 +20341,73 @@ export class DatabaseStorage extends MemStorage {
     .orderBy(risks.code);
     
     return results;
+  }
+  
+  // ============= EFFICIENT AGGREGATION METHODS (SQL GROUP BY) =============
+  
+  async getRisksGroupedByProcess(): Promise<{ 
+    processId: string; 
+    processName: string; 
+    processCode: string;
+    macroprocesoId: string | null;
+    macroprocesoName: string | null;
+    riskCount: number; 
+    riskIds: string[];
+  }[]> {
+    // Use raw SQL with GROUP BY for efficiency
+    const results = await db.execute(sql`
+      SELECT 
+        p.id as "processId",
+        p.name as "processName", 
+        p.code as "processCode",
+        p.macroproceso_id as "macroprocesoId",
+        m.name as "macroprocesoName",
+        COUNT(DISTINCT rpl.risk_id)::integer as "riskCount",
+        array_agg(DISTINCT rpl.risk_id) as "riskIds"
+      FROM risk_process_links rpl
+      INNER JOIN processes p ON rpl.process_id = p.id
+      LEFT JOIN macroprocesos m ON p.macroproceso_id = m.id
+      WHERE p.status != 'deleted'
+        AND p.deleted_at IS NULL
+      GROUP BY p.id, p.name, p.code, p.macroproceso_id, m.name
+      ORDER BY p.code
+    `);
+    
+    return results.rows as any[];
+  }
+  
+  async getRisksGroupedByOwner(): Promise<{ 
+    ownerId: string; 
+    ownerName: string; 
+    ownerEmail: string;
+    riskCount: number; 
+    riskIds: string[];
+  }[]> {
+    // Use raw SQL with GROUP BY for efficiency
+    // Owner is: responsible_override_id OR process.owner_id OR subproceso.owner_id
+    // Only include active owners (matching prior behavior)
+    const results = await db.execute(sql`
+      SELECT 
+        po.id as "ownerId",
+        po.name as "ownerName",
+        COALESCE(po.email, '') as "ownerEmail",
+        COUNT(DISTINCT rpl.risk_id)::integer as "riskCount",
+        array_agg(DISTINCT rpl.risk_id) as "riskIds"
+      FROM risk_process_links rpl
+      LEFT JOIN processes p ON rpl.process_id = p.id
+      LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id
+      LEFT JOIN process_owners po ON po.id = COALESCE(
+        rpl.responsible_override_id,
+        p.owner_id,
+        s.owner_id
+      )
+      WHERE po.id IS NOT NULL
+        AND po.is_active = true
+      GROUP BY po.id, po.name, po.email
+      ORDER BY po.name
+    `);
+    
+    return results.rows as any[];
   }
   
   // ============= MIGRATION METHODS FOR RISK PROCESS LINKS =============

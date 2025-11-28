@@ -1680,6 +1680,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============== RISKS GROUPED BY PROCESS (for tab view) ==============
+  // Returns aggregated counts of risks per process using SQL GROUP BY (efficient)
+  app.get("/api/risks/grouped-by-process", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const cacheKey = `risks-grouped-by-process:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try cache first (60 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+      
+      // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
+      const result = await storage.getRisksGroupedByProcess();
+      
+      // Sort by risk count descending
+      result.sort((a, b) => b.riskCount - a.riskCount);
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      
+      console.log(`[PERF] /api/risks/grouped-by-process COMPLETE in ${Date.now() - requestStart}ms, ${result.length} processes (SQL GROUP BY)`);
+      
+      res.json(result);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("[ERROR] /api/risks/grouped-by-process failed:", error);
+      res.status(500).json({ message: "Failed to fetch grouped risks by process" });
+    }
+  });
+
+  // ============== RISKS GROUPED BY OWNER (for tab view) ==============
+  // Returns aggregated counts of risks per process owner using SQL GROUP BY (efficient)
+  app.get("/api/risks/grouped-by-owner", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const cacheKey = `risks-grouped-by-owner:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try cache first (60 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+      
+      // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
+      const result = await storage.getRisksGroupedByOwner();
+      
+      // Sort by risk count descending
+      result.sort((a, b) => b.riskCount - a.riskCount);
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      
+      console.log(`[PERF] /api/risks/grouped-by-owner COMPLETE in ${Date.now() - requestStart}ms, ${result.length} owners (SQL GROUP BY)`);
+      
+      res.json(result);
+    } catch (error) {
+      if (error instanceof ActiveTenantError) {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("[ERROR] /api/risks/grouped-by-owner failed:", error);
+      res.status(500).json({ message: "Failed to fetch grouped risks by owner" });
+    }
+  });
+
   // Risks
   app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {

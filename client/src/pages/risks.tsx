@@ -36,6 +36,8 @@ import { RiskValidationStatus } from "@/components/RiskValidationStatus";
 import { ValidationHistoryModal } from "@/components/ValidationHistoryModal";
 import { RiskValidationHistory } from "@/components/RiskValidationHistory";
 import { RisksPageSkeleton } from "@/components/skeletons/risks-page-skeleton";
+import { RisksByProcess } from "@/components/RisksByProcess";
+import { RisksByOwner } from "@/components/RisksByOwner";
 
 // Type for responsible with validation status
 interface ResponsibleWithValidation {
@@ -83,6 +85,9 @@ export default function Risks() {
   const [configureColumnsOpen, setConfigureColumnsOpen] = useState(false);
   const [testMode50k, setTestMode50k] = useState(false);
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
+  
+  // Active tab state - for lazy mounting of tab content
+  const [activeTab, setActiveTab] = useState<"list" | "by-process" | "by-owner">("list");
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -1165,9 +1170,8 @@ export default function Risks() {
     return allActionPlans.filter((ap: any) => ap.riskId === riskId);
   };
 
-  if (isLoading) {
-    return <RisksPageSkeleton />;
-  }
+  // Removed early return for isLoading - skeleton now shown inside TabsContent
+  // so tabs are always visible during loading
 
   // Data selection: use mock data for testing or filtered paginated data
   // Note: With pagination, filters are applied only to the current page
@@ -2024,29 +2028,53 @@ export default function Risks() {
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex-1">
-          {searchTerm && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Badge variant="secondary" className="gap-1">
-                Búsqueda: "{searchTerm}"
-                <button
-                  onClick={() => setFilters(prev => ({ ...prev, search: "" }))}
-                  className="ml-1 hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </Badge>
-              <span>({filteredRisks.length} resultados)</span>
-            </div>
-          )}
+      
+      {/* Tabs for different risk views - lazy mounted */}
+      <Tabs 
+        value={activeTab} 
+        onValueChange={(value) => setActiveTab(value as "list" | "by-process" | "by-owner")}
+        className="flex-1 flex flex-col overflow-hidden"
+      >
+        <div className="flex items-center justify-between gap-4 mb-2">
+          <TabsList>
+            <TabsTrigger value="list" data-testid="tab-list">Lista</TabsTrigger>
+            <TabsTrigger value="by-process" data-testid="tab-by-process">Por Proceso</TabsTrigger>
+            <TabsTrigger value="by-owner" data-testid="tab-by-owner">Por Responsable</TabsTrigger>
+          </TabsList>
+          
+          <div className="flex-1 flex justify-end">
+            {activeTab === "list" && searchTerm && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Badge variant="secondary" className="gap-1">
+                  Búsqueda: "{searchTerm}"
+                  <button
+                    onClick={() => setFilters(prev => ({ ...prev, search: "" }))}
+                    className="ml-1 hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+                <span>({filteredRisks.length} resultados)</span>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-      {/* Risks Table - Virtualized */}
-      <Card className="flex-1 flex flex-col overflow-hidden">
-        <CardContent className="p-0 h-full flex flex-col">
-          <div className="flex-1 overflow-hidden">
-            <VirtualizedTable
+
+        {/* Tab: Lista - only mount when active (default tab, always rendered first) */}
+        <TabsContent value="list" className="flex-1 flex flex-col overflow-hidden mt-0">
+          {isLoading ? (
+            <Card className="flex-1 flex flex-col overflow-hidden">
+              <CardContent className="p-4">
+                <RisksPageSkeleton />
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Risks Table - Virtualized */}
+              <Card className="flex-1 flex flex-col overflow-hidden">
+                <CardContent className="p-0 h-full flex flex-col">
+                  <div className="flex-1 overflow-hidden">
+                    <VirtualizedTable
               data={displayData}
               columns={columns}
               estimatedRowHeight={65}
@@ -2132,8 +2160,23 @@ export default function Risks() {
               </CreateGuard>
             </div>
           )}
-        </CardContent>
-      </Card>
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
+
+        {/* Tab: Por Proceso - lazy mounted, only renders when clicked */}
+        <TabsContent value="by-process" className="flex-1 overflow-auto mt-0">
+          {activeTab === "by-process" && <RisksByProcess />}
+        </TabsContent>
+
+        {/* Tab: Por Responsable - lazy mounted, only renders when clicked */}
+        <TabsContent value="by-owner" className="flex-1 overflow-auto mt-0">
+          {activeTab === "by-owner" && <RisksByOwner />}
+        </TabsContent>
+      </Tabs>
+
       {/* Diálogo de detalles del riesgo */}
       <Dialog open={!!viewingRisk} onOpenChange={(open) => !open && setViewingRisk(null)}>
         <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
