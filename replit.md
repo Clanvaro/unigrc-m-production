@@ -82,7 +82,7 @@ Reduced frontend API calls by optimizing heavy endpoints with extended cache:
 - Result: No redundant API calls when switching tabs or returning to window
 - Mutations still invalidate cache properly for immediate data updates
 
-## Authentication Cache Optimization (Nov 27, 2025)
+## Authentication Cache Optimization (Nov 27-28, 2025)
 
 Reduced auth API calls from ~10+ per navigation to 1 per session:
 - `useAuth` hook updated with `staleTime: 5 minutes` (data rarely changes during session)
@@ -93,6 +93,15 @@ Reduced auth API calls from ~10+ per navigation to 1 per session:
 - **Immediate session expiration**: useAuth queryFn calls `handleSessionExpired()` directly on 401 responses (not waiting for threshold)
 - `handleSessionExpired()` clears queryClient and redirects to /login immediately
 - Result: Single `/api/auth/me` call per session instead of multiple calls per page navigation
+
+## Static Asset Middleware Optimization (Nov 28, 2025)
+
+Optimized session/passport middleware to skip static file requests:
+- **Skip pattern**: Routes starting with `/@`, `/node_modules/`, `/@fs/`, `/src/` and files ending with `.tsx`, `.ts`, `.css`, `.js`, `.map`, `.png`, `.jpg`, `.svg`, `.ico`, `.woff`, `.woff2`
+- **Session middleware skip**: Static files bypass PostgreSQL session store lookup entirely
+- **Passport.session() skip**: No deserializing of user session for static assets
+- **Result**: Static files now served in 0-1ms (previously 140-180ms with Passport deserialization per file)
+- **Impact**: Page reload no longer triggers dozens of session/passport deserializations for Vite dev server files
 
 ## Production Database Schema Sync (Nov 27, 2025) - RESOLVED
 
