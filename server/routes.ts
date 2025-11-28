@@ -4155,7 +4155,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:rejected`),
           distributedCache.invalidate(`validation:process-dashboard:${tenantId}`),
-          distributedCache.invalidate(`validation:process-list:${tenantId}`)
+          distributedCache.invalidate(`validation:process-list:${tenantId}`),
+          // Invalidate paginated validation lists (CRITICAL for ECONNRESET fix)
+          distributedCache.invalidatePattern(`validation:notified-list:${CACHE_VERSION}:${tenantId}:*`),
+          distributedCache.invalidatePattern(`validation:not-notified-list:${CACHE_VERSION}:${tenantId}:*`)
         ]);
       }
 
