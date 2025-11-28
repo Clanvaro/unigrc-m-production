@@ -19,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import RiskForm from "@/components/forms/risk-form";
 import { getRiskColor, getRiskLevelText, calculateResidualRisk, calculateResidualRiskFromControls, getResidualRiskColor, getInherentRiskColor } from "@/lib/risk-calculations";
 import { apiRequest } from "@/lib/queryClient";
+import { getCSRFTokenFromCookie } from "@/lib/csrf-cache";
 import { useToast } from "@/hooks/use-toast";
 import { useSearch } from "@/contexts/SearchContext";
 import { RiskValue } from "@/components/RiskValue";
@@ -261,9 +262,14 @@ export default function Risks() {
     queryKey: ["/api/risks/batch-relations", riskIds],
     queryFn: async () => {
       if (riskIds.length === 0) return { riskProcessLinks: [], riskControls: [] };
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const csrfToken = getCSRFTokenFromCookie();
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken;
+      }
       const response = await fetch("/api/risks/batch-relations", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ riskIds }),
         credentials: "include"
       });

@@ -29,6 +29,7 @@ import { ControlSearchAndFilterDialog } from "@/components/ControlSearchAndFilte
 import { AuditPlanSearchAndFilterDialog } from "@/components/AuditPlanSearchAndFilterDialog";
 import { AuditFindingsSearchAndFilterDialog } from "@/components/AuditFindingsSearchAndFilterDialog";
 import { useTheme } from "@/hooks/use-theme";
+import { getCSRFTokenFromCookie } from "@/lib/csrf-cache";
 import { useExcelExport } from "@/hooks/useExcelExport";
 import ExcelJS from 'exceljs';
 import { Breadcrumbs } from "@/components/Breadcrumbs";
@@ -267,9 +268,14 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     queryFn: async () => {
       if (allRisks.length === 0) return { riskProcessLinks: [], riskControls: [] };
       const riskIds = allRisks.map((r: any) => r.id);
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const csrfToken = getCSRFTokenFromCookie();
+      if (csrfToken) {
+        headers["x-csrf-token"] = csrfToken;
+      }
       const response = await fetch("/api/risks/batch-relations", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ riskIds }),
         credentials: "include"
       });
