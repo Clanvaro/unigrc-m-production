@@ -2035,7 +2035,7 @@ export default function Risks() {
         onValueChange={(value) => setActiveTab(value as "list" | "by-process" | "by-owner")}
         className="flex-1 flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between gap-4 mb-2">
+        <div className="flex items-center justify-between gap-4 mb-0">
           <TabsList>
             <TabsTrigger value="list" data-testid="tab-list">Lista</TabsTrigger>
             <TabsTrigger value="by-process" data-testid="tab-by-process">Por Proceso</TabsTrigger>
