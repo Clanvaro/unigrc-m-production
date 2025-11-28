@@ -33,6 +33,15 @@ Added 12 new performance indexes for faster query execution on the risks page:
 - **Users**: `idx_users_is_active`
 - Total indexes per table: risks(11), gerencias(8), macroprocesos(7), processes(7), subprocesos(6)
 
+## Header API Call Consolidation (Nov 28, 2025)
+
+Eliminated duplicate API calls in header.tsx when on /risks page:
+- **Consolidated queries**: Header now shares `/api/risks/page-data` cache with risks.tsx using same queryKey
+- **Removed redundant calls**: `/api/risk-processes`, `/api/risk-controls-with-details` now extracted from risksPageData
+- **Smart data sourcing**: effective* variables (effectiveProcesses, effectiveMacroprocesos, etc.) use cached page-data on /risks, individual queries elsewhere
+- **Query gating**: `needsProcessData` flag enables queries for /validation, /controls, /actions, /action-plans
+- **Skeleton loader**: Added RisksPageSkeleton component with proper table structure, ARIA labels, and data-testid
+
 ## React Query Cache Optimization (Nov 28, 2025)
 
 Reduced frontend API calls by optimizing heavy endpoints with extended cache:
