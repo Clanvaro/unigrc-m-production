@@ -1828,6 +1828,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Optimized endpoint for Lista básica - returns risks with control count and residual pre-calculated
+  app.get("/api/risks/with-control-summary", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    try {
+      const requestStart = Date.now();
+      
+      // Parse pagination params
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      const cacheKey = `risks-control-summary:${CACHE_VERSION}:${limit}:${offset}`;
+      
+      // Try cache first (15 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/risks/with-control-summary in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+      
+      // Efficient SQL query: Get risks with control summary in a single query using subqueries
+      const risksWithSummary = await db.execute(sql`
+        SELECT 
+          r.*,
+          COALESCE(cs.control_count, 0) as control_count,
+          COALESCE(cs.residual_risk, r.inherent_risk) as calculated_residual
+        FROM risks r
+        LEFT JOIN LATERAL (
+          SELECT 
+            COUNT(rc.id) as control_count,
+            -- Calculate residual: inherent * (1 - avg_effectiveness/100)
+            -- Using average effectiveness of controls for simplicity
+            CASE 
+              WHEN COUNT(rc.id) > 0 THEN 
+                r.inherent_risk * (1 - COALESCE(AVG(c.effectiveness), 0) / 100.0)
+              ELSE r.inherent_risk
+            END as residual_risk
+          FROM risk_controls rc
+          INNER JOIN controls c ON rc.control_id = c.id
+          WHERE rc.risk_id = r.id AND c.deleted_at IS NULL
+        ) cs ON true
+        WHERE r.status <> 'deleted'
+        ORDER BY r.created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `);
+      
+      // Get total count
+      const countResult = await db.execute(sql`
+        SELECT COUNT(*)::int as total FROM risks WHERE status <> 'deleted'
+      `);
+      const total = (countResult.rows[0] as any)?.total || 0;
+      
+      const response = {
+        data: risksWithSummary.rows.map((row: any) => ({
+          ...row,
+          controlCount: parseInt(row.control_count) || 0,
+          calculatedResidual: parseFloat(row.calculated_residual) || row.inherent_risk
+        })),
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      };
+      
+      // Cache for 15 seconds
+      await distributedCache.set(cacheKey, response, 15);
+      
+      console.log(`[PERF] /api/risks/with-control-summary COMPLETE in ${Date.now() - requestStart}ms, ${risksWithSummary.rows.length} risks`);
+      
+      res.json(response);
+    } catch (error) {
+      console.error("[ERROR] /api/risks/with-control-summary failed:", error);
+      res.status(500).json({ message: "Failed to fetch risks with control summary" });
+    }
+  });
+
   app.get("/api/risks-with-details", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       // Extract and validate tenantId
