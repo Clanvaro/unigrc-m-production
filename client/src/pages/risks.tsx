@@ -2053,6 +2053,12 @@ export default function Risks() {
     },
   ];
 
+  // Columnas para vista básica - excluye proceso, responsable, cargo y validación
+  // (esos datos requieren APIs adicionales que no se cargan en vista básica)
+  const columnsBasic = columns.filter(col => 
+    !['process', 'responsible', 'cargo', 'validation'].includes(col.id)
+  );
+
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
@@ -2101,7 +2107,7 @@ export default function Risks() {
                 <div className="flex-1 min-h-0">
                     <VirtualizedTable
                       data={displayData}
-                      columns={columns}
+                      columns={columnsBasic}
                       estimatedRowHeight={65}
                       overscan={5}
                       getRowKey={(risk) => risk.id}
