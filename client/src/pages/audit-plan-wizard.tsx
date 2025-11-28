@@ -1264,13 +1264,18 @@ export default function AuditPlanWizard() {
                     size="sm"
                     onClick={async () => {
                       try {
+                        console.log('Regenerating audit universe...');
                         await apiRequest('/api/audit-universe/generate', 'POST');
+                        console.log('Generation complete, invalidating cache...');
                         await queryClient.invalidateQueries({ queryKey: ['/api/audit-universe'] });
+                        await queryClient.refetchQueries({ queryKey: ['/api/audit-universe'] });
+                        console.log('Cache invalidated and refetched');
                         toast({
                           title: "Universo regenerado",
                           description: "El universo de auditoría se ha regenerado correctamente desde los procesos existentes.",
                         });
                       } catch (error) {
+                        console.error('Error regenerating universe:', error);
                         toast({
                           title: "Error",
                           description: "No se pudo regenerar el universo de auditoría.",
