@@ -267,6 +267,10 @@ export const riskProcessLinks = pgTable("risk_process_links", {
   uniqueIndex("unique_rpl_risk_macroproceso").on(table.riskId, table.macroprocesoId).where(isNotNull(table.macroprocesoId)),
   uniqueIndex("unique_rpl_risk_process").on(table.riskId, table.processId).where(isNotNull(table.processId)),
   uniqueIndex("unique_rpl_risk_subproceso").on(table.riskId, table.subprocesoId).where(isNotNull(table.subprocesoId)),
+  // Performance optimization: Indexes for JOINs and ORDER BY in batch queries
+  index("idx_rpl_created_at").on(table.createdAt),
+  index("idx_rpl_responsible_override").on(table.responsibleOverrideId),
+  index("idx_rpl_validated_by").on(table.validatedBy),
 ]);
 
 // Historial de validaciones de riskProcessLinks para auditoría completa
@@ -340,6 +344,8 @@ export const controls = pgTable("controls", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   // Composite indexes for performance optimization (controls module)
+  index("idx_controls_deleted_at").on(table.deletedAt),
+  index("idx_controls_status").on(table.status),
 ]);
 
 // Historial de autoevaluaciones de controles
