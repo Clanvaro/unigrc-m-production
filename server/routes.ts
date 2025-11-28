@@ -14629,11 +14629,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/audit-universe", async (req, res) => {
     try {
       console.log('🔍 Fetching audit universe with details...');
+      
+      // First check raw count
+      const rawItems = await storage.getAuditUniverse();
+      console.log(`📊 Raw audit universe items in DB: ${rawItems.length}`);
+      
       const universe = await storage.getAuditUniverseWithDetails();
-      console.log(`✅ Found ${universe.length} audit universe items`);
+      console.log(`✅ Found ${universe.length} audit universe items with details`);
+      
+      // Log if there's a mismatch
+      if (rawItems.length !== universe.length) {
+        console.warn(`⚠️ Mismatch: ${rawItems.length} raw items vs ${universe.length} with details`);
+      }
+      
       res.json(universe);
     } catch (error) {
       console.error('❌ Error fetching audit universe:', error);
+      console.error('Error details:', error instanceof Error ? error.stack : error);
       res.status(500).json({ message: "Failed to fetch audit universe" });
     }
   });
