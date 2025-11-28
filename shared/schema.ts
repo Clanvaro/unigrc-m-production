@@ -267,8 +267,9 @@ export const riskProcessLinks = pgTable("risk_process_links", {
   uniqueIndex("unique_rpl_risk_macroproceso").on(table.riskId, table.macroprocesoId).where(isNotNull(table.macroprocesoId)),
   uniqueIndex("unique_rpl_risk_process").on(table.riskId, table.processId).where(isNotNull(table.processId)),
   uniqueIndex("unique_rpl_risk_subproceso").on(table.riskId, table.subprocesoId).where(isNotNull(table.subprocesoId)),
-  // Performance optimization: Indexes for JOINs and ORDER BY in batch queries
-  index("idx_rpl_created_at").on(table.createdAt),
+  // Performance optimization: Composite index for ORDER BY in batch queries (riskId filter + createdAt sort)
+  index("idx_rpl_risk_created").on(table.riskId, table.createdAt),
+  // Performance optimization: Indexes for JOINs in batch queries
   index("idx_rpl_responsible_override").on(table.responsibleOverrideId),
   index("idx_rpl_validated_by").on(table.validatedBy),
 ]);
