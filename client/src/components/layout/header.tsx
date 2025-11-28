@@ -242,53 +242,6 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     enabled: location === "/matrix"
   });
 
-  // For risks export, we need to fetch all risks (not paginated)
-  const { data: risksResponse } = useQuery<{ data: Risk[], pagination: any }>({
-    queryKey: ["/api/risks", "export"],
-    queryFn: async () => {
-      const response = await fetch("/api/risks?limit=10000");
-      if (!response.ok) throw new Error("Failed to fetch risks for export");
-      return response.json();
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes cache
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    enabled: location === "/risks"
-  });
-  const allRisks = risksResponse?.data || [];
-  
-  // Risk relations for export - loaded on demand only for export functionality
-  interface ExportRelationsData {
-    riskProcessLinks: any[];
-    riskControls: any[];
-  }
-  
-  const { data: exportRelations } = useQuery<ExportRelationsData>({
-    queryKey: ["/api/risks/batch-relations", "export", allRisks.map((r: any) => r.id)],
-    queryFn: async () => {
-      if (allRisks.length === 0) return { riskProcessLinks: [], riskControls: [] };
-      const riskIds = allRisks.map((r: any) => r.id);
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      const csrfToken = getCSRFTokenFromCookie();
-      if (csrfToken) {
-        headers["x-csrf-token"] = csrfToken;
-      }
-      const response = await fetch("/api/risks/batch-relations", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ riskIds }),
-        credentials: "include"
-      });
-      if (!response.ok) throw new Error("Failed to fetch risk relations");
-      return response.json();
-    },
-    enabled: location === "/risks" && allRisks.length > 0,
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchOnWindowFocus: false,
-  });
-  
-  const riskProcessLinks = exportRelations?.riskProcessLinks || [];
-  const allRiskControls = exportRelations?.riskControls || [];
 
   // Combine data sources - use page-data-lite when on /risks, otherwise use individual queries
   // This prevents duplicate API calls when on the risks page
@@ -737,47 +690,6 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     }));
   };
 
-  // Helper functions for risks export
-  const getRiskProcessLinks = (riskId: string) => {
-    return riskProcessLinks.filter((link: any) => link.risk?.id === riskId);
-  };
-
-  const getRiskProcessResponsibles = (risk: Risk) => {
-    const links = getRiskProcessLinks(risk.id);
-    const responsibles: any[] = [];
-    
-    links.forEach((link: any) => {
-      if (link.responsibleOverride) {
-        responsibles.push(link.responsibleOverride);
-      } else if (link.subproceso?.owner) {
-        responsibles.push(link.subproceso.owner);
-      } else if (link.process?.owner) {
-        responsibles.push(link.process.owner);
-      } else if (link.macroproceso?.owner) {
-        responsibles.push(link.macroproceso.owner);
-      }
-    });
-    
-    const uniqueResponsibles = Array.from(new Map(responsibles.map(r => [r.id, r])).values());
-    return uniqueResponsibles;
-  };
-
-  const getAggregatedValidationStatus = (risk: Risk): 'validated' | 'pending_validation' | 'rejected' => {
-    const links = getRiskProcessLinks(risk.id);
-    if (links.length === 0) return 'pending_validation';
-    
-    const hasRejected = links.some((link: any) => link.validationStatus === 'rejected');
-    const allValidated = links.every((link: any) => link.validationStatus === 'validated');
-    
-    if (hasRejected) return 'rejected';
-    if (allValidated) return 'validated';
-    return 'pending_validation';
-  };
-
-  const getRiskControls = (riskId: string) => {
-    return allRiskControls.filter((rc: any) => rc.riskId === riskId);
-  };
-
   // Export Controls to Excel
   const exportControlsToExcel = async () => {
     if (location !== "/controls") return;
@@ -937,78 +849,142 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const exportToExcel = async () => {
     if (location !== "/risks") return;
 
-    // Prepare data
-    const risksToExport = allRisks;
-    const exportData = risksToExport.map((risk: Risk) => {
-      // Get process names from riskProcessLinks (same as table display)
-      const riskLinks = riskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      const processNames: string[] = [];
+    toast({
+      title: "Preparando exportación",
+      description: "Cargando datos completos para exportar...",
+    });
+
+    try {
+      const risksResponse = await fetch("/api/risks?limit=10000");
+      if (!risksResponse.ok) {
+        throw new Error("Failed to fetch risks for export");
+      }
+      const risksData = await risksResponse.json();
+      const risksToExport = risksData.data || [];
       
-      riskLinks.forEach((link: any) => {
-        if (link.subprocesoId) {
-          const sub = effectiveSubprocesos.find((s: any) => s.id === link.subprocesoId);
-          if (sub) processNames.push(`S: ${sub.name}`);
-        } else if (link.processId) {
-          const proc = effectiveProcesses.find((p: any) => p.id === link.processId);
-          if (proc) processNames.push(`P: ${proc.name}`);
-        } else if (link.macroprocesoId) {
-          const macro = effectiveMacroprocesos.find((m: any) => m.id === link.macroprocesoId);
-          if (macro) processNames.push(`M: ${macro.name}`);
-        }
+      if (risksToExport.length === 0) {
+        toast({
+          title: "Error",
+          description: "No se encontraron riesgos para exportar.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      const riskIds = risksToExport.map((r: any) => r.id);
+      const fetchHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      const csrfToken = getCSRFTokenFromCookie();
+      if (csrfToken) {
+        fetchHeaders["x-csrf-token"] = csrfToken;
+      }
+      const relationsResponse = await fetch("/api/risks/batch-relations", {
+        method: "POST",
+        headers: fetchHeaders,
+        body: JSON.stringify({ riskIds }),
+        credentials: "include"
       });
       
-      const processName = processNames.length > 0 ? processNames.join(', ') : 'Sin asignar';
+      if (!relationsResponse.ok) {
+        throw new Error("Failed to fetch risk relations");
+      }
+      const relationsData = await relationsResponse.json();
+      
+      const freshRiskProcessLinks = relationsData?.riskProcessLinks || [];
+      const freshRiskControls = relationsData?.riskControls || [];
+      
+      const fetchedProcessOwners = await fetch('/api/process-owners').then(res => res.json());
+      const ownersMap = new Map((fetchedProcessOwners || []).map((o: any) => [o.id, o]));
+      
+      const exportData = risksToExport.map((risk: Risk) => {
+        const riskLinks = freshRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
+        const processNames: string[] = [];
+        
+        riskLinks.forEach((link: any) => {
+          if (link.subproceso?.name) {
+            processNames.push(`S: ${link.subproceso.name}`);
+          } else if (link.process?.name) {
+            processNames.push(`P: ${link.process.name}`);
+          } else if (link.macroproceso?.name) {
+            processNames.push(`M: ${link.macroproceso.name}`);
+          }
+        });
+        
+        const processName = processNames.length > 0 ? processNames.join(', ') : 'Sin asignar';
 
-      const responsibles = getRiskProcessResponsibles(risk);
-      const responsibleNames = responsibles.length > 0 
-        ? responsibles.map(r => r.name).join(', ')
-        : 'Sin asignar';
+        const responsibles: any[] = [];
+        riskLinks.forEach((link: any) => {
+          if (link.responsibleUser) {
+            responsibles.push({ id: link.responsibleUser.id, name: link.responsibleUser.fullName || link.responsibleUser.name });
+          } else if (link.subproceso?.ownerId) {
+            const owner = ownersMap.get(link.subproceso.ownerId);
+            if (owner) responsibles.push({ id: owner.id, name: owner.name });
+          } else if (link.process?.ownerId) {
+            const owner = ownersMap.get(link.process.ownerId);
+            if (owner) responsibles.push({ id: owner.id, name: owner.name });
+          } else if (link.macroproceso?.ownerId) {
+            const owner = ownersMap.get(link.macroproceso.ownerId);
+            if (owner) responsibles.push({ id: owner.id, name: owner.name });
+          }
+        });
+        const uniqueResponsibles = Array.from(new Map(responsibles.map(r => [r?.id, r])).values()).filter(Boolean);
+        const responsibleNames = uniqueResponsibles.length > 0 
+          ? uniqueResponsibles.map((r: any) => r.name).join(', ')
+          : 'Sin asignar';
 
-      const riskControls = getRiskControls(risk.id);
-      const residualRisk = riskControls.length > 0 
-        ? Math.min(...riskControls.map((rc: any) => rc.residualRisk || risk.inherentRisk))
-        : risk.inherentRisk;
+        const riskControlsForRisk = freshRiskControls.filter((rc: any) => rc.riskId === risk.id);
+        const residualRisk = riskControlsForRisk.length > 0 
+          ? Math.min(...riskControlsForRisk.map((rc: any) => rc.residualRisk || risk.inherentRisk))
+          : risk.inherentRisk;
 
-      const validationStatus = getAggregatedValidationStatus(risk) as string;
-      const validationText = validationStatus === 'validated' ? 'Validado' :
-                            validationStatus === 'rejected' ? 'Rechazado' : 
-                            validationStatus === 'observed' ? 'Observado' : 'Pendiente';
+        const hasRejected = riskLinks.some((link: any) => link.validationStatus === 'rejected');
+        const hasObserved = riskLinks.some((link: any) => link.validationStatus === 'observed');
+        const allValidated = riskLinks.length > 0 && riskLinks.every((link: any) => link.validationStatus === 'validated');
+        const validationText = hasRejected ? 'Rechazado' :
+                              hasObserved ? 'Observado' :
+                              allValidated ? 'Validado' : 'Pendiente';
 
-      return {
-        code: risk.code,
-        name: risk.name,
-        description: risk.description || '',
-        category: Array.isArray(risk.category) ? risk.category.join(', ') : risk.category,
-        probability: risk.probability,
-        impact: risk.impact,
-        inherentRisk: risk.inherentRisk,
-        residualRisk: residualRisk,
-        process: processName,
-        responsible: responsibleNames,
-        validation: validationText,
-      };
-    });
+        return {
+          code: risk.code,
+          name: risk.name,
+          description: risk.description || '',
+          category: Array.isArray(risk.category) ? risk.category.join(', ') : risk.category,
+          probability: risk.probability,
+          impact: risk.impact,
+          inherentRisk: risk.inherentRisk,
+          residualRisk: residualRisk,
+          process: processName,
+          responsible: responsibleNames,
+          validation: validationText,
+        };
+      });
 
-    // Export using hook
-    await exportToExcelHook({
-      sheetName: 'Riesgos',
-      fileName: 'riesgos',
-      columns: [
-        { header: 'Código', key: 'code', width: 15 },
-        { header: 'Nombre', key: 'name', width: 40 },
-        { header: 'Descripción', key: 'description', width: 50 },
-        { header: 'Categoría', key: 'category', width: 20 },
-        { header: 'Probabilidad', key: 'probability', width: 12 },
-        { header: 'Impacto', key: 'impact', width: 12 },
-        { header: 'Riesgo Inherente', key: 'inherentRisk', width: 15 },
-        { header: 'Riesgo Residual', key: 'residualRisk', width: 15 },
-        { header: 'Proceso', key: 'process', width: 40 },
-        { header: 'Responsable', key: 'responsible', width: 30 },
-        { header: 'Estado Validación', key: 'validation', width: 20 },
-      ],
-      data: exportData,
-      successMessage: `Se exportaron ${risksToExport.length} riesgos a Excel.`
-    });
+      await exportToExcelHook({
+        sheetName: 'Riesgos',
+        fileName: 'riesgos',
+        columns: [
+          { header: 'Código', key: 'code', width: 15 },
+          { header: 'Nombre', key: 'name', width: 40 },
+          { header: 'Descripción', key: 'description', width: 50 },
+          { header: 'Categoría', key: 'category', width: 20 },
+          { header: 'Probabilidad', key: 'probability', width: 12 },
+          { header: 'Impacto', key: 'impact', width: 12 },
+          { header: 'Riesgo Inherente', key: 'inherentRisk', width: 15 },
+          { header: 'Riesgo Residual', key: 'residualRisk', width: 15 },
+          { header: 'Proceso', key: 'process', width: 40 },
+          { header: 'Responsable', key: 'responsible', width: 30 },
+          { header: 'Estado Validación', key: 'validation', width: 20 },
+        ],
+        data: exportData,
+        successMessage: `Se exportaron ${risksToExport.length} riesgos a Excel.`
+      });
+    } catch (error) {
+      console.error("Export error:", error);
+      toast({
+        title: "Error de exportación",
+        description: "No se pudo completar la exportación. Intente nuevamente.",
+        variant: "destructive"
+      });
+    }
   };
 
   const getActiveFilters = () => {

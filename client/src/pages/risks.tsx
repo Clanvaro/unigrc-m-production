@@ -233,20 +233,19 @@ export default function Risks() {
   const processGerencias = pageDataLite?.processGerencias || [];
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
 
-  // ============== RISKS DATA (paginated) ==============
+  // ============== RISKS DATA WITH CONTROL SUMMARY (optimized) ==============
+  // Uses new endpoint that includes controlCount and calculatedResidual in a single SQL query
   const { data: risksResponse, isLoading: isRisksLoading, refetch: refetchRisks } = useQuery<{ data: any[], pagination: { limit: number, offset: number, total: number } }>({
-    queryKey: queryKeys.risks.paginated({ 
+    queryKey: ["/api/risks/with-control-summary", { 
       limit: pageSize, 
-      offset: (currentPage - 1) * pageSize,
-      paginate: true 
-    }),
+      offset: (currentPage - 1) * pageSize
+    }],
     queryFn: async () => {
       const params = new URLSearchParams({
         limit: pageSize.toString(),
-        offset: ((currentPage - 1) * pageSize).toString(),
-        paginate: "true"
+        offset: ((currentPage - 1) * pageSize).toString()
       });
-      const response = await fetch(`/api/risks?${params}`);
+      const response = await fetch(`/api/risks/with-control-summary?${params}`);
       if (!response.ok) throw new Error("Failed to fetch risks");
       return response.json();
     },
@@ -254,15 +253,19 @@ export default function Risks() {
   const risks = risksResponse?.data || [];
   const totalPages = risksResponse?.pagination ? Math.ceil(risksResponse.pagination.total / pageSize) : 0;
   
-  // ============== BATCH LOAD RELATIONS FOR VISIBLE RISKS ==============
-  // Load processLinks and controls only for the risks currently displayed
+  // ============== BATCH LOAD RELATIONS (LAZY - only for detail views) ==============
+  // Load processLinks and controls only when user accesses detail dialogs
   const riskIds = risks.map((r: any) => r.id);
+  
+  // State to track if we need detailed data (for viewing risk details, validation, etc.)
+  const [needsDetailedData, setNeedsDetailedData] = useState(false);
   
   interface BatchRelationsData {
     riskProcessLinks: any[];
     riskControls: any[];
   }
   
+  // Only load batch relations when needed (viewing details, editing, etc.)
   const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
     queryKey: ["/api/risks/batch-relations", riskIds],
     queryFn: async () => {
@@ -281,24 +284,28 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
-    enabled: riskIds.length > 0,
+    enabled: needsDetailedData && riskIds.length > 0, // Only fetch when detailed data is needed
     staleTime: 1000 * 15, // 15 seconds
   });
   
-  // Extract relations from batch response
+  // Extract relations from batch response (empty when not loaded)
   const allRiskProcessLinks = batchRelations?.riskProcessLinks || [];
   const allRiskControls = batchRelations?.riskControls || [];
   
-  // Process owners - load when we have risks (needed for responsibles calculation)
+  // Process owners - lazy load only when viewing details
   const { data: processOwnersData, isLoading: isProcessOwnersLoading } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    enabled: risks.length > 0, // Load when we have risks to display
+    enabled: needsDetailedData, // Only load when detailed data is needed
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: false,
   });
   const processOwners = processOwnersData || [];
   
-  const isLoading = isPageDataLoading || isRisksLoading || isRelationsLoading || isProcessOwnersLoading;
+  // Main loading state - no longer waits for batch relations
+  const isLoading = isPageDataLoading || isRisksLoading;
+  
+  // Detailed loading state - only when user requests details
+  const isDetailedLoading = needsDetailedData && (isRelationsLoading || isProcessOwnersLoading);
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
   
@@ -1119,12 +1126,25 @@ export default function Risks() {
 
 
   const getResidualRisk = (risk: Risk) => {
+    // Use pre-calculated residual from optimized endpoint if available
+    if ((risk as any).calculatedResidual !== undefined) {
+      return (risk as any).calculatedResidual;
+    }
+    // Fallback to detailed calculation when batch-relations are loaded
     const riskControlsForThisRisk = allRiskControls.filter((rc: any) => rc.riskId === risk.id);
     const controls = riskControlsForThisRisk.map((rc: any) => ({
       effectiveness: rc.control?.effectiveness || 0,
       effectTarget: rc.control?.effectTarget || 'both'
     }));
     return calculateResidualRiskFromControls(risk.probability, risk.impact, controls);
+  };
+  
+  // Get control count - uses pre-calculated from endpoint or from batch-relations
+  const getControlCount = (risk: Risk) => {
+    if ((risk as any).controlCount !== undefined) {
+      return (risk as any).controlCount;
+    }
+    return allRiskControls.filter((rc: any) => rc.riskId === risk.id).length;
   };
 
   const getAvailableControls = () => {
@@ -1402,8 +1422,10 @@ export default function Risks() {
       width: '160px',
       cell: (risk) => {
         const residualRisk = getResidualRisk(risk);
-        const riskControls = allRiskControls.filter((rc: any) => rc.riskId === risk.id);
-        const hasControls = riskControls.length > 0;
+        const controlCount = getControlCount(risk);
+        const hasControls = controlCount > 0;
+        // Only use detailed controls if batch-relations are loaded
+        const riskControls = needsDetailedData ? allRiskControls.filter((rc: any) => rc.riskId === risk.id) : [];
         
         const controlsSteps = riskControls.map((rc: any) => ({
           label: `Control: ${rc.control?.code || 'N/A'}`,
@@ -1831,17 +1853,17 @@ export default function Risks() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setViewingRisk(risk)}>
+              <DropdownMenuItem onClick={() => { setNeedsDetailedData(true); setViewingRisk(risk); }}>
                 <Eye className="h-4 w-4 mr-2" />
                 Ver Detalles
               </DropdownMenuItem>
               <EditGuard itemType="risk">
-                <DropdownMenuItem onClick={() => setEditingRisk(risk)}>
+                <DropdownMenuItem onClick={() => { setNeedsDetailedData(true); setEditingRisk(risk); }}>
                   <Edit className="h-4 w-4 mr-2" />
                   Editar
                 </DropdownMenuItem>
               </EditGuard>
-              <DropdownMenuItem onClick={() => setControlsDialogRisk(risk)}>
+              <DropdownMenuItem onClick={() => { setNeedsDetailedData(true); setControlsDialogRisk(risk); }}>
                 <Shield className="h-4 w-4 mr-2" />
                 Gestionar Controles
               </DropdownMenuItem>
