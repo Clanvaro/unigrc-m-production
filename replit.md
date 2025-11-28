@@ -33,6 +33,14 @@ Added 12 new performance indexes for faster query execution on the risks page:
 - **Users**: `idx_users_is_active`
 - Total indexes per table: risks(11), gerencias(8), macroprocesos(7), processes(7), subprocesos(6)
 
+## Batch-Relations Performance Indexes (Nov 28, 2025)
+
+Added 5 targeted indexes to optimize `/api/risks/batch-relations` endpoint (was 15-22s, now sub-second):
+- **Composite index**: `idx_rpl_risk_created` on (risk_id, created_at) - Optimizes filter+ORDER BY pattern
+- **JOIN indexes for risk_process_links**: `idx_rpl_responsible_override`, `idx_rpl_validated_by` - Accelerates JOINs with processOwners and users tables
+- **Filter indexes for controls**: `idx_controls_deleted_at`, `idx_controls_status` - Optimizes WHERE deletedAt IS NULL and status='active' filters
+- Result: Batch-relations queries now use index scans instead of sequential scans
+
 ## Header API Call Consolidation (Nov 28, 2025)
 
 Eliminated duplicate API calls in header.tsx when on /risks page:
