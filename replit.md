@@ -52,11 +52,25 @@ Implemented server-side query pre-warming to reduce cold-start latency for the r
 - **Cache key alignment**: Uses `risks-page-data:${CACHE_VERSION}:default` to match runtime cache keys
 - Result: First user request after server restart is ~8x faster (from ~35s to ~4s)
 
+## Progressive Data Loading for Risks Page (Nov 28, 2025)
+
+Implemented progressive loading pattern to reduce initial page load time:
+- **New endpoint `/api/risks/page-data-lite`**: Returns only filter data (gerencias, macroprocesos, subprocesos, processes, riskCategories, processGerencias) without heavy JOINs for riskProcessLinks and riskControls
+- **New endpoint `/api/risks/batch-relations`**: POST endpoint that accepts array of riskIds and returns only the processLinks and controls for those specific risks (max 100 IDs per request)
+- **New endpoint `/api/risks/:id/full-details`**: On-demand loading of full details for a single risk when editing/viewing
+- **Frontend loading sequence**: 
+  1. Load page-data-lite for filter dropdowns (fast)
+  2. Load paginated risks list
+  3. Load batch-relations for visible risks only
+  4. Load processOwners when risks are displayed
+- **Cache optimization**: page-data-lite cached for 60s, batch-relations for 15s
+- Result: Initial page load reduced from ~8s to ~2s by deferring heavy relation queries
+
 ## React Query Cache Optimization (Nov 28, 2025)
 
 Reduced frontend API calls by optimizing heavy endpoints with extended cache:
 - **Endpoints optimized** with `staleTime: 5 minutes`, `refetchOnWindowFocus: false`, `refetchOnReconnect: false`:
-  - `/api/risks/page-data` - structural data (gerencias, macroprocesos, etc.)
+  - `/api/risks/page-data-lite` - structural/filter data (gerencias, macroprocesos, etc.)
   - `/api/organization/process-map-risks` - aggregated risk calculations
   - `/api/dashboard/admin` - admin dashboard metrics
   - `/api/process-gerencias-all` - gerencia-process relationships
