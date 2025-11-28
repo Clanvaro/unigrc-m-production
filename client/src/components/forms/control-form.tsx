@@ -335,7 +335,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         variant: "destructive",
       });
     },
-    onSuccess: (controlResult, variables, context: any) => {
+    onSuccess: async (controlResult, variables, context: any) => {
       // Update cache immediately with server response (faster than refetch)
       const controlId = control?.id || controlResult.id;
       const tempId = context?.tempId;
@@ -373,11 +373,21 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       queryClient.invalidateQueries({ queryKey: ["/api/control-owners"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls", controlId, "evaluations"] });
       
+      // CRITICAL: Force immediate refetch of controls list to show updated owner/responsible
+      // The controlResult from API doesn't include the newly assigned owner (assigned in separate call)
+      // So we must invalidate and refetch to get the complete data with owner info
+      await queryClient.invalidateQueries({ 
+        queryKey: ["/api/controls"],
+        exact: false,
+        refetchType: 'active'
+      });
+      
       // CRITICAL: Invalidate ALL paginated controls queries (matches any params) to update main controls table immediately
       // Using exact:false ensures we match all queries starting with ["/api/controls", "paginated", ...]
-      queryClient.invalidateQueries({ 
+      await queryClient.invalidateQueries({ 
         queryKey: ["/api/controls", "paginated"],
-        exact: false
+        exact: false,
+        refetchType: 'active'
       });
       
       toast({
