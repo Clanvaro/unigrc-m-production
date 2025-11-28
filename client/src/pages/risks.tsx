@@ -87,7 +87,8 @@ export default function Risks() {
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
   
   // Active tab state - for lazy mounting of tab content
-  const [activeTab, setActiveTab] = useState<"list" | "by-process" | "by-owner">("list");
+  // "basica" = fast load using optimized endpoint, "detalle" = full data with batch-relations
+  const [activeTab, setActiveTab] = useState<"basica" | "detalle">("basica");
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -2054,18 +2055,17 @@ export default function Risks() {
       {/* Tabs for different risk views - lazy mounted */}
       <Tabs 
         value={activeTab} 
-        onValueChange={(value) => setActiveTab(value as "list" | "by-process" | "by-owner")}
+        onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
         className="flex-1 flex flex-col overflow-hidden"
       >
         <div className="flex items-center justify-between gap-4 mb-0">
           <TabsList>
-            <TabsTrigger value="list" data-testid="tab-list">Lista</TabsTrigger>
-            <TabsTrigger value="by-process" data-testid="tab-by-process">Por Proceso</TabsTrigger>
-            <TabsTrigger value="by-owner" data-testid="tab-by-owner">Por Responsable</TabsTrigger>
+            <TabsTrigger value="basica" data-testid="tab-basica">Básica</TabsTrigger>
+            <TabsTrigger value="detalle" data-testid="tab-detalle">Detalle</TabsTrigger>
           </TabsList>
           
           <div className="flex-1 flex justify-end">
-            {activeTab === "list" && searchTerm && (
+            {activeTab === "basica" && searchTerm && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Badge variant="secondary" className="gap-1">
                   Búsqueda: "{searchTerm}"
@@ -2082,8 +2082,8 @@ export default function Risks() {
           </div>
         </div>
 
-        {/* Tab: Lista - only mount when active (default tab, always rendered first) */}
-        <TabsContent value="list" className="flex-1 flex flex-col overflow-hidden mt-0">
+        {/* Tab: Básica - fast loading using optimized endpoint */}
+        <TabsContent value="basica" className="flex-1 flex flex-col overflow-hidden mt-0">
           {isLoading ? (
             <Card className="flex-1 flex flex-col overflow-hidden">
               <CardContent className="p-4">
@@ -2188,14 +2188,24 @@ export default function Risks() {
           )}
         </TabsContent>
 
-        {/* Tab: Por Proceso - lazy mounted, only renders when clicked */}
-        <TabsContent value="by-process" className="flex-1 overflow-auto mt-0">
-          {activeTab === "by-process" && <RisksByProcess />}
-        </TabsContent>
-
-        {/* Tab: Por Responsable - lazy mounted, only renders when clicked */}
-        <TabsContent value="by-owner" className="flex-1 overflow-auto mt-0">
-          {activeTab === "by-owner" && <RisksByOwner />}
+        {/* Tab: Detalle - full data with batch-relations, grouped views */}
+        <TabsContent value="detalle" className="flex-1 overflow-auto mt-0">
+          {activeTab === "detalle" && (
+            <div className="space-y-6">
+              <Tabs defaultValue="by-process" className="w-full">
+                <TabsList>
+                  <TabsTrigger value="by-process">Por Proceso</TabsTrigger>
+                  <TabsTrigger value="by-owner">Por Responsable</TabsTrigger>
+                </TabsList>
+                <TabsContent value="by-process" className="mt-4">
+                  <RisksByProcess />
+                </TabsContent>
+                <TabsContent value="by-owner" className="mt-4">
+                  <RisksByOwner />
+                </TabsContent>
+              </Tabs>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
 
