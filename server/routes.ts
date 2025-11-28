@@ -1974,6 +1974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Batch load relations for visible risks (on-demand loading for paginated view)
+  // OPTIMIZED: Uses WHERE IN queries instead of loading ALL data and filtering in memory
   app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
       const { riskIds } = req.body;
@@ -1992,15 +1993,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
       
-      // Fetch relations for the specified risks in parallel
-      const [allProcessLinks, allRiskControls] = await Promise.all([
-        storage.getRiskProcessLinksWithDetails(),
-        storage.getAllRiskControlsWithDetails()
+      const startTime = Date.now();
+      
+      // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+      const [filteredLinks, filteredControls] = await Promise.all([
+        storage.getRiskProcessLinksByRiskIds(limitedIds),
+        storage.getRiskControlsByRiskIds(limitedIds)
       ]);
       
-      // Filter to only the requested risks
-      const filteredLinks = allProcessLinks.filter((link: any) => limitedIds.includes(link.riskId));
-      const filteredControls = allRiskControls.filter((rc: any) => limitedIds.includes(rc.riskId));
+      const duration = Date.now() - startTime;
+      console.log(`[batch-relations] Fetched ${filteredLinks.length} links + ${filteredControls.length} controls for ${limitedIds.length} risks in ${duration}ms`);
       
       const response = {
         riskProcessLinks: filteredLinks,
