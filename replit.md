@@ -20,6 +20,18 @@ The backend uses Express.js with TypeScript and Zod for validation. Data is stor
 
 The system operates in a single-tenant architecture, with all tenant-specific logic and database columns removed. Key modules like Control Self-Assessment (CSA) and Whistleblower have been completely removed. The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly. Aggressive keep-alive pings are implemented to mitigate Neon's Scale to Zero cold start issues.
 
+### Performance Optimizations - Lazy Loading (Nov 2025)
+
+**Validations Page** (Completed):
+- Already implements tab-based lazy loading: Riesgos tab loads by default, Controles and Planes de Acción load only when accessed
+- Each tab query uses `enabled: activeTab === "tab-name"` pattern with 30s staleTime and 5min cache
+
+**Risks Page** (Completed):
+- Implements two-tab lazy loading interface with `/api/risks/with-control-summary` endpoint
+- Básica tab (default): ~230ms load time, shows core risk data without Process/Responsible/Cargo columns
+- Detalle tab (lazy): +388ms for batch-relations and process-owners data (40% faster initial load)
+- Uses VirtualizedTable with columnsBasic filtering for optimized rendering
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
