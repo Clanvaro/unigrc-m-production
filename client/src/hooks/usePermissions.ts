@@ -96,6 +96,11 @@ export function usePermissions() {
   };
 
   const canViewSection = (section: string): boolean => {
+    // Admins can view all sections
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
+    
     const sectionPermissions = {
       dashboard: ["view_all"],
       processes: ["view_processes", "view_all"],
@@ -114,10 +119,18 @@ export function usePermissions() {
   };
 
   const canValidateRisks = (): boolean => {
+    // Admins can validate all risks
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
     return hasPermission("validate_risks");
   };
 
   const canCreateItem = (itemType: string): boolean => {
+    // Admins can create all items
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
     const createPermissions = {
       process: ["create_processes", "create_all"],
       proceso: ["create_processes", "create_all"],
@@ -140,6 +153,10 @@ export function usePermissions() {
   };
 
   const canEditItem = (itemType: string): boolean => {
+    // Admins can edit all items
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
     const editPermissions = {
       process: ["edit_processes", "edit_all"],
       proceso: ["edit_processes", "edit_all"],
@@ -165,6 +182,10 @@ export function usePermissions() {
   };
 
   const canDeleteItem = (itemType: string): boolean => {
+    // Admins can delete all items
+    if (currentUser?.isAdmin || currentUser?.isPlatformAdmin) {
+      return true;
+    }
     const deletePermissions = {
       process: ["delete_processes", "delete_all"],
       proceso: ["delete_processes", "delete_all"],
