@@ -23,6 +23,18 @@ Key modules like Control Self-Assessment (CSA) and Whistleblower have been compl
 The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views.
 Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment (1 CPU, 2GB RAM) with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly. Aggressive keep-alive pings are implemented to mitigate Neon's Scale to Zero cold start issues.
 
+## React Query Cache Optimization (Nov 28, 2025)
+
+Reduced frontend API calls by optimizing heavy endpoints with extended cache:
+- **Endpoints optimized** with `staleTime: 5 minutes`, `refetchOnWindowFocus: false`, `refetchOnReconnect: false`:
+  - `/api/risks/page-data` - structural data (gerencias, macroprocesos, etc.)
+  - `/api/organization/process-map-risks` - aggregated risk calculations
+  - `/api/dashboard/admin` - admin dashboard metrics
+  - `/api/process-gerencias-all` - gerencia-process relationships
+  - `/api/gerencias-risk-levels` - aggregated risk levels per gerencia
+- Result: No redundant API calls when switching tabs or returning to window
+- Mutations still invalidate cache properly for immediate data updates
+
 ## Authentication Cache Optimization (Nov 27, 2025)
 
 Reduced auth API calls from ~10+ per navigation to 1 per session:
