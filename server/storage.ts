@@ -20355,22 +20355,30 @@ export class DatabaseStorage extends MemStorage {
     riskIds: string[];
   }[]> {
     // Use raw SQL with GROUP BY for efficiency
+    // Includes risks associated directly to processes AND risks associated to subprocesos
     const results = await db.execute(sql`
       SELECT 
-        p.id as "processId",
-        p.name as "processName", 
-        p.code as "processCode",
-        p.macroproceso_id as "macroprocesoId",
-        m.name as "macroprocesoName",
+        COALESCE(p.id, s.proceso_id) as "processId",
+        COALESCE(p.name, sp.name) as "processName", 
+        COALESCE(p.code, sp.code) as "processCode",
+        COALESCE(p.macroproceso_id, sp_macro.id) as "macroprocesoId",
+        COALESCE(m.name, sp_macro.name) as "macroprocesoName",
         COUNT(DISTINCT rpl.risk_id)::integer as "riskCount",
         array_agg(DISTINCT rpl.risk_id) as "riskIds"
       FROM risk_process_links rpl
-      INNER JOIN processes p ON rpl.process_id = p.id
+      LEFT JOIN processes p ON rpl.process_id = p.id
+      LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id
+      LEFT JOIN processes sp ON s.proceso_id = sp.id
       LEFT JOIN macroprocesos m ON p.macroproceso_id = m.id
-      WHERE p.status != 'deleted'
-        AND p.deleted_at IS NULL
-      GROUP BY p.id, p.name, p.code, p.macroproceso_id, m.name
-      ORDER BY p.code
+      LEFT JOIN macroprocesos sp_macro ON sp.macroproceso_id = sp_macro.id
+      WHERE (p.id IS NOT NULL OR s.id IS NOT NULL)
+        AND (p.status != 'deleted' OR p.id IS NULL)
+        AND (p.deleted_at IS NULL OR p.id IS NULL)
+        AND (s.status != 'deleted' OR s.id IS NULL)
+        AND (s.deleted_at IS NULL OR s.id IS NULL)
+      GROUP BY COALESCE(p.id, s.proceso_id), COALESCE(p.name, sp.name), COALESCE(p.code, sp.code), 
+               COALESCE(p.macroproceso_id, sp_macro.id), COALESCE(m.name, sp_macro.name)
+      ORDER BY COALESCE(p.code, sp.code)
     `);
     
     return results.rows as any[];
