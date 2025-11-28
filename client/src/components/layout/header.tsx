@@ -139,20 +139,48 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const [findingTypeFilter, setFindingTypeFilter] = useState("all");
   const [findingAuditFilter, setFindingAuditFilter] = useState("all");
 
-  // Common data queries (used by multiple filter sections)
+  // Consolidated risks page data - uses same query as risks.tsx to share cache
+  // This eliminates duplicate API calls when on the risks page
+  interface RisksPageData {
+    gerencias: any[];
+    macroprocesos: any[];
+    subprocesos: any[];
+    processes: any[];
+    processOwners: any[];
+    riskCategories: any[];
+    riskProcessLinks: any[];
+    riskControlsWithDetails: any[];
+    processGerencias: any[];
+    macroprocesoGerencias: any[];
+  }
+  
+  const { data: risksPageData } = useQuery<RisksPageData>({
+    queryKey: ["/api/risks/page-data"],
+    queryFn: async () => {
+      const response = await fetch("/api/risks/page-data");
+      if (!response.ok) throw new Error("Failed to fetch page data");
+      return response.json();
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes - matches risks.tsx cache
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    enabled: location === "/risks"
+  });
+
+  // Common data queries (used by multiple filter sections) - only for non-risks pages
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
-    enabled: location === "/risks" || location === "/validation"
+    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
   });
 
   const { data: macroprocesos = [] } = useQuery<Macroproceso[]>({
     queryKey: ["/api/macroprocesos"],
-    enabled: location === "/risks" || location === "/validation"
+    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
   });
 
   const { data: subprocesos = [] } = useQuery<Subproceso[]>({
     queryKey: ["/api/subprocesos"],
-    enabled: location === "/risks" || location === "/validation"
+    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
   });
 
   const { data: users = [] } = useQuery<User[]>({
@@ -162,12 +190,12 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    enabled: location === "/validation" || location === "/risks"
+    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
   });
 
   const { data: gerencias = [] } = useQuery<any[]>({
     queryKey: ["/api/gerencias"],
-    enabled: location === "/risks"
+    enabled: location === "/matrix" // Only for matrix page - /risks uses page-data instead
   });
 
   const { data: auditPlans = [] } = useQuery<AuditPlan[]>({
@@ -212,22 +240,33 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     enabled: location === "/matrix"
   });
 
-  // Risks page data (for export functionality)
+  // Risks page data for export - extracted from consolidated query
+  // This uses cached data from risksPageData instead of separate API calls
+  const riskProcessLinks = risksPageData?.riskProcessLinks || [];
+  const allRiskControls = risksPageData?.riskControlsWithDetails || [];
+  
+  // For risks export, we need to fetch all risks (not paginated) - this is only for export
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: any }>({
-    queryKey: ["/api/risks"],
+    queryKey: ["/api/risks", "export"],
+    queryFn: async () => {
+      const response = await fetch("/api/risks?limit=10000");
+      if (!response.ok) throw new Error("Failed to fetch risks for export");
+      return response.json();
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes cache
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     enabled: location === "/risks"
   });
   const allRisks = risksResponse?.data || [];
 
-  const { data: riskProcessLinks = [] } = useQuery<RiskProcessLink[]>({
-    queryKey: ["/api/risk-processes"],
-    enabled: location === "/risks"
-  });
-
-  const { data: allRiskControls = [] } = useQuery<any[]>({
-    queryKey: ["/api/risk-controls-with-details"],
-    enabled: location === "/risks"
-  });
+  // Combine data sources - use page-data when on /risks, otherwise use individual queries
+  // This prevents duplicate API calls when on the risks page
+  const effectiveProcesses = location === "/risks" ? (risksPageData?.processes || []) : processes;
+  const effectiveMacroprocesos = location === "/risks" ? (risksPageData?.macroprocesos || []) : macroprocesos;
+  const effectiveSubprocesos = location === "/risks" ? (risksPageData?.subprocesos || []) : subprocesos;
+  const effectiveGerencias = location === "/risks" ? (risksPageData?.gerencias || []) : gerencias;
+  const effectiveProcessOwners = location === "/risks" ? (risksPageData?.processOwners || []) : processOwners;
 
   // Reset filters when changing pages
   useEffect(() => {
@@ -319,13 +358,13 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
   };
 
-  // Risk filters logic
+  // Risk filters logic - use effective* variables to leverage cached page-data
   const filteredProcesses = macroprocesoFilter === "all" 
-    ? processes 
-    : processes.filter((process: any) => process.macroprocesoId === macroprocesoFilter);
+    ? effectiveProcesses 
+    : effectiveProcesses.filter((process: any) => process.macroprocesoId === macroprocesoFilter);
 
   const filteredSubprocesos = (() => {
-    let filtered = subprocesos;
+    let filtered = effectiveSubprocesos;
     
     if (processFilter !== "all") {
       filtered = filtered.filter((subproceso: any) => subproceso.procesoId === processFilter);
@@ -339,8 +378,8 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   // Risk Validation filters logic
   const validationFilteredProcesses = validationMacroprocesoFilter === "all" 
-    ? processes 
-    : processes.filter((process: any) => process.macroprocesoId === validationMacroprocesoFilter);
+    ? effectiveProcesses 
+    : effectiveProcesses.filter((process: any) => process.macroprocesoId === validationMacroprocesoFilter);
 
   // Risk filter handlers
   const handleMacroprocesoFilterChange = (value: string) => {
@@ -877,13 +916,13 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       
       riskLinks.forEach((link: any) => {
         if (link.subprocesoId) {
-          const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
+          const sub = effectiveSubprocesos.find((s: any) => s.id === link.subprocesoId);
           if (sub) processNames.push(`S: ${sub.name}`);
         } else if (link.processId) {
-          const proc = processes.find((p: any) => p.id === link.processId);
+          const proc = effectiveProcesses.find((p: any) => p.id === link.processId);
           if (proc) processNames.push(`P: ${proc.name}`);
         } else if (link.macroprocesoId) {
-          const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
+          const macro = effectiveMacroprocesos.find((m: any) => m.id === link.macroprocesoId);
           if (macro) processNames.push(`M: ${macro.name}`);
         }
       });
@@ -945,20 +984,20 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const getActiveFilters = () => {
     const filters = [];
     
-    // Risk filters
+    // Risk filters - use effective* variables for cached data
     if (location === "/risks") {
       if (macroprocesoFilter !== "all") {
-        const macroproceso = macroprocesos.find((m: any) => m.id === macroprocesoFilter);
+        const macroproceso = effectiveMacroprocesos.find((m: any) => m.id === macroprocesoFilter);
         filters.push({ key: "macroproceso", label: "Macroproceso", value: macroproceso?.name || macroprocesoFilter });
       }
       
       if (processFilter !== "all") {
-        const process = processes.find((p: any) => p.id === processFilter);
+        const process = effectiveProcesses.find((p: any) => p.id === processFilter);
         filters.push({ key: "process", label: "Proceso", value: process?.name || processFilter });
       }
       
       if (subprocesoFilter !== "all") {
-        const subproceso = subprocesos.find((s: any) => s.id === subprocesoFilter);
+        const subproceso = effectiveSubprocesos.find((s: any) => s.id === subprocesoFilter);
         filters.push({ key: "subproceso", label: "Subproceso", value: subproceso?.name || subprocesoFilter });
       }
       
@@ -980,7 +1019,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       }
       
       if (riskOwnerFilter !== "all") {
-        const owner = processOwners.find((o: any) => o.id === riskOwnerFilter);
+        const owner = effectiveProcessOwners.find((o: any) => o.id === riskOwnerFilter);
         const ownerLabel = owner ? `${owner.name} - ${owner.position}` : riskOwnerFilter;
         filters.push({ key: "riskOwner", label: "Responsable", value: ownerLabel });
       }
