@@ -81,8 +81,8 @@ export function RisksByProcess() {
   const totalRisks = entityGroups.reduce((sum, e) => sum + e.riskCount, 0);
 
   return (
-    <div className="space-y-4 p-4">
-      <div className="text-sm text-muted-foreground mb-4">
+    <div className="space-y-4 pt-0 px-4 pb-4">
+      <div className="text-sm text-muted-foreground mb-2">
         {totalEntities} {totalEntities === 1 ? 'entidad' : 'entidades'} con {totalRisks} riesgos asociados
       </div>
       
