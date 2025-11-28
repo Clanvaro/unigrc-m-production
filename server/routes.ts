@@ -4203,14 +4203,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get notified risk-process links (pending_validation + notificationSent = true) with pagination
+  // OPTIMIZED: Uses DB-level LIMIT/OFFSET and distributed cache (Nov 28, 2025)
   app.get("/api/risk-processes/validation/notified/list", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
-      const allLinks = await storage.getRiskProcessLinksByNotificationStatus(true);
-      const total = allLinks.length;
-      const paginatedLinks = allLinks.slice(offset, offset + limit);
       
-      res.json(createPaginatedResponse(paginatedLinks, total, limit, offset));
+      // Cache for 30s per page
+      const cacheKey = `validation:notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      // Use paginated query with DB-level LIMIT/OFFSET
+      const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(true, limit, offset);
+      const response = createPaginatedResponse(data, total, limit, offset);
+      
+      await distributedCache.set(cacheKey, response, 30);
+      res.json(response);
     } catch (error) {
       console.error("Error fetching notified risk processes:", error);
       res.status(500).json({ message: "Failed to fetch notified risk processes" });
@@ -4218,14 +4230,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get not-notified risk-process links (pending_validation + notificationSent = false) with pagination
+  // OPTIMIZED: Uses DB-level LIMIT/OFFSET and distributed cache (Nov 28, 2025)
   app.get("/api/risk-processes/validation/not-notified/list", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
-      const allLinks = await storage.getRiskProcessLinksByNotificationStatus(false);
-      const total = allLinks.length;
-      const paginatedLinks = allLinks.slice(offset, offset + limit);
       
-      res.json(createPaginatedResponse(paginatedLinks, total, limit, offset));
+      // Cache for 30s per page
+      const cacheKey = `validation:not-notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      // Use paginated query with DB-level LIMIT/OFFSET
+      const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(false, limit, offset);
+      const response = createPaginatedResponse(data, total, limit, offset);
+      
+      await distributedCache.set(cacheKey, response, 30);
+      res.json(response);
     } catch (error) {
       console.error("Error fetching not-notified risk processes:", error);
       res.status(500).json({ message: "Failed to fetch not-notified risk processes" });

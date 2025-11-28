@@ -369,6 +369,7 @@ export interface IStorage {
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
+  getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
   
   // RiskProcessLink validation history
   createValidationHistoryEntry(historyEntry: InsertRiskProcessLinkValidationHistory): Promise<RiskProcessLinkValidationHistory>;
@@ -20073,7 +20074,34 @@ export class DatabaseStorage extends MemStorage {
   }
   
   async getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]> {
-    // Get risk-process links that are pending validation and match notification status
+    // DEPRECATED: Use getRiskProcessLinksByNotificationStatusPaginated instead for better performance
+    return this.getRiskProcessLinksByNotificationStatusPaginated(notified, 50, 0).then(r => r.data);
+  }
+  
+  /**
+   * Paginated version with LIMIT/OFFSET at DB level for performance
+   * Uses new index: idx_risk_process_links_validation_notification
+   */
+  async getRiskProcessLinksByNotificationStatusPaginated(
+    notified: boolean, 
+    limit: number = 50, 
+    offset: number = 0
+  ): Promise<{ data: RiskProcessLinkWithDetails[], total: number }> {
+    // First, get total count (fast with index)
+    const countResult = await db.select({ count: sql<number>`cast(count(*) as integer)` })
+      .from(riskProcessLinks)
+      .where(and(
+        eq(riskProcessLinks.validationStatus, 'pending_validation'),
+        eq(riskProcessLinks.notificationSent, notified)
+      ));
+    const total = countResult[0]?.count || 0;
+    
+    // If no results, return early
+    if (total === 0) {
+      return { data: [], total: 0 };
+    }
+    
+    // Get paginated results with LIMIT/OFFSET at DB level
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
@@ -20081,7 +20109,6 @@ export class DatabaseStorage extends MemStorage {
       process: processes,
       subproceso: subprocesos,
       validatedByUser: users,
-      // Get the responsible owner ID using COALESCE logic
       responsibleOwnerId: sql<string>`
         COALESCE(
           ${riskProcessLinks.responsibleOverrideId},
@@ -20101,9 +20128,11 @@ export class DatabaseStorage extends MemStorage {
       eq(riskProcessLinks.validationStatus, 'pending_validation'),
       eq(riskProcessLinks.notificationSent, notified)
     ))
-    .orderBy(riskProcessLinks.createdAt);
+    .orderBy(riskProcessLinks.createdAt)
+    .limit(limit)
+    .offset(offset);
     
-    // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
+    // Batch-fetch process owners for this page only
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
     const owners = ownerIds.length > 0 
       ? await db.select({
@@ -20116,8 +20145,8 @@ export class DatabaseStorage extends MemStorage {
       : [];
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
     
-    // Map results with owner lookups
-    const results = baseResults.map((result) => ({
+    // Map results
+    const data = baseResults.map((result) => ({
       ...result.riskProcessLink,
       risk: result.risk!,
       macroproceso: result.macroproceso || undefined,
@@ -20127,7 +20156,7 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
     
-    return results;
+    return { data, total };
   }
   
   // ============= RISK PROCESS LINK VALIDATION HISTORY METHODS =============
