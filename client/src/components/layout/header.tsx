@@ -167,20 +167,23 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     enabled: location === "/risks"
   });
 
-  // Common data queries (used by multiple filter sections) - only for non-risks pages
+  // Common data queries (used by multiple filter sections)
+  // /risks uses page-data, other pages use individual queries
+  const needsProcessData = location === "/validation" || location === "/controls" || location === "/actions" || location === "/action-plans";
+  
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
-    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
+    enabled: needsProcessData
   });
 
   const { data: macroprocesos = [] } = useQuery<Macroproceso[]>({
     queryKey: ["/api/macroprocesos"],
-    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
+    enabled: needsProcessData
   });
 
   const { data: subprocesos = [] } = useQuery<Subproceso[]>({
     queryKey: ["/api/subprocesos"],
-    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
+    enabled: needsProcessData
   });
 
   const { data: users = [] } = useQuery<User[]>({
@@ -190,7 +193,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    enabled: location === "/validation" // Removed "/risks" - uses page-data instead
+    enabled: needsProcessData
   });
 
   const { data: gerencias = [] } = useQuery<any[]>({

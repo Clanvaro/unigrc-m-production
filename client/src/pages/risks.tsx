@@ -34,6 +34,7 @@ import { useSavedViews } from "@/hooks/useSavedViews";
 import { RiskValidationStatus } from "@/components/RiskValidationStatus";
 import { ValidationHistoryModal } from "@/components/ValidationHistoryModal";
 import { RiskValidationHistory } from "@/components/RiskValidationHistory";
+import { RisksPageSkeleton } from "@/components/skeletons/risks-page-skeleton";
 
 // Type for responsible with validation status
 interface ResponsibleWithValidation {
@@ -1126,7 +1127,7 @@ export default function Risks() {
   };
 
   if (isLoading) {
-    return <div className="p-6">Cargando riesgos...</div>;
+    return <RisksPageSkeleton />;
   }
 
   // Data selection: use mock data for testing or filtered paginated data
