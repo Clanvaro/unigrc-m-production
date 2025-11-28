@@ -784,7 +784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fullName: dbUser.fullName,
           profileImageUrl: dbUser.profileImageUrl,
           isAdmin: dbUser.isAdmin ?? false,
-          isPlatformAdmin: dbUser.isPlatformAdmin ?? dbUser.isAdmin ?? false
+          isPlatformAdmin: dbUser.isAdmin ?? false
         },
         permissions: userPermissions || []
       };
@@ -882,7 +882,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const sessionUser = {
         id: user.id,
         email: user.email || '',
-        isPlatformAdmin: user.isPlatformAdmin === true,
+        isPlatformAdmin: user.isAdmin === true,
         activeTenantId: SINGLE_TENANT_ID
       };
 
@@ -958,7 +958,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('[Local Auth] Login successful:', email);
       return res.json({ 
         authenticated: true,
-        isPlatformAdmin: user.isPlatformAdmin,
+        isPlatformAdmin: user.isAdmin ?? false,
         needsTenantSelection: false,
         user: sessionUser
       });
@@ -7333,7 +7333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         originalDueDate: req.body.originalDueDate ? new Date(req.body.originalDueDate) : null
       };
       
-      const validatedData = insertActionPlanSchema.partial().parse(processedData);
+      const validatedData = insertActionSchema.partial().parse(processedData);
       
       // Track due date changes in audit logs
       if (validatedData.dueDate && currentPlan.dueDate) {
