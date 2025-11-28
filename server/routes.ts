@@ -21369,10 +21369,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
 }
 
 /**
- * Cache warming function - disabled in single-tenant mode
- * The cache will be populated on-demand when users access data
- * This avoids startup delays and ensures cache entries reflect actual usage patterns
+ * Critical query warming function - executes key database queries at startup
+ * This ensures Neon's query planner has cached execution plans, reducing cold-start latency
+ * Also populates the distributed cache for immediate user access
  */
 export async function warmCacheForAllTenants(): Promise<void> {
-  console.log('ℹ️ [CACHE WARMING] Cache warming disabled in single-tenant mode - cache will be populated on-demand');
+  const startTime = Date.now();
+  console.log('🔥 [QUERY WARMING] Starting critical query pre-warming...');
+  
+  try {
+    // Execute all critical queries in parallel (same as /api/risks/page-data)
+    // This warms Neon's query planner cache and populates our distributed cache
+    const [
+      gerencias,
+      macroprocesos,
+      subprocesos,
+      processes,
+      processOwners,
+      riskCategories,
+      riskProcessLinks,
+      riskControls,
+      processGerencias
+    ] = await Promise.all([
+      storage.getGerencias(),
+      storage.getMacroprocesos(),
+      storage.getSubprocesosWithOwners(),
+      storage.getProcesses(),
+      storage.getProcessOwners(),
+      storage.getRiskCategories(),
+      storage.getRiskProcessLinksWithDetails(),
+      storage.getAllRiskControlsWithDetails(),
+      storage.getAllProcessGerenciasRelations()
+    ]);
+    
+    // Filter out soft-deleted records
+    const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
+    const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+    const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+    const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
+    
+    // Build response object (same structure as /api/risks/page-data)
+    const pageData = {
+      gerencias: activeGerencias,
+      macroprocesos: activeMacroprocesos,
+      subprocesos: activeSubprocesos,
+      processes: activeProcesses,
+      processOwners,
+      riskCategories,
+      riskProcessLinks,
+      riskControlsWithDetails: riskControls,
+      processGerencias,
+      macroprocesoGerencias: []
+    };
+    
+    // Cache the warmed data (30 second TTL, same as endpoint)
+    // IMPORTANT: Must use 'default' to match resolveActiveTenant() which returns SINGLE_TENANT_ID = 'default'
+    const cacheKey = `risks-page-data:${CACHE_VERSION}:default`;
+    await distributedCache.set(cacheKey, pageData, 30);
+    
+    const duration = Date.now() - startTime;
+    console.log(`✅ [QUERY WARMING] Completed in ${duration}ms - Cached ${activeGerencias.length} gerencias, ${activeMacroprocesos.length} macroprocesos, ${activeProcesses.length} processes, ${riskCategories.length} categories`);
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`❌ [QUERY WARMING] Failed after ${duration}ms:`, error);
+  }
 }
