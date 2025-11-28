@@ -42,15 +42,19 @@ Eliminated duplicate API calls in header.tsx when on /risks page:
 - **Query gating**: `needsProcessData` flag enables queries for /validation, /controls, /actions, /action-plans
 - **Skeleton loader**: Added RisksPageSkeleton component with proper table structure, ARIA labels, and data-testid
 
-## Critical Query Pre-Warming at Startup (Nov 28, 2025)
+## Critical Query Pre-Warming at Startup (Nov 28, 2025) - OPTIMIZED
 
-Implemented server-side query pre-warming to reduce cold-start latency for the risks page:
-- **Startup warming**: `warmCacheForAllTenants()` executes all 9 critical database queries at server startup
-- **Queries warmed**: gerencias, macroprocesos, subprocesos, processes, processOwners, riskCategories, riskProcessLinks, riskControls, processGerencias
-- **Neon query planner cache**: Pre-executing queries warms Neon's query planner, reducing subsequent query times
-- **Distributed cache population**: Results are cached with 30-second TTL for immediate user access
-- **Cache key alignment**: Uses `risks-page-data:${CACHE_VERSION}:default` to match runtime cache keys
-- Result: First user request after server restart is ~8x faster (from ~35s to ~4s)
+Implemented 2-phase server-side query pre-warming to reduce cold-start latency:
+- **Phase 1 (Synchronous)**: Lightweight lookup data only - gerencias, macroprocesos, subprocesos, processes, processOwners, riskCategories, processGerencias
+  - Completes in ~2s (down from 3-4 minutes)
+  - Cached with 60s TTL as `risks-page-data-lite:${CACHE_VERSION}:default`
+- **Phase 2 (Async Background)**: Heavy validation data - first page of riskProcessLinks (notified + not-notified)
+  - Non-blocking, runs via `setImmediate()` after Phase 1
+  - Cached with 5-minute TTL (300s) for extended availability
+  - Uses paginated queries (50 items per page) instead of full-table scans
+- **Removed from startup**: `riskProcessLinks` and `riskControls` full-table queries (caused 3-4 min startup delays)
+- **New indexes added**: `idx_risk_process_links_risk_validation`, `idx_risk_process_links_process_validation`, `idx_risk_process_links_macroproceso_validation`, `idx_risk_process_links_subproceso_validation`
+- Result: Server ready in ~2s, validation pages load instantly from 5-min cache
 
 ## Progressive Data Loading for Risks Page (Nov 28, 2025)
 
