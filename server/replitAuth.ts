@@ -32,11 +32,20 @@ export function getSession() {
   const pgStore = connectPg(session);
   
   // Use pooled connection for session store for better performance under load
-  let databaseUrl = process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+  // Priority: RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
+  let databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
   
   // Remove channel_binding parameter if present (can cause issues with some drivers)
   if (databaseUrl) {
     databaseUrl = databaseUrl.replace(/[&?]channel_binding=[^&]*/g, '');
+    
+    // Ensure sslmode=require is present for Render PostgreSQL connections
+    const isRenderDb = databaseUrl.includes('render.com') || databaseUrl.includes('oregon-postgres.render.com');
+    if (isRenderDb && !databaseUrl.includes('sslmode=')) {
+      databaseUrl = databaseUrl.includes('?') 
+        ? `${databaseUrl}&sslmode=require` 
+        : `${databaseUrl}?sslmode=require`;
+    }
   }
   
   console.log('[Session] Initializing PostgreSQL session store');

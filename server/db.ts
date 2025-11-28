@@ -7,16 +7,24 @@ import * as schema from "@shared/schema";
 let pool: Pool | null = null;
 let db: ReturnType<typeof drizzle> | null = null;
 
-// Use DATABASE_URL first, or POOLED_DATABASE_URL if DATABASE_URL is not set
-// IMPORTANT: Ensure both URLs point to the same Neon database/branch
-const databaseUrl = process.env.DATABASE_URL || process.env.POOLED_DATABASE_URL;
+// Database URL priority: RENDER_DATABASE_URL > DATABASE_URL > POOLED_DATABASE_URL
+// RENDER_DATABASE_URL is for Render PostgreSQL hosting
+// DATABASE_URL is the default Replit/Neon connection
+const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.DATABASE_URL || process.env.POOLED_DATABASE_URL;
+
+// Detect if using Render PostgreSQL (non-Neon)
+const isRenderDb = databaseUrl?.includes('render.com') || databaseUrl?.includes('oregon-postgres.render.com') || false;
 
 // Detect pooler based on actual connection string content (not env var name)
-const isPooled = databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false;
+const isPooled = !isRenderDb && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
 
-// Log which URL is being used for debugging
-console.log(`[DB Config] Using: ${isPooled ? 'Pooled connection' : 'Direct connection'}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
-if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL) {
+// Log which database is being used
+if (isRenderDb) {
+  console.log(`[DB Config] Using: Render PostgreSQL, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
+} else {
+  console.log(`[DB Config] Using: ${isPooled ? 'Neon Pooled connection' : 'Neon Direct connection'}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
+}
+if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL && !isRenderDb) {
   const pooledHost = process.env.POOLED_DATABASE_URL.split('@')[1]?.split('-pooler')[0];
   const directHost = process.env.DATABASE_URL.split('@')[1]?.split('.')[0];
   if (pooledHost !== directHost) {
@@ -29,28 +37,36 @@ if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL) {
 if (databaseUrl) {
   const isProduction = process.env.NODE_ENV === 'production';
   
-  // Production needs longer timeouts when Scale to Zero is enabled (can take 30-60s to wake)
-  // If you disable Scale to Zero in Neon, you can reduce these back to 15s
-  const connectionTimeout = isProduction ? 60000 : 15000;  // 60s prod, 15s dev
-  const statementTimeout = isProduction ? 60000 : 15000;   // 60s prod, 15s dev
+  // Render PostgreSQL has always-on connections, no Scale to Zero delays
+  // Neon production needs longer timeouts when Scale to Zero is enabled (can take 30-60s to wake)
+  const connectionTimeout = isRenderDb ? 15000 : (isProduction ? 60000 : 15000);
+  const statementTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
+  
+  // Render PostgreSQL requires SSL with sslmode=require in connection string
+  // The connection string already includes sslmode=require, so we just need to enable SSL
+  const sslConfig = isRenderDb 
+    ? { rejectUnauthorized: false }  // Render requires SSL
+    : (isProduction ? { rejectUnauthorized: false } : false);
   
   pool = new Pool({ 
     connectionString: databaseUrl,
-    max: isPooled ? 10 : 6,      // Optimized for Reserved VM 1 CPU 2GB - reduced from 20/10
-    min: 1,                      // Single minimum connection for 1 CPU VM
-    idleTimeoutMillis: 30000,    // Close idle connections after 30s
+    max: isRenderDb ? 10 : (isPooled ? 10 : 6),  // Render supports more connections
+    min: 1,
+    idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render can have longer idle
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
-    keepAlive: true,             // Enable TCP keepalive to maintain connections
-    keepAliveInitialDelayMillis: 10000, // Start keepalive after 10s
-    ssl: isProduction ? { rejectUnauthorized: false } : false,
-    allowExitOnIdle: false,      // Keep pool active for better performance
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+    ssl: sslConfig,
+    allowExitOnIdle: false,
   });
   db = drizzle(pool, { schema, logger: true });
   
   console.log(`📊 Database config: connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, env=${isProduction ? 'production' : 'development'}`);
   
-  if (isPooled) {
+  if (isRenderDb) {
+    console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');
+  } else if (isPooled) {
     console.log('✅ Using Neon connection pooler (PgBouncer) - up to 10,000 concurrent connections supported');
   } else {
     console.log('⚠️ Using direct database connection - consider setting POOLED_DATABASE_URL for better scalability');

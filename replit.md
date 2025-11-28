@@ -14,11 +14,11 @@ The frontend is built with React, TypeScript, Vite, Wouter, TanStack Query, Radi
 
 ## Technical Implementations
 
-The backend uses Express.js with TypeScript and Zod for validation. Data is stored in PostgreSQL (Neon serverless) using Drizzle ORM. Authentication is session-based with Replit Auth, role-based access control, and CSRF protection. Core data models include Processes, Risks, Controls, Action Plans, Risk Events, and Organizational Structure. Features include configurable risk aggregation, hierarchical entity selection, a process-centered validation system, document management, a 4-step Audit Planning Wizard with automated fraud detection, and soft-delete functionality. The system uses BullMQ for asynchronous job processing with automatic fallback to mock queues. A 3-layer cache prevention strategy ensures immediate UI updates after mutations.
+The backend uses Express.js with TypeScript and Zod for validation. Data is stored in PostgreSQL (Render) using Drizzle ORM. Authentication is session-based with Replit Auth, role-based access control, and CSRF protection. Core data models include Processes, Risks, Controls, Action Plans, Risk Events, and Organizational Structure. Features include configurable risk aggregation, hierarchical entity selection, a process-centered validation system, document management, a 4-step Audit Planning Wizard with automated fraud detection, and soft-delete functionality. The system uses BullMQ for asynchronous job processing with automatic fallback to mock queues. A 3-layer cache prevention strategy ensures immediate UI updates after mutations.
 
 ## System Design Choices
 
-The system operates in a single-tenant architecture, with all tenant-specific logic and database columns removed. Key modules like Control Self-Assessment (CSA) and Whistleblower have been completely removed. The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly. Aggressive keep-alive pings are implemented to mitigate Neon's Scale to Zero cold start issues.
+The system operates in a single-tenant architecture, with all tenant-specific logic and database columns removed. Key modules like Control Self-Assessment (CSA) and Whistleblower have been completely removed. The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly.
 
 ### Performance Optimizations - Lazy Loading (Nov 2025)
 
@@ -46,7 +46,7 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 
 # External Dependencies
 
--   **Neon Database**: Serverless PostgreSQL hosting.
+-   **Render PostgreSQL**: Always-on PostgreSQL hosting (migrated from Neon on Nov 28, 2025). No cold start delays.
 -   **Render Hosting**: Node.js web service for production deployment.
 -   **Replit Integration**: Development environment tools and Replit Auth.
 -   **Google Fonts**: Inter font family.

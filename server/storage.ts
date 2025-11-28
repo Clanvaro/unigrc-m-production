@@ -21711,11 +21711,12 @@ export class DatabaseStorage extends MemStorage {
 // Fast-path to prevent deployment timeout: use MemStorage if DATABASE_URL is unavailable
 // This allows the server to start and respond to health checks even without database
 function createStorage(): IStorage {
-  const databaseUrl = process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+  // Priority: RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
+  const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
   
   if (!databaseUrl) {
-    console.warn('⚠️ DATABASE_URL not configured - using in-memory storage');
-    console.warn('⚠️ Data will be lost on restart. Configure DATABASE_URL for persistence.');
+    console.warn('⚠️ No database URL configured - using in-memory storage');
+    console.warn('⚠️ Data will be lost on restart. Configure RENDER_DATABASE_URL or DATABASE_URL for persistence.');
     return new MemStorage();
   }
   
