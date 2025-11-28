@@ -56,11 +56,14 @@ Implemented 2-phase server-side query pre-warming to reduce cold-start latency:
 - **New indexes added**: `idx_risk_process_links_risk_validation`, `idx_risk_process_links_process_validation`, `idx_risk_process_links_macroproceso_validation`, `idx_risk_process_links_subproceso_validation`
 - Result: Server ready in ~2s, validation pages load instantly from 5-min cache
 
-## Progressive Data Loading for Risks Page (Nov 28, 2025)
+## Progressive Data Loading for Risks Page (Nov 28, 2025) - ENHANCED
 
 Implemented progressive loading pattern to reduce initial page load time:
 - **New endpoint `/api/risks/page-data-lite`**: Returns only filter data (gerencias, macroprocesos, subprocesos, processes, riskCategories, processGerencias) without heavy JOINs for riskProcessLinks and riskControls
 - **New endpoint `/api/risks/batch-relations`**: POST endpoint that accepts array of riskIds and returns only the processLinks and controls for those specific risks (max 100 IDs per request)
+  - **OPTIMIZED (Nov 28)**: Uses SQL `WHERE IN` queries instead of loading ALL data and filtering in JavaScript
+  - New storage methods: `getRiskProcessLinksByRiskIds()`, `getRiskControlsByRiskIds()` with efficient batch loading
+  - Performance: Now fetches only needed records directly from database, eliminating memory overhead of full-table loads
 - **New endpoint `/api/risks/:id/full-details`**: On-demand loading of full details for a single risk when editing/viewing
 - **Frontend loading sequence**: 
   1. Load page-data-lite for filter dropdowns (fast)
