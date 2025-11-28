@@ -20346,39 +20346,95 @@ export class DatabaseStorage extends MemStorage {
   // ============= EFFICIENT AGGREGATION METHODS (SQL GROUP BY) =============
   
   async getRisksGroupedByProcess(): Promise<{ 
-    processId: string; 
-    processName: string; 
-    processCode: string;
+    entityId: string; 
+    entityName: string; 
+    entityCode: string;
+    entityType: 'macroproceso' | 'process' | 'subproceso';
     macroprocesoId: string | null;
     macroprocesoName: string | null;
+    processId: string | null;
+    processName: string | null;
     riskCount: number; 
     riskIds: string[];
   }[]> {
-    // Use raw SQL with GROUP BY for efficiency
-    // Includes risks associated directly to processes AND risks associated to subprocesos
+    // Use UNION to combine all three levels: macroprocesos, processes, subprocesos
+    // Each risk appears under its most specific association level
     const results = await db.execute(sql`
+      WITH risk_entities AS (
+        -- Riesgos asociados directamente a macroprocesos (sin proceso ni subproceso)
+        SELECT 
+          m.id as entity_id,
+          m.name as entity_name,
+          m.code as entity_code,
+          'macroproceso' as entity_type,
+          m.id as macroproceso_id,
+          m.name as macroproceso_name,
+          NULL::varchar as process_id,
+          NULL::text as process_name,
+          rpl.risk_id
+        FROM risk_process_links rpl
+        INNER JOIN macroprocesos m ON rpl.macroproceso_id = m.id
+        WHERE rpl.process_id IS NULL 
+          AND rpl.subproceso_id IS NULL
+          AND rpl.macroproceso_id IS NOT NULL
+        
+        UNION ALL
+        
+        -- Riesgos asociados a procesos (con o sin macroproceso, sin subproceso)
+        SELECT 
+          p.id as entity_id,
+          p.name as entity_name,
+          p.code as entity_code,
+          'process' as entity_type,
+          p.macroproceso_id,
+          m.name as macroproceso_name,
+          p.id as process_id,
+          p.name as process_name,
+          rpl.risk_id
+        FROM risk_process_links rpl
+        INNER JOIN processes p ON rpl.process_id = p.id
+        LEFT JOIN macroprocesos m ON p.macroproceso_id = m.id
+        WHERE rpl.subproceso_id IS NULL
+          AND p.status != 'deleted'
+          AND p.deleted_at IS NULL
+        
+        UNION ALL
+        
+        -- Riesgos asociados a subprocesos (agrupados bajo su proceso padre)
+        SELECT 
+          s.id as entity_id,
+          s.name as entity_name,
+          s.code as entity_code,
+          'subproceso' as entity_type,
+          p.macroproceso_id,
+          m.name as macroproceso_name,
+          p.id as process_id,
+          p.name as process_name,
+          rpl.risk_id
+        FROM risk_process_links rpl
+        INNER JOIN subprocesos s ON rpl.subproceso_id = s.id
+        INNER JOIN processes p ON s.proceso_id = p.id
+        LEFT JOIN macroprocesos m ON p.macroproceso_id = m.id
+        WHERE s.status != 'deleted'
+          AND s.deleted_at IS NULL
+          AND p.status != 'deleted'
+          AND p.deleted_at IS NULL
+      )
       SELECT 
-        COALESCE(p.id, s.proceso_id) as "processId",
-        COALESCE(p.name, sp.name) as "processName", 
-        COALESCE(p.code, sp.code) as "processCode",
-        COALESCE(p.macroproceso_id, sp_macro.id) as "macroprocesoId",
-        COALESCE(m.name, sp_macro.name) as "macroprocesoName",
-        COUNT(DISTINCT rpl.risk_id)::integer as "riskCount",
-        array_agg(DISTINCT rpl.risk_id) as "riskIds"
-      FROM risk_process_links rpl
-      LEFT JOIN processes p ON rpl.process_id = p.id
-      LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id
-      LEFT JOIN processes sp ON s.proceso_id = sp.id
-      LEFT JOIN macroprocesos m ON p.macroproceso_id = m.id
-      LEFT JOIN macroprocesos sp_macro ON sp.macroproceso_id = sp_macro.id
-      WHERE (p.id IS NOT NULL OR s.id IS NOT NULL)
-        AND (p.status != 'deleted' OR p.id IS NULL)
-        AND (p.deleted_at IS NULL OR p.id IS NULL)
-        AND (s.status != 'deleted' OR s.id IS NULL)
-        AND (s.deleted_at IS NULL OR s.id IS NULL)
-      GROUP BY COALESCE(p.id, s.proceso_id), COALESCE(p.name, sp.name), COALESCE(p.code, sp.code), 
-               COALESCE(p.macroproceso_id, sp_macro.id), COALESCE(m.name, sp_macro.name)
-      ORDER BY COALESCE(p.code, sp.code)
+        entity_id as "entityId",
+        entity_name as "entityName",
+        entity_code as "entityCode",
+        entity_type as "entityType",
+        macroproceso_id as "macroprocesoId",
+        macroproceso_name as "macroprocesoName",
+        process_id as "processId",
+        process_name as "processName",
+        COUNT(DISTINCT risk_id)::integer as "riskCount",
+        array_agg(DISTINCT risk_id) as "riskIds"
+      FROM risk_entities
+      GROUP BY entity_id, entity_name, entity_code, entity_type, 
+               macroproceso_id, macroproceso_name, process_id, process_name
+      ORDER BY entity_code
     `);
     
     return results.rows as any[];

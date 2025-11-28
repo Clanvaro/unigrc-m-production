@@ -2,17 +2,19 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, ChevronRight, AlertTriangle, Building2 } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertTriangle, Building2, Layers, FolderTree } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface ProcessGroup {
-  processId: string;
-  processName: string;
-  processCode: string;
+interface EntityGroup {
+  entityId: string;
+  entityName: string;
+  entityCode: string;
+  entityType: 'macroproceso' | 'process' | 'subproceso';
   macroprocesoId: string | null;
   macroprocesoName: string | null;
+  processId: string | null;
+  processName: string | null;
   riskCount: number;
 }
 
@@ -27,21 +29,21 @@ interface Risk {
 }
 
 export function RisksByProcess() {
-  const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(new Set());
+  const [expandedEntities, setExpandedEntities] = useState<Set<string>>(new Set());
 
-  const { data: processGroups, isLoading: isGroupsLoading } = useQuery<ProcessGroup[]>({
+  const { data: entityGroups, isLoading: isGroupsLoading } = useQuery<EntityGroup[]>({
     queryKey: ["/api/risks/grouped-by-process"],
     staleTime: 1000 * 60, 
     refetchOnWindowFocus: false,
   });
 
-  const toggleProcess = (processId: string) => {
-    setExpandedProcesses(prev => {
+  const toggleEntity = (entityId: string) => {
+    setExpandedEntities(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(processId)) {
-        newSet.delete(processId);
+      if (newSet.has(entityId)) {
+        newSet.delete(entityId);
       } else {
-        newSet.add(processId);
+        newSet.add(entityId);
       }
       return newSet;
     });
@@ -57,7 +59,7 @@ export function RisksByProcess() {
     );
   }
 
-  if (!processGroups || processGroups.length === 0) {
+  if (!entityGroups || entityGroups.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
         <Building2 className="h-12 w-12 mb-4 opacity-50" />
@@ -66,39 +68,42 @@ export function RisksByProcess() {
     );
   }
 
-  const groupedByMacroproceso = processGroups.reduce((acc, process) => {
-    const key = process.macroprocesoName || "Sin Macroproceso";
+  const groupedByMacroproceso = entityGroups.reduce((acc, entity) => {
+    const key = entity.macroprocesoName || "Sin Macroproceso";
     if (!acc[key]) {
-      acc[key] = [];
+      acc[key] = { entities: [], macroprocesoId: entity.macroprocesoId };
     }
-    acc[key].push(process);
+    acc[key].entities.push(entity);
     return acc;
-  }, {} as Record<string, ProcessGroup[]>);
+  }, {} as Record<string, { entities: EntityGroup[], macroprocesoId: string | null }>);
+
+  const totalEntities = entityGroups.length;
+  const totalRisks = entityGroups.reduce((sum, e) => sum + e.riskCount, 0);
 
   return (
     <div className="space-y-4 p-4">
       <div className="text-sm text-muted-foreground mb-4">
-        {processGroups.length} procesos con riesgos asociados
+        {totalEntities} {totalEntities === 1 ? 'entidad' : 'entidades'} con {totalRisks} riesgos asociados
       </div>
       
-      {Object.entries(groupedByMacroproceso).map(([macroprocesoName, processes]) => (
+      {Object.entries(groupedByMacroproceso).map(([macroprocesoName, { entities, macroprocesoId }]) => (
         <Card key={macroprocesoName} className="overflow-hidden">
           <CardHeader className="py-3 px-4 bg-muted/50">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Building2 className="h-4 w-4" />
               {macroprocesoName}
               <Badge variant="secondary" className="ml-auto">
-                {processes.reduce((sum, p) => sum + p.riskCount, 0)} riesgos
+                {entities.reduce((sum, e) => sum + e.riskCount, 0)} riesgos
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {processes.map(process => (
-              <ProcessRow 
-                key={process.processId}
-                process={process}
-                isExpanded={expandedProcesses.has(process.processId)}
-                onToggle={() => toggleProcess(process.processId)}
+            {entities.map(entity => (
+              <EntityRow 
+                key={entity.entityId}
+                entity={entity}
+                isExpanded={expandedEntities.has(entity.entityId)}
+                onToggle={() => toggleEntity(entity.entityId)}
               />
             ))}
           </CardContent>
@@ -108,19 +113,27 @@ export function RisksByProcess() {
   );
 }
 
-function ProcessRow({ 
-  process, 
+function EntityRow({ 
+  entity, 
   isExpanded, 
   onToggle 
 }: { 
-  process: ProcessGroup; 
+  entity: EntityGroup; 
   isExpanded: boolean; 
   onToggle: () => void;
 }) {
   const { data: risks, isLoading: isRisksLoading } = useQuery<{ data: Risk[] }>({
-    queryKey: ["/api/risks", { processId: process.processId }],
+    queryKey: ["/api/risks", { entityType: entity.entityType, entityId: entity.entityId }],
     queryFn: async () => {
-      const response = await fetch(`/api/risks?processId=${process.processId}&limit=100`);
+      let url = `/api/risks?limit=100`;
+      if (entity.entityType === 'macroproceso') {
+        url += `&macroprocesoId=${entity.entityId}`;
+      } else if (entity.entityType === 'process') {
+        url += `&processId=${entity.entityId}`;
+      } else if (entity.entityType === 'subproceso') {
+        url += `&subprocesoId=${entity.entityId}`;
+      }
+      const response = await fetch(url);
       if (!response.ok) throw new Error("Failed to fetch risks");
       return response.json();
     },
@@ -128,34 +141,70 @@ function ProcessRow({
     staleTime: 1000 * 30,
   });
 
+  const getEntityIcon = () => {
+    switch (entity.entityType) {
+      case 'macroproceso':
+        return <Layers className="h-4 w-4 shrink-0 text-primary" />;
+      case 'process':
+        return <FolderTree className="h-4 w-4 shrink-0 text-blue-500" />;
+      case 'subproceso':
+        return <FolderTree className="h-3 w-3 shrink-0 text-muted-foreground" />;
+      default:
+        return <FolderTree className="h-4 w-4 shrink-0" />;
+    }
+  };
+
+  const getEntityTypeLabel = () => {
+    switch (entity.entityType) {
+      case 'macroproceso':
+        return 'Macroproceso';
+      case 'process':
+        return 'Proceso';
+      case 'subproceso':
+        return 'Subproceso';
+      default:
+        return '';
+    }
+  };
+
   return (
     <div className="border-b last:border-b-0">
       <button
         onClick={onToggle}
         className={cn(
           "w-full flex items-center gap-3 px-4 py-3 text-left hover-elevate",
-          isExpanded && "bg-muted/30"
+          isExpanded && "bg-muted/30",
+          entity.entityType === 'subproceso' && "pl-8"
         )}
-        data-testid={`process-row-${process.processId}`}
+        data-testid={`entity-row-${entity.entityId}`}
       >
         {isExpanded ? (
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
+        {getEntityIcon()}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-sm">{process.processCode}</span>
-            <span className="text-sm text-muted-foreground truncate">{process.processName}</span>
+            <span className="font-medium text-sm">{entity.entityCode}</span>
+            <span className="text-sm text-muted-foreground truncate">{entity.entityName}</span>
+            {entity.entityType !== 'process' && (
+              <Badge variant="outline" className="text-xs py-0">
+                {getEntityTypeLabel()}
+              </Badge>
+            )}
           </div>
         </div>
         <Badge variant="outline" className="shrink-0">
-          {process.riskCount} {process.riskCount === 1 ? "riesgo" : "riesgos"}
+          {entity.riskCount} {entity.riskCount === 1 ? "riesgo" : "riesgos"}
         </Badge>
       </button>
 
       {isExpanded && (
-        <div className="bg-muted/20 px-4 py-2 pl-10">
+        <div className={cn(
+          "bg-muted/20 px-4 py-2",
+          entity.entityType === 'subproceso' ? "pl-14" : "pl-10"
+        )}>
           {isRisksLoading ? (
             <div className="space-y-2">
               {[1, 2, 3].map(i => (
