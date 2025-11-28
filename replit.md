@@ -23,6 +23,16 @@ Key modules like Control Self-Assessment (CSA) and Whistleblower have been compl
 The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views.
 Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment (1 CPU, 2GB RAM) with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly. Aggressive keep-alive pings are implemented to mitigate Neon's Scale to Zero cold start issues.
 
+## Database Index Optimization (Nov 28, 2025)
+
+Added 12 new performance indexes for faster query execution on the risks page:
+- **Status indexes**: `idx_gerencias_status`, `idx_macroprocesos_status`, `idx_processes_status`, `idx_subprocesos_status`, `idx_controls_status`
+- **Composite indexes**: `idx_risks_status_validation`, `idx_gerencias_status_order`, `idx_macroprocesos_status_order`, `idx_processes_status_macro`
+- **Risk validation**: `idx_risks_validation_status`
+- **Relations**: `idx_process_gerencias_process`, `idx_process_gerencias_gerencia`, `idx_risk_categories_tenant`
+- **Users**: `idx_users_is_active`
+- Total indexes per table: risks(11), gerencias(8), macroprocesos(7), processes(7), subprocesos(6)
+
 ## React Query Cache Optimization (Nov 28, 2025)
 
 Reduced frontend API calls by optimizing heavy endpoints with extended cache:
