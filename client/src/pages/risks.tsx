@@ -715,14 +715,23 @@ export default function Risks() {
       return { previousControls, riskId, previousBootstrapData };
     },
     onSuccess: async (_data, variables, context) => {
-      // Refetch bootstrap to get accurate control counts from server
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      // Invalidate controls-summary endpoint cache for this risk (matches query key format)
+      // Invalidate controls-summary endpoint cache for this risk FIRST (matches query key format)
       if (context?.riskId) {
-        queryClient.invalidateQueries({ 
+        await queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.riskId, "controls/summary"],
           exact: false 
         });
+      }
+      
+      // Force refetch bootstrap to get accurate control counts from server
+      // Wait for it to complete to ensure UI shows fresh data
+      await queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      await queryClient.refetchQueries({ 
+        queryKey: ["/api/risks/bootstrap"],
+        type: 'active'
+      });
+      
+      if (context?.riskId) {
         await queryClient.refetchQueries({ 
           queryKey: ["/api/risks", context.riskId, "controls"],
           type: 'active'
@@ -812,14 +821,23 @@ export default function Risks() {
       return { previousControls, currentRisk, previousBootstrapData };
     },
     onSuccess: async (_data, _variables, context) => {
-      // Refetch bootstrap to get accurate control counts from server
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      // Invalidate controls-summary endpoint cache for this risk (matches query key format)
+      // Invalidate controls-summary endpoint cache for this risk FIRST (matches query key format)
       if (context?.currentRisk) {
-        queryClient.invalidateQueries({ 
+        await queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.currentRisk.id, "controls/summary"],
           exact: false 
         });
+      }
+      
+      // Force refetch bootstrap to get accurate control counts from server
+      // Wait for it to complete to ensure UI shows fresh data
+      await queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      await queryClient.refetchQueries({ 
+        queryKey: ["/api/risks/bootstrap"],
+        type: 'active'
+      });
+      
+      if (context?.currentRisk) {
         await queryClient.refetchQueries({ 
           queryKey: ["/api/risks", context.currentRisk.id, "controls"],
           type: 'active'
