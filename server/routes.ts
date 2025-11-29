@@ -7290,6 +7290,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Optimized endpoint for ManageControlsDialog - paginated with pre-calculated residual projections
+  app.get("/api/risks/:riskId/controls/summary", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const { riskId } = req.params;
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(50, Math.max(10, parseInt(req.query.limit as string) || 25));
+      const search = (req.query.search as string) || '';
+      
+      // Cache key includes riskId, page, limit, and search
+      const cacheKey = `risk-control-summary:${riskId}:p${page}:l${limit}:s${search}`;
+      const cached = await distributedCache.get(cacheKey);
+      
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey} (${Date.now() - startTime}ms)`);
+        return res.json(cached);
+      }
+      
+      // Get the risk to access inherent risk value
+      const risk = await storage.getRisk(riskId);
+      if (!risk) {
+        return res.status(404).json({ message: "Risk not found" });
+      }
+      
+      // Get already associated control IDs for this risk
+      const associatedRiskControls = await storage.getRiskControls(riskId, tenantId);
+      const associatedControlIds = new Set(associatedRiskControls.map((rc: any) => rc.controlId));
+      
+      // Get all controls with basic fields only
+      const allControls = await storage.getControls();
+      
+      // Filter to available controls (not already associated) and apply search
+      let availableControls = allControls.filter((c: any) => !associatedControlIds.has(c.id));
+      
+      if (search) {
+        const searchLower = search.toLowerCase();
+        availableControls = availableControls.filter((c: any) => 
+          c.name?.toLowerCase().includes(searchLower) || 
+          c.code?.toLowerCase().includes(searchLower)
+        );
+      }
+      
+      // Calculate total before pagination
+      const total = availableControls.length;
+      
+      // Apply pagination
+      const offset = (page - 1) * limit;
+      const paginatedControls = availableControls.slice(offset, offset + limit);
+      
+      // Pre-calculate projected residual risk for each control (simple formula)
+      const inherentRisk = risk.inherentRisk || (risk.probability * risk.impact);
+      const controlsWithProjection = paginatedControls.map((control: any) => ({
+        id: control.id,
+        code: control.code,
+        name: control.name,
+        description: control.description,
+        type: control.type,
+        effectiveness: control.effectiveness || 0,
+        projectedResidualRisk: Math.round((inherentRisk * (1 - (control.effectiveness || 0) / 100)) * 10) / 10
+      }));
+      
+      const result = {
+        data: controlsWithProjection,
+        associated: associatedRiskControls.map((rc: any) => ({
+          id: rc.id,
+          controlId: rc.controlId,
+          residualRisk: rc.residualRisk,
+          control: rc.control ? {
+            id: rc.control.id,
+            code: rc.control.code,
+            name: rc.control.name,
+            description: rc.control.description,
+            type: rc.control.type,
+            effectiveness: rc.control.effectiveness || 0
+          } : null
+        })),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        },
+        inherentRisk
+      };
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      
+      console.log(`[CACHE MISS] ${cacheKey} (${Date.now() - startTime}ms)`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ERROR] /api/risks/:riskId/controls/summary:", error);
+      res.status(500).json({ message: "Failed to fetch controls summary" });
+    }
+  });
+
   app.get("/api/controls/:controlId/risks", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -7347,7 +7444,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskControlCaches(),
-        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+        distributedCache.invalidatePattern(`risk-control-summary:${req.params.riskId}*`)
       ]);
       
       res.status(201).json(riskControl);
@@ -7365,6 +7463,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/risk-controls/:id", isAuthenticated, async (req, res) => {
     try {
+      // Get risk-control before deleting to know the riskId for cache invalidation
+      const riskControlData = await requireDb()
+        .select({ riskId: riskControls.riskId })
+        .from(riskControls)
+        .where(eq(riskControls.id, req.params.id))
+        .limit(1);
+      
+      const riskId = riskControlData[0]?.riskId;
+      
       const deleted = await storage.deleteRiskControl(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Risk control not found" });
@@ -7372,10 +7479,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Invalidate all risk-control related caches for real-time UI updates
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
+      const invalidations = [
         invalidateRiskControlCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
-      ]);
+      ];
+      
+      // Also invalidate the controls-summary cache for this specific risk
+      if (riskId) {
+        invalidations.push(distributedCache.invalidatePattern(`risk-control-summary:${riskId}*`));
+      }
+      
+      await Promise.all(invalidations);
       
       res.status(204).send();
     } catch (error) {

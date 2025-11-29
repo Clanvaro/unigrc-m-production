@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Edit, Shield, ChevronUp, ChevronDown, X, Search, User, MoreVertical, RefreshCw, Settings, Eye, Star, Trash2, ClipboardList, Loader2 } from "lucide-react";
+import { Plus, Edit, Shield, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, X, Search, User, MoreVertical, RefreshCw, Settings, Eye, Star, Trash2, ClipboardList, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -78,6 +78,7 @@ export default function Risks() {
   const gerenciaFilter = filters.gerencia || "all";
   const searchTerm = filters.search || "";
   const [controlSearchTerm, setControlSearchTerm] = useState("");
+  const [controlsPage, setControlsPage] = useState(1);
   const [deleteConfirmRisk, setDeleteConfirmRisk] = useState<Risk | null>(null);
   const [deletionReason, setDeletionReason] = useState("");
   const [configureColumnsOpen, setConfigureColumnsOpen] = useState(false);
@@ -338,31 +339,47 @@ export default function Risks() {
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
   
-  // Controls - only loaded when modal is open
-  const { data: controlsResponse } = useQuery<{ data: any[], pagination: { limit: number, offset: number, total: number } }>({
-    queryKey: queryKeys.controls.all(),
+  // Debounced search term for controls to avoid excessive API calls
+  const [debouncedControlSearch, setDebouncedControlSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedControlSearch(controlSearchTerm);
+      setControlsPage(1); // Reset to first page on search
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [controlSearchTerm]);
+  
+  // Optimized controls summary - paginated with pre-calculated residual projections
+  const { data: controlsSummary, isLoading: isControlsSummaryLoading, refetch: refetchControlsSummary } = useQuery<{
+    data: Array<{id: string, code: string, name: string, description: string, type: string, effectiveness: number, projectedResidualRisk: number}>,
+    associated: Array<{id: string, controlId: string, residualRisk: number, control: any}>,
+    pagination: {page: number, limit: number, total: number, totalPages: number},
+    inherentRisk: number
+  }>({
+    queryKey: ['/api/risks', controlsDialogRisk?.id, 'controls/summary', controlsPage, debouncedControlSearch],
     queryFn: async () => {
-      const response = await fetch("/api/controls");
-      if (!response.ok) throw new Error("Failed to fetch controls");
-      return response.json();
-    },
-    enabled: !!controlsDialogRisk, // Only fetch when dialog is open
-  });
-  const allControls = controlsResponse?.data || [];
-
-  // Get risk controls for the selected risk in dialog
-  const { data: dialogRiskControls = [], refetch: refetchRiskControls } = useQuery<any[]>({
-    queryKey: queryKeys.risks.controls(controlsDialogRisk?.id),
-    queryFn: async () => {
-      if (!controlsDialogRisk) return [];
-      const response = await fetch(`/api/risks/${controlsDialogRisk.id}/controls`);
-      if (!response.ok) throw new Error('Failed to fetch risk controls');
+      if (!controlsDialogRisk) throw new Error('No risk selected');
+      const params = new URLSearchParams({
+        page: controlsPage.toString(),
+        limit: '25',
+        ...(debouncedControlSearch && { search: debouncedControlSearch })
+      });
+      const response = await fetch(`/api/risks/${controlsDialogRisk.id}/controls/summary?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch controls summary');
       return response.json();
     },
     enabled: !!controlsDialogRisk?.id,
     staleTime: 0,
     gcTime: 0,
   });
+  
+  // Extract data from the optimized endpoint
+  const dialogRiskControls = controlsSummary?.associated || [];
+  const availableControlsData = controlsSummary?.data || [];
+  const controlsPagination = controlsSummary?.pagination;
+  
+  // Legacy refetch function for mutations
+  const refetchRiskControls = refetchControlsSummary;
 
   // Action plans - lazy loaded
   const { data: allActionPlans = [] } = useQuery<any[]>({
@@ -619,22 +636,22 @@ export default function Risks() {
   });
 
   const addControlMutation = useMutation({
-    mutationFn: ({ riskId, controlId }: { riskId: string; controlId: string }) => {
-      const control = allControls.find((c: Control) => c.id === controlId);
+    mutationFn: ({ riskId, controlId, effectiveness }: { riskId: string; controlId: string; effectiveness: number }) => {
       const risk = risks.find((r: Risk) => r.id === riskId);
-      if (!control || !risk) throw new Error("Control o riesgo no encontrado");
+      if (!risk) throw new Error("Riesgo no encontrado");
       
-      const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
+      const residualRisk = calculateResidualRisk(risk.inherentRisk, effectiveness);
       return apiRequest(`/api/risks/${riskId}/controls`, "POST", {
         controlId,
         residualRisk
       });
     },
-    onMutate: async ({ riskId, controlId }) => {
+    onMutate: async ({ riskId, controlId, effectiveness }) => {
       // OPTIMISTIC UPDATE: Add to cache immediately
-      const control = allControls.find((c: Control) => c.id === controlId);
+      const control = availableControlsData.find((c: any) => c.id === controlId);
       const risk = risks.find((r: Risk) => r.id === riskId);
-      if (!control || !risk) return;
+      if (!risk) return;
+      const controlEffectiveness = control?.effectiveness ?? effectiveness;
 
       // Cancel any outgoing refetches - MUST match query key format
       await queryClient.cancelQueries({ 
@@ -650,18 +667,18 @@ export default function Risks() {
       const previousControls = queryClient.getQueryData(["/api/risks", riskId, "controls"]);
 
       // Optimistically add the new control association
-      const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
+      const residualRisk = calculateResidualRisk(risk.inherentRisk, controlEffectiveness);
       const tempId = `temp-${Date.now()}`;
       queryClient.setQueryData(
         ["/api/risks", riskId, "controls"],
         (old: any[] = []) => [...old, { 
           id: tempId,
           riskId: risk.id, 
-          controlId: control.id,
+          controlId: controlId,
           residualRisk,
-          controlCode: control.code,
-          controlName: control.name,
-          effectiveness: control.effectiveness
+          controlCode: control?.code || '',
+          controlName: control?.name || '',
+          effectiveness: controlEffectiveness
         }]
       );
 
@@ -700,8 +717,12 @@ export default function Risks() {
     onSuccess: async (_data, variables, context) => {
       // Refetch bootstrap to get accurate control counts from server
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      // Refetch both specific risk controls AND the general risk-controls list for table sync
+      // Invalidate controls-summary endpoint cache for this risk (matches query key format)
       if (context?.riskId) {
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/risks", context.riskId, "controls/summary"],
+          exact: false 
+        });
         await queryClient.refetchQueries({ 
           queryKey: ["/api/risks", context.riskId, "controls"],
           type: 'active'
@@ -793,8 +814,12 @@ export default function Risks() {
     onSuccess: async (_data, _variables, context) => {
       // Refetch bootstrap to get accurate control counts from server
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      // Refetch both specific risk controls AND the general risk-controls list for table sync
+      // Invalidate controls-summary endpoint cache for this risk (matches query key format)
       if (context?.currentRisk) {
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/risks", context.currentRisk.id, "controls/summary"],
+          exact: false 
+        });
         await queryClient.refetchQueries({ 
           queryKey: ["/api/risks", context.currentRisk.id, "controls"],
           type: 'active'
@@ -1218,9 +1243,9 @@ export default function Risks() {
     }
   };
 
-  const handleAddControl = (controlId: string) => {
+  const handleAddControl = (controlId: string, effectiveness: number) => {
     if (controlsDialogRisk) {
-      addControlMutation.mutate({ riskId: controlsDialogRisk.id, controlId });
+      addControlMutation.mutate({ riskId: controlsDialogRisk.id, controlId, effectiveness });
     }
   };
 
@@ -1251,24 +1276,9 @@ export default function Risks() {
     return allRiskControls.filter((rc: any) => rc.riskId === risk.id).length;
   };
 
+  // getAvailableControls now returns pre-filtered, pre-calculated data from the optimized endpoint
   const getAvailableControls = () => {
-    const associatedControlIds = dialogRiskControls.map((rc: any) => rc.controlId);
-    return allControls.filter((control: Control) => {
-      // Check if control is not already associated
-      if (associatedControlIds.includes(control.id)) return false;
-      
-      // Filter by search term if present
-      if (controlSearchTerm) {
-        const searchLower = controlSearchTerm.toLowerCase();
-        return (
-          control.name.toLowerCase().includes(searchLower) ||
-          control.code.toLowerCase().includes(searchLower) ||
-          (control.description && control.description.toLowerCase().includes(searchLower))
-        );
-      }
-      
-      return true;
-    });
+    return availableControlsData;
   };
 
   const getValidationBadge = (validationStatus: string) => {
@@ -2029,6 +2039,7 @@ export default function Risks() {
             if (!open) {
               setControlsDialogRisk(null);
               setControlSearchTerm("");
+              setControlsPage(1);
             }
           }}>
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -2083,9 +2094,9 @@ export default function Risks() {
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-lg font-medium">Controles Disponibles</h4>
-                    {getAvailableControls().length > 0 && (
+                    {controlsPagination && controlsPagination.total > 0 && (
                       <span className="text-sm text-muted-foreground">
-                        {getAvailableControls().length} {getAvailableControls().length === 1 ? 'control' : 'controles'} encontrado{getAvailableControls().length === 1 ? '' : 's'}
+                        {controlsPagination.total} {controlsPagination.total === 1 ? 'control' : 'controles'} encontrado{controlsPagination.total === 1 ? '' : 's'}
                       </span>
                     )}
                   </div>
@@ -2101,9 +2112,14 @@ export default function Risks() {
                     />
                   </div>
                   
-                  {getAvailableControls().length > 0 ? (
+                  {isControlsSummaryLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                      <span className="ml-2 text-muted-foreground">Cargando controles...</span>
+                    </div>
+                  ) : getAvailableControls().length > 0 ? (
                     <div className="space-y-2">
-                      {getAvailableControls().map((control: Control) => (
+                      {getAvailableControls().map((control: any) => (
                         <div key={control.id} className="flex items-center justify-between p-3 border rounded">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
@@ -2113,21 +2129,20 @@ export default function Risks() {
                               <p className="font-medium">{control.name}</p>
                             </div>
                             <p className="text-sm text-muted-foreground">{control.description}</p>
-                            <div className="flex gap-2 mt-1">
+                            <div className="flex gap-2 mt-1 flex-wrap">
                               <Badge variant="outline">
-                                {control.type === "preventive" ? "Preventivo" :
-                                 control.type === "detective" ? "Detectivo" : "Correctivo"}
+                                {translateControlType(control.type)}
                               </Badge>
                               <Badge variant="outline">
                                 Efectividad: {control.effectiveness}%
                               </Badge>
-                              <Badge className={getRiskColor(calculateResidualRisk(risk.inherentRisk, control.effectiveness))}>
-                                Riesgo Residual Proyectado: {calculateResidualRisk(risk.inherentRisk, control.effectiveness).toFixed(1).replace('.', ',')}
+                              <Badge className={getRiskColor(control.projectedResidualRisk)}>
+                                Riesgo Residual Proyectado: {control.projectedResidualRisk.toFixed(1).replace('.', ',')}
                               </Badge>
                             </div>
                           </div>
                           <Button 
-                            onClick={() => handleAddControl(control.id)}
+                            onClick={() => handleAddControl(control.id, control.effectiveness)}
                             disabled={addControlMutation.isPending}
                             size="sm"
                           >
@@ -2145,6 +2160,35 @@ export default function Risks() {
                           </Button>
                         </div>
                       ))}
+                      
+                      {/* Pagination controls */}
+                      {controlsPagination && controlsPagination.totalPages > 1 && (
+                        <div className="flex items-center justify-between pt-4 border-t mt-4">
+                          <span className="text-sm text-muted-foreground">
+                            Página {controlsPagination.page} de {controlsPagination.totalPages}
+                          </span>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setControlsPage(p => Math.max(1, p - 1))}
+                              disabled={controlsPagination.page <= 1 || isControlsSummaryLoading}
+                            >
+                              <ChevronLeft className="h-4 w-4" />
+                              Anterior
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setControlsPage(p => Math.min(controlsPagination.totalPages, p + 1))}
+                              disabled={controlsPagination.page >= controlsPagination.totalPages || isControlsSummaryLoading}
+                            >
+                              Siguiente
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <p className="text-muted-foreground">
