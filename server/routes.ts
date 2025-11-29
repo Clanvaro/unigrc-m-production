@@ -4669,7 +4669,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await Promise.all([
           invalidateRiskControlCaches(),
           distributedCache.set(`risk-processes:${tenantId}`, null, 0),
-          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+          distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`)
         ]);
       }
       
@@ -4700,7 +4701,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await Promise.all([
           invalidateRiskControlCaches(),
           distributedCache.set(`risk-processes:${tenantId}`, null, 0),
-          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+          distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`)
         ]);
       }
       
@@ -4731,6 +4733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           distributedCache.set(`risk-processes:${tenantId}`, null, 0),
           distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
           // Invalidate validation status caches
+          distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:validated`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`),
@@ -4774,6 +4777,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           distributedCache.set(`risk-processes:${tenantId}`, null, 0),
           distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
           // Invalidate validation status caches for all statuses
+          distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:validated`),
           distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`),
@@ -4790,6 +4794,215 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error validating risk process:", error);
       res.status(500).json({ message: "Failed to validate risk-process association" });
+    }
+  });
+
+  // OPTIMIZED: Single endpoint for all validation data with counts and first page
+  // Reduces 4-6 queries to 1 SQL query using CTEs (Nov 29, 2025)
+  app.get("/api/risk-processes/validation/lite", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+      
+      // Cache for 30s (validation data needs fresher updates but not real-time)
+      const cacheKey = `validation:lite:${CACHE_VERSION}:${tenantId}`;
+      const cachedData = await distributedCache.get(cacheKey);
+      if (cachedData !== null) {
+        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - startTime}ms`);
+        return res.json(cachedData);
+      }
+      
+      // Single SQL query with CTEs for all validation data
+      const result = await requireDb().execute(sql`
+        WITH status_counts AS (
+          SELECT 
+            rpl.validation_status,
+            COUNT(*) as count,
+            COUNT(*) FILTER (WHERE rpl.notification_sent = true) as notified_count,
+            COUNT(*) FILTER (WHERE rpl.notification_sent = false) as not_notified_count
+          FROM risk_process_links rpl
+          JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
+          GROUP BY rpl.validation_status
+        ),
+        owner_lookup AS (
+          SELECT id, name as full_name, email FROM process_owners
+        ),
+        validation_data AS (
+          SELECT 
+            rpl.id,
+            rpl.risk_id,
+            rpl.macroproceso_id,
+            rpl.process_id,
+            rpl.subproceso_id,
+            rpl.validation_status,
+            rpl.notification_sent,
+            rpl.validated_at,
+            rpl.validation_comments,
+            rpl.created_at,
+            r.code as risk_code,
+            r.name as risk_name,
+            r.category as risk_category,
+            r.probability,
+            r.impact,
+            r.inherent_risk,
+            m.code as macroproceso_code,
+            m.name as macroproceso_name,
+            p.code as process_code,
+            p.name as process_name,
+            s.code as subproceso_code,
+            s.name as subproceso_name,
+            COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id,
+            u.full_name as validated_by_name,
+            u.email as validated_by_email,
+            ROW_NUMBER() OVER (PARTITION BY rpl.validation_status ORDER BY rpl.created_at) as row_num
+          FROM risk_process_links rpl
+          JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
+          LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id
+          LEFT JOIN processes p ON rpl.process_id = p.id
+          LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id
+          LEFT JOIN users u ON rpl.validated_by = u.id
+        )
+        SELECT 
+          'counts' as result_type,
+          NULL as id,
+          NULL as risk_id,
+          NULL as macroproceso_id,
+          NULL as process_id,
+          NULL as subproceso_id,
+          sc.validation_status as val_status,
+          NULL::boolean as notification_sent,
+          NULL::timestamp as validated_at,
+          NULL as validation_comments,
+          NULL::timestamp as created_at,
+          NULL as risk_code,
+          NULL as risk_name,
+          NULL as risk_category,
+          NULL::numeric as probability,
+          NULL::numeric as impact,
+          NULL::numeric as inherent_risk,
+          NULL as macroproceso_code,
+          NULL as macroproceso_name,
+          NULL as process_code,
+          NULL as process_name,
+          NULL as subproceso_code,
+          NULL as subproceso_name,
+          NULL as responsible_owner_id,
+          NULL as validated_by_name,
+          NULL as validated_by_email,
+          NULL as owner_name,
+          NULL as owner_email,
+          sc.count::integer as count,
+          sc.notified_count::integer as notified_count,
+          sc.not_notified_count::integer as not_notified_count
+        FROM status_counts sc
+        
+        UNION ALL
+        
+        SELECT 
+          'data' as result_type,
+          vd.id,
+          vd.risk_id,
+          vd.macroproceso_id,
+          vd.process_id,
+          vd.subproceso_id,
+          vd.validation_status as val_status,
+          vd.notification_sent,
+          vd.validated_at,
+          vd.validation_comments,
+          vd.created_at,
+          vd.risk_code,
+          vd.risk_name,
+          vd.risk_category,
+          vd.probability,
+          vd.impact,
+          vd.inherent_risk,
+          vd.macroproceso_code,
+          vd.macroproceso_name,
+          vd.process_code,
+          vd.process_name,
+          vd.subproceso_code,
+          vd.subproceso_name,
+          vd.responsible_owner_id,
+          vd.validated_by_name,
+          vd.validated_by_email,
+          o.full_name as owner_name,
+          o.email as owner_email,
+          NULL::integer,
+          NULL::integer,
+          NULL::integer
+        FROM validation_data vd
+        LEFT JOIN owner_lookup o ON vd.responsible_owner_id = o.id
+        WHERE vd.row_num <= 50
+        ORDER BY 1, 7, 11
+      `);
+      
+      // Parse results: separate counts from data
+      const rows = result.rows as any[];
+      const counts: Record<string, { total: number; notified: number; notNotified: number }> = {};
+      const byStatus: Record<string, any[]> = {
+        pending_validation: [],
+        validated: [],
+        observed: [],
+        rejected: []
+      };
+      
+      for (const row of rows) {
+        if (row.result_type === 'counts') {
+          counts[row.val_status] = {
+            total: row.count || 0,
+            notified: row.notified_count || 0,
+            notNotified: row.not_notified_count || 0
+          };
+        } else if (row.result_type === 'data') {
+          const item = {
+            id: row.id,
+            riskId: row.risk_id,
+            macroprocesoId: row.macroproceso_id,
+            processId: row.process_id,
+            subprocesoId: row.subproceso_id,
+            validationStatus: row.val_status,
+            notificationSent: row.notification_sent,
+            validatedAt: row.validated_at,
+            validationComments: row.validation_comments,
+            createdAt: row.created_at,
+            risk: {
+              code: row.risk_code,
+              name: row.risk_name,
+              category: row.risk_category,
+              probability: row.probability,
+              impact: row.impact,
+              inherentRisk: row.inherent_risk
+            },
+            macroproceso: row.macroproceso_id ? { code: row.macroproceso_code, name: row.macroproceso_name } : undefined,
+            process: row.process_id ? { code: row.process_code, name: row.process_name } : undefined,
+            subproceso: row.subproceso_id ? { code: row.subproceso_code, name: row.subproceso_name } : undefined,
+            responsibleUser: row.owner_name ? { fullName: row.owner_name, email: row.owner_email } : undefined,
+            validatedByUser: row.validated_by_name ? { fullName: row.validated_by_name, email: row.validated_by_email } : undefined
+          };
+          if (byStatus[row.val_status]) {
+            byStatus[row.val_status].push(item);
+          }
+        }
+      }
+      
+      const response = {
+        counts,
+        pending: byStatus.pending_validation,
+        validated: byStatus.validated,
+        observed: byStatus.observed,
+        rejected: byStatus.rejected,
+        timestamp: new Date().toISOString()
+      };
+      
+      await distributedCache.set(cacheKey, response, 30);
+      console.log(`[CACHE MISS] ${cacheKey} in ${Date.now() - startTime}ms`);
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching validation lite data:", error);
+      res.status(500).json({ message: "Failed to fetch validation data" });
     }
   });
 
@@ -5172,6 +5385,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Return results
       const successCount = emailResults.filter(r => r.success).length;
       const failureCount = emailResults.filter(r => !r.success).length;
+      
+      // Invalidate validation caches if any notifications were sent
+      if (successCount > 0) {
+        const { tenantId } = await resolveActiveTenant(req, { required: true });
+        if (tenantId) {
+          await Promise.all([
+            distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`),
+            distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`)
+          ]);
+        }
+      }
       
       res.json({
         emailsSent: sentCount,

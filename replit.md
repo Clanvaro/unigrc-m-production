@@ -20,6 +20,14 @@ The backend uses Express.js with TypeScript and Zod for validation. Data is stor
 
 The system operates in a single-tenant architecture. It incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment. A two-level distributed caching architecture (endpoint and storage function) is implemented for maximum performance.
 
+## Performance Optimizations (Nov 29, 2025)
+
+-   **Risk Matrix Endpoint**: `/api/risk-matrix/optimized` uses CTE-based SQL approach for ~87ms response (production-compatible).
+-   **Validation Lite Endpoint**: `/api/risk-processes/validation/lite` consolidates 4+ queries into single SQL using CTEs, returns counts + first 50 items per status, cached for 30s (~200-300ms).
+-   **Catalog Endpoints**: Separated individual cached endpoints for macroprocesos, processes, subprocesos with 5-10 minute TTL.
+-   **Database Indexing**: Added `idx_actions_origin_deleted` for audit wizard filter optimization.
+-   **Storage Function Batch Loading**: `getRiskProcessLinksByValidationStatus` uses batch-fetch for owner lookups to prevent N+1 queries.
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
