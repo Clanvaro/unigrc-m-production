@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Edit, Shield, ChevronUp, ChevronDown, X, Search, User, MoreVertical, RefreshCw, Settings, Eye, Star, Trash2, ClipboardList } from "lucide-react";
+import { Plus, Edit, Shield, ChevronUp, ChevronDown, X, Search, User, MoreVertical, RefreshCw, Settings, Eye, Star, Trash2, ClipboardList, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -640,6 +640,11 @@ export default function Risks() {
       await queryClient.cancelQueries({ 
         queryKey: ["/api/risks", riskId, "controls"] 
       });
+      // Also cancel bootstrap queries to prevent race conditions
+      await queryClient.cancelQueries({ 
+        queryKey: ["/api/risks/bootstrap"],
+        exact: false
+      });
 
       // Snapshot the previous value
       const previousControls = queryClient.getQueryData(["/api/risks", riskId, "controls"]);
@@ -660,10 +665,40 @@ export default function Risks() {
         }]
       );
 
-      return { previousControls, riskId };
+      // OPTIMISTIC UPDATE: Also update control count in bootstrap cache
+      // This ensures the table shows the updated count immediately
+      const bootstrapCaches = queryClient.getQueriesData({ 
+        queryKey: ["/api/risks/bootstrap"],
+        exact: false
+      });
+      
+      // Store previous bootstrap data for rollback
+      const previousBootstrapData: Array<[readonly unknown[], unknown]> = [];
+      
+      bootstrapCaches.forEach(([queryKey, data]: [readonly unknown[], unknown]) => {
+        if (data && typeof data === 'object') {
+          previousBootstrapData.push([queryKey, data]);
+          queryClient.setQueryData(queryKey, (oldData: any) => {
+            if (!oldData?.risks?.data) return oldData;
+            return {
+              ...oldData,
+              risks: {
+                ...oldData.risks,
+                data: oldData.risks.data.map((r: any) => 
+                  r.id === riskId 
+                    ? { ...r, controlCount: (r.controlCount || 0) + 1 }
+                    : r
+                )
+              }
+            };
+          });
+        }
+      });
+
+      return { previousControls, riskId, previousBootstrapData };
     },
     onSuccess: async (_data, variables, context) => {
-      // Invalidate bootstrap to refresh control counts in table
+      // Refetch bootstrap to get accurate control counts from server
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       // Refetch both specific risk controls AND the general risk-controls list for table sync
       if (context?.riskId) {
@@ -680,12 +715,18 @@ export default function Risks() {
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
     onError: (_error, _variables, context) => {
-      // Rollback on error
+      // Rollback controls on error
       if (context?.previousControls && context?.riskId) {
         queryClient.setQueryData(
           ["/api/risks", context.riskId, "controls"],
           context.previousControls
         );
+      }
+      // Rollback bootstrap data on error
+      if (context?.previousBootstrapData) {
+        context.previousBootstrapData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
       }
       toast({ title: "Error", description: "No se pudo asociar el control.", variant: "destructive" });
     },
@@ -702,6 +743,11 @@ export default function Risks() {
       await queryClient.cancelQueries({ 
         queryKey: ["/api/risks", currentRisk.id, "controls"] 
       });
+      // Also cancel bootstrap queries to prevent race conditions
+      await queryClient.cancelQueries({ 
+        queryKey: ["/api/risks/bootstrap"],
+        exact: false
+      });
 
       // Snapshot the previous value
       const previousControls = queryClient.getQueryData(["/api/risks", currentRisk.id, "controls"]);
@@ -712,10 +758,40 @@ export default function Risks() {
         (old: any[] = []) => old.filter((assoc: any) => assoc.id !== riskControlId)
       );
 
-      return { previousControls, currentRisk };
+      // OPTIMISTIC UPDATE: Also update control count in bootstrap cache
+      // This ensures the table shows the updated count immediately
+      const bootstrapCaches = queryClient.getQueriesData({ 
+        queryKey: ["/api/risks/bootstrap"],
+        exact: false
+      });
+      
+      // Store previous bootstrap data for rollback
+      const previousBootstrapData: Array<[readonly unknown[], unknown]> = [];
+      
+      bootstrapCaches.forEach(([queryKey, data]: [readonly unknown[], unknown]) => {
+        if (data && typeof data === 'object') {
+          previousBootstrapData.push([queryKey, data]);
+          queryClient.setQueryData(queryKey, (oldData: any) => {
+            if (!oldData?.risks?.data) return oldData;
+            return {
+              ...oldData,
+              risks: {
+                ...oldData.risks,
+                data: oldData.risks.data.map((r: any) => 
+                  r.id === currentRisk.id 
+                    ? { ...r, controlCount: Math.max(0, (r.controlCount || 0) - 1) }
+                    : r
+                )
+              }
+            };
+          });
+        }
+      });
+
+      return { previousControls, currentRisk, previousBootstrapData };
     },
     onSuccess: async (_data, _variables, context) => {
-      // Invalidate bootstrap to refresh control counts in table
+      // Refetch bootstrap to get accurate control counts from server
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       // Refetch both specific risk controls AND the general risk-controls list for table sync
       if (context?.currentRisk) {
@@ -732,12 +808,18 @@ export default function Risks() {
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
     onError: (_error, _variables, context) => {
-      // Rollback on error
+      // Rollback controls on error
       if (context?.previousControls && context?.currentRisk) {
         queryClient.setQueryData(
           ["/api/risks", context.currentRisk.id, "controls"],
           context.previousControls
         );
+      }
+      // Rollback bootstrap data on error
+      if (context?.previousBootstrapData) {
+        context.previousBootstrapData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
       }
       toast({ title: "Error", description: "No se pudo remover el control.", variant: "destructive" });
     },
@@ -1983,7 +2065,11 @@ export default function Risks() {
                             onClick={() => handleRemoveControl(riskControl.id)}
                             disabled={removeControlMutation.isPending}
                           >
-                            <X className="h-4 w-4" />
+                            {removeControlMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <X className="h-4 w-4" />
+                            )}
                           </Button>
                         </div>
                       ))}
@@ -2045,8 +2131,17 @@ export default function Risks() {
                             disabled={addControlMutation.isPending}
                             size="sm"
                           >
-                            <Plus className="h-4 w-4 mr-2" />
-                            Asociar
+                            {addControlMutation.isPending ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Asociando...
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="h-4 w-4 mr-2" />
+                                Asociar
+                              </>
+                            )}
                           </Button>
                         </div>
                       ))}
