@@ -106,6 +106,20 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Benefits: Multiple endpoints share cached catalog data, reducing redundant database queries
 - `/api/risks/page-data-lite` endpoint: **99.9% improvement** (2097ms → 2ms cache warm, ~90ms with storage cache warm)
 
+**Process Mutation Cache Invalidation Fix** (Nov 29, 2025):
+- Fixed issue where creating/updating/deleting a process took 5+ seconds to appear in UI
+- Root cause: POST/PUT/DELETE `/api/processes` endpoints only invalidated 2 cache keys (processes:single-tenant, org-structure:single-tenant)
+- Solution: Changed all 3 endpoints to call `invalidateRiskControlCaches()` instead (comprehensive cache invalidation)
+- This ensures `risks-page-data-lite` and all process-related caches are invalidated immediately
+- Result: New processes now appear instantaneously after creation
+
+**RiskCellDrawer Component Bug Fix** (Nov 29, 2025):
+- Fixed "Cannot read properties of undefined (reading 'length')" error in Risk Matrix page
+- Issue: `risk.controlEffectiveness` could be undefined, causing runtime crash when checking `.length`
+- Solution: Added optional chaining operator `?.` to safely check `risk.controlEffectiveness?.length > 0`
+- File: `client/src/components/risk/RiskCellDrawer.tsx` line 147
+- Impact: Risk Matrix page now renders without crashes
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
