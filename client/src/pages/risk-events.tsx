@@ -23,14 +23,54 @@ import { Star } from "lucide-react";
 import BowTieDiagram from "@/components/BowTieDiagram";
 import type { Control } from "@shared/schema";
 
+// Type for enriched risk events with client-side resolved catalog data
+interface CatalogItem {
+  id: string | number;
+  code: string;
+  name: string;
+}
+
+interface EnrichedRiskEvent {
+  id: string;
+  code: string;
+  title: string;
+  eventDate: string;
+  status: string;
+  severity: string;
+  lossAmount: string | null;
+  currency: string | null;
+  riskId: string | null;
+  processId: number | null;
+  createdAt: string;
+  createdBy: string | null;
+  updatedAt: string;
+  macroprocesoIds: string[];
+  processIds: number[];
+  subprocesoIds: string[];
+  selectedRisks: string[];
+  description: string;
+  estimatedLoss: string | null;
+  relatedMacroprocesos: CatalogItem[];
+  relatedProcesses: CatalogItem[];
+  relatedSubprocesos: CatalogItem[];
+  // Additional fields that may come from full event fetch
+  eventType?: string;
+  involvedPersons?: string;
+  reportedBy?: string;
+  consecuencias?: string[] | null;
+  causas?: string[] | null;
+  location?: string;
+  evidenceUrls?: string[] | null;
+}
+
 // Componente wrapper para cargar controles del riesgo
-function BowTieDiagramWrapper({ eventId, event }: { eventId: string; event: RiskEvent }) {
+function BowTieDiagramWrapper({ eventId, event }: { eventId: string; event: EnrichedRiskEvent | RiskEvent }) {
   const { data: controlsData = [] } = useQuery<Control[]>({
     queryKey: [`/api/risks/${event.riskId}/controls`],
     enabled: !!event.riskId,
   });
 
-  return <BowTieDiagram event={event} controls={controlsData} />;
+  return <BowTieDiagram event={event as RiskEvent} controls={controlsData} />;
 }
 
 // Componente wrapper para cargar evento completo al editar
@@ -63,8 +103,8 @@ function useIsMobile() {
 }
 
 export default function RiskEvents() {
-  const [editingEvent, setEditingEvent] = useState<RiskEvent | null>(null);
-  const [viewingEvent, setViewingEvent] = useState<RiskEvent | null>(null);
+  const [editingEvent, setEditingEvent] = useState<EnrichedRiskEvent | null>(null);
+  const [viewingEvent, setViewingEvent] = useState<EnrichedRiskEvent | null>(null);
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [testMode50k, setTestMode50k] = useState(false);
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
@@ -179,25 +219,96 @@ export default function RiskEvents() {
     localStorage.setItem('riskEventsColumnVisibility', JSON.stringify(columnVisibility));
   }, [columnVisibility]);
 
-  // Consolidated endpoint - fetches events, risks, and processes in one call
+  // OPTIMIZED: Lightweight page data with catalog prefetch for client-side joins
+  interface LightweightRiskEvent {
+    id: string;
+    code: string;
+    title: string;
+    eventDate: string;
+    status: string;
+    severity: string;
+    lossAmount: string | null;
+    currency: string | null;
+    riskId: string | null;
+    processId: number | null;
+    createdAt: string;
+    createdBy: string | null;
+    updatedAt: string;
+    macroprocesoIds: string[];
+    processIds: number[];
+    subprocesoIds: string[];
+    selectedRisks: string[];
+    // Added for compatibility with display components
+    description?: string;
+    estimatedLoss?: string | null;
+  }
+
   interface RiskEventsPageData {
     riskEvents: {
-      data: RiskEvent[];
+      data: LightweightRiskEvent[];
       pagination: { limit: number; offset: number; total: number };
     };
-    risks: Risk[];
-    processes: Process[];
   }
+  
+  // Prefetch catalog data with long TTL (10 min cache on server)
+  const { data: macroprocesosCatalog = [] } = useQuery<CatalogItem[]>({
+    queryKey: ["/api/macroprocesos/basic"],
+    staleTime: 10 * 60 * 1000, // 10 min client cache
+  });
+  
+  const { data: processesCatalog = [] } = useQuery<CatalogItem[]>({
+    queryKey: ["/api/processes/basic"],
+    staleTime: 10 * 60 * 1000,
+  });
+  
+  const { data: subprocesosCatalog = [] } = useQuery<CatalogItem[]>({
+    queryKey: ["/api/subprocesos/basic"],
+    staleTime: 10 * 60 * 1000,
+  });
+  
+  // Fetch risks catalog for risk name lookups (needed for description column)
+  const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
+    queryKey: ["/api/risks-basic"],
+    staleTime: 5 * 60 * 1000, // 5 min - risks change more often
+  });
+  
+  // Build lookup maps for O(1) client-side joins
+  const catalogMaps = useMemo(() => ({
+    macroprocesos: new Map(macroprocesosCatalog.map(m => [m.id, m])),
+    processes: new Map(processesCatalog.map(p => [p.id, p])),
+    subprocesos: new Map(subprocesosCatalog.map(s => [s.id, s])),
+    risks: new Map(risksCatalog.map(r => [r.id, r])),
+  }), [macroprocesosCatalog, processesCatalog, subprocesosCatalog, risksCatalog]);
   
   const { data: pageData, isLoading: isPageDataLoading } = useQuery<RiskEventsPageData>({
     queryKey: ["/api/risk-events/page-data"],
     staleTime: 30000, // Cache for 30 seconds
   });
   
-  // Derive individual arrays from consolidated response
-  const riskEvents = pageData?.riskEvents?.data || [];
-  const risks = pageData?.risks || [];
-  const processes = pageData?.processes || [];
+  // Transform lightweight events to include resolved names for display
+  const riskEvents = useMemo(() => {
+    const events = pageData?.riskEvents?.data || [];
+    return events.map(event => ({
+      ...event,
+      // Use title as description for display compatibility
+      description: event.title || '',
+      estimatedLoss: event.lossAmount,
+      // Client-side resolve names from cached catalogs
+      relatedMacroprocesos: (event.macroprocesoIds || [])
+        .map(id => catalogMaps.macroprocesos.get(id))
+        .filter((item): item is CatalogItem => item !== undefined),
+      relatedProcesses: (event.processIds || [])
+        .map(id => catalogMaps.processes.get(id))
+        .filter((item): item is CatalogItem => item !== undefined),
+      relatedSubprocesos: (event.subprocesoIds || [])
+        .map(id => catalogMaps.subprocesos.get(id))
+        .filter((item): item is CatalogItem => item !== undefined),
+    }));
+  }, [pageData, catalogMaps]);
+  
+  // Lookup helpers for UI components
+  const risks = risksCatalog;
+  const processes = processesCatalog;
   const isLoading = isPageDataLoading;
 
   const deleteMutation = useOptimisticMutation({
@@ -256,13 +367,15 @@ export default function RiskEvents() {
     }
   };
 
-  // Filter and sort events
-  const filteredEvents = riskEvents.filter((event: RiskEvent) => {
+  // Filter and sort events with enriched type
+  type EnrichedEvent = typeof riskEvents[number];
+  
+  const filteredEvents = riskEvents.filter((event: EnrichedEvent) => {
     // Filter by search term
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch = 
-        event.description.toLowerCase().includes(searchLower) ||
+        (event.description || '').toLowerCase().includes(searchLower) ||
         (event.involvedPersons && event.involvedPersons.toLowerCase().includes(searchLower)) ||
         (event.reportedBy && event.reportedBy.toLowerCase().includes(searchLower));
       
@@ -290,7 +403,7 @@ export default function RiskEvents() {
     }
 
     return true;
-  }).sort((a: RiskEvent, b: RiskEvent) => {
+  }).sort((a: EnrichedEvent, b: EnrichedEvent) => {
     if (sortOrder === "none") return 0;
     
     let aValue: number | string, bValue: number | string;
@@ -403,8 +516,8 @@ export default function RiskEvents() {
     });
   };
 
-  // Define columns for VirtualizedTable
-  const columns: VirtualizedTableColumn<RiskEvent>[] = [
+  // Define columns for VirtualizedTable using enriched event type
+  const columns: VirtualizedTableColumn<EnrichedEvent>[] = [
     {
       id: 'code',
       header: (
@@ -423,7 +536,7 @@ export default function RiskEvents() {
         <Badge 
           variant="outline" 
           className="cursor-pointer hover:bg-accent transition-colors font-mono text-xs"
-          onClick={() => setViewingEvent(event)}
+          onClick={() => setViewingEvent(event as EnrichedRiskEvent)}
           data-testid={`badge-code-${event.id}`}
         >
           {event.code}
@@ -437,11 +550,11 @@ export default function RiskEvents() {
       width: '320px',
       minWidth: '320px',
       cell: (event) => {
-        const associatedRisk = risks.find((r: Risk) => r.id === event.riskId);
+        const associatedRisk = risks.find((r) => r.id === event.riskId);
         return (
           <div className="min-w-0 w-full overflow-hidden py-1" data-testid={`cell-description-${event.id}`}>
             <div className="text-sm font-medium line-clamp-2 mb-1 break-words">
-              {event.description}
+              {event.description || event.title}
             </div>
             {associatedRisk && (
               <div className="text-xs text-muted-foreground line-clamp-1 break-words" title={`${associatedRisk.code} - ${associatedRisk.name}`}>
@@ -516,7 +629,7 @@ export default function RiskEvents() {
         }
         
         if (relatedProcesses.length === 0 && event.processId) {
-          const singleProcess = processes.find((p: Process) => p.id === event.processId)?.name;
+          const singleProcess = processes.find((p) => p.id === event.processId)?.name;
           if (singleProcess) {
             relatedProcesses.push(singleProcess);
           }
@@ -710,13 +823,13 @@ export default function RiskEvents() {
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">Proceso</label>
                       <p className="text-sm mt-1">
-                        {processes.find((p: Process) => p.id === viewingEvent.processId)?.name || "No asignado"}
+                        {processes.find((p) => p.id === viewingEvent.processId)?.name || "No asignado"}
                       </p>
                     </div>
                     <div>
                       <label className="text-sm font-medium text-muted-foreground">Riesgo Asociado</label>
                       <p className="text-sm mt-1">
-                        {risks.find((r: Risk) => r.id === viewingEvent.riskId)?.name || "No asignado"}
+                        {risks.find((r) => r.id === viewingEvent.riskId)?.name || "No asignado"}
                       </p>
                     </div>
                   </div>

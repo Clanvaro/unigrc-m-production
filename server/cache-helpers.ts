@@ -91,6 +91,9 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`processes-basic:${TENANT_KEY}`),
       distributedCache.invalidate(`subprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`subprocesos-with-owners:${TENANT_KEY}`),
+      // OPTIMIZED (Nov 2025): Lightweight catalog caches for client-side joins
+      distributedCache.invalidate(`risks-basic:single-tenant`),
+      distributedCache.invalidate(`macroprocesos-basic:single-tenant`),
       // Legacy keys
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
@@ -173,10 +176,43 @@ export async function invalidateRisksPageDataCache() {
  */
 export async function invalidateRiskEventsPageDataCache() {
   try {
+    // Invalidate all paginated caches (pattern matching)
+    await distributedCache.invalidatePattern(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}:*`);
+    // Also invalidate legacy key
     await distributedCache.invalidate(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}`);
     console.log(`✅ Invalidated risk events page data cache`);
   } catch (error) {
     console.error(`Error invalidating risk events page data cache:`, error);
+  }
+}
+
+/**
+ * Invalidates catalog basic caches (lightweight endpoints for client-side joins)
+ * Call this after CRUD operations on macroprocesos, processes, subprocesos, risks
+ */
+export async function invalidateCatalogBasicCaches(catalogs?: ('macroprocesos' | 'processes' | 'subprocesos' | 'risks')[]) {
+  try {
+    const allCatalogs = catalogs || ['macroprocesos', 'processes', 'subprocesos'];
+    const invalidations = allCatalogs.map(catalog => 
+      distributedCache.invalidate(`${catalog}-basic:${TENANT_KEY}`)
+    );
+    await Promise.all(invalidations);
+    console.log(`✅ Invalidated catalog basic caches: ${allCatalogs.join(', ')}`);
+  } catch (error) {
+    console.error(`Error invalidating catalog basic caches:`, error);
+  }
+}
+
+/**
+ * Invalidates risks-basic catalog cache
+ * Call this after CRUD operations on risks
+ */
+export async function invalidateRisksBasicCache() {
+  try {
+    await distributedCache.invalidate(`risks-basic:single-tenant`);
+    console.log(`✅ Invalidated risks-basic catalog cache`);
+  } catch (error) {
+    console.error(`Error invalidating risks-basic cache:`, error);
   }
 }
 

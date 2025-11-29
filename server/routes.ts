@@ -2001,6 +2001,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Risks Basic - minimal fields for lookups (5 min cache)
+  app.get("/api/risks-basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `risks-basic:single-tenant`;
+      
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CATALOG CACHE HIT] risks-basic`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CATALOG CACHE MISS] risks-basic`);
+      const data = await requireDb()
+        .select({
+          id: risks.id,
+          code: risks.code,
+          name: risks.name
+        })
+        .from(risks)
+        .where(isNull(risks.deletedAt));
+      
+      // Cache for 5 minutes (risks change more often than processes)
+      await distributedCache.set(cacheKey, data, 300);
+      
+      res.json(data);
+    } catch (error) {
+      console.error('Error in /api/risks-basic:', error);
+      res.status(500).json({ message: "Failed to fetch basic risks" });
+    }
+  });
+
   // Risks
   app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
@@ -6147,125 +6178,119 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============== RISK EVENTS ==============
   
-  // Consolidated endpoint for risk events page - reduces API calls from 3 to 1
+  // OPTIMIZED: Lightweight endpoint for risk events page
+  // Strategy: Return minimal event fields + relation IDs only
+  // Frontend prefetches catalogs (macroprocesos/processes/subprocesos) and does client-side joins
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
-      // Single-tenant mode: no tenantId needed
-      
-      // Cache key for consolidated risk events page data
-      const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant`;
-      
-      // Try to get from cache
-      const cached = await distributedCache.get<any>(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] ${cacheKey}`);
-        return res.json(cached);
-      }
-      
-      console.log(`[CACHE MISS] ${cacheKey} - fetching all data in parallel`);
-      
       // Parse pagination parameters - default to 50 for faster initial load
       const limit = parseInt(req.query.limit as string) || 50;
       const offset = parseInt(req.query.offset as string) || 0;
       
-      // Fetch events data in parallel (single-tenant mode - no tenantId filtering)
-      // OPTIMIZED: Removed unnecessary storage.getRisks() and storage.getProcesses() 
-      // which loaded ALL risks/processes just for reference - not needed for list view
-      const [
-        eventsData,
-        totalCountResult
-      ] = await Promise.all([
-        // Events with pagination
-        requireDb().select().from(riskEvents)
-          .where(isNull(riskEvents.deletedAt))
-          .orderBy(desc(riskEvents.eventDate))
-          .limit(limit)
-          .offset(offset),
-        // Total count
+      // Cache key includes pagination for proper caching
+      const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant:${limit}:${offset}`;
+      
+      // Try to get from cache
+      const cached = await distributedCache.get<any>(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] risk-events/page-data (${Date.now() - startTime}ms)`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
+      
+      // OPTIMIZED: Fetch only essential columns for table display
+      // Removed: description, resolution_notes (large text fields)
+      const [eventsData, totalCountResult] = await Promise.all([
+        requireDb().select({
+          id: riskEvents.id,
+          code: riskEvents.code,
+          eventType: riskEvents.eventType,
+          eventDate: riskEvents.eventDate,
+          status: riskEvents.status,
+          severity: riskEvents.severity,
+          estimatedLoss: riskEvents.estimatedLoss,
+          actualLoss: riskEvents.actualLoss,
+          riskId: riskEvents.riskId,
+          processId: riskEvents.processId,
+          createdAt: riskEvents.createdAt,
+          createdBy: riskEvents.createdBy,
+          updatedAt: riskEvents.updatedAt
+        })
+        .from(riskEvents)
+        .where(isNull(riskEvents.deletedAt))
+        .orderBy(desc(riskEvents.eventDate))
+        .limit(limit)
+        .offset(offset),
+        
         requireDb().select({ count: sql<number>`count(*)` })
           .from(riskEvents)
           .where(isNull(riskEvents.deletedAt))
       ]);
       
-      // OPTIMIZED: Batch load all related entities with 3 queries instead of 3*N queries
-      // This reduces ~90 queries to just 3 queries for 30 events
       const eventIds = eventsData.map(e => e.id);
       
-      // Collect unique riskIds and processIds for batch lookup (instead of loading ALL)
-      const riskIds = [...new Set(eventsData.map(e => e.riskId).filter(Boolean))] as string[];
-      const processIds = [...new Set(eventsData.map(e => e.processId).filter(Boolean))] as string[];
-      
-      const [allMacroprocesos, allProcesses, allSubprocesos, riskLookup, processLookup] = await Promise.all([
-        requireDb()
-          .select({
-            riskEventId: riskEventMacroprocesos.riskEventId,
-            id: macroprocesos.id,
-            name: macroprocesos.name,
-            code: macroprocesos.code
-          })
-          .from(riskEventMacroprocesos)
-          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
-          .where(inArray(riskEventMacroprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
-        requireDb()
-          .select({
-            riskEventId: riskEventProcesses.riskEventId,
-            id: processes.id,
-            name: processes.name,
-            code: processes.code
-          })
-          .from(riskEventProcesses)
-          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
-          .where(inArray(riskEventProcesses.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
-        requireDb()
-          .select({
-            riskEventId: riskEventSubprocesos.riskEventId,
-            id: subprocesos.id,
-            name: subprocesos.name,
-            code: subprocesos.code
-          })
-          .from(riskEventSubprocesos)
-          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
-          .where(inArray(riskEventSubprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
-        // OPTIMIZED: Batch load only the risks referenced by events (not ALL risks)
-        riskIds.length > 0 
-          ? requireDb().select({ id: risks.id, name: risks.name, code: risks.code })
-              .from(risks).where(inArray(risks.id, riskIds))
+      // OPTIMIZED: Only fetch relation IDs (no JOINs with catalog tables)
+      // Frontend will use cached catalogs to resolve names client-side
+      const [macroRelations, processRelations, subprocesoRelations] = await Promise.all([
+        eventIds.length > 0
+          ? requireDb()
+              .select({
+                riskEventId: riskEventMacroprocesos.riskEventId,
+                macroprocesoId: riskEventMacroprocesos.macroprocesoId
+              })
+              .from(riskEventMacroprocesos)
+              .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
           : Promise.resolve([]),
-        // OPTIMIZED: Batch load only the processes referenced by events (not ALL processes)
-        processIds.length > 0
-          ? requireDb().select({ id: processes.id, name: processes.name, code: processes.code })
-              .from(processes).where(inArray(processes.id, processIds))
+        eventIds.length > 0
+          ? requireDb()
+              .select({
+                riskEventId: riskEventProcesses.riskEventId,
+                processId: riskEventProcesses.processId
+              })
+              .from(riskEventProcesses)
+              .where(inArray(riskEventProcesses.riskEventId, eventIds))
+          : Promise.resolve([]),
+        eventIds.length > 0
+          ? requireDb()
+              .select({
+                riskEventId: riskEventSubprocesos.riskEventId,
+                subprocesoId: riskEventSubprocesos.subprocesoId
+              })
+              .from(riskEventSubprocesos)
+              .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
           : Promise.resolve([])
       ]);
       
-      // Group relations by eventId for O(1) lookup
-      const macroMap = new Map<string, Array<{id: string | null, name: string | null, code: string | null}>>();
-      const processMap = new Map<string, Array<{id: number | null, name: string | null, code: string | null}>>();
-      const subprocesoMap = new Map<string, Array<{id: string | null, name: string | null, code: string | null}>>();
+      // Group relation IDs by eventId for O(1) lookup
+      const macroMap = new Map<string, string[]>();
+      const processMap = new Map<string, string[]>();
+      const subprocesoMap = new Map<string, string[]>();
       
-      for (const m of allMacroprocesos) {
+      for (const m of macroRelations) {
         if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
-        macroMap.get(m.riskEventId)!.push({ id: m.id, name: m.name, code: m.code });
+        if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
       }
-      for (const p of allProcesses) {
+      for (const p of processRelations) {
         if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
-        processMap.get(p.riskEventId)!.push({ id: p.id, name: p.name, code: p.code });
+        if (p.processId) processMap.get(p.riskEventId)!.push(p.processId);
       }
-      for (const s of allSubprocesos) {
+      for (const s of subprocesoRelations) {
         if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
-        subprocesoMap.get(s.riskEventId)!.push({ id: s.id, name: s.name, code: s.code });
+        if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
       }
       
-      // Build events list with O(1) lookups
+      // Build lightweight events list (IDs only, no names)
       const eventsForList = eventsData.map(event => ({
         ...event,
         eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
         createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
         updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
-        relatedMacroprocesos: macroMap.get(event.id) || [],
-        relatedProcesses: processMap.get(event.id) || [],
-        relatedSubprocesos: subprocesoMap.get(event.id) || [],
-        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        // Return IDs only - frontend resolves names from cached catalogs
+        macroprocesoIds: macroMap.get(event.id) || [],
+        processIds: processMap.get(event.id) || [],
+        subprocesoIds: subprocesoMap.get(event.id) || [],
         selectedRisks: event.riskId ? [event.riskId] : []
       }));
       
@@ -6277,14 +6302,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             offset,
             total: totalCountResult[0]?.count || 0
           }
-        },
-        // OPTIMIZED: Only include risks/processes referenced by events, not ALL
-        risks: riskLookup,
-        processes: processLookup
+        }
       };
       
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, response, 30);
+      
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
       
       res.json(response);
     } catch (error) {
@@ -13973,6 +13998,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================
+  // LIGHTWEIGHT CATALOG ENDPOINTS - 10 min cache
+  // For client-side joins to reduce per-request data transfer
+  // ============================================
+  
+  // Macroprocesos Basic - minimal fields for lookups (10 min cache)
+  app.get("/api/macroprocesos/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `macroprocesos-basic:single-tenant`;
+      
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CATALOG CACHE HIT] macroprocesos-basic`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CATALOG CACHE MISS] macroprocesos-basic`);
+      const data = await requireDb()
+        .select({
+          id: macroprocesos.id,
+          code: macroprocesos.code,
+          name: macroprocesos.name
+        })
+        .from(macroprocesos)
+        .where(isNull(macroprocesos.deletedAt));
+      
+      // Cache for 10 minutes
+      await distributedCache.set(cacheKey, data, 600);
+      
+      res.json(data);
+    } catch (error) {
+      console.error('Error in /api/macroprocesos/basic:', error);
+      res.status(500).json({ message: "Failed to fetch basic macroprocesos" });
+    }
+  });
+
   // Macroprocesos routes - with 60s distributed cache
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
@@ -14483,6 +14544,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(entities);
     } catch (error) {
       res.status(500).json({ message: "Failed to update macroproceso fiscal entities" });
+    }
+  });
+
+  // Subprocesos Basic - minimal fields for lookups (10 min cache)
+  app.get("/api/subprocesos/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `subprocesos-basic:single-tenant`;
+      
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CATALOG CACHE HIT] subprocesos-basic`);
+        return res.json(cached);
+      }
+      
+      console.log(`[CATALOG CACHE MISS] subprocesos-basic`);
+      const data = await requireDb()
+        .select({
+          id: subprocesos.id,
+          code: subprocesos.code,
+          name: subprocesos.name,
+          procesoId: subprocesos.procesoId
+        })
+        .from(subprocesos)
+        .where(isNull(subprocesos.deletedAt));
+      
+      // Cache for 10 minutes
+      await distributedCache.set(cacheKey, data, 600);
+      
+      res.json(data);
+    } catch (error) {
+      console.error('Error in /api/subprocesos/basic:', error);
+      res.status(500).json({ message: "Failed to fetch basic subprocesos" });
     }
   });
 
