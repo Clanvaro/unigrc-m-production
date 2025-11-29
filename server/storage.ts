@@ -10552,8 +10552,15 @@ export class DatabaseStorage extends MemStorage {
     if (result.length > 0) {
       const riskIds = result.map(r => r.id);
       
-      // Get all riskProcessLinks for these risks (tenant isolation already guaranteed by risk filtering)
-      const links = await db.select()
+      // Get all riskProcessLinks for these risks - OPTIMIZED: only select needed columns
+      const links = await db.select({
+        riskId: riskProcessLinks.riskId,
+        processId: riskProcessLinks.processId,
+        validationStatus: riskProcessLinks.validationStatus,
+        validatedBy: riskProcessLinks.validatedBy,
+        validatedAt: riskProcessLinks.validatedAt,
+        validationComments: riskProcessLinks.validationComments,
+      })
         .from(riskProcessLinks)
         .where(inArray(riskProcessLinks.riskId, riskIds));
       
@@ -19993,8 +20000,12 @@ export class DatabaseStorage extends MemStorage {
   // RiskProcessLink validation methods
   async validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined> {
     try {
-      // Primero, obtener el estado actual antes de actualizar (para el historial)
-      const currentLink = await db.select()
+      // OPTIMIZED: Only select columns needed for history tracking
+      const currentLink = await db.select({
+        id: riskProcessLinks.id,
+        validationStatus: riskProcessLinks.validationStatus,
+        processId: riskProcessLinks.processId,
+      })
         .from(riskProcessLinks)
         .where(eq(riskProcessLinks.id, id))
         .limit(1);
