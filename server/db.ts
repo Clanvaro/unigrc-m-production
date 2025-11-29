@@ -171,13 +171,20 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Database operation wrapper with retry logic for Neon Launch plan (updated Nov 26, 2025)
-// Launch plan has faster autoscaling with shorter cold starts, but still needs tolerance for resume delays
-const RETRY_DELAYS = [300, 800, 2000]; // ms - optimized for Launch plan (faster cold starts, ~3s total retry window)
+// Database operation wrapper with retry logic
+// Optimized for Render PostgreSQL (fast always-on) and Neon (serverless with cold starts)
+// Render: Faster retries since DB is always-on, just need to handle transient network issues
+// Neon: Longer delays to handle Scale to Zero wake-up time
+const RETRY_DELAYS_RENDER = [200, 500, 1000, 2000]; // ~4s total window for Render
+const RETRY_DELAYS_NEON = [300, 800, 2000, 5000];   // ~8s total window for Neon cold starts
+
+// Detect database type once at module load
+const isRenderDatabase = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
+const RETRY_DELAYS = isRenderDatabase ? RETRY_DELAYS_RENDER : RETRY_DELAYS_NEON;
 
 export async function withRetry<T>(
   operation: () => Promise<T>,
-  maxRetries: number = 3
+  maxRetries: number = 4  // Increased from 3 to 4 for better resilience
 ): Promise<T> {
   if (!db || !pool) {
     throw new Error('Database not configured - cannot perform operation');
@@ -199,29 +206,45 @@ export async function withRetry<T>(
         error.code === '08001' || // unable to connect
         error.code === '08004' || // connection rejected
         error.code === '53300' || // too many connections
-        // Node.js network error codes (critical for Neon serverless)
-        error.code === 'ENETUNREACH' || // Network unreachable - common with Neon cold starts
+        error.code === '57014' || // query canceled (timeout)
+        // Node.js network error codes
+        error.code === 'ENETUNREACH' || // Network unreachable
         error.code === 'ECONNRESET' ||  // Connection reset by peer
         error.code === 'ETIMEDOUT' ||   // Connection timed out
         error.code === 'ECONNREFUSED' || // Connection refused
         error.code === 'EPIPE' ||       // Broken pipe
         error.code === 'EHOSTUNREACH' || // Host unreachable
+        error.code === 'EAI_AGAIN' ||   // DNS temporary failure
+        error.code === 'ENOTFOUND' ||   // DNS lookup failed
         // Message-based detection for edge cases
         error.message?.includes('connection') ||
         error.message?.includes('timeout') ||
         error.message?.includes('Connection terminated') ||
         error.message?.includes('ENETUNREACH') ||
-        error.message?.includes('socket hang up');
+        error.message?.includes('socket hang up') ||
+        error.message?.includes('SSL') ||
+        error.message?.includes('ECONNRESET');
       
       if (!isRecoverable || attempt === maxRetries) {
         console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
         throw error;
       }
       
-      // Use fixed delay array: 200ms, 500ms, 1000ms
+      // Use delay from array based on attempt number
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
       
-      console.warn(`⚠️ Database retry (${attempt}/${maxRetries}) after ${delay}ms - ${error.code || 'ERROR'}: ${error.message}`);
+      console.warn(`⚠️ Database retry (${attempt}/${maxRetries}) after ${delay}ms - ${error.code || 'ERROR'}: ${error.message?.substring(0, 100)}`);
+      
+      // On connection errors, try to warm the pool before retry
+      if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET')) {
+        console.log('🔄 Warming pool before retry...');
+        try {
+          await warmPool(2);
+        } catch (warmError) {
+          // Ignore warming errors, proceed with retry
+        }
+      }
+      
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
