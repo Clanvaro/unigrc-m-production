@@ -55,8 +55,8 @@ if (databaseUrl) {
   // - Aggressive keep-alive to maintain connection health
   pool = new Pool({ 
     connectionString: databaseUrl,
-    max: isRenderDb ? 15 : (isPooled ? 10 : 6),  // Increased max for Render (handle burst traffic)
-    min: isRenderDb ? 5 : 1,  // Keep 5 warm connections for Render (critical for avoiding cold connections)
+    max: isRenderDb ? 4 : (isPooled ? 6 : 4),  // Reduced max for 0.1 CPU DB (avoid thrashing/contention)
+    min: isRenderDb ? 2 : 1,  // Keep 2 warm connections (balance between readiness and resource usage)
     idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
@@ -67,8 +67,8 @@ if (databaseUrl) {
   });
   db = drizzle(pool, { schema, logger: true });
   
-  const poolMax = isRenderDb ? 15 : (isPooled ? 10 : 6);
-  const poolMin = isRenderDb ? 5 : 1;
+  const poolMax = isRenderDb ? 4 : (isPooled ? 6 : 4);
+  const poolMin = isRenderDb ? 2 : 1;
   console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
   
   if (isRenderDb) {
