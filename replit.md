@@ -45,6 +45,15 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Cache miss: ~912ms, Cache hit: ~9ms (99% improvement)
 - Proper cache invalidation in macroproceso/process/risk mutations
 
+**Database Connection Pool Optimization** (Nov 29, 2025):
+- Optimized for Render PostgreSQL with SSL connections
+- Pool configuration: min 5, max 15 connections (increased from 3-12)
+- Aggressive pool warming: 5 connections pre-established at startup
+- Keep-alive ping every 15 seconds to maintain connection health
+- Shorter idle timeout (60s) to recycle before server closes connections
+- Enhanced retry logic with 4 attempts and pool warming on connection errors
+- Quiet hours (00:00-07:00 Chile time) pause pool warming to save resources
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
