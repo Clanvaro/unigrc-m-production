@@ -249,7 +249,8 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch bootstrap data");
       return response.json();
     },
-    staleTime: 1000 * 15, // 15 seconds for risks data
+    staleTime: 1000 * 60 * 5, // 5 minutes - invalidated on mutations
+    gcTime: 1000 * 60 * 15, // 15 minutes cache retention
     refetchOnWindowFocus: false,
   });
   
@@ -601,6 +602,7 @@ export default function Risks() {
       };
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -661,6 +663,8 @@ export default function Risks() {
       return { previousControls, riskId };
     },
     onSuccess: async (_data, variables, context) => {
+      // Invalidate bootstrap to refresh control counts in table
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       // Refetch both specific risk controls AND the general risk-controls list for table sync
       if (context?.riskId) {
         await queryClient.refetchQueries({ 
@@ -711,6 +715,8 @@ export default function Risks() {
       return { previousControls, currentRisk };
     },
     onSuccess: async (_data, _variables, context) => {
+      // Invalidate bootstrap to refresh control counts in table
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       // Refetch both specific risk controls AND the general risk-controls list for table sync
       if (context?.currentRisk) {
         await queryClient.refetchQueries({ 
@@ -1088,7 +1094,8 @@ export default function Risks() {
   const handleEditSuccess = () => {
     setEditingRisk(null);
     // CRITICAL: Invalidate ALL risk-related queries for immediate updates across all views
-    // Using exact:false ensures we match all queries starting with ["/api/risks"]
+    // Bootstrap is the main data source for risks page - invalidate first
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
     queryClient.invalidateQueries({ 
       queryKey: ["/api/risks"],
       exact: false 
@@ -1101,20 +1108,14 @@ export default function Risks() {
     queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
     queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
-    
-    // Force refetch of paginated risks to ensure immediate visibility
-    queryClient.refetchQueries({ 
-      queryKey: ["/api/risks", "paginated"],
-      exact: false,
-      type: 'active'
-    });
   };
 
 
   const handleCreateSuccess = () => {
     setIsCreateDialogOpen(false);
     // CRITICAL: Invalidate ALL risk queries including paginated ones for immediate UI refresh
-    // Using exact:false ensures we match all queries starting with ["/api/risks"]
+    // Bootstrap is the main data source for risks page - invalidate first
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
     queryClient.invalidateQueries({ 
       queryKey: ["/api/risks"],
       exact: false 
@@ -1125,13 +1126,6 @@ export default function Risks() {
     queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
     queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
-    
-    // Force refetch of paginated risks to ensure immediate visibility
-    queryClient.refetchQueries({ 
-      queryKey: ["/api/risks", "paginated"],
-      exact: false,
-      type: 'active'
-    });
   };
 
   const handleCreateDialogOpen = (open: boolean) => {
