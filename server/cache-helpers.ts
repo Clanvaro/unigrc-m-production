@@ -56,6 +56,10 @@ export async function invalidateRiskControlCaches() {
     // 1. First, invalidate the main risks cache patterns (most critical)
     await distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`);
     
+    // 1b. Also invalidate risks-bootstrap cache (optimized batch endpoint)
+    // Only invalidate risks data, not catalogs (which have longer TTL and rarely change)
+    await distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`);
+    
     // 2. Versioned risk caches
     await Promise.all([
       distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),

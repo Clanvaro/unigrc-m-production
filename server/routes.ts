@@ -1938,10 +1938,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const data = risks.map((row: any) => {
           const summary = controlSummaryMap.get(row.id);
           const controlCount = summary?.controlCount || 0;
-          const avgEffectiveness = summary?.avgEffectiveness || 0;
+          // Clamp effectiveness to [0, 100] to prevent negative residuals
+          const rawEffectiveness = summary?.avgEffectiveness || 0;
+          const avgEffectiveness = Math.max(0, Math.min(100, rawEffectiveness));
           const inherentRisk = parseFloat(row.inherent_risk) || 0;
           
           // Calculate residual risk: inherent * (1 - avg_effectiveness/100)
+          // Result is always >= 0 due to clamped effectiveness
           const calculatedResidual = controlCount > 0 
             ? inherentRisk * (1 - avgEffectiveness / 100)
             : inherentRisk;
