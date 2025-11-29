@@ -97,6 +97,8 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`risk-matrix:macroprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix:processes:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix:heatmap:${TENANT_KEY}`),
+      // OPTIMIZED: Also invalidate process-map-risks cache
+      distributedCache.invalidate(`process-map-risks:${TENANT_KEY}`),
     ]);
     
     const duration = Date.now() - startTime;

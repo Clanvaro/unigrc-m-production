@@ -5674,16 +5674,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`[CACHE MISS] ${cacheKey} - fetching all data in parallel`);
       
-      // Parse pagination parameters
-      const limit = parseInt(req.query.limit as string) || 1000;
+      // Parse pagination parameters - default to 50 for faster initial load
+      const limit = parseInt(req.query.limit as string) || 50;
       const offset = parseInt(req.query.offset as string) || 0;
       
-      // Fetch all data in parallel (single-tenant mode - no tenantId filtering)
+      // Fetch events data in parallel (single-tenant mode - no tenantId filtering)
+      // OPTIMIZED: Removed unnecessary storage.getRisks() and storage.getProcesses() 
+      // which loaded ALL risks/processes just for reference - not needed for list view
       const [
         eventsData,
-        totalCountResult,
-        risksData,
-        processesData
+        totalCountResult
       ] = await Promise.all([
         // Events with pagination
         requireDb().select().from(riskEvents)
@@ -5694,18 +5694,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Total count
         requireDb().select({ count: sql<number>`count(*)` })
           .from(riskEvents)
-          .where(isNull(riskEvents.deletedAt)),
-        // Risks for reference
-        storage.getRisks(),
-        // Processes for reference
-        storage.getProcesses()
+          .where(isNull(riskEvents.deletedAt))
       ]);
       
       // OPTIMIZED: Batch load all related entities with 3 queries instead of 3*N queries
       // This reduces ~90 queries to just 3 queries for 30 events
       const eventIds = eventsData.map(e => e.id);
       
-      const [allMacroprocesos, allProcesses, allSubprocesos] = await Promise.all([
+      // Collect unique riskIds and processIds for batch lookup (instead of loading ALL)
+      const riskIds = [...new Set(eventsData.map(e => e.riskId).filter(Boolean))] as string[];
+      const processIds = [...new Set(eventsData.map(e => e.processId).filter(Boolean))] as string[];
+      
+      const [allMacroprocesos, allProcesses, allSubprocesos, riskLookup, processLookup] = await Promise.all([
         requireDb()
           .select({
             riskEventId: riskEventMacroprocesos.riskEventId,
@@ -5735,7 +5735,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
           .from(riskEventSubprocesos)
           .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
-          .where(inArray(riskEventSubprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__']))
+          .where(inArray(riskEventSubprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
+        // OPTIMIZED: Batch load only the risks referenced by events (not ALL risks)
+        riskIds.length > 0 
+          ? requireDb().select({ id: risks.id, name: risks.name, code: risks.code })
+              .from(risks).where(inArray(risks.id, riskIds))
+          : Promise.resolve([]),
+        // OPTIMIZED: Batch load only the processes referenced by events (not ALL processes)
+        processIds.length > 0
+          ? requireDb().select({ id: processes.id, name: processes.name, code: processes.code })
+              .from(processes).where(inArray(processes.id, processIds))
+          : Promise.resolve([])
       ]);
       
       // Group relations by eventId for O(1) lookup
@@ -5778,8 +5788,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             total: totalCountResult[0]?.count || 0
           }
         },
-        risks: risksData || [],
-        processes: processesData || []
+        // OPTIMIZED: Only include risks/processes referenced by events, not ALL
+        risks: riskLookup,
+        processes: processLookup
       };
       
       // Cache for 30 seconds
@@ -13624,8 +13635,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/organization/process-map-risks", isAuthenticated, async (req, res) => {
+  app.get("/api/organization/process-map-risks", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      // OPTIMIZED: Add 60s distributed cache for process map data (changes infrequently)
+      const cacheKey = `process-map-risks:single-tenant`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+      
+      const startTime = Date.now();
       const validatedRisks = await storage.getProcessMapValidatedRisks();
       
       // Convert Maps to plain objects for JSON serialization
@@ -13634,6 +13654,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processes: Object.fromEntries(validatedRisks.processes),
         subprocesos: Object.fromEntries(validatedRisks.subprocesos)
       };
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, response, 60);
+      console.log(`[DB] /api/organization/process-map-risks in ${Date.now() - startTime}ms`);
       
       res.status(200).json(response);
     } catch (error) {

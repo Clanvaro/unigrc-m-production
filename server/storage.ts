@@ -5105,9 +5105,10 @@ export class MemStorage implements IStorage {
       .from(riskControls)
       .innerJoin(risks, eq(riskControls.riskId, risks.id))
       .where(isNull(risks.deletedAt)),
-      db.select().from(macroprocesos).where(isNull(macroprocesos.deletedAt)),
-      db.select().from(processes).where(isNull(processes.deletedAt)),
-      db.select().from(subprocesos).where(isNull(subprocesos.deletedAt)),
+      // OPTIMIZED: Only select id (used as Map key) instead of all columns
+      db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt)),
+      db.select({ id: processes.id }).from(processes).where(isNull(processes.deletedAt)),
+      db.select({ id: subprocesos.id }).from(subprocesos).where(isNull(subprocesos.deletedAt)),
       this.getRiskAggregationMethod(),
       this.getRiskAggregationWeights(),
       this.getRiskLevelRanges()
