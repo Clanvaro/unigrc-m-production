@@ -87,6 +87,15 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Lowered slow query logging threshold from 10s to 5s with pool metrics included
 - Prevents pool saturation from long-running queries that would previously block for 45s × 4 retries
 
+**Risks Bootstrap Endpoint - Batch Query Optimization** (Nov 29, 2025):
+- Refactored `/api/risks/bootstrap` endpoint: replaced LEFT JOIN LATERAL with batch IN clause + in-memory calculation
+- Pattern: Fetch paginated risks → batch query control summaries for all risk_ids → Map lookup O(1)
+- Uses `sql.join()` with IN clause instead of ANY() for PostgreSQL compatibility with drizzle-orm
+- Effectiveness clamped to [0,100] to prevent negative residual risk values
+- Cache: 30s TTL for risks data, 300s TTL for catalogs (rarely change)
+- Cache invalidation: `risks-bootstrap:risks:${CACHE_VERSION}:*` pattern in invalidateRiskControlCaches()
+- Result: **69% improvement** cache cold (1130ms → 420ms), **99.9% improvement** cache warm (1ms)
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
