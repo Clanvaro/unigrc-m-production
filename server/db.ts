@@ -38,10 +38,10 @@ if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL && !isRenderDb) 
 if (databaseUrl) {
   const isProduction = process.env.NODE_ENV === 'production';
   
-  // Render PostgreSQL has always-on connections, no Scale to Zero delays
-  // Neon production needs longer timeouts when Scale to Zero is enabled (can take 30-60s to wake)
-  const connectionTimeout = isRenderDb ? 15000 : (isProduction ? 60000 : 15000);
-  const statementTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
+  // Render PostgreSQL has always-on connections but may have SSL handshake latency
+  // Increase timeout to handle occasional slow SSL negotiations
+  const connectionTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
+  const statementTimeout = isRenderDb ? 45000 : (isProduction ? 60000 : 15000);
   
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
@@ -49,23 +49,27 @@ if (databaseUrl) {
     ? { rejectUnauthorized: false }  // Render requires SSL
     : (isProduction ? { rejectUnauthorized: false } : false);
   
+  // Optimized pool settings for Render PostgreSQL with SSL
+  // - Higher min connections to avoid cold connection overhead
+  // - Shorter idle timeout to recycle connections before Render closes them
+  // - Aggressive keep-alive to maintain connection health
   pool = new Pool({ 
     connectionString: databaseUrl,
-    max: isRenderDb ? 12 : (isPooled ? 10 : 6),  // Render supports more connections (12 for headroom)
-    min: isRenderDb ? 3 : 1,  // Keep 3 warm connections for Render to reduce acquisition latency
-    idleTimeoutMillis: isRenderDb ? 120000 : 30000,  // Render: 2 min idle before releasing (stable connections)
+    max: isRenderDb ? 15 : (isPooled ? 10 : 6),  // Increased max for Render (handle burst traffic)
+    min: isRenderDb ? 5 : 1,  // Keep 5 warm connections for Render (critical for avoiding cold connections)
+    idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
     keepAlive: true,
-    keepAliveInitialDelayMillis: 10000,
+    keepAliveInitialDelayMillis: 5000,  // Start keep-alive sooner (was 10000)
     ssl: sslConfig,
     allowExitOnIdle: false,
   });
   db = drizzle(pool, { schema, logger: true });
   
-  const poolMax = isRenderDb ? 12 : (isPooled ? 10 : 6);
-  const poolMin = isRenderDb ? 3 : 1;
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 120000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
+  const poolMax = isRenderDb ? 15 : (isPooled ? 10 : 6);
+  const poolMin = isRenderDb ? 5 : 1;
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
   
   if (isRenderDb) {
     console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');
@@ -503,13 +507,16 @@ function isQuietHours(): boolean {
 // Track if we were in quiet hours to detect transitions
 let wasInQuietHours = false;
 
-// Keep pool warm with periodic pings (every 20 seconds to prevent Neon Scale to Zero)
-// Neon suspends after ~5 minutes of inactivity, causing 30-60s cold start delays
+// Keep pool warm with periodic pings
+// For Render PostgreSQL: Prevent connection timeout by server
+// For Neon: Prevent Scale to Zero (suspends after ~5 minutes)
 // Paused between 00:00-07:00 Chile time to save resources
 function startPoolWarming() {
   if (!pool || poolWarmingInterval) return;
 
-  const PING_INTERVAL = 20000; // 20 seconds - aggressive to prevent Neon sleep
+  // Detect database type for appropriate ping interval
+  const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
+  const PING_INTERVAL = isRender ? 15000 : 20000; // 15s for Render, 20s for Neon
   
   poolWarmingInterval = setInterval(async () => {
     try {
@@ -517,8 +524,9 @@ function startPoolWarming() {
       
       // Detect transition from quiet hours to active hours (7:00 AM)
       if (wasInQuietHours && !currentlyQuiet) {
-        console.log('🌅 Quiet hours ended - pool warming');
-        await warmPool(2); // Warm-up after quiet period (reduced for 1 CPU VM)
+        console.log('🌅 Quiet hours ended - aggressive pool warming');
+        const warmCount = isRender ? 5 : 2;
+        await warmPool(warmCount);
         wasInQuietHours = false;
         return;
       }
@@ -531,21 +539,37 @@ function startPoolWarming() {
       }
       
       const metrics = getPoolMetrics();
-      // Only warm if pool is below minimum (reduced for 1 CPU VM)
-      if (metrics && metrics.totalCount < 2) {
-        await warmPool(2);
+      const minWarm = isRender ? 4 : 2;
+      
+      // Warm more aggressively if pool is below minimum
+      if (metrics && metrics.totalCount < minWarm) {
+        console.log(`🔄 Pool below minimum (${metrics.totalCount}/${minWarm}), warming...`);
+        await warmPool(minWarm);
       } else {
-        // Lightweight ping to keep Neon database awake
+        // Lightweight ping to keep connections active and detect stale connections
         const pingStart = Date.now();
         await pool!.query('SELECT 1');
         const pingDuration = Date.now() - pingStart;
-        // Log if ping takes too long (indicates Neon was waking up)
-        if (pingDuration > 1000) {
-          console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - Neon may have been sleeping`);
+        
+        // Log slow pings (indicates connection issues)
+        if (pingDuration > 500) {
+          console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue`);
+          // If ping is very slow, proactively warm the pool
+          if (pingDuration > 2000) {
+            console.log('🔄 Very slow ping detected, warming pool...');
+            await warmPool(3);
+          }
         }
       }
-    } catch (error) {
-      console.warn('⚠️ Pool keep-alive ping failed:', error);
+    } catch (error: any) {
+      console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
+      // On ping failure, try to warm the pool
+      try {
+        console.log('🔄 Recovering pool after ping failure...');
+        await warmPool(3);
+      } catch (warmError) {
+        console.error('❌ Pool warming failed during recovery:', warmError);
+      }
     }
   }, PING_INTERVAL);
 
@@ -592,16 +616,20 @@ export async function getHealthStatus(): Promise<{
 if (pool) {
   // Initial warm on startup (after a short delay to let server initialize)
   // Skip initial warming during quiet hours (00:00-07:00 Chile time)
-  setTimeout(() => {
+  setTimeout(async () => {
     if (isQuietHours()) {
       console.log('🌙 Quiet hours (00:00-07:00 Chile time) - skipping initial pool warming');
       startPoolWarming(); // Start the interval anyway, it will skip pings during quiet hours
     } else {
-      warmPool(2).then(() => { // Reduced from 5 to 2 for 1 CPU VM
-        startPoolWarming();
-      });
+      // Aggressive pool warming for Render PostgreSQL
+      // Pre-establish 5 connections to avoid SSL handshake latency during requests
+      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
+      const warmCount = isRender ? 5 : 2;
+      console.log(`🔥 Starting aggressive pool warming (${warmCount} connections)...`);
+      await warmPool(warmCount);
+      startPoolWarming();
     }
-  }, 2000);
+  }, 1000); // Start sooner (was 2000)
 }
 
 // Cleanup on shutdown
