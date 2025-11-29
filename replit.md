@@ -38,6 +38,13 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Pattern: Batch load macroprocesos, processes, and subprocesos in parallel, then group results in-memory using Maps for O(1) lookup
 - Result: All 50+ Risk Events load in under 400ms instead of 1.4+ seconds
 
+**Risk Matrix Page - Bootstrap Endpoint** (Nov 29, 2025):
+- Created `/api/risk-matrix/bootstrap` endpoint that combines macroprocesos, processes, and heatmap data in one response
+- Reduced 3 HTTP requests to 1 from frontend
+- Uses granular caching: each component (macroprocesos, processes, heatmap) cached separately for 30-60s
+- Cache miss: ~912ms, Cache hit: ~9ms (99% improvement)
+- Proper cache invalidation in macroproceso/process/risk mutations
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
