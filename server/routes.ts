@@ -1832,7 +1832,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return result;
       })();
       
-      // Build SQL query for risks with only necessary columns
+      // Build SQL query for risks with BATCH QUERY pattern (no LEFT JOIN LATERAL)
+      // Pattern: Simple risks query + batch control summary query + in-memory calculation
       const risksPromise = (async () => {
         // Try risks cache first
         const cachedRisks = await distributedCache.get(cacheKeyRisks);
@@ -1840,6 +1841,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - requestStart}ms`);
           return cachedRisks;
         }
+        
+        const batchStart = Date.now();
         
         // Build WHERE conditions
         const conditions: any[] = [sql`r.status <> 'deleted'`];
@@ -1869,69 +1872,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? sql`WHERE ${sql.join(conditions, sql` AND `)}` 
           : sql``;
         
-        // Optimized SQL: Get risks with control count and residual risk pre-calculated
-        // Only select columns needed by the table
-        const risksResult = await db.execute(sql`
-          SELECT 
-            r.id,
-            r.code,
-            r.name,
-            r.status,
-            r.probability,
-            r.impact,
-            r.inherent_risk,
-            r.evaluation_method,
-            r.macroproceso_id,
-            r.process_id,
-            r.subproceso_id,
-            r.category,
-            r.created_at,
-            COALESCE(cs.control_count, 0) as control_count,
-            COALESCE(cs.residual_risk, r.inherent_risk) as calculated_residual
-          FROM risks r
-          LEFT JOIN LATERAL (
+        // STEP 1: Simple risks query (no joins) - very fast
+        const [risksResult, countResult] = await Promise.all([
+          db.execute(sql`
             SELECT 
-              COUNT(rc.id) as control_count,
-              CASE 
-                WHEN COUNT(rc.id) > 0 THEN 
-                  r.inherent_risk * (1 - COALESCE(AVG(c.effectiveness), 0) / 100.0)
-                ELSE r.inherent_risk
-              END as residual_risk
-            FROM risk_controls rc
-            INNER JOIN controls c ON rc.control_id = c.id
-            WHERE rc.risk_id = r.id AND c.deleted_at IS NULL
-          ) cs ON true
-          ${whereClause}
-          ORDER BY r.created_at DESC
-          LIMIT ${limit} OFFSET ${offset}
-        `);
+              r.id,
+              r.code,
+              r.name,
+              r.status,
+              r.probability,
+              r.impact,
+              r.inherent_risk,
+              r.evaluation_method,
+              r.macroproceso_id,
+              r.process_id,
+              r.subproceso_id,
+              r.category,
+              r.created_at
+            FROM risks r
+            ${whereClause}
+            ORDER BY r.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}
+          `),
+          db.execute(sql`
+            SELECT COUNT(*)::int as total 
+            FROM risks r
+            ${whereClause}
+          `)
+        ]);
         
-        // Get total count for pagination
-        const countResult = await db.execute(sql`
-          SELECT COUNT(*)::int as total 
-          FROM risks r
-          ${whereClause}
-        `);
+        const risks = risksResult.rows as any[];
         const total = (countResult.rows[0] as any)?.total || 0;
         
-        const result = {
-          data: risksResult.rows.map((row: any) => ({
+        // STEP 2: Batch query for control summaries (single query for ALL risks on this page)
+        // Only if we have risks to process
+        let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number }>();
+        
+        if (risks.length > 0) {
+          const riskIds = risks.map(r => r.id);
+          
+          // Single batch query: get control count and avg effectiveness per risk
+          const controlSummary = await db.execute(sql`
+            SELECT 
+              rc.risk_id,
+              COUNT(rc.id)::int as control_count,
+              COALESCE(AVG(c.effectiveness), 0)::float as avg_effectiveness
+            FROM risk_controls rc
+            INNER JOIN controls c ON rc.control_id = c.id
+            WHERE rc.risk_id = ANY(${riskIds}) AND c.deleted_at IS NULL
+            GROUP BY rc.risk_id
+          `);
+          
+          // Build lookup map for O(1) access
+          for (const row of controlSummary.rows as any[]) {
+            controlSummaryMap.set(row.risk_id, {
+              controlCount: row.control_count,
+              avgEffectiveness: row.avg_effectiveness
+            });
+          }
+        }
+        
+        // STEP 3: In-memory calculation (O(n) - very fast)
+        const data = risks.map((row: any) => {
+          const summary = controlSummaryMap.get(row.id);
+          const controlCount = summary?.controlCount || 0;
+          const avgEffectiveness = summary?.avgEffectiveness || 0;
+          const inherentRisk = parseFloat(row.inherent_risk) || 0;
+          
+          // Calculate residual risk: inherent * (1 - avg_effectiveness/100)
+          const calculatedResidual = controlCount > 0 
+            ? inherentRisk * (1 - avgEffectiveness / 100)
+            : inherentRisk;
+          
+          return {
             id: row.id,
             code: row.code,
             name: row.name,
             status: row.status,
             probability: row.probability,
             impact: row.impact,
-            inherentRisk: row.inherent_risk,
+            inherentRisk: inherentRisk,
             evaluationMethod: row.evaluation_method,
             macroprocesoId: row.macroproceso_id,
             processId: row.process_id,
             subprocesoId: row.subproceso_id,
             category: row.category,
             createdAt: row.created_at,
-            controlCount: parseInt(row.control_count) || 0,
-            calculatedResidual: parseFloat(row.calculated_residual) || row.inherent_risk
-          })),
+            controlCount,
+            calculatedResidual
+          };
+        });
+        
+        console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls)`);
+        
+        const result = {
+          data,
           pagination: {
             limit,
             offset,
@@ -1940,8 +1975,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         };
         
-        // Cache risks for 15 seconds
-        await distributedCache.set(cacheKeyRisks, result, 15);
+        // Cache risks for 30 seconds (increased from 15s for better hit rate)
+        await distributedCache.set(cacheKeyRisks, result, 30);
         return result;
       })();
       
