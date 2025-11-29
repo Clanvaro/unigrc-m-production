@@ -13481,6 +13481,142 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // OPTIMIZED: Risk Matrix Bootstrap - combines 3 API calls into 1
+  // Uses granular caching: each catalog cached separately for fine-grained invalidation
+  app.get("/api/risk-matrix/bootstrap", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    try {
+      // Cache keys for granular caching
+      const macroprocesosCacheKey = `risk-matrix:macroprocesos:single-tenant`;
+      const processesCacheKey = `risk-matrix:processes:single-tenant`;
+      const heatmapCacheKey = `risk-matrix:heatmap:single-tenant`;
+      
+      // Try to get each from cache independently (granular caching)
+      const [cachedMacroprocesos, cachedProcesses, cachedHeatmap] = await Promise.all([
+        distributedCache.get(macroprocesosCacheKey),
+        distributedCache.get(processesCacheKey),
+        distributedCache.get(heatmapCacheKey)
+      ]);
+      
+      // If all cached, return immediately
+      if (cachedMacroprocesos && cachedProcesses && cachedHeatmap) {
+        console.log(`[CACHE HIT] /api/risk-matrix/bootstrap in ${Date.now() - startTime}ms`);
+        return res.json({
+          macroprocesos: cachedMacroprocesos,
+          processes: cachedProcesses,
+          heatmapData: cachedHeatmap
+        });
+      }
+      
+      // Fetch only what's missing in parallel
+      const fetchPromises: Promise<any>[] = [];
+      const fetchOrder: string[] = [];
+      
+      if (!cachedMacroprocesos) {
+        fetchOrder.push('macroprocesos');
+        fetchPromises.push(storage.getMacroprocesos());
+      }
+      if (!cachedProcesses) {
+        fetchOrder.push('processes');
+        fetchPromises.push(storage.getProcesses());
+      }
+      if (!cachedHeatmap) {
+        fetchOrder.push('heatmap');
+        fetchPromises.push(
+          Promise.all([
+            storage.getRisksWithDetails(),
+            storage.getAllRiskControlsWithDetails()
+          ])
+        );
+      }
+      
+      const fetchResults = await Promise.all(fetchPromises);
+      
+      // Build result object
+      let macroprocesos = cachedMacroprocesos;
+      let processes = cachedProcesses;
+      let heatmapData = cachedHeatmap;
+      
+      fetchOrder.forEach((key, index) => {
+        if (key === 'macroprocesos') {
+          const macroList = fetchResults[index] as any[];
+          macroprocesos = macroList
+            .filter((m: any) => m.status !== 'deleted')
+            .map((m: any) => ({
+              id: m.id,
+              code: m.code,
+              name: m.name,
+              type: m.type
+            }));
+        } else if (key === 'processes') {
+          const procList = fetchResults[index] as any[];
+          processes = procList
+            .filter((p: any) => p.status !== 'deleted')
+            .map((p: any) => ({
+              id: p.id,
+              code: p.code,
+              name: p.name,
+              macroprocesoId: p.macroprocesoId
+            }));
+        } else if (key === 'heatmap') {
+          const [risksWithDetails, riskControls] = fetchResults[index] as [any[], any[]];
+          
+          // Build control effectiveness map
+          const controlsByRiskId = new Map<string, number[]>();
+          riskControls.forEach((rc: any) => {
+            if (!controlsByRiskId.has(rc.riskId)) {
+              controlsByRiskId.set(rc.riskId, []);
+            }
+            if (rc.control?.effectiveness) {
+              controlsByRiskId.get(rc.riskId)!.push(rc.control.effectiveness);
+            }
+          });
+          
+          // Transform risks to heatmap format
+          heatmapData = risksWithDetails
+            .filter((risk: any) => risk.status !== 'deleted')
+            .map((risk: any) => ({
+              id: risk.id,
+              code: risk.code,
+              name: risk.name,
+              probability: risk.probability || 1,
+              impact: risk.impact || 1,
+              inherentRisk: risk.inherentRisk || (risk.probability * risk.impact),
+              controlEffectiveness: controlsByRiskId.get(risk.id) || [],
+              status: risk.status,
+              category: risk.category || [],
+              macroprocesoId: risk.macroprocesoId || risk.macroproceso?.id || null,
+              processId: risk.processId || risk.process?.id || null,
+              subprocesoId: risk.subprocesoId || risk.subproceso?.id || null
+            }));
+        }
+      });
+      
+      // Cache each component separately (60 seconds for catalogs, 30 seconds for heatmap)
+      const cachePromises = [];
+      if (!cachedMacroprocesos && macroprocesos) {
+        cachePromises.push(distributedCache.set(macroprocesosCacheKey, macroprocesos, 60));
+      }
+      if (!cachedProcesses && processes) {
+        cachePromises.push(distributedCache.set(processesCacheKey, processes, 60));
+      }
+      if (!cachedHeatmap && heatmapData) {
+        cachePromises.push(distributedCache.set(heatmapCacheKey, heatmapData, 30));
+      }
+      await Promise.all(cachePromises);
+      
+      console.log(`[DB] /api/risk-matrix/bootstrap in ${Date.now() - startTime}ms (${fetchOrder.length} fetched, ${3 - fetchOrder.length} cached)`);
+      res.json({
+        macroprocesos,
+        processes,
+        heatmapData
+      });
+    } catch (error) {
+      console.error(`[ERROR] /api/risk-matrix/bootstrap failed after ${Date.now() - startTime}ms:`, error);
+      res.status(500).json({ message: "Failed to fetch risk matrix bootstrap data" });
+    }
+  });
+
   app.get("/api/organization/process-map-risks", isAuthenticated, async (req, res) => {
     try {
       const validatedRisks = await storage.getProcessMapValidatedRisks();
