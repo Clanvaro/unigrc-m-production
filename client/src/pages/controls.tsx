@@ -255,6 +255,8 @@ export default function Controls() {
       if (!response.ok) throw new Error("Failed to fetch controls");
       return response.json();
     },
+    staleTime: 30000,
+    gcTime: 5 * 60 * 1000,
   });
   const controls = controlsResponse?.data || [];
   const totalPages = controlsResponse?.pagination ? Math.ceil(controlsResponse.pagination.total / pageSize) : 0;
@@ -266,6 +268,8 @@ export default function Controls() {
       if (!response.ok) throw new Error("Failed to fetch risks");
       return response.json();
     },
+    staleTime: 60000,
+    gcTime: 5 * 60 * 1000,
   });
   const risks = risksResponse?.data || [];
 
