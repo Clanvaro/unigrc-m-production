@@ -73,6 +73,18 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Created missing filter indexes on `risk_events`: `event_date`, `risk_id`, `process_id`, `status`, `deleted_at`
 - All indexes improve JOIN performance and WHERE clause filtering
 
+**Gerencias Risk Levels - N+1 Elimination** (Nov 29, 2025):
+- Refactored `storage.getGerenciasRiskLevels()` from ~20 parallel queries + O(n²) loops to single SQL with CTEs
+- Uses UNION of 6 relationship paths (macro, macro→process, macro→process→subproceso, process, process→subproceso, subproceso)
+- Supports all 3 aggregation methods: average, worst_case, weighted (via array_agg)
+- Config values (method, weights, ranges) loaded in parallel with main query
+- Result: **99.88% improvement** (138s → 169ms on cold cache)
+
+**Statement Timeout & Monitoring** (Nov 29, 2025):
+- Reduced statement_timeout from 45s to 10s for faster failure detection
+- Lowered slow query logging threshold from 10s to 5s with pool metrics included
+- Prevents pool saturation from long-running queries that would previously block for 45s × 4 retries
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
