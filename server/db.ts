@@ -51,9 +51,9 @@ if (databaseUrl) {
   
   pool = new Pool({ 
     connectionString: databaseUrl,
-    max: isRenderDb ? 10 : (isPooled ? 10 : 6),  // Render supports more connections
-    min: 1,
-    idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render can have longer idle
+    max: isRenderDb ? 12 : (isPooled ? 10 : 6),  // Render supports more connections (12 for headroom)
+    min: isRenderDb ? 3 : 1,  // Keep 3 warm connections for Render to reduce acquisition latency
+    idleTimeoutMillis: isRenderDb ? 120000 : 30000,  // Render: 2 min idle before releasing (stable connections)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
     keepAlive: true,
@@ -63,7 +63,9 @@ if (databaseUrl) {
   });
   db = drizzle(pool, { schema, logger: true });
   
-  console.log(`📊 Database config: connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, env=${isProduction ? 'production' : 'development'}`);
+  const poolMax = isRenderDb ? 12 : (isPooled ? 10 : 6);
+  const poolMin = isRenderDb ? 3 : 1;
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 120000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
   
   if (isRenderDb) {
     console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');
