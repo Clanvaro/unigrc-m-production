@@ -1369,11 +1369,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const process = await storage.createProcess(dataWithAudit);
       
-      // Invalidate processes and org-structure cache
-      await Promise.all([
-        distributedCache.invalidate(`processes:single-tenant`),
-        distributedCache.set(`org-structure:single-tenant`, null, 0)
-      ]);
+      // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
+      await invalidateRiskControlCaches();
       
       res.status(201).json(process);
     } catch (error) {
@@ -1390,11 +1387,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Process not found" });
       }
       
-      // Invalidate processes and org-structure cache
-      await Promise.all([
-        distributedCache.invalidate(`processes:single-tenant`),
-        distributedCache.set(`org-structure:single-tenant`, null, 0)
-      ]);
+      // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
+      await invalidateRiskControlCaches();
       
       res.json(process);
     } catch (error) {
@@ -1441,11 +1435,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Process not found" });
       }
       
-      // Invalidate processes and org-structure cache
-      await Promise.all([
-        distributedCache.invalidate(`processes:single-tenant`),
-        distributedCache.set(`org-structure:single-tenant`, null, 0)
-      ]);
+      // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
+      await invalidateRiskControlCaches();
       
       res.status(204).send();
     } catch (error) {
