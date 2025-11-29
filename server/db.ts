@@ -644,11 +644,12 @@ if (pool) {
       console.log('🌙 Quiet hours (00:00-07:00 Chile time) - skipping initial pool warming');
       startPoolWarming(); // Start the interval anyway, it will skip pings during quiet hours
     } else {
-      // Aggressive pool warming for Render PostgreSQL
-      // Pre-establish 5 connections to avoid SSL handshake latency during requests
+      // Pool warming for Render PostgreSQL
+      // Pre-establish connections respecting pool max to avoid SSL handshake latency during requests
       const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
-      const warmCount = isRender ? 5 : 2;
-      console.log(`🔥 Starting aggressive pool warming (${warmCount} connections)...`);
+      const poolMax = isRender ? 4 : 4; // Match actual pool.max setting
+      const warmCount = Math.min(isRender ? 3 : 2, poolMax); // Warm 3 of 4 max connections
+      console.log(`🔥 Starting pool warming (${warmCount} of ${poolMax} connections)...`);
       await warmPool(warmCount);
       startPoolWarming();
     }

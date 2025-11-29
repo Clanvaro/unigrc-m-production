@@ -72,6 +72,7 @@ export const macroprocesos = pgTable("macroprocesos", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   index("idx_macroprocesos_order").on(table.order),
+  index("idx_macroprocesos_gerencia").on(table.gerenciaId),
 ]);
 
 // Procesos - Nivel medio, vinculados a macroprocesos
@@ -95,6 +96,7 @@ export const processes = pgTable("processes", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   index("idx_processes_macro").on(table.macroprocesoId),
+  index("idx_processes_gerencia").on(table.gerenciaId),
 ]);
 
 // Subprocesos - Nivel inferior, vinculados a procesos
@@ -6288,6 +6290,11 @@ export const riskEvents = pgTable("risk_events", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
+  index("idx_risk_events_event_date").on(table.eventDate),
+  index("idx_risk_events_risk_id").on(table.riskId),
+  index("idx_risk_events_process_id").on(table.processId),
+  index("idx_risk_events_status").on(table.status),
+  index("idx_risk_events_deleted_at").on(table.deletedAt),
 ]);
 
 // Relaciones muchos-a-muchos para eventos de riesgo con macroprocesos

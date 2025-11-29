@@ -59,13 +59,19 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Result: Cache hit ~10ms vs cache miss ~1597ms (99% improvement on repeated loads)
 
 **Database Connection Pool Optimization** (Nov 29, 2025):
-- Optimized for Render PostgreSQL with SSL connections
-- Pool configuration: min 5, max 15 connections (increased from 3-12)
-- Aggressive pool warming: 5 connections pre-established at startup
+- Optimized for Render PostgreSQL with SSL connections (0.1 CPU tier)
+- Pool configuration: min 2, max 4 connections (reduced from 5-15 to prevent thrashing)
+- Conservative pool warming: 3 connections pre-established at startup (respects max pool size)
 - Keep-alive ping every 15 seconds to maintain connection health
 - Shorter idle timeout (60s) to recycle before server closes connections
 - Enhanced retry logic with 4 attempts and pool warming on connection errors
 - Quiet hours (00:00-07:00 Chile time) pause pool warming to save resources
+- Result: Pool warming reduced from 30012ms → 622ms after optimization
+
+**Database Indexing Strategy** (Nov 29, 2025):
+- Created missing FK indexes: `macroprocesos.gerencia_id`, `processes.gerencia_id`
+- Created missing filter indexes on `risk_events`: `event_date`, `risk_id`, `process_id`, `status`, `deleted_at`
+- All indexes improve JOIN performance and WHERE clause filtering
 
 ## Core Features
 
