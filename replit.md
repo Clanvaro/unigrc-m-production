@@ -42,7 +42,7 @@ The system operates in a single-tenant architecture. It incorporates robust perf
 
 # External Dependencies
 
--   **Render PostgreSQL**: Always-on PostgreSQL hosting.
+-   **Render PostgreSQL**: Basic-1gb plan (1 GB RAM, 0.5 CPU) for always-on PostgreSQL hosting.
 -   **Render Hosting**: Node.js web service for production deployment.
 -   **Replit Integration**: Development environment tools and Replit Auth.
 -   **Google Fonts**: Inter font family.
