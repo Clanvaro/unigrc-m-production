@@ -2201,12 +2201,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Single optimized SQL query for heatmap data
-      // Calculates residual risk factors directly in SQL
+      // Uses CTE for control effectiveness calculation
       const heatmapData = await requireDb().execute(sql`
         WITH risk_control_factors AS (
           SELECT 
             rc.risk_id,
-            -- Product of (1 - effectiveness/100) per target
             EXP(SUM(CASE 
               WHEN c.effect_target IN ('probability', 'both') 
               THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
