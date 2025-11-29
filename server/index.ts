@@ -19,7 +19,7 @@ import {
 } from "./validation/input-sanitizer";
 import { responseSanitizer } from "./validation/output-sanitizer";
 import { applyPerformanceOptimizations } from "./performance";
-import { azureAIService } from "./azure-ai-service";
+import { openAIService } from "./openai-service";
 import { initializeQueues } from "./services/queue";
 
 // Load environment variables from .env file
@@ -186,12 +186,12 @@ app.use((req, res, next) => {
   }, () => {
     log(`serving on port ${port}`);
     
-    // Check Azure AI Service status
-    const aiStatus = azureAIService.getStatus();
+    // Check OpenAI Service status
+    const aiStatus = openAIService.getStatus();
     if (aiStatus.ready) {
-      console.log(`✅ Azure OpenAI Service ready with deployment: ${aiStatus.deployment}`);
+      console.log(`✅ OpenAI Service ready with model: ${aiStatus.deployment}`);
     } else {
-      console.warn('⚠️ Azure OpenAI Service not configured. AI features will be disabled.');
+      console.warn('⚠️ OpenAI Service not configured. AI features will be disabled.');
     }
     
     // Warm cache in background (non-blocking) after server is ready

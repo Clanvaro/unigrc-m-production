@@ -1,14 +1,17 @@
-import { AzureOpenAI } from "openai";
+import OpenAI from "openai";
 
-interface AzureAIConfig {
-  endpoint: string;
+// OpenAI Service - using standard OpenAI API
+// the newest OpenAI model is "gpt-4o-mini" which is cost-effective for most use cases
+// can also use "gpt-4o" for more complex tasks
+
+interface OpenAIConfig {
   apiKey: string;
-  deployment: string;
+  model: string;
 }
 
-class AzureAIService {
-  private client: AzureOpenAI | null = null;
-  private config: AzureAIConfig | null = null;
+class OpenAIService {
+  private client: OpenAI | null = null;
+  private config: OpenAIConfig | null = null;
   private isReady: boolean = false;
 
   constructor() {
@@ -16,30 +19,26 @@ class AzureAIService {
   }
 
   private initialize() {
-    const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
-    const apiKey = process.env.AZURE_OPENAI_API_KEY;
-    const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
+    const apiKey = process.env.OPENAI_API_KEY;
+    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-    if (!endpoint || !apiKey || !deployment) {
-      console.warn('⚠️ Azure OpenAI credentials not configured. AI features will be disabled.');
-      console.warn('Required: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT');
+    if (!apiKey) {
+      console.warn('⚠️ OpenAI credentials not configured. AI features will be disabled.');
+      console.warn('Required: OPENAI_API_KEY');
       return;
     }
 
     try {
-      this.config = { endpoint, apiKey, deployment };
+      this.config = { apiKey, model };
       
-      // Initialize Azure OpenAI client with official Azure SDK configuration
-      this.client = new AzureOpenAI({
-        apiKey,
-        endpoint,
-        apiVersion: "2024-08-01-preview"
+      this.client = new OpenAI({
+        apiKey
       });
 
       this.isReady = true;
-      console.log(`✅ Azure OpenAI Service initialized with deployment: ${deployment}`);
+      console.log(`✅ OpenAI Service initialized with model: ${model}`);
     } catch (error) {
-      console.error('❌ Failed to initialize Azure OpenAI Service:', error);
+      console.error('❌ Failed to initialize OpenAI Service:', error);
       this.isReady = false;
     }
   }
@@ -47,18 +46,18 @@ class AzureAIService {
   getStatus() {
     return {
       ready: this.isReady,
-      deployment: this.config?.deployment || null,
-      endpoint: this.config?.endpoint || null
+      deployment: this.config?.model || null,
+      provider: "openai"
     };
   }
 
   async generateText(prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.isReady || !this.client || !this.config) {
-      throw new Error('Azure OpenAI Service is not initialized. Please configure API credentials.');
+      throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
 
     try {
-      const messages: any[] = [];
+      const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
       
       if (systemPrompt) {
         messages.push({
@@ -73,7 +72,7 @@ class AzureAIService {
       });
 
       const response = await this.client.chat.completions.create({
-        model: this.config.deployment,
+        model: this.config.model,
         messages,
         temperature: 0.7,
         max_tokens: 800
@@ -81,18 +80,18 @@ class AzureAIService {
 
       return response.choices[0]?.message?.content || '';
     } catch (error) {
-      console.error('Error generating text with Azure OpenAI:', error);
+      console.error('Error generating text with OpenAI:', error);
       throw error;
     }
   }
 
   async *streamText(prompt: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
     if (!this.isReady || !this.client || !this.config) {
-      throw new Error('Azure OpenAI Service is not initialized. Please configure API credentials.');
+      throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
 
     try {
-      const messages: any[] = [];
+      const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
       
       if (systemPrompt) {
         messages.push({
@@ -107,7 +106,7 @@ class AzureAIService {
       });
 
       const stream = await this.client.chat.completions.create({
-        model: this.config.deployment,
+        model: this.config.model,
         messages,
         temperature: 0.7,
         max_tokens: 800,
@@ -121,7 +120,7 @@ class AzureAIService {
         }
       }
     } catch (error) {
-      console.error('Error streaming text with Azure OpenAI:', error);
+      console.error('Error streaming text with OpenAI:', error);
       throw error;
     }
   }
@@ -135,7 +134,7 @@ class AzureAIService {
     }
   ): Promise<string | AsyncGenerator<string, void, unknown>> {
     if (!this.isReady || !this.client || !this.config) {
-      throw new Error('Azure OpenAI Service is not initialized. Please configure API credentials.');
+      throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
 
     try {
@@ -146,15 +145,15 @@ class AzureAIService {
       }
 
       const response = await this.client.chat.completions.create({
-        model: this.config.deployment,
-        messages,
+        model: this.config.model,
+        messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
         temperature,
         max_tokens: maxTokens
       });
 
       return response.choices[0]?.message?.content || '';
     } catch (error) {
-      console.error('Error generating completion with Azure OpenAI:', error);
+      console.error('Error generating completion with OpenAI:', error);
       throw error;
     }
   }
@@ -165,12 +164,12 @@ class AzureAIService {
     maxTokens: number
   ): AsyncGenerator<string, void, unknown> {
     if (!this.client || !this.config) {
-      throw new Error('Azure OpenAI Service is not initialized.');
+      throw new Error('OpenAI Service is not initialized.');
     }
 
     const stream = await this.client.chat.completions.create({
-      model: this.config.deployment,
-      messages,
+      model: this.config.model,
+      messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       temperature,
       max_tokens: maxTokens,
       stream: true
@@ -185,4 +184,4 @@ class AzureAIService {
   }
 }
 
-export const azureAIService = new AzureAIService();
+export const openAIService = new OpenAIService();

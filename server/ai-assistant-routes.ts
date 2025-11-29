@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { azureAIService } from "./azure-ai-service";
+import { openAIService } from "./openai-service";
 import { z } from "zod";
 import { storage } from "./storage";
 import { aiCache } from "./ai-cache";
@@ -7,8 +7,8 @@ import rateLimit from "express-rate-limit";
 import { resolveActiveTenant } from "./routes";
 import { isAuthenticated } from "./replitAuth";
 
-// ============ RATE LIMITING PARA AZURE OPENAI (CONTROL DE COSTOS) ============
-const azureAIRateLimiter = rateLimit({
+// ============ RATE LIMITING PARA OPENAI (CONTROL DE COSTOS) ============
+const openAIRateLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minuto
   max: 20, // 20 requests por minuto por IP (más generoso que 10)
   message: { 
@@ -20,7 +20,7 @@ const azureAIRateLimiter = rateLimit({
 });
 
 // Rate limiter más estricto para generación de texto (operaciones costosas)
-const azureAIGenerationLimiter = rateLimit({
+const openAIGenerationLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minuto
   max: 10, // 10 generaciones por minuto por IP
   message: { 
@@ -34,7 +34,7 @@ const azureAIGenerationLimiter = rateLimit({
 // ============ SANITIZACIÓN DE DATOS (PRIVACIDAD EMPRESARIAL) ============
 
 /**
- * Sanitiza datos sensibles antes de enviarlos a Azure OpenAI
+ * Sanitiza datos sensibles antes de enviarlos a OpenAI
  * Elimina: emails, números de identificación, datos personales sensibles
  */
 function sanitizeText(text: string): string {
@@ -104,7 +104,7 @@ const assistantQuerySchema = z.object({
 // ============ RESPUESTAS DIRECTAS (OPTIMIZACIÓN) ============
 
 /**
- * Detecta queries simples y genera respuestas directas sin llamar a Azure OpenAI
+ * Detecta queries simples y genera respuestas directas sin llamar a OpenAI
  * Optimización: respuestas instantáneas para conteos básicos (ahorro de costos)
  */
 async function tryDirectResponse(question: string): Promise<string | null> {
@@ -208,7 +208,7 @@ async function tryDirectResponse(question: string): Promise<string | null> {
         }
 
         const response = `Actualmente hay **${count}** ${name} en el sistema.${additionalInfo}`;
-        console.log(`⚡ Direct response (${type}): ${count} items - no Azure API call (cost saved)`);
+        console.log(`⚡ Direct response (${type}): ${count} items - no OpenAI API call (cost saved)`);
         return response;
       } catch (error) {
         console.error('Error generating direct response:', error);
@@ -227,25 +227,25 @@ export function registerAIAssistantRoutes(app: Express) {
   // ============ STATUS & HEALTH CHECK ============
   
   app.get("/api/ai/status", (req: Request, res: Response) => {
-    const status = azureAIService.getStatus();
+    const status = openAIService.getStatus();
     res.json({
       ready: status.ready,
       deployment: status.deployment,
-      provider: "Azure OpenAI",
+      provider: "OpenAI",
       model: "gpt-4o-mini"
     });
   });
 
   // ============ TEST ENDPOINTS ============
   
-  app.post("/api/ai/test", azureAIGenerationLimiter, async (req: Request, res: Response) => {
+  app.post("/api/ai/test", openAIGenerationLimiter, async (req: Request, res: Response) => {
     try {
       const { prompt } = testPromptSchema.parse(req.body);
       
-      console.log(`Testing Azure AI with prompt: "${prompt.substring(0, 100)}..."`);
+      console.log(`Testing OpenAI with prompt: "${prompt.substring(0, 100)}..."`);
       
       const sanitizedPrompt = sanitizeText(prompt);
-      const response = await azureAIService.generateText(
+      const response = await openAIService.generateText(
         sanitizedPrompt, 
         "You are a helpful assistant."
       );
@@ -258,7 +258,7 @@ export function registerAIAssistantRoutes(app: Express) {
         timestamp: new Date().toISOString()
       });
     } catch (error) {
-      console.error("Azure AI test failed:", error);
+      console.error("OpenAI test failed:", error);
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"
@@ -266,11 +266,11 @@ export function registerAIAssistantRoutes(app: Express) {
     }
   });
 
-  app.post("/api/ai/test-stream", azureAIGenerationLimiter, async (req: Request, res: Response) => {
+  app.post("/api/ai/test-stream", openAIGenerationLimiter, async (req: Request, res: Response) => {
     try {
       const { prompt } = testPromptSchema.parse(req.body);
       
-      console.log(`Testing Azure AI STREAMING with prompt: "${prompt.substring(0, 100)}..."`);
+      console.log(`Testing OpenAI STREAMING with prompt: "${prompt.substring(0, 100)}..."`);
       
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -280,7 +280,7 @@ export function registerAIAssistantRoutes(app: Express) {
 
       try {
         const sanitizedPrompt = sanitizeText(prompt);
-        for await (const chunk of azureAIService.streamText(sanitizedPrompt, "You are a helpful assistant.")) {
+        for await (const chunk of openAIService.streamText(sanitizedPrompt, "You are a helpful assistant.")) {
           res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
         }
         
@@ -293,7 +293,7 @@ export function registerAIAssistantRoutes(app: Express) {
       }
       
     } catch (error) {
-      console.error("Azure AI streaming test failed:", error);
+      console.error("OpenAI streaming test failed:", error);
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"
@@ -303,7 +303,7 @@ export function registerAIAssistantRoutes(app: Express) {
 
   // ============ ASISTENTE AI GENERAL CON STREAMING ============
   
-  app.post("/api/ai/assistant-stream", azureAIRateLimiter, async (req: Request, res: Response) => {
+  app.post("/api/ai/assistant-stream", openAIRateLimiter, async (req: Request, res: Response) => {
     try {
       const { question } = assistantQuerySchema.parse(req.body);
       
@@ -739,7 +739,7 @@ export function registerAIAssistantRoutes(app: Express) {
         const sanitizedQuestion = sanitizeText(question);
         let fullResponse = '';
         
-        for await (const chunk of azureAIService.streamText(sanitizedQuestion, systemContext)) {
+        for await (const chunk of openAIService.streamText(sanitizedQuestion, systemContext)) {
           fullResponse += chunk;
           res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
         }
@@ -759,7 +759,7 @@ export function registerAIAssistantRoutes(app: Express) {
             documentsCount: documents.length,
             risksCount: risks.length,
             controlsCount: controls.length,
-            provider: "Azure OpenAI",
+            provider: "OpenAI",
             model: "gpt-4o-mini",
             directResponse: false,
             cached: false
@@ -783,7 +783,7 @@ export function registerAIAssistantRoutes(app: Express) {
 
   // ============ GENERACIÓN DE SUGERENCIAS PARA RIESGOS ============
   
-  app.post("/api/ai/risk-suggestions-stream", azureAIGenerationLimiter, async (req: Request, res: Response) => {
+  app.post("/api/ai/risk-suggestions-stream", openAIGenerationLimiter, async (req: Request, res: Response) => {
     try {
       const { riskDescription, context, riskCategory, industry } = riskSuggestionSchema.parse(req.body);
       
@@ -827,7 +827,7 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
       try {
         const sanitizedPrompt = sanitizeText(prompt);
         
-        for await (const chunk of azureAIService.streamText(sanitizedPrompt, systemPrompt)) {
+        for await (const chunk of openAIService.streamText(sanitizedPrompt, systemPrompt)) {
           res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
         }
         
@@ -850,7 +850,7 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
 
   // ============ SUGERENCIAS DE PRUEBAS DE AUDITORÍA CON IA ============
   
-  app.post("/api/audits/:id/ai-test-suggestions", isAuthenticated, azureAIGenerationLimiter, async (req: Request, res: Response) => {
+  app.post("/api/audits/:id/ai-test-suggestions", isAuthenticated, openAIGenerationLimiter, async (req: Request, res: Response) => {
     try {
       const auditId = req.params.id;
       const { riskId, controlId } = req.body;
@@ -919,7 +919,7 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
         console.log("No documents found");
       }
       
-      // ============ CONSTRUIR PROMPT PARA AZURE OPENAI ============
+      // ============ CONSTRUIR PROMPT PARA OPENAI ============
       
       let contextPrompt = `# CONTEXTO DE LA AUDITORÍA\n\n`;
       
@@ -1051,7 +1051,7 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
       
       console.log(`📝 Generating test suggestions with ${contextPrompt.length} chars of context`);
       
-      // Generar respuesta con Azure OpenAI (con max_tokens más alto para evitar truncado)
+      // Generar respuesta con OpenAI (con max_tokens más alto para evitar truncado)
       const messages = [
         {
           role: 'system' as const,
@@ -1063,7 +1063,7 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
         }
       ];
       
-      const response = await azureAIService.generateCompletion(messages, {
+      const response = await openAIService.generateCompletion(messages, {
         temperature: 0.7,
         maxTokens: 1500
       }) as string;
@@ -1140,5 +1140,5 @@ Mantén las respuestas prácticas y accionables para profesionales de gestión d
     }
   });
 
-  console.log("✅ AI Assistant routes registered successfully (Azure OpenAI)");
+  console.log("✅ AI Assistant routes registered successfully (OpenAI)");
 }

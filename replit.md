@@ -41,7 +41,7 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 -   **Ad-Hoc Audit Risk Evaluation System**: Supports factor-based and manual evaluation.
 -   **Email Notification System**: For validation workflows, action plan reminders, and critical communications.
 -   **Validation Center**: 3-state validation workflow with bulk actions.
--   **AI Assistant**: Powered by Azure OpenAI (GPT-4o-mini) with a three-tier response strategy, data sanitization, rate limiting, and Audit Test Suggestion feature.
+-   **AI Assistant**: Powered by OpenAI (GPT-4o-mini) with a three-tier response strategy, data sanitization, rate limiting, and Audit Test Suggestion feature.
 -   **Historical Risk Comparison**: Automatic temporal comparison of risk evolution.
 
 # External Dependencies
@@ -56,5 +56,5 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 -   **date-fns**: For date formatting and manipulation.
 -   **Lucide React**: Icon system.
 -   **Mailgun API and SMTP**: For email services.
--   **Azure OpenAI**: Enterprise AI service for the integrated AI assistant.
+-   **OpenAI API**: AI service for the integrated AI assistant (requires OPENAI_API_KEY).
 -   **Upstash Redis**: Distributed caching via Redis REST API.
