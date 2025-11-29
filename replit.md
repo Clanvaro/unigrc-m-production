@@ -61,11 +61,12 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 **Database Connection Pool Optimization** (Nov 29, 2025):
 - Optimized for Render PostgreSQL with SSL connections (0.1 CPU tier)
 - Pool configuration: min 2, max 4 connections (reduced from 5-15 to prevent thrashing)
-- Conservative pool warming: 3 connections pre-established at startup (respects max pool size)
+- Conservative pool warming: 2 connections pre-established (matches pool min to prevent churn)
 - Keep-alive ping every 15 seconds to maintain connection health
 - Shorter idle timeout (60s) to recycle before server closes connections
 - Enhanced retry logic with 4 attempts and pool warming on connection errors
 - Quiet hours (00:00-07:00 Chile time) pause pool warming to save resources
+- Log noise reduction: Warming logs limited to every 5 minutes (was every 15s)
 - Result: Pool warming reduced from 30012ms → 622ms after optimization
 
 **Database Indexing Strategy** (Nov 29, 2025):

@@ -473,6 +473,8 @@ if (pool) {
 
 // Pool warming - pre-create connections to avoid cold start latency
 let poolWarmingInterval: NodeJS.Timeout | null = null;
+let lastWarmLogTime = 0; // Track last time we logged warming (reduce log noise)
+const WARM_LOG_COOLDOWN = 300000; // Only log warming every 5 minutes
 
 export async function warmPool(minConnections: number = 1): Promise<{ success: boolean; connections: number; duration: number }> {
   if (!pool) {
@@ -506,8 +508,11 @@ export async function warmPool(minConnections: number = 1): Promise<{ success: b
     
     const duration = Date.now() - startTime;
     
-    if (successCount > 0) {
+    // Only log warming success every 5 minutes to reduce noise
+    const now = Date.now();
+    if (successCount > 0 && (now - lastWarmLogTime > WARM_LOG_COOLDOWN || lastWarmLogTime === 0)) {
       console.log(`🔥 Pool warmed: ${successCount}/${minConnections} connections ready in ${duration}ms`);
+      lastWarmLogTime = now;
     }
     
     return { success: successCount > 0, connections: successCount, duration };
@@ -570,11 +575,15 @@ function startPoolWarming() {
       }
       
       const metrics = getPoolMetrics();
-      const minWarm = isRender ? 4 : 2;
+      // Match pool min config: Render=2, others=2 (don't over-warm as Render closes idle connections)
+      const minWarm = 2;
       
       // Warm more aggressively if pool is below minimum
+      // Only log if pool is empty (reduce log noise from normal connection recycling)
       if (metrics && metrics.totalCount < minWarm) {
-        console.log(`🔄 Pool below minimum (${metrics.totalCount}/${minWarm}), warming...`);
+        if (metrics.totalCount === 0) {
+          console.log(`🔄 Pool empty, warming to ${minWarm} connections...`);
+        }
         await warmPool(minWarm);
       } else {
         // Lightweight ping to keep connections active and detect stale connections
