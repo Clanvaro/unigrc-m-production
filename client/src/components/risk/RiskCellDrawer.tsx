@@ -141,7 +141,7 @@ export function RiskCellDrawer({
                       )}
                     </div>
 
-                    {risk.controlEffectiveness.length > 0 && (
+                    {risk.controlEffectiveness?.length > 0 && (
                       <div className="text-sm">
                         <span className="text-muted-foreground">Efectividad controles:</span>
                         <span className="ml-1 font-medium" data-testid={`risk-effectiveness-${risk.code}`}>
