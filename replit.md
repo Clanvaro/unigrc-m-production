@@ -96,6 +96,16 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Cache invalidation: `risks-bootstrap:risks:${CACHE_VERSION}:*` pattern in invalidateRiskControlCaches()
 - Result: **69% improvement** cache cold (1130ms → 420ms), **99.9% improvement** cache warm (1ms)
 
+**Two-Level Caching Architecture** (Nov 29, 2025):
+- Implemented 2-level distributed caching pattern for maximum performance
+- Level 1 (Endpoint cache): Full response cached with 60s TTL at route handler level
+- Level 2 (Storage function cache): Individual catalog functions cached with 60s TTL
+- Storage functions with cache: `getGerencias()`, `getMacroprocesos()`, `getProcesses()`, `getSubprocesosWithOwners()`
+- Cache keys pattern: `{entity}:single-tenant` (e.g., `gerencias:single-tenant`)
+- Cache invalidation: All keys invalidated via `invalidateRiskControlCaches()` in cache-helpers.ts
+- Benefits: Multiple endpoints share cached catalog data, reducing redundant database queries
+- `/api/risks/page-data-lite` endpoint: **99.9% improvement** (2097ms → 2ms cache warm, ~90ms with storage cache warm)
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
