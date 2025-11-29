@@ -164,6 +164,124 @@ export async function invalidateRiskEventsPageDataCache() {
 const SYSTEM_CONFIG_CACHE_KEY = "system-config:all";
 const SYSTEM_CONFIG_TTL = 10 * 60; // 10 minutes
 
+// ============================================
+// CATALOG CACHE SYSTEM
+// In-memory cache for rarely changing catalog data
+// TTL: 5-10 minutes depending on change frequency
+// ============================================
+
+interface CatalogCacheEntry<T> {
+  data: T;
+  timestamp: number;
+  ttl: number;
+}
+
+// In-memory catalog cache (Node.js process memory)
+const catalogCache = new Map<string, CatalogCacheEntry<any>>();
+
+// Cache TTLs in milliseconds
+const CATALOG_TTL = {
+  macroprocesos: 10 * 60 * 1000,      // 10 min - rarely changes
+  processes: 10 * 60 * 1000,          // 10 min - rarely changes
+  subprocesos: 10 * 60 * 1000,        // 10 min - rarely changes
+  gerencias: 10 * 60 * 1000,          // 10 min - rarely changes
+  controls: 5 * 60 * 1000,            // 5 min - changes more often
+  processOwners: 5 * 60 * 1000,       // 5 min - changes more often
+  riskCategories: 10 * 60 * 1000,     // 10 min - rarely changes
+  fiscalEntities: 10 * 60 * 1000,     // 10 min - rarely changes
+};
+
+type CatalogKey = keyof typeof CATALOG_TTL;
+
+/**
+ * Get catalog data from in-memory cache
+ */
+export function getCatalogFromCache<T>(key: CatalogKey): T | null {
+  const entry = catalogCache.get(key);
+  if (!entry) {
+    console.log(`[CATALOG CACHE MISS] ${key}`);
+    return null;
+  }
+  
+  const now = Date.now();
+  if (now - entry.timestamp > entry.ttl) {
+    console.log(`[CATALOG CACHE EXPIRED] ${key} (age: ${Math.round((now - entry.timestamp) / 1000)}s, ttl: ${entry.ttl / 1000}s)`);
+    catalogCache.delete(key);
+    return null;
+  }
+  
+  console.log(`[CATALOG CACHE HIT] ${key} (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
+  return entry.data as T;
+}
+
+/**
+ * Set catalog data in in-memory cache
+ */
+export function setCatalogCache<T>(key: CatalogKey, data: T): void {
+  const ttl = CATALOG_TTL[key];
+  catalogCache.set(key, {
+    data,
+    timestamp: Date.now(),
+    ttl,
+  });
+  console.log(`[CATALOG CACHE SET] ${key} (TTL: ${ttl / 1000}s, items: ${Array.isArray(data) ? data.length : 1})`);
+}
+
+/**
+ * Invalidate specific catalog cache
+ */
+export function invalidateCatalogCache(key: CatalogKey): void {
+  if (catalogCache.has(key)) {
+    catalogCache.delete(key);
+    console.log(`[CATALOG CACHE INVALIDATED] ${key}`);
+  }
+}
+
+/**
+ * Invalidate multiple catalog caches at once
+ */
+export function invalidateCatalogCaches(keys: CatalogKey[]): void {
+  keys.forEach(key => invalidateCatalogCache(key));
+}
+
+/**
+ * Invalidate all catalog caches
+ */
+export function invalidateAllCatalogCaches(): void {
+  const keys = Array.from(catalogCache.keys());
+  catalogCache.clear();
+  console.log(`[CATALOG CACHE CLEARED] All ${keys.length} catalogs invalidated`);
+}
+
+/**
+ * Invalidate macroproceso hierarchy (macroprocesos + processes + subprocesos)
+ */
+export function invalidateMacroprocesoHierarchy(): void {
+  invalidateCatalogCaches(['macroprocesos', 'processes', 'subprocesos']);
+  console.log(`[CATALOG CACHE] Macroproceso hierarchy invalidated`);
+}
+
+/**
+ * Invalidate process hierarchy (processes + subprocesos)
+ */
+export function invalidateProcessHierarchy(): void {
+  invalidateCatalogCaches(['processes', 'subprocesos']);
+  console.log(`[CATALOG CACHE] Process hierarchy invalidated`);
+}
+
+/**
+ * Get catalog cache stats for monitoring
+ */
+export function getCatalogCacheStats(): { key: string; age: number; ttl: number; size: number }[] {
+  const now = Date.now();
+  return Array.from(catalogCache.entries()).map(([key, entry]) => ({
+    key,
+    age: Math.round((now - entry.timestamp) / 1000),
+    ttl: entry.ttl / 1000,
+    size: Array.isArray(entry.data) ? entry.data.length : 1,
+  }));
+}
+
 export async function getSystemConfigFromCache(): Promise<Record<string, any> | null> {
   try {
     return await distributedCache.get(SYSTEM_CONFIG_CACHE_KEY);

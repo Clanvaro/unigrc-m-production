@@ -8254,6 +8254,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
+      // Invalidate action plans validation caches
+      await Promise.all([
+        distributedCache.invalidatePattern(`validation:action-plans:*:${tenantId}`),
+        distributedCache.invalidatePattern(`action-plans:*:${tenantId}`),
+        distributedCache.set(`validation:action-plans:pending:${tenantId}`, null, 0)
+      ]);
+
       // Send notification if requested
       if (sendNotification && currentPlan.responsible) {
         const actionText = status === 'validated' ? 'aprobado' : status === 'observed' ? 'observado' : 'rechazado';
