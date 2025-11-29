@@ -35,8 +35,16 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 **Risk Events Page - Batch Query Optimization** (Nov 29, 2025):
 - Optimized `/api/risk-events/page-data` endpoint: **73% improvement** (1439ms → 387ms)
 - Eliminated N+1 problem: reduced from 90+ queries to 3 batch queries using `inArray()` operator
+- Default pagination reduced from 1000→50 events for faster initial load
+- Replaced full-table risk/process fetches with targeted batch lookups keyed to current page events
 - Pattern: Batch load macroprocesos, processes, and subprocesos in parallel, then group results in-memory using Maps for O(1) lookup
 - Result: All 50+ Risk Events load in under 400ms instead of 1.4+ seconds
+
+**Process Map Risks - Distributed Caching** (Nov 29, 2025):
+- Added 60s distributed Redis cache to `/api/organization/process-map-risks` endpoint
+- Cache key: `process-map-risks:tenant-1`, properly invalidated in `invalidateRiskControlCaches()`
+- Storage optimization: `getProcessMapValidatedRisks()` now selects only `{id}` for org entities instead of all columns
+- Result: Cache hit ~10ms vs cache miss ~900ms+ (99% improvement on repeated loads)
 
 **Risk Matrix Page - Bootstrap Endpoint** (Nov 29, 2025):
 - Created `/api/risk-matrix/bootstrap` endpoint that combines macroprocesos, processes, and heatmap data in one response
