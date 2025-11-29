@@ -25,9 +25,14 @@ The system operates in a single-tenant architecture. It incorporates robust perf
 -   **Risk Matrix Endpoint**: `/api/risk-matrix/optimized` uses CTE-based SQL approach for ~87ms response (production-compatible).
 -   **Validation Lite Endpoint**: `/api/risk-processes/validation/lite` consolidates 4+ queries into single SQL using CTEs, returns counts + first 50 items per status, cached for 30s (~200-300ms).
 -   **Catalog Endpoints**: Separated individual cached endpoints for macroprocesos, processes, subprocesos with 5-10 minute TTL.
--   **Database Indexing**: Added `idx_actions_origin_deleted` for audit wizard filter optimization.
+-   **Database Indexing (Deployed to Render)**: 15+ production indexes created for query optimization:
+    - `idx_risk_process_links_validation_notification` - Validation status queries
+    - `idx_risks_deleted_at`, `idx_risks_inherent_risk`, `idx_risks_residual_risk`, `idx_risks_inherent_residual` - Risk filtering and sorting
+    - `idx_controls_deleted_at`, `idx_risk_controls_risk_id`, `idx_risk_controls_control_id` - Control lookups
+    - `idx_actions_status`, `idx_actions_deleted_at`, `idx_actions_due_date`, `idx_actions_origin_deleted` - Action plan filtering
+    - `idx_processes_macroproceso_id`, `idx_processes_deleted_at`, `idx_subprocesos_proceso_id`, `idx_subprocesos_deleted_at`, `idx_macroprocesos_deleted_at` - Process hierarchy navigation
 -   **Storage Function Batch Loading**: `getRiskProcessLinksByValidationStatus` uses batch-fetch for owner lookups to prevent N+1 queries.
--   **Connection Pool**: Optimized for Basic-1gb (max=10, min=3 warm connections, 60s idle timeout).
+-   **Connection Pool**: Optimized for Basic-1gb (max=10, min=3 warm connections, 60s idle timeout, 10s statement timeout).
 
 ## Core Features
 
