@@ -1912,6 +1912,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const riskIds = risks.map(r => r.id);
           
           // Single batch query: get control count and avg effectiveness per risk
+          // Use sql.join to properly build the IN clause for UUID array
+          const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
           const controlSummary = await db.execute(sql`
             SELECT 
               rc.risk_id,
@@ -1919,7 +1921,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               COALESCE(AVG(c.effectiveness), 0)::float as avg_effectiveness
             FROM risk_controls rc
             INNER JOIN controls c ON rc.control_id = c.id
-            WHERE rc.risk_id = ANY(${riskIds}) AND c.deleted_at IS NULL
+            WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
             GROUP BY rc.risk_id
           `);
           
