@@ -101,7 +101,7 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
     ]);
     
-    // 6. Risk matrix caches (including bootstrap granular caches)
+    // 6. Risk matrix caches (including bootstrap granular caches and NEW lite endpoint)
     await invalidateRiskMatrixCache();
     await Promise.all([
       distributedCache.invalidate(`risk-matrix:macroprocesos:${TENANT_KEY}`),
@@ -109,6 +109,13 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`risk-matrix:heatmap:${TENANT_KEY}`),
       // OPTIMIZED: Also invalidate process-map-risks cache
       distributedCache.invalidate(`process-map-risks:${TENANT_KEY}`),
+      // NEW (Nov 2025): Invalidate lightweight matrix and lookup caches
+      distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`lookups:macroprocesos:${TENANT_KEY}`),
+      distributedCache.invalidate(`lookups:processes:${TENANT_KEY}`),
+      distributedCache.invalidate(`lookups:subprocesos:${TENANT_KEY}`),
+      distributedCache.invalidate(`lookups:gerencias:${TENANT_KEY}`),
+      distributedCache.invalidate(`lookups:risk-categories:${TENANT_KEY}`),
     ]);
     
     const duration = Date.now() - startTime;
