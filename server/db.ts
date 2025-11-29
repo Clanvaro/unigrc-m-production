@@ -41,7 +41,9 @@ if (databaseUrl) {
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
   // Increase timeout to handle occasional slow SSL negotiations
   const connectionTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
-  const statementTimeout = isRenderDb ? 45000 : (isProduction ? 60000 : 15000);
+  // CRITICAL: Reduced from 45s to 10s to fail fast on slow queries (Nov 29, 2025)
+  // This prevents 138s hangs when N+1 queries saturate the pool
+  const statementTimeout = isRenderDb ? 10000 : (isProduction ? 15000 : 10000);
   
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
@@ -117,18 +119,28 @@ if (pool) {
   });
 
   // Log slow queries for debugging (Nov 23, 2025)
+  // Updated Nov 29, 2025: Reduced threshold to 5s and added more detail
   const originalQuery = pool.query.bind(pool);
   (pool as any).query = function(queryText: any, values?: any, callback?: any): any {
     const startTime = Date.now();
+    const SLOW_QUERY_THRESHOLD = 5000; // 5 seconds
+    
+    const logSlowQuery = (duration: number) => {
+      if (duration > SLOW_QUERY_THRESHOLD) {
+        const queryStr = typeof queryText === 'string' ? queryText : queryText?.text || '';
+        const truncatedQuery = queryStr.substring(0, 300);
+        const metrics = getPoolMetrics();
+        console.warn(`⚠️ SLOW QUERY (${duration}ms): ${truncatedQuery}`);
+        if (metrics) {
+          console.warn(`   Pool: active=${metrics.totalCount - metrics.idleCount}/${metrics.maxConnections}, waiting=${metrics.waitingCount}`);
+        }
+      }
+    };
     
     // Handle callback-based queries
     if (callback) {
       return originalQuery(queryText, values, (err: any, result: any) => {
-        const duration = Date.now() - startTime;
-        if (duration > 10000) {
-          const queryStr = typeof queryText === 'string' ? queryText : queryText?.text || '';
-          console.warn(`⚠️ Slow query detected (${duration}ms):`, queryStr.substring(0, 200));
-        }
+        logSlowQuery(Date.now() - startTime);
         callback(err, result);
       });
     }
@@ -137,11 +149,7 @@ if (pool) {
     const result = originalQuery(queryText, values);
     if (result && typeof (result as any).then === 'function') {
       return (result as Promise<any>).then((res) => {
-        const duration = Date.now() - startTime;
-        if (duration > 10000) {
-          const queryStr = typeof queryText === 'string' ? queryText : queryText?.text || '';
-          console.warn(`⚠️ Slow query detected (${duration}ms):`, queryStr.substring(0, 200));
-        }
+        logSlowQuery(Date.now() - startTime);
         return res;
       });
     }
