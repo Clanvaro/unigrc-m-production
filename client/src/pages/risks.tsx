@@ -200,57 +200,78 @@ export default function Risks() {
     setCurrentPage(1);
   }, [filters]);
 
-  // ============== LIGHTWEIGHT PAGE DATA (filters only) ==============
-  // Fast initial load with only filter/dropdown data - no heavy JOINs
-  interface PageDataLite {
-    gerencias: any[];
-    macroprocesos: any[];
-    subprocesos: any[];
-    processes: any[];
-    riskCategories: any[];
-    processGerencias: any[];
+  // ============== CONSOLIDATED BOOTSTRAP ENDPOINT ==============
+  // Single optimized endpoint that returns risks + catalogs in one call
+  // Replaces 5+ parallel API calls with 1 optimized call (<1.5s target)
+  interface BootstrapResponse {
+    risks: {
+      data: any[];
+      pagination: { limit: number; offset: number; total: number; hasMore: boolean };
+    };
+    catalogs: {
+      gerencias: any[];
+      macroprocesos: any[];
+      processes: any[];
+      subprocesos: any[];
+      processOwners: any[];
+      processGerencias: any[];
+    };
+    _meta: {
+      fetchedAt: string;
+      duration: number;
+    };
   }
   
-  const { data: pageDataLite, isLoading: isPageDataLoading } = useQuery<PageDataLite>({
-    queryKey: ["/api/risks/page-data-lite"],
-    queryFn: async () => {
-      const response = await fetch("/api/risks/page-data-lite");
-      if (!response.ok) throw new Error("Failed to fetch page data");
-      return response.json();
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes - structural data changes infrequently
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
-  
-  // Extract individual data from lightweight response
-  const gerencias = pageDataLite?.gerencias || [];
-  const macroprocesos = pageDataLite?.macroprocesos || [];
-  const subprocesos = pageDataLite?.subprocesos || [];
-  const processes = pageDataLite?.processes || [];
-  const riskCategories = pageDataLite?.riskCategories || [];
-  const processGerencias = pageDataLite?.processGerencias || [];
-  const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
-
-  // ============== RISKS DATA WITH CONTROL SUMMARY (optimized) ==============
-  // Uses new endpoint that includes controlCount and calculatedResidual in a single SQL query
-  const { data: risksResponse, isLoading: isRisksLoading, refetch: refetchRisks } = useQuery<{ data: any[], pagination: { limit: number, offset: number, total: number } }>({
-    queryKey: ["/api/risks/with-control-summary", { 
+  const { data: bootstrapData, isLoading: isBootstrapLoading, refetch: refetchRisks } = useQuery<BootstrapResponse>({
+    queryKey: ["/api/risks/bootstrap", { 
       limit: pageSize, 
-      offset: (currentPage - 1) * pageSize
+      offset: (currentPage - 1) * pageSize,
+      ...filters
     }],
     queryFn: async () => {
       const params = new URLSearchParams({
         limit: pageSize.toString(),
-        offset: ((currentPage - 1) * pageSize).toString()
+        offset: ((currentPage - 1) * pageSize).toString(),
       });
-      const response = await fetch(`/api/risks/with-control-summary?${params}`);
-      if (!response.ok) throw new Error("Failed to fetch risks");
+      
+      // Add filters to query params
+      if (filters.status && filters.status !== 'all') params.append('status', filters.status);
+      if (filters.gerencia && filters.gerencia !== 'all') params.append('gerenciaId', filters.gerencia);
+      if (filters.macroproceso && filters.macroproceso !== 'all') params.append('macroprocesoId', filters.macroproceso);
+      if (filters.process && filters.process !== 'all') params.append('processId', filters.process);
+      if (filters.subproceso && filters.subproceso !== 'all') params.append('subprocesoId', filters.subproceso);
+      if (filters.search) params.append('search', filters.search);
+      if (filters.inherentRiskLevel && filters.inherentRiskLevel !== 'all') params.append('inherentRiskLevel', filters.inherentRiskLevel);
+      if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') params.append('residualRiskLevel', filters.residualRiskLevel);
+      if (filters.owner && filters.owner !== 'all') params.append('ownerId', filters.owner);
+      
+      const response = await fetch(`/api/risks/bootstrap?${params}`);
+      if (!response.ok) throw new Error("Failed to fetch bootstrap data");
       return response.json();
     },
+    staleTime: 1000 * 15, // 15 seconds for risks data
+    refetchOnWindowFocus: false,
   });
-  const risks = risksResponse?.data || [];
-  const totalPages = risksResponse?.pagination ? Math.ceil(risksResponse.pagination.total / pageSize) : 0;
+  
+  // Extract data from bootstrap response
+  const risks = bootstrapData?.risks?.data || [];
+  const totalPages = bootstrapData?.risks?.pagination ? Math.ceil(bootstrapData.risks.pagination.total / pageSize) : 0;
+  
+  // Catalogs from bootstrap (cached for 5 min on server, use local staleTime too)
+  const gerencias = bootstrapData?.catalogs?.gerencias || [];
+  const macroprocesos = bootstrapData?.catalogs?.macroprocesos || [];
+  const subprocesos = bootstrapData?.catalogs?.subprocesos || [];
+  const processes = bootstrapData?.catalogs?.processes || [];
+  const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
+  const riskCategories: any[] = []; // Not included in bootstrap, loaded on demand if needed
+  const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
+  
+  // Process owners from bootstrap (for basic display)
+  const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
+  
+  // Legacy compatibility - these were separate queries before
+  const isPageDataLoading = isBootstrapLoading;
+  const isRisksLoading = isBootstrapLoading;
   
   // ============== BATCH LOAD RELATIONS (LAZY - only for detail views) ==============
   // Load processLinks and controls only when user accesses detail dialogs
@@ -291,14 +312,15 @@ export default function Risks() {
   const allRiskProcessLinks = batchRelations?.riskProcessLinks || [];
   const allRiskControls = batchRelations?.riskControls || [];
   
-  // Process owners - lazy load only when viewing details
+  // Process owners - use bootstrap data first, lazy load full data only when viewing details
   const { data: processOwnersData, isLoading: isProcessOwnersLoading } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    enabled: needsDetailedData, // Only load when detailed data is needed
+    enabled: needsDetailedData && bootstrapProcessOwners.length === 0, // Only load if bootstrap didn't provide
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: false,
   });
-  const processOwners = processOwnersData || [];
+  // Use bootstrap processOwners first, fallback to full API data when loaded
+  const processOwners = bootstrapProcessOwners.length > 0 ? bootstrapProcessOwners : (processOwnersData || []);
   
   // Main loading state - no longer waits for batch relations
   const isLoading = isPageDataLoading || isRisksLoading;
@@ -2121,10 +2143,10 @@ export default function Risks() {
                   </div>
 
                   {/* Pagination controls */}
-                  {!testMode50k && risksResponse && risksResponse.pagination && risksResponse.pagination.total > 0 && (
+                  {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
                     <div className="border-t px-4 py-2 flex items-center justify-between text-[15px]">
                       <div className="text-sm text-muted-foreground">
-                        Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, risksResponse.pagination.total)} de {risksResponse.pagination.total} riesgos
+                        Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
@@ -2224,10 +2246,10 @@ export default function Risks() {
                 </div>
 
                 {/* Pagination controls */}
-                {!testMode50k && risksResponse && risksResponse.pagination && risksResponse.pagination.total > 0 && (
+                {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
                   <div className="border-t px-4 py-2 flex items-center justify-between text-[15px] shrink-0">
                     <div className="text-sm text-muted-foreground">
-                      Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, risksResponse.pagination.total)} de {risksResponse.pagination.total} riesgos
+                      Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
                     </div>
                     <div className="flex items-center gap-2">
                       <Button

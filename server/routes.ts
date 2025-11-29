@@ -1754,6 +1754,212 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============== RISKS BOOTSTRAP - CONSOLIDATED ENDPOINT FOR PAGE LOAD ==============
+  // Single endpoint that returns everything the risks page needs in one call
+  // Replaces 5+ parallel API calls with 1 optimized call
+  app.get("/api/risks/bootstrap", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      // Parse pagination params (default 50 risks per page)
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Parse filters
+      const filters = {
+        status: req.query.status as string,
+        gerenciaId: req.query.gerenciaId as string,
+        macroprocesoId: req.query.macroprocesoId as string,
+        processId: req.query.processId as string,
+        subprocesoId: req.query.subprocesoId as string,
+        search: req.query.search as string,
+        inherentRiskLevel: req.query.inherentRiskLevel as string,
+        residualRiskLevel: req.query.residualRiskLevel as string,
+        ownerId: req.query.ownerId as string,
+      };
+      
+      // Build cache key including filters (catalogs have longer TTL)
+      const filterKey = JSON.stringify(filters);
+      const cacheKeyRisks = `risks-bootstrap:risks:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
+      const cacheKeyCatalogs = `risks-bootstrap:catalogs:${CACHE_VERSION}`;
+      
+      // Try to get catalogs from cache (5 min TTL - they rarely change)
+      let catalogs = await distributedCache.get(cacheKeyCatalogs);
+      
+      // If catalogs not cached, fetch them in parallel with risks
+      const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
+        const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations] = await Promise.all([
+          storage.getGerencias(),
+          storage.getMacroprocesos(),
+          storage.getProcesses(),
+          storage.getSubprocesosWithOwners(),
+          storage.getProcessOwners(),
+          storage.getAllProcessGerenciasRelations()
+        ]);
+        
+        // Filter out deleted records and map to minimal fields
+        const result = {
+          gerencias: gerencias.filter((g: any) => g.status !== 'deleted').map((g: any) => ({
+            id: g.id, name: g.name, code: g.code
+          })),
+          macroprocesos: macroprocesos.filter((m: any) => m.status !== 'deleted').map((m: any) => ({
+            id: m.id, name: m.name, code: m.code, gerenciaId: m.gerenciaId
+          })),
+          processes: processes.filter((p: any) => p.status !== 'deleted').map((p: any) => ({
+            id: p.id, name: p.name, code: p.code, macroprocesoId: p.macroprocesoId
+          })),
+          subprocesos: subprocesos.filter((s: any) => s.status !== 'deleted').map((s: any) => ({
+            id: s.id, name: s.name, code: s.code, processId: s.processId, ownerName: s.ownerName, ownerPosition: s.ownerPosition
+          })),
+          processOwners: processOwners.map((po: any) => ({
+            id: po.id, name: po.name, position: po.position
+          })),
+          processGerencias: processGerenciasRelations
+        };
+        
+        // Cache catalogs for 5 minutes
+        await distributedCache.set(cacheKeyCatalogs, result, 300);
+        return result;
+      })();
+      
+      // Build SQL query for risks with only necessary columns
+      const risksPromise = (async () => {
+        // Try risks cache first
+        const cachedRisks = await distributedCache.get(cacheKeyRisks);
+        if (cachedRisks) {
+          console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - requestStart}ms`);
+          return cachedRisks;
+        }
+        
+        // Build WHERE conditions
+        const conditions: any[] = [sql`r.status <> 'deleted'`];
+        
+        if (filters.status && filters.status !== 'all') {
+          conditions.push(sql`r.status = ${filters.status}`);
+        }
+        
+        if (filters.search) {
+          const searchPattern = `%${filters.search}%`;
+          conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
+        }
+        
+        if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+          conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
+        }
+        
+        if (filters.processId && filters.processId !== 'all') {
+          conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
+        }
+        
+        if (filters.subprocesoId && filters.subprocesoId !== 'all') {
+          conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
+        }
+        
+        const whereClause = conditions.length > 0 
+          ? sql`WHERE ${sql.join(conditions, sql` AND `)}` 
+          : sql``;
+        
+        // Optimized SQL: Get risks with control count and residual risk pre-calculated
+        // Only select columns needed by the table
+        const risksResult = await db.execute(sql`
+          SELECT 
+            r.id,
+            r.code,
+            r.name,
+            r.status,
+            r.probability,
+            r.impact,
+            r.inherent_risk,
+            r.evaluation_method,
+            r.macroproceso_id,
+            r.process_id,
+            r.subproceso_id,
+            r.category,
+            r.created_at,
+            COALESCE(cs.control_count, 0) as control_count,
+            COALESCE(cs.residual_risk, r.inherent_risk) as calculated_residual
+          FROM risks r
+          LEFT JOIN LATERAL (
+            SELECT 
+              COUNT(rc.id) as control_count,
+              CASE 
+                WHEN COUNT(rc.id) > 0 THEN 
+                  r.inherent_risk * (1 - COALESCE(AVG(c.effectiveness), 0) / 100.0)
+                ELSE r.inherent_risk
+              END as residual_risk
+            FROM risk_controls rc
+            INNER JOIN controls c ON rc.control_id = c.id
+            WHERE rc.risk_id = r.id AND c.deleted_at IS NULL
+          ) cs ON true
+          ${whereClause}
+          ORDER BY r.created_at DESC
+          LIMIT ${limit} OFFSET ${offset}
+        `);
+        
+        // Get total count for pagination
+        const countResult = await db.execute(sql`
+          SELECT COUNT(*)::int as total 
+          FROM risks r
+          ${whereClause}
+        `);
+        const total = (countResult.rows[0] as any)?.total || 0;
+        
+        const result = {
+          data: risksResult.rows.map((row: any) => ({
+            id: row.id,
+            code: row.code,
+            name: row.name,
+            status: row.status,
+            probability: row.probability,
+            impact: row.impact,
+            inherentRisk: row.inherent_risk,
+            evaluationMethod: row.evaluation_method,
+            macroprocesoId: row.macroproceso_id,
+            processId: row.process_id,
+            subprocesoId: row.subproceso_id,
+            category: row.category,
+            createdAt: row.created_at,
+            controlCount: parseInt(row.control_count) || 0,
+            calculatedResidual: parseFloat(row.calculated_residual) || row.inherent_risk
+          })),
+          pagination: {
+            limit,
+            offset,
+            total,
+            hasMore: offset + limit < total
+          }
+        };
+        
+        // Cache risks for 15 seconds
+        await distributedCache.set(cacheKeyRisks, result, 15);
+        return result;
+      })();
+      
+      // Execute both in parallel
+      const [catalogsResult, risksResult] = await Promise.all([catalogsPromise, risksPromise]);
+      
+      const response = {
+        risks: risksResult,
+        catalogs: catalogsResult,
+        _meta: {
+          fetchedAt: new Date().toISOString(),
+          duration: Date.now() - requestStart
+        }
+      };
+      
+      console.log(`[PERF] /api/risks/bootstrap COMPLETE in ${Date.now() - requestStart}ms`, {
+        risksCount: risksResult.data.length,
+        total: risksResult.pagination.total,
+        catalogsCached: !!catalogs
+      });
+      
+      res.json(response);
+    } catch (error) {
+      console.error("[ERROR] /api/risks/bootstrap failed:", error);
+      res.status(500).json({ message: "Failed to fetch risks bootstrap data" });
+    }
+  });
+
   // Risks
   app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
