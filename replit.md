@@ -129,6 +129,17 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Frontend optimizations: Uses `availableControlsData` array from optimized endpoint, eliminates client-side O(n·m) loops
 - Result: Modal opens in <500ms vs multiple seconds previously, smooth pagination for large control lists
 
+**Risk Matrix Lite Endpoint - SQL CTE Optimization** (Nov 29, 2025):
+- Created `/api/risk-matrix/lite` endpoint with single optimized SQL query using CTEs
+- Pattern: Pre-aggregate control effectiveness, validation status, and process links using WITH clauses, then JOIN once
+- SQL computes residual probability/impact directly: `ROUND(probability * prob_factor, 1)` with 0.1-5 bounds
+- Separated catalog data into independent endpoints with 5-10min cache:
+  - `/api/lookups/macroprocesos`, `/api/lookups/processes`, `/api/lookups/subprocesos`
+  - `/api/lookups/gerencias`, `/api/lookups/risk-categories`
+- Frontend refactored to load risks first (instant display) then catalogs in parallel
+- Cache invalidation: All lookup keys added to `invalidateRiskControlCaches()` function
+- Result: **99.9% improvement** (89s → 87ms cache cold, ~10ms cache warm)
+
 ## Core Features
 
 -   **Authentication System**: Replit Auth with various providers and mock fallback.
