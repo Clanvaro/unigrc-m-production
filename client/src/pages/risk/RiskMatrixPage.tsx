@@ -26,6 +26,12 @@ interface HeatmapDataPoint {
   subprocesoId: string | null;
 }
 
+interface RiskMatrixBootstrapData {
+  macroprocesos: Array<{ id: string; code: string; name: string; type: string }>;
+  processes: Array<{ id: string; code: string; name: string; macroprocesoId: string }>;
+  heatmapData: HeatmapDataPoint[];
+}
+
 export default function RiskMatrixPage() {
   const [mode, setMode] = useState<'inherent' | 'residual'>('inherent');
   const [filters, setFilters] = useState({
@@ -39,19 +45,19 @@ export default function RiskMatrixPage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  // Fetch heatmap data
-  const { data: heatmapData = [], isLoading } = useQuery<HeatmapDataPoint[]>({
-    queryKey: ["/api/risks/heatmap-data"],
+  // OPTIMIZED: Single bootstrap call instead of 3 separate API calls
+  // Reduces 3 HTTP requests to 1, with granular backend caching
+  const { data: bootstrapData, isLoading } = useQuery<RiskMatrixBootstrapData>({
+    queryKey: ["/api/risk-matrix/bootstrap"],
+    staleTime: 30000, // 30 seconds
+    gcTime: 1000 * 60 * 5, // 5 minutes cache
+    refetchOnWindowFocus: false,
   });
 
-  // Fetch processes for filters
-  const { data: macroprocesos = [] } = useQuery<any[]>({
-    queryKey: ["/api/macroprocesos"],
-  });
-
-  const { data: processes = [] } = useQuery<any[]>({
-    queryKey: ["/api/processes"],
-  });
+  // Extract data from bootstrap response
+  const heatmapData = bootstrapData?.heatmapData || [];
+  const macroprocesos = bootstrapData?.macroprocesos || [];
+  const processes = bootstrapData?.processes || [];
 
   // Aplicar filtros
   const filteredData = heatmapData.filter((risk) => {

@@ -13669,11 +13669,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const macroproceso = await storage.createMacroproceso(dataWithAudit);
       
-      // Invalidate caches after creation
+      // Invalidate caches after creation (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0),
-        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
       
       res.status(201).json(macroproceso);
@@ -13691,11 +13692,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Macroproceso not found" });
       }
       
-      // Invalidate caches after update
+      // Invalidate caches after update (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0),
-        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
       
       res.json(macroproceso);
@@ -13732,11 +13734,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Atomic reorder using storage method
       const reorderedMacroprocesos = await storage.reorderMacroprocesos(updates);
       
-      // Invalidate caches after reorder
+      // Invalidate caches after reorder (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0),
-        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
       
       res.json({ 
@@ -13788,11 +13791,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Macroproceso not found" });
       }
       
-      // Invalidate caches after delete
+      // Invalidate caches after delete (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0),
-        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
+        distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
+        distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
       
       res.status(204).send();

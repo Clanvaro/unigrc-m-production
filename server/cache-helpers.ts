@@ -91,8 +91,13 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
     ]);
     
-    // 6. Risk matrix caches
+    // 6. Risk matrix caches (including bootstrap granular caches)
     await invalidateRiskMatrixCache();
+    await Promise.all([
+      distributedCache.invalidate(`risk-matrix:macroprocesos:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-matrix:processes:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-matrix:heatmap:${TENANT_KEY}`),
+    ]);
     
     const duration = Date.now() - startTime;
     console.log(`✅ [CACHE INVALIDATION COMPLETE] All risk-control caches invalidated in ${duration}ms (version: ${CACHE_VERSION})`);
