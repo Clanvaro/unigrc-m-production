@@ -20,7 +20,7 @@ The backend uses Express.js with TypeScript and Zod for validation. Data is stor
 
 The system operates in a single-tenant architecture, with all tenant-specific logic and database columns removed. Key modules like Control Self-Assessment (CSA) and Whistleblower have been completely removed. The system incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment with specific Node.js memory limits and thread pool configurations. Authentication cache has been optimized to reduce API calls significantly.
 
-### Performance Optimizations - Lazy Loading (Nov 2025)
+### Performance Optimizations - Lazy Loading & Batch Queries (Nov 2025)
 
 **Validations Page** (Completed):
 - Already implements tab-based lazy loading: Riesgos tab loads by default, Controles and Planes de Acción load only when accessed
@@ -31,6 +31,12 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Básica tab (default): ~230ms load time, shows core risk data without Process/Responsible/Cargo columns
 - Detalle tab (lazy): +388ms for batch-relations and process-owners data (40% faster initial load)
 - Uses VirtualizedTable with columnsBasic filtering for optimized rendering
+
+**Risk Events Page - Batch Query Optimization** (Nov 29, 2025):
+- Optimized `/api/risk-events/page-data` endpoint: **73% improvement** (1439ms → 387ms)
+- Eliminated N+1 problem: reduced from 90+ queries to 3 batch queries using `inArray()` operator
+- Pattern: Batch load macroprocesos, processes, and subprocesos in parallel, then group results in-memory using Maps for O(1) lookup
+- Result: All 50+ Risk Events load in under 400ms instead of 1.4+ seconds
 
 ## Core Features
 
