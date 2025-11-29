@@ -5701,49 +5701,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getProcesses()
       ]);
       
-      // Load related entities for all events in parallel
-      const eventsForList = await Promise.all(eventsData.map(async (event) => {
-        const [relatedMacroprocesos, relatedProcesses, relatedSubprocesos] = await Promise.all([
-          requireDb()
-            .select({
-              id: macroprocesos.id,
-              name: macroprocesos.name,
-              code: macroprocesos.code
-            })
-            .from(riskEventMacroprocesos)
-            .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
-            .where(eq(riskEventMacroprocesos.riskEventId, event.id)),
-          requireDb()
-            .select({
-              id: processes.id,
-              name: processes.name,
-              code: processes.code
-            })
-            .from(riskEventProcesses)
-            .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
-            .where(eq(riskEventProcesses.riskEventId, event.id)),
-          requireDb()
-            .select({
-              id: subprocesos.id,
-              name: subprocesos.name,
-              code: subprocesos.code
-            })
-            .from(riskEventSubprocesos)
-            .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
-            .where(eq(riskEventSubprocesos.riskEventId, event.id))
-        ]);
-        
-        return {
-          ...event,
-          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
-          relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
-          relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
-          relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
-          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
-          selectedRisks: event.riskId ? [event.riskId] : []
-        };
+      // OPTIMIZED: Batch load all related entities with 3 queries instead of 3*N queries
+      // This reduces ~90 queries to just 3 queries for 30 events
+      const eventIds = eventsData.map(e => e.id);
+      
+      const [allMacroprocesos, allProcesses, allSubprocesos] = await Promise.all([
+        requireDb()
+          .select({
+            riskEventId: riskEventMacroprocesos.riskEventId,
+            id: macroprocesos.id,
+            name: macroprocesos.name,
+            code: macroprocesos.code
+          })
+          .from(riskEventMacroprocesos)
+          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+          .where(inArray(riskEventMacroprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
+        requireDb()
+          .select({
+            riskEventId: riskEventProcesses.riskEventId,
+            id: processes.id,
+            name: processes.name,
+            code: processes.code
+          })
+          .from(riskEventProcesses)
+          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+          .where(inArray(riskEventProcesses.riskEventId, eventIds.length > 0 ? eventIds : ['__none__'])),
+        requireDb()
+          .select({
+            riskEventId: riskEventSubprocesos.riskEventId,
+            id: subprocesos.id,
+            name: subprocesos.name,
+            code: subprocesos.code
+          })
+          .from(riskEventSubprocesos)
+          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+          .where(inArray(riskEventSubprocesos.riskEventId, eventIds.length > 0 ? eventIds : ['__none__']))
+      ]);
+      
+      // Group relations by eventId for O(1) lookup
+      const macroMap = new Map<string, Array<{id: string | null, name: string | null, code: string | null}>>();
+      const processMap = new Map<string, Array<{id: number | null, name: string | null, code: string | null}>>();
+      const subprocesoMap = new Map<string, Array<{id: string | null, name: string | null, code: string | null}>>();
+      
+      for (const m of allMacroprocesos) {
+        if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
+        macroMap.get(m.riskEventId)!.push({ id: m.id, name: m.name, code: m.code });
+      }
+      for (const p of allProcesses) {
+        if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
+        processMap.get(p.riskEventId)!.push({ id: p.id, name: p.name, code: p.code });
+      }
+      for (const s of allSubprocesos) {
+        if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
+        subprocesoMap.get(s.riskEventId)!.push({ id: s.id, name: s.name, code: s.code });
+      }
+      
+      // Build events list with O(1) lookups
+      const eventsForList = eventsData.map(event => ({
+        ...event,
+        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+        relatedMacroprocesos: macroMap.get(event.id) || [],
+        relatedProcesses: processMap.get(event.id) || [],
+        relatedSubprocesos: subprocesoMap.get(event.id) || [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
       }));
       
       const response = {
