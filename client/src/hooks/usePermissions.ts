@@ -7,7 +7,7 @@ interface UserWithRoles extends User {
 }
 
 export function usePermissions() {
-  // Get current authenticated user
+  // Get current authenticated user with optimized cache settings
   const { data: authResponse, isLoading: queryLoading } = useQuery<{
     authenticated: boolean;
     user: {
@@ -24,6 +24,9 @@ export function usePermissions() {
     roles?: Array<{ id: string; role: { name: string; permissions: string[] } }>;
   }>({
     queryKey: ['/api/auth/user'],
+    staleTime: 2 * 60 * 1000, // 2 minutes - auth data rarely changes mid-session
+    gcTime: 10 * 60 * 1000, // 10 minutes cache retention
+    refetchOnMount: false, // Don't refetch on every component mount
   });
 
   const currentUser = authResponse?.user ? {
