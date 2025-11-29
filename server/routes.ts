@@ -1211,9 +1211,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Alias /api/auth/user to /api/auth/me for backward compatibility - both use same handler
   app.get('/api/auth/user', noCacheMiddleware, isAuthenticated, getCurrentUserHandler);
 
-  // Processes - Basic endpoint for fast initial loading
+  // Processes - Basic endpoint for fast initial loading - with 60s distributed cache
   app.get("/api/processes/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      // Try distributed cache first (60s TTL)
+      const cacheKey = `processes-basic:single-tenant`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+      
       // PERFORMANCE: Only fetch process risk levels (not all entities)
       const [processes, allRiskLevels] = await Promise.all([
         storage.getProcessesWithOwners(),
@@ -1236,6 +1243,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riskCount: riskLevels.riskCount
         };
       });
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, basicProcesses, 60);
       
       res.json(basicProcesses);
     } catch (error) {

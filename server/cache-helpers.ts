@@ -82,6 +82,7 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
       distributedCache.invalidate(`subprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`processes:${TENANT_KEY}`),
+      distributedCache.invalidate(`processes-basic:${TENANT_KEY}`),
       distributedCache.invalidate(`macroprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
