@@ -27,6 +27,7 @@ The system operates in a single-tenant architecture. It incorporates robust perf
 -   **Catalog Endpoints**: Separated individual cached endpoints for macroprocesos, processes, subprocesos with 5-10 minute TTL.
 -   **Database Indexing**: Added `idx_actions_origin_deleted` for audit wizard filter optimization.
 -   **Storage Function Batch Loading**: `getRiskProcessLinksByValidationStatus` uses batch-fetch for owner lookups to prevent N+1 queries.
+-   **Connection Pool**: Optimized for Basic-1gb (max=10, min=3 warm connections, 60s idle timeout).
 
 ## Core Features
 

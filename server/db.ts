@@ -51,14 +51,15 @@ if (databaseUrl) {
     ? { rejectUnauthorized: false }  // Render requires SSL
     : (isProduction ? { rejectUnauthorized: false } : false);
   
-  // Optimized pool settings for Render PostgreSQL with SSL
-  // - Higher min connections to avoid cold connection overhead
+  // Optimized pool settings for Render PostgreSQL Basic-1gb (1 GB RAM, 0.5 CPU)
+  // - Higher max connections to leverage upgraded DB capacity
+  // - Min connections for warm pool readiness
   // - Shorter idle timeout to recycle connections before Render closes them
   // - Aggressive keep-alive to maintain connection health
   pool = new Pool({ 
     connectionString: databaseUrl,
-    max: isRenderDb ? 4 : (isPooled ? 6 : 4),  // Reduced max for 0.1 CPU DB (avoid thrashing/contention)
-    min: isRenderDb ? 2 : 1,  // Keep 2 warm connections (balance between readiness and resource usage)
+    max: isRenderDb ? 10 : (isPooled ? 8 : 6),  // Increased for Basic-1gb plan (was 4 for 0.1 CPU)
+    min: isRenderDb ? 3 : 2,  // Keep 3 warm connections for faster response
     idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
@@ -69,8 +70,8 @@ if (databaseUrl) {
   });
   db = drizzle(pool, { schema, logger: true });
   
-  const poolMax = isRenderDb ? 4 : (isPooled ? 6 : 4);
-  const poolMin = isRenderDb ? 2 : 1;
+  const poolMax = isRenderDb ? 10 : (isPooled ? 8 : 6);
+  const poolMin = isRenderDb ? 3 : 2;
   console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
   
   if (isRenderDb) {
