@@ -14059,110 +14059,103 @@ export class DatabaseStorage extends MemStorage {
   async getGerenciasRiskLevels(): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
     // OPTIMIZED: Single SQL query with CTEs replaces ~20+ queries and O(n^2) loops
     // Nov 29, 2025: Refactored to prevent pool saturation under cold-cache load
-    // Maintains full parity with previous weighted/worst_case/average aggregation logic
+    // Hybrid implementation: fast SQL for average/worst_case, accurate logic for weighted
     const startTime = Date.now();
     
     return await withRetry(async () => {
-      // Load config values in parallel with the main query
-      const [result, methodConfig] = await Promise.all([
-        // Main aggregated query using CTEs
-        db.execute(sql`
-          WITH gerencia_risk_mapping AS (
-            -- Risks from macroprocesos (direct + child processes + child subprocesos)
-            SELECT DISTINCT mg.gerencia_id, r.id AS risk_id, r.inherent_risk
-            FROM macroproceso_gerencias mg
-            JOIN risks r ON r.macroproceso_id = mg.macroproceso_id AND r.deleted_at IS NULL
-            
-            UNION
-            
-            SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
-            FROM macroproceso_gerencias mg
-            JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
-            JOIN risks r ON r.process_id = p.id AND r.deleted_at IS NULL
-            
-            UNION
-            
-            SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
-            FROM macroproceso_gerencias mg
-            JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
-            JOIN subprocesos sp ON sp.proceso_id = p.id AND sp.deleted_at IS NULL
-            JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
-            
-            UNION
-            
-            -- Risks from processes (direct + child subprocesos)
-            SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
-            FROM process_gerencias pg
-            JOIN risks r ON r.process_id = pg.process_id AND r.deleted_at IS NULL
-            
-            UNION
-            
-            SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
-            FROM process_gerencias pg
-            JOIN subprocesos sp ON sp.proceso_id = pg.process_id AND sp.deleted_at IS NULL
-            JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
-            
-            UNION
-            
-            -- Risks from subprocesos (direct)
-            SELECT DISTINCT sg.gerencia_id, r.id, r.inherent_risk
-            FROM subproceso_gerencias sg
-            JOIN risks r ON r.subproceso_id = sg.subproceso_id AND r.deleted_at IS NULL
-          ),
-          residual_risks AS (
-            -- Get residual risk for each risk (max from risk_controls, fallback to inherent)
-            SELECT rc.risk_id, MAX(rc.residual_risk) AS residual_risk
-            FROM risk_controls rc
-            WHERE rc.residual_risk IS NOT NULL
-            GROUP BY rc.risk_id
-          ),
-          -- Final aggregation with residual fallback to inherent
-          gerencia_risk_details AS (
-            SELECT 
-              grm.gerencia_id,
-              grm.risk_id,
-              grm.inherent_risk,
-              COALESCE(rr.residual_risk, grm.inherent_risk) AS residual_risk
-            FROM gerencia_risk_mapping grm
-            LEFT JOIN residual_risks rr ON rr.risk_id = grm.risk_id
-          )
-          SELECT 
-            gerencia_id,
-            COUNT(DISTINCT risk_id)::int AS risk_count,
-            COALESCE(AVG(inherent_risk), 0)::float AS inherent_risk_avg,
-            COALESCE(MAX(inherent_risk), 0)::float AS inherent_risk_max,
-            COALESCE(AVG(residual_risk), 0)::float AS residual_risk_avg,
-            COALESCE(MAX(residual_risk), 0)::float AS residual_risk_max
-          FROM gerencia_risk_details
-          GROUP BY gerencia_id
-        `),
-        // Load aggregation method config in parallel with SQL
-        this.getSystemConfig('risk_aggregation_method'),
-      ]);
-      
+      // First, determine the aggregation method
+      const methodConfig = await this.getSystemConfig('risk_aggregation_method');
       const method = methodConfig?.configValue || 'average';
       
-      // Note: 'weighted' aggregation requires per-risk-id iteration which conflicts with 
-      // the single-SQL optimization. For now, we fall back to 'average' for weighted mode
-      // to ensure correctness while maintaining the 99%+ performance improvement.
-      // The original implementation had similar trade-offs with performance vs accuracy.
-      const effectiveMethod = method === 'weighted' ? 'average' : method;
+      // For 'weighted' mode, use the slower but accurate per-risk calculation
       if (method === 'weighted') {
-        console.log('[getGerenciasRiskLevels] Weighted method requested but using average fallback for correctness');
+        return await this.getGerenciasRiskLevelsWeighted(startTime);
       }
       
-      // Build the result map using the effective method
+      // Fast path: Use optimized SQL for average/worst_case
+      const result = await db.execute(sql`
+        WITH gerencia_risk_mapping AS (
+          -- Risks from macroprocesos (direct + child processes + child subprocesos)
+          SELECT DISTINCT mg.gerencia_id, r.id AS risk_id, r.inherent_risk
+          FROM macroproceso_gerencias mg
+          JOIN risks r ON r.macroproceso_id = mg.macroproceso_id AND r.deleted_at IS NULL
+          
+          UNION
+          
+          SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
+          FROM macroproceso_gerencias mg
+          JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
+          JOIN risks r ON r.process_id = p.id AND r.deleted_at IS NULL
+          
+          UNION
+          
+          SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
+          FROM macroproceso_gerencias mg
+          JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
+          JOIN subprocesos sp ON sp.proceso_id = p.id AND sp.deleted_at IS NULL
+          JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
+          
+          UNION
+          
+          -- Risks from processes (direct + child subprocesos)
+          SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
+          FROM process_gerencias pg
+          JOIN risks r ON r.process_id = pg.process_id AND r.deleted_at IS NULL
+          
+          UNION
+          
+          SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
+          FROM process_gerencias pg
+          JOIN subprocesos sp ON sp.proceso_id = pg.process_id AND sp.deleted_at IS NULL
+          JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
+          
+          UNION
+          
+          -- Risks from subprocesos (direct)
+          SELECT DISTINCT sg.gerencia_id, r.id, r.inherent_risk
+          FROM subproceso_gerencias sg
+          JOIN risks r ON r.subproceso_id = sg.subproceso_id AND r.deleted_at IS NULL
+        ),
+        residual_risks AS (
+          -- Get residual risk for each risk (max from risk_controls, fallback to inherent)
+          SELECT rc.risk_id, MAX(rc.residual_risk) AS residual_risk
+          FROM risk_controls rc
+          WHERE rc.residual_risk IS NOT NULL
+          GROUP BY rc.risk_id
+        ),
+        -- Final aggregation with residual fallback to inherent
+        gerencia_risk_details AS (
+          SELECT 
+            grm.gerencia_id,
+            grm.risk_id,
+            grm.inherent_risk,
+            COALESCE(rr.residual_risk, grm.inherent_risk) AS residual_risk
+          FROM gerencia_risk_mapping grm
+          LEFT JOIN residual_risks rr ON rr.risk_id = grm.risk_id
+        )
+        SELECT 
+          gerencia_id,
+          COUNT(DISTINCT risk_id)::int AS risk_count,
+          COALESCE(AVG(inherent_risk), 0)::float AS inherent_risk_avg,
+          COALESCE(MAX(inherent_risk), 0)::float AS inherent_risk_max,
+          COALESCE(AVG(residual_risk), 0)::float AS residual_risk_avg,
+          COALESCE(MAX(residual_risk), 0)::float AS residual_risk_max
+        FROM gerencia_risk_details
+        GROUP BY gerencia_id
+      `);
+      
+      // Build the result map using the configured method
       const gerenciaRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
       
       for (const row of result.rows as any[]) {
         let inherentRisk: number;
         let residualRisk: number;
         
-        if (effectiveMethod === 'worst_case') {
+        if (method === 'worst_case') {
           inherentRisk = row.inherent_risk_max;
           residualRisk = row.residual_risk_max;
         } else {
-          // Default: average (also used as fallback for weighted)
+          // Default: average
           inherentRisk = row.inherent_risk_avg;
           residualRisk = row.residual_risk_avg;
         }
@@ -14179,6 +14172,112 @@ export class DatabaseStorage extends MemStorage {
       
       return gerenciaRiskLevels;
     });
+  }
+
+  // Weighted aggregation path - slower but accurate per-risk calculation
+  private async getGerenciasRiskLevelsWeighted(startTime: number): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
+    console.log('[getGerenciasRiskLevels] Using weighted calculation path');
+    
+    // Load weight and range configs
+    const [criticalWeight, highWeight, mediumWeight, lowWeight, lowMax, mediumMax, highMax] = await Promise.all([
+      this.getSystemConfig('risk_weight_critical').then(cfg => parseFloat(cfg?.configValue || '10')),
+      this.getSystemConfig('risk_weight_high').then(cfg => parseFloat(cfg?.configValue || '7')),
+      this.getSystemConfig('risk_weight_medium').then(cfg => parseFloat(cfg?.configValue || '4')),
+      this.getSystemConfig('risk_weight_low').then(cfg => parseFloat(cfg?.configValue || '1')),
+      this.getSystemConfig('risk_low_max').then(cfg => parseFloat(cfg?.configValue || '6')),
+      this.getSystemConfig('risk_medium_max').then(cfg => parseFloat(cfg?.configValue || '12')),
+      this.getSystemConfig('risk_high_max').then(cfg => parseFloat(cfg?.configValue || '16')),
+    ]);
+    
+    // Get individual risk data for weighted calculation
+    const result = await db.execute(sql`
+      WITH gerencia_risk_mapping AS (
+        SELECT DISTINCT mg.gerencia_id, r.id AS risk_id, r.inherent_risk
+        FROM macroproceso_gerencias mg
+        JOIN risks r ON r.macroproceso_id = mg.macroproceso_id AND r.deleted_at IS NULL
+        UNION
+        SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
+        FROM macroproceso_gerencias mg
+        JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
+        JOIN risks r ON r.process_id = p.id AND r.deleted_at IS NULL
+        UNION
+        SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
+        FROM macroproceso_gerencias mg
+        JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
+        JOIN subprocesos sp ON sp.proceso_id = p.id AND sp.deleted_at IS NULL
+        JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
+        UNION
+        SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
+        FROM process_gerencias pg
+        JOIN risks r ON r.process_id = pg.process_id AND r.deleted_at IS NULL
+        UNION
+        SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
+        FROM process_gerencias pg
+        JOIN subprocesos sp ON sp.proceso_id = pg.process_id AND sp.deleted_at IS NULL
+        JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
+        UNION
+        SELECT DISTINCT sg.gerencia_id, r.id, r.inherent_risk
+        FROM subproceso_gerencias sg
+        JOIN risks r ON r.subproceso_id = sg.subproceso_id AND r.deleted_at IS NULL
+      ),
+      residual_risks AS (
+        SELECT rc.risk_id, MAX(rc.residual_risk) AS residual_risk
+        FROM risk_controls rc
+        WHERE rc.residual_risk IS NOT NULL
+        GROUP BY rc.risk_id
+      )
+      SELECT 
+        grm.gerencia_id,
+        grm.risk_id,
+        grm.inherent_risk,
+        COALESCE(rr.residual_risk, grm.inherent_risk) AS residual_risk
+      FROM gerencia_risk_mapping grm
+      LEFT JOIN residual_risks rr ON rr.risk_id = grm.risk_id
+    `);
+    
+    // Helper to get weight based on risk level
+    const getLevelWeight = (value: number) => {
+      if (value > highMax) return criticalWeight;
+      if (value > mediumMax) return highWeight;
+      if (value > lowMax) return mediumWeight;
+      return lowWeight;
+    };
+    
+    // Group risks by gerencia and calculate weighted averages
+    const gerenciaData = new Map<string, { inherentValues: number[], residualValues: number[] }>();
+    
+    for (const row of result.rows as any[]) {
+      const gerenciaId = row.gerencia_id;
+      if (!gerenciaData.has(gerenciaId)) {
+        gerenciaData.set(gerenciaId, { inherentValues: [], residualValues: [] });
+      }
+      const data = gerenciaData.get(gerenciaId)!;
+      if (row.inherent_risk != null) data.inherentValues.push(Number(row.inherent_risk));
+      if (row.residual_risk != null) data.residualValues.push(Number(row.residual_risk));
+    }
+    
+    // Calculate weighted averages per gerencia
+    const gerenciaRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
+    
+    for (const [gerenciaId, data] of gerenciaData) {
+      const calculateWeighted = (values: number[]): number => {
+        if (values.length === 0) return 0;
+        const weightedSum = values.reduce((sum, val) => sum + (val * getLevelWeight(val)), 0);
+        const totalWeight = values.reduce((sum, val) => sum + getLevelWeight(val), 0);
+        return totalWeight > 0 ? weightedSum / totalWeight : 0;
+      };
+      
+      gerenciaRiskLevels.set(gerenciaId, {
+        inherentRisk: calculateWeighted(data.inherentValues),
+        residualRisk: calculateWeighted(data.residualValues),
+        riskCount: data.inherentValues.length
+      });
+    }
+    
+    const duration = Date.now() - startTime;
+    console.log(`[getGerenciasRiskLevels] Weighted calculation completed in ${duration}ms, ${gerenciaRiskLevels.size} gerencias`);
+    
+    return gerenciaRiskLevels;
   }
 
   // ============== PROCESS GERENCIAS RELATIONS ==============

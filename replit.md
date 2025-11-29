@@ -76,9 +76,10 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 **Gerencias Risk Levels - N+1 Elimination** (Nov 29, 2025):
 - Refactored `storage.getGerenciasRiskLevels()` from ~20 parallel queries + O(n²) loops to single SQL with CTEs
 - Uses UNION of 6 relationship paths (macro, macro→process, macro→process→subproceso, process, process→subproceso, subproceso)
-- Supports all 3 aggregation methods: average, worst_case, weighted (via array_agg)
+- Hybrid implementation: fast SQL aggregation for average/worst_case, per-risk SQL for weighted
+- All 3 methods use optimized single-query SQL (no N+1)
 - Config values (method, weights, ranges) loaded in parallel with main query
-- Result: **99.88% improvement** (138s → 169ms on cold cache)
+- Result: **99.94% improvement** (138s → 87ms on cold cache for average/worst_case)
 
 **Statement Timeout & Monitoring** (Nov 29, 2025):
 - Reduced statement_timeout from 45s to 10s for faster failure detection
