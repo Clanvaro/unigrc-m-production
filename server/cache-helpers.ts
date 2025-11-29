@@ -80,20 +80,25 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidatePattern(`validation:controls:*:${TENANT_KEY}`),
     ]);
     
-    // 5. Association and entity caches
+    // 5. Association and entity caches (including storage-level caches)
     await Promise.all([
       distributedCache.invalidatePattern(`risk-control-associations:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
-      distributedCache.invalidate(`subprocesos:${TENANT_KEY}`),
+      // Storage-level catalog caches
+      distributedCache.invalidate(`gerencias:${TENANT_KEY}`),
+      distributedCache.invalidate(`macroprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`processes:${TENANT_KEY}`),
       distributedCache.invalidate(`processes-basic:${TENANT_KEY}`),
-      distributedCache.invalidate(`macroprocesos:${TENANT_KEY}`),
+      distributedCache.invalidate(`subprocesos:${TENANT_KEY}`),
+      distributedCache.invalidate(`subprocesos-with-owners:${TENANT_KEY}`),
+      // Legacy keys
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
       distributedCache.invalidate(`gerencias-risk-levels:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`gerencias-risk-levels:${TENANT_KEY}`),
       // Consolidated risks page data cache
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
     ]);
     
     // 6. Risk matrix caches (including bootstrap granular caches)

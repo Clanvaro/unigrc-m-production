@@ -4659,6 +4659,14 @@ export class MemStorage implements IStorage {
   }
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
+    const cacheKey = 'subprocesos-with-owners:single-tenant';
+    
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    
     const results = await db
       .select({
         subproceso: subprocesos,
@@ -4668,10 +4676,14 @@ export class MemStorage implements IStorage {
       .leftJoin(processOwners, eq(subprocesos.ownerId, processOwners.id))
       .where(isNull(subprocesos.deletedAt));
 
-    return results.map(result => ({
+    const result = results.map(result => ({
       ...result.subproceso,
       owner: result.owner,
     }));
+    
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
+    return result;
   }
 
   async getSubproceso(id: string): Promise<Subproceso | undefined> {
@@ -7936,8 +7948,20 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== MACROPROCESOS - Use Database ==============
   async getMacroprocesos(): Promise<Macroproceso[]> {
-    return await db.select().from(macroprocesos)
+    const cacheKey = 'macroprocesos:single-tenant';
+    
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    
+    const result = await db.select().from(macroprocesos)
       .where(isNull(macroprocesos.deletedAt));
+    
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
+    return result;
   }
 
   async createMacroproceso(insertMacroproceso: InsertMacroproceso): Promise<Macroproceso> {
@@ -8081,8 +8105,20 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== PROCESSES - Use Database ==============
   async getProcesses(): Promise<Process[]> {
-    return await db.select().from(processes)
+    const cacheKey = 'processes:single-tenant';
+    
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    
+    const result = await db.select().from(processes)
       .where(isNull(processes.deletedAt));
+    
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
+    return result;
   }
 
   async getProcessesWithOwners(): Promise<ProcessWithOwner[]> {
@@ -13912,11 +13948,23 @@ export class DatabaseStorage extends MemStorage {
   // ============== GERENCIAS DATABASE IMPLEMENTATION ==============
   
   async getGerencias(): Promise<Gerencia[]> {
-    return await withRetry(async () => {
+    const cacheKey = 'gerencias:single-tenant';
+    
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    
+    const result = await withRetry(async () => {
       return await db.select().from(gerencias)
         .where(isNull(gerencias.deletedAt))
         .orderBy(gerencias.level, gerencias.order);
     });
+    
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
+    return result;
   }
 
   async getGerenciasHierarchy(): Promise<Gerencia[]> {
