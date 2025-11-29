@@ -2182,6 +2182,232 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===================================================================================
+  // OPTIMIZED RISK MATRIX ENDPOINTS (Nov 2025)
+  // Strategy: Separate heatmap-minimal data from catalogs for faster initial load
+  // ===================================================================================
+
+  // LITE endpoint: Returns ONLY data needed to render heatmap (no heavy JOINs)
+  // Frontend loads catalogs separately via /api/lookups/* endpoints
+  app.get("/api/risk-matrix/lite", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    try {
+      const cacheKey = `risk-matrix-lite:${CACHE_VERSION}:single-tenant`;
+      
+      const cachedData = await distributedCache.get(cacheKey);
+      if (cachedData) {
+        console.log(`[CACHE HIT] /api/risk-matrix/lite in ${Date.now() - startTime}ms`);
+        return res.json(cachedData);
+      }
+      
+      // Single optimized SQL query for heatmap data
+      // Calculates residual risk factors directly in SQL
+      const heatmapData = await requireDb().execute(sql`
+        WITH risk_control_factors AS (
+          SELECT 
+            rc.risk_id,
+            -- Product of (1 - effectiveness/100) per target
+            EXP(SUM(CASE 
+              WHEN c.effect_target IN ('probability', 'both') 
+              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+              ELSE 0 
+            END)) as prob_factor,
+            EXP(SUM(CASE 
+              WHEN c.effect_target IN ('impact', 'both') 
+              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+              ELSE 0 
+            END)) as impact_factor,
+            COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count
+          FROM risk_controls rc
+          JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+          GROUP BY rc.risk_id
+        ),
+        risk_validation_status AS (
+          SELECT 
+            rpl.risk_id,
+            CASE 
+              WHEN COUNT(*) = 0 THEN 'pending'
+              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
+              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
+              WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
+              ELSE 'pending'
+            END as aggregated_status
+          FROM risk_process_links rpl
+          GROUP BY rpl.risk_id
+        ),
+        risk_process_primary AS (
+          SELECT DISTINCT ON (rpl.risk_id)
+            rpl.risk_id,
+            rpl.macroproceso_id,
+            rpl.process_id,
+            rpl.subproceso_id
+          FROM risk_process_links rpl
+          ORDER BY rpl.risk_id, rpl.created_at
+        )
+        SELECT 
+          r.id,
+          r.code,
+          r.name,
+          r.category,
+          r.probability,
+          r.impact,
+          r.inherent_risk,
+          COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
+          COALESCE(rpp.process_id, r.process_id) as process_id,
+          COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
+          COALESCE(rvs.aggregated_status, 'pending') as validation_status,
+          COALESCE(rcf.control_count, 0) as control_count,
+          -- Calculate residual probability/impact
+          GREATEST(0.1, LEAST(5, ROUND(
+            r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
+          ))) as residual_probability,
+          GREATEST(0.1, LEAST(5, ROUND(
+            r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
+          ))) as residual_impact
+        FROM risks r
+        LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
+        LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
+        LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
+        WHERE r.status = 'active' 
+          AND r.deleted_at IS NULL
+        ORDER BY r.inherent_risk DESC
+      `);
+      
+      // Get risk level ranges config
+      const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config => 
+        config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+      );
+      
+      const result = {
+        risks: heatmapData.rows,
+        riskLevelRanges,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      
+      console.log(`[CACHE MISS] /api/risk-matrix/lite computed in ${Date.now() - startTime}ms (${heatmapData.rows.length} risks)`);
+      res.json(result);
+    } catch (error) {
+      console.error("Error fetching risk matrix lite data:", error);
+      res.status(500).json({ message: "Failed to fetch risk matrix data" });
+    }
+  });
+
+  // LOOKUPS endpoints: Cached catalogs that change rarely (5 min cache)
+  app.get("/api/lookups/macroprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `lookups:macroprocesos:single-tenant`;
+      const cached = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          const data = await storage.getMacroprocesos();
+          return data.filter((m: any) => !m.deletedAt).map((m: any) => ({
+            id: m.id,
+            code: m.code,
+            name: m.name,
+            type: m.type,
+            gerenciaId: m.gerenciaId
+          }));
+        },
+        300 // 5 minutes
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroprocesos" });
+    }
+  });
+
+  app.get("/api/lookups/processes", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `lookups:processes:single-tenant`;
+      const cached = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          const data = await storage.getProcesses();
+          return data.filter((p: any) => !p.deletedAt).map((p: any) => ({
+            id: p.id,
+            code: p.code,
+            name: p.name,
+            macroprocesoId: p.macroprocesoId
+          }));
+        },
+        300 // 5 minutes
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch processes" });
+    }
+  });
+
+  app.get("/api/lookups/subprocesos", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `lookups:subprocesos:single-tenant`;
+      const cached = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          const data = await storage.getSubprocesos();
+          return data.filter((s: any) => !s.deletedAt).map((s: any) => ({
+            id: s.id,
+            code: s.code,
+            name: s.name,
+            procesoId: s.procesoId
+          }));
+        },
+        300 // 5 minutes
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch subprocesos" });
+    }
+  });
+
+  app.get("/api/lookups/gerencias", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `lookups:gerencias:single-tenant`;
+      const cached = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          const data = await storage.getGerencias();
+          return data.filter((g: any) => !g.deletedAt).map((g: any) => ({
+            id: g.id,
+            code: g.code,
+            name: g.name,
+            level: g.level,
+            parentId: g.parentId
+          }));
+        },
+        300 // 5 minutes
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias" });
+    }
+  });
+
+  app.get("/api/lookups/risk-categories", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `lookups:risk-categories:single-tenant`;
+      const cached = await distributedCache.getOrSet(
+        cacheKey,
+        async () => {
+          const data = await storage.getRiskCategories();
+          return data.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            color: c.color
+          }));
+        },
+        300 // 5 minutes
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch risk categories" });
+    }
+  });
+
+  // LEGACY: Keep old endpoint for backward compatibility (deprecate later)
   // Aggregated endpoint for risk matrix - loads all data in one call
   app.get("/api/risk-matrix", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
