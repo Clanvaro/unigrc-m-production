@@ -53,6 +53,11 @@ The system operates in a single-tenant architecture, with all tenant-specific lo
 - Cache miss: ~912ms, Cache hit: ~9ms (99% improvement)
 - Proper cache invalidation in macroproceso/process/risk mutations
 
+**Processes Basic Endpoint - Distributed Caching** (Nov 29, 2025):
+- Added 60s distributed Redis cache to `/api/processes/basic` endpoint
+- Cache key: `processes-basic:single-tenant`, properly invalidated in `invalidateRiskControlCaches()`
+- Result: Cache hit ~10ms vs cache miss ~1597ms (99% improvement on repeated loads)
+
 **Database Connection Pool Optimization** (Nov 29, 2025):
 - Optimized for Render PostgreSQL with SSL connections
 - Pool configuration: min 5, max 15 connections (increased from 3-12)
