@@ -13,6 +13,7 @@ import { normalizePaginationParams, createPaginatedResponse } from "./pagination
 import { analyzeCriticalQuery, analyzeAllCriticalQueries, CRITICAL_QUERIES, type CriticalQueryKey } from './performance/query-analyzer';
 // New performance services
 import { distributedCache } from './services/redis';
+import { twoTierCache, getCacheStatsForEndpoint } from './services/two-tier-cache';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
 import { 
@@ -36,7 +37,7 @@ import { ObjectPermission } from "./objectAcl";
 import approvalRoutes from "./approval-routes";
 import setupRevalidationRoutes from "./revalidation-routes";
 import { calculateProbability, type ProbabilityFactors, type ProbabilityWeights, calculateDynamicProbability, type DynamicProbabilityFactors, type DynamicCriterion } from "@shared/probability-calculation";
-import { 
+import {
   insertMacroprocesoSchema,
   insertProcessSchema,
   insertSubprocesoSchema,
@@ -44,7 +45,7 @@ import {
   insertRiskSchema,
   insertRiskEventSchema,
   baseInsertRiskSchema,
-  insertControlSchema, 
+  insertControlSchema,
   insertControlEvaluationCriteriaSchema,
   insertControlEvaluationOptionsSchema,
   insertControlEvaluationSchema,
@@ -155,7 +156,7 @@ async function syncActionPlanValidation(actionPlanCode: string, validationData: 
   if (!db) {
     throw new Error("Database not available");
   }
-  
+
   await requireDb()
     .update(actions)
     .set(validationData)
@@ -166,7 +167,7 @@ async function syncActionPlanValidation(actionPlanCode: string, validationData: 
 // Error tipado para cuando no se encuentra tenant activo
 class ActiveTenantError extends Error {
   statusCode: number;
-  
+
   constructor(message: string = "No active tenant found") {
     super(message);
     this.name = "ActiveTenantError";
@@ -182,15 +183,15 @@ class ActiveTenantError extends Error {
  * @returns Promise<{ tenantId: string, userId: string | null }>
  */
 export async function resolveActiveTenant(
-  req: Request, 
+  req: Request,
   options: { required?: boolean } = {}
 ): Promise<{ tenantId: string; userId: string | null }> {
   // Single-tenant mode: always return a constant tenant ID
   const SINGLE_TENANT_ID = 'default';
-  
+
   // Get userId from authenticated user
   const userId = (req as any).user?.claims?.sub || (req as any).user?.id || null;
-  
+
   return { tenantId: SINGLE_TENANT_ID, userId };
 }
 
@@ -206,15 +207,15 @@ export async function resolveActiveTenant(
  * @returns Promise<string | null> - el tenantId como string, o null si no está disponible y required=false
  */
 async function resolveActiveTenantId(
-  req: Request, 
+  req: Request,
   options: { required?: boolean } = {}
 ): Promise<string | null> {
   const { tenantId } = await resolveActiveTenant(req, options);
-  
+
   if (options.required && !tenantId) {
     throw new ActiveTenantError("No active tenant found. Please ensure user has at least one tenant assigned.");
   }
-  
+
   return tenantId;
 }
 
@@ -378,7 +379,7 @@ const upload = multer({
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/msword',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'application/vnd.ms-powerpoint',
@@ -388,7 +389,7 @@ const upload = multer({
       'text/plain',
       'text/csv'
     ];
-    
+
     if (allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -446,17 +447,17 @@ function getAuthenticatedUserId(req: any, options: { allowDevDemo?: boolean } = 
   // In development, isAuthenticated middleware sets req.user.id
   // In production with Replit Auth, it's in req.user.claims.sub
   const userId = req.user?.id || req.user?.claims?.sub;
-  
+
   // Check if user is authenticated
   if (userId) {
     return userId;
   }
-  
+
   // Development fallback - use demo user when not authenticated
   if (process.env.NODE_ENV === 'development' && options.allowDevDemo !== false) {
     return "user-1";
   }
-  
+
   // Production - require authentication
   throw new Error("User not authenticated");
 }
@@ -465,7 +466,7 @@ function getAuthenticatedUserId(req: any, options: { allowDevDemo?: boolean } = 
 function requirePermission(permission: string) {
   return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
     let userId: string;
-    
+
     // Use centralized helper to get authenticated user ID
     // This handles both OAuth (req.user.claims.sub) and local auth (req.user.id)
     try {
@@ -474,20 +475,20 @@ function requirePermission(permission: string) {
       // User not authenticated and not in development mode
       return res.status(401).json({ message: "Autenticación requerida" });
     }
-    
+
     // Set development mock user if not already set (development only)
     if (process.env.NODE_ENV === 'development' && !req.user) {
       // SINGLE-TENANT MODE: Use constant tenant ID
       const activeTenantId = 'single-tenant';
       let permissions: string[] = [];
-      
+
       try {
         // Load user's permissions from global roles
         permissions = (await storage.getUserPermissions(userId)) ?? [];
       } catch (error) {
         console.error("[requirePermission] Error getting user permissions:", error);
       }
-      
+
       (req as any).user = {
         id: userId,
         username: 'admin',
@@ -496,13 +497,13 @@ function requirePermission(permission: string) {
         permissions
       };
     }
-    
+
     // SINGLE-TENANT ADMIN BYPASS: Admins have all permissions
     // Check both isAdmin (schema property) and isPlatformAdmin (legacy)
     if (req.user?.isAdmin || req.user?.isPlatformAdmin) {
       return next();
     }
-    
+
     try {
       // Check for exact permission match
       const hasExactPermission = await storage.hasPermission(userId, permission);
@@ -512,7 +513,7 @@ function requirePermission(permission: string) {
 
       // PERMISSION MAPPING GAP FIX: Check for wildcard permissions
       // Dynamic permission mapping for better maintainability
-      
+
       // Check if user has view_all for any permission that starts with "view_"
       if (permission.startsWith('view_')) {
         const hasViewAll = await storage.hasPermission(userId, 'view_all');
@@ -522,12 +523,12 @@ function requirePermission(permission: string) {
       }
 
       // Check if user has edit_all for any write/manage/create/delete permission
-      if (permission.startsWith('manage_') || permission.startsWith('create_') || 
-          permission.startsWith('edit_') || permission.startsWith('delete_') ||
-          permission === 'validate_risks' || permission === 'update_audit_progress' || 
-          permission === 'review_audit_tests' || permission === 'create_work_logs' ||
-          permission === 'review_work_logs' || permission === 'validate_assignments' || 
-          permission === 'validate_transitions') {
+      if (permission.startsWith('manage_') || permission.startsWith('create_') ||
+        permission.startsWith('edit_') || permission.startsWith('delete_') ||
+        permission === 'validate_risks' || permission === 'update_audit_progress' ||
+        permission === 'review_audit_tests' || permission === 'create_work_logs' ||
+        permission === 'review_work_logs' || permission === 'validate_assignments' ||
+        permission === 'validate_transitions') {
         const hasEditAll = await storage.hasPermission(userId, 'edit_all');
         if (hasEditAll) {
           return next();
@@ -547,18 +548,18 @@ function requirePermission(permission: string) {
 function requirePlatformAdmin() {
   return (req: Request & { user?: any }, res: Response, next: NextFunction) => {
     const user = req.user;
-    
+
     // Verificar autenticación
     if (!user) {
       return res.status(401).json({ message: "Autenticación requerida" });
     }
-    
+
     // Verificar flag isAdmin o isPlatformAdmin de la sesión (ya populado por Passport)
     // Ambos flags son válidos dependiendo de cómo se deserializó la sesión
     if (!user.isAdmin && !user.isPlatformAdmin) {
       return res.status(403).json({ message: "Acceso denegado: se requiere ser administrador de plataforma" });
     }
-    
+
     next();
   };
 }
@@ -566,15 +567,15 @@ function requirePlatformAdmin() {
 // Middleware para serializar recursivamente todas las fechas a ISO strings
 function serializeDatesToISO(obj: any): any {
   if (obj === null || obj === undefined) return obj;
-  
+
   if (obj instanceof Date) {
     return obj.toISOString();
   }
-  
+
   if (Array.isArray(obj)) {
     return obj.map(item => serializeDatesToISO(item));
   }
-  
+
   if (typeof obj === 'object') {
     const result: any = {};
     for (const key in obj) {
@@ -584,7 +585,7 @@ function serializeDatesToISO(obj: any): any {
     }
     return result;
   }
-  
+
   return obj;
 }
 
@@ -592,7 +593,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Middleware global para serializar todas las fechas a ISO strings ANTES de enviar la respuesta
   app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
-    res.json = function(body: any) {
+    res.json = function (body: any) {
       return originalJson(serializeDatesToISO(body));
     };
     next();
@@ -608,9 +609,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
       res.status(statusCode).json(health);
     } catch (error) {
-      res.status(503).json({ 
-        status: 'unhealthy', 
-        database: false, 
+      res.status(503).json({
+        status: 'unhealthy',
+        database: false,
         error: 'Health check failed',
         timestamp: new Date().toISOString()
       });
@@ -623,7 +624,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startTime = Date.now();
       const warmResult = await warmPool(2);
       const poolMetrics = getPoolMetrics();
-      
+
       res.json({
         success: warmResult.success,
         warmupDuration: warmResult.duration,
@@ -633,8 +634,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         timestamp: new Date().toISOString()
       });
     } catch (error) {
-      res.status(500).json({ 
-        success: false, 
+      res.status(500).json({
+        success: false,
         error: 'Warmup failed',
         timestamp: new Date().toISOString()
       });
@@ -652,17 +653,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Small delay between measurements
         if (i < 2) await new Promise(r => setTimeout(r, 100));
       }
-      
+
       // Calculate averages
       const avgConnect = Math.round(measurements.reduce((sum, m) => sum + m.connect, 0) / measurements.length);
       const avgQuery = Math.round(measurements.reduce((sum, m) => sum + m.query, 0) / measurements.length);
       const avgRoundTrip = Math.round(measurements.reduce((sum, m) => sum + m.roundTrip, 0) / measurements.length);
-      
+
       // Log warning if latency is high
       if (avgRoundTrip > 200) {
         console.warn(`[DB LATENCY] HIGH LATENCY DETECTED: avg=${avgRoundTrip}ms (connect=${avgConnect}ms, query=${avgQuery}ms)`);
       }
-      
+
       res.json({
         measurements,
         averages: {
@@ -675,7 +676,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('[DB LATENCY] Error:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Latency measurement failed',
         message: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
@@ -692,20 +693,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const getCurrentUserHandler = async (req: any, res: any) => {
     try {
       const user = req.user as any;
-      
+
       // Check if user is authenticated (includes dev mode check)
       if (!req.isAuthenticated() && process.env.NODE_ENV !== 'development') {
-        const unauthResponse = { 
+        const unauthResponse = {
           authenticated: false,
           user: null,
           permissions: []
         };
         return res.json(unauthResponse);
       }
-      
+
       // Get effective user ID
       const userId = user?.id || (process.env.NODE_ENV === 'development' ? ((req.session as any)?.switchedUserId || 'user-1') : null);
-      
+
       if (!userId) {
         return res.json({
           authenticated: false,
@@ -713,7 +714,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           permissions: []
         });
       }
-      
+
       // OPTIMIZATION: Check in-memory cache first (5 min TTL)
       const cached = authCache.get(userId);
       if (cached) {
@@ -733,13 +734,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
         return res.json(response);
       }
-      
+
       // Cache miss - fetch from database
       const [dbUser, userPermissions] = await Promise.all([
         storage.getUser(userId),
         storage.getUserPermissions(userId)
       ]);
-      
+
       if (!dbUser) {
         return res.json({
           authenticated: false,
@@ -747,7 +748,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           permissions: []
         });
       }
-      
+
       // Store in cache for next request
       authCache.set(userId, {
         user: dbUser,
@@ -755,7 +756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         permissions: userPermissions || [],
         cachedAt: Date.now()
       });
-      
+
       const response = {
         authenticated: true,
         user: {
@@ -770,11 +771,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         permissions: userPermissions || []
       };
-      
+
       return res.json(response);
     } catch (error) {
       console.error('Error in getCurrentUser handler:', error);
-      return res.json({ 
+      return res.json({
         authenticated: false,
         user: null,
         permissions: []
@@ -792,15 +793,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/auth/login', async (req, res) => {
     const loginStart = Date.now();
     const timings: Record<string, number> = {};
-    
+
     const bcrypt = await import('bcrypt');
     timings.bcryptImport = Date.now() - loginStart;
-    
+
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ 
-        message: 'Email y contraseña son requeridos' 
+      return res.status(400).json({
+        message: 'Email y contraseña son requeridos'
       });
     }
 
@@ -809,27 +810,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const dbStart = Date.now();
       const user = await storage.getUserByEmail(email);
       timings.getUserByEmail = Date.now() - dbStart;
-      
+
       if (!user) {
         console.log('[Local Auth] User not found:', email);
-        return res.status(401).json({ 
-          message: 'Credenciales inválidas' 
+        return res.status(401).json({
+          message: 'Credenciales inválidas'
         });
       }
 
       // Check if user is active
       if (!user.isActive) {
         console.log('[Local Auth] User is deactivated:', email);
-        return res.status(401).json({ 
-          message: 'Tu cuenta ha sido desactivada' 
+        return res.status(401).json({
+          message: 'Tu cuenta ha sido desactivada'
         });
       }
 
       // Check if user has a password set
       if (!user.password) {
         console.log('[Local Auth] User has no password set:', email);
-        return res.status(401).json({ 
-          message: 'Tu cuenta no tiene contraseña configurada. Contacta al administrador.' 
+        return res.status(401).json({
+          message: 'Tu cuenta no tiene contraseña configurada. Contacta al administrador.'
         });
       }
 
@@ -837,29 +838,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const bcryptStart = Date.now();
       const isValidPassword = await bcrypt.compare(password, user.password);
       timings.bcryptCompare = Date.now() - bcryptStart;
-      
+
       if (!isValidPassword) {
         console.log('[Local Auth] Invalid password for user:', email);
-        return res.status(401).json({ 
-          message: 'Credenciales inválidas' 
+        return res.status(401).json({
+          message: 'Credenciales inválidas'
         });
       }
 
       console.log('[Local Auth] User authenticated successfully for userId:', user.id);
-      
+
       // SINGLE-TENANT MODE: Only get permissions (no tenant lookup needed)
       const parallelStart = Date.now();
       const userPermissions = await storage.getUserPermissions(user.id);
-      
+
       // Non-critical: update last login timestamp (fire and forget, don't block login)
       storage.updateUserLastLogin(user.id).catch(err => {
         console.warn('[Local Auth] Non-critical: failed to update last login:', err);
       });
       timings.parallelDbQueries = Date.now() - parallelStart;
-      
+
       // SINGLE-TENANT MODE: Use constant tenant ID
       const SINGLE_TENANT_ID = 'single-tenant';
-      
+
       // Create minimal session user object (permissions loaded on demand by middleware)
       const sessionUser = {
         id: user.id,
@@ -935,10 +936,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Only log email in development for debugging
         ...(isProduction ? {} : { email })
       });
-      
+
       // SINGLE-TENANT MODE: Simplified login response
       console.log('[Local Auth] Login successful:', email);
-      return res.json({ 
+      return res.json({
         authenticated: true,
         isPlatformAdmin: user.isAdmin ?? false,
         needsTenantSelection: false,
@@ -947,8 +948,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     } catch (error) {
       console.error('[Local Auth] Login error:', error);
-      return res.status(500).json({ 
-        message: 'Error al procesar el login' 
+      return res.status(500).json({
+        message: 'Error al procesar el login'
       });
     }
   });
@@ -960,28 +961,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const user = (req as any).user;
 
     if (!password || password.length < 8) {
-      return res.status(400).json({ 
-        message: 'La contraseña debe tener al menos 8 caracteres' 
+      return res.status(400).json({
+        message: 'La contraseña debe tener al menos 8 caracteres'
       });
     }
 
     try {
       // Hash the password
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       // Update user password
       await storage.updateUserPassword(user.id, hashedPassword);
-      
+
       console.log('[Set Password] Password set for user:', user.email);
-      
-      return res.json({ 
+
+      return res.json({
         success: true,
-        message: 'Contraseña establecida exitosamente' 
+        message: 'Contraseña establecida exitosamente'
       });
     } catch (error) {
       console.error('[Set Password] Error:', error);
-      return res.status(500).json({ 
-        message: 'Error al establecer la contraseña' 
+      return res.status(500).json({
+        message: 'Error al establecer la contraseña'
       });
     }
   });
@@ -991,19 +992,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { checkDatabaseHealth, getPoolMetrics } = await import('./db');
       const { checkObjectStorageHealth } = await import('./objectStorage');
-      
+
       const startTime = Date.now();
       const [dbHealthy, storageHealthy] = await Promise.all([
         checkDatabaseHealth(),
         checkObjectStorageHealth()
       ]);
       const checkDuration = Date.now() - startTime;
-      
+
       const healthy = dbHealthy && storageHealthy;
       const status = healthy ? 'healthy' : 'degraded';
-      
+
       const storageKind = (storage as any).storageKind || 'Unknown';
-      
+
       // Get deployment info
       const deploymentInfo = {
         environment: process.env.NODE_ENV || 'development',
@@ -1017,7 +1018,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rss: Math.round(process.memoryUsage().rss / 1024 / 1024)
         }
       };
-      
+
       // Get pool metrics (Phase 1 - Nov 23, 2025)
       const poolMetrics = getPoolMetrics();
       const poolHealth = poolMetrics ? {
@@ -1026,10 +1027,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         waitingQueries: poolMetrics.waitingCount,
         maxConnections: poolMetrics.maxConnections,
         utilizationPct: Math.round((poolMetrics.totalCount / poolMetrics.maxConnections) * 100),
-        status: poolMetrics.waitingCount > 5 ? 'saturated' : 
-                poolMetrics.totalCount >= poolMetrics.maxConnections * 0.8 ? 'high' : 'normal'
+        status: poolMetrics.waitingCount > 5 ? 'saturated' :
+          poolMetrics.totalCount >= poolMetrics.maxConnections * 0.8 ? 'high' : 'normal'
       } : null;
-      
+
       // Check critical environment variables
       const criticalEnvVars = {
         DATABASE_URL: !!process.env.DATABASE_URL,
@@ -1037,11 +1038,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         CSRF_SECRET: !!process.env.CSRF_SECRET && process.env.CSRF_SECRET !== 'csrf-secret-key-change-in-production',
         PORT: process.env.PORT || '5000'
       };
-      
+
       const envVarsHealthy = Object.entries(criticalEnvVars)
         .filter(([key]) => key !== 'PORT')
         .every(([_, value]) => value === true);
-      
+
       res.status(healthy ? 200 : 503).json({
         status,
         timestamp: new Date().toISOString(),
@@ -1057,7 +1058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           kind: storageKind,
           databaseConfigured: !!process.env.DATABASE_URL,
           constructorName: storage.constructor.name,
-          warning: storageKind === 'MemStorage' && !!process.env.DATABASE_URL 
+          warning: storageKind === 'MemStorage' && !!process.env.DATABASE_URL
             ? 'DatabaseStorage failed to initialize - check server logs for errors'
             : null
         },
@@ -1080,20 +1081,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/readiness', async (req, res) => {
     try {
       const { checkDatabaseHealth, getPoolMetrics } = await import('./db');
-      
+
       const startTime = Date.now();
       const dbHealthy = await checkDatabaseHealth();
       const checkDuration = Date.now() - startTime;
-      
+
       // Get pool metrics
       const poolMetrics = getPoolMetrics();
-      
+
       // App is ready if:
       // 1. Database is reachable (or no database configured - fallback mode)
       // 2. Pool exists and is not saturated (< 90% utilization)
       let poolOk = true;
       let poolStatus: any = null;
-      
+
       if (poolMetrics) {
         const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
         const activeUtilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
@@ -1104,15 +1105,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           activeConnections,
           totalConnections: poolMetrics.totalCount,
           waitingQueries: poolMetrics.waitingCount,
-          status: poolMetrics.waitingCount > 5 ? 'saturated' : 
-                  activeUtilizationPct >= 80 ? 'high' : 'normal'
+          status: poolMetrics.waitingCount > 5 ? 'saturated' :
+            activeUtilizationPct >= 80 ? 'high' : 'normal'
         };
       }
-      
+
       // Ready means: database is up (or optional) AND pool has capacity
       // If database is required but down, not ready
       const ready = dbHealthy && poolOk;
-      
+
       const response: any = {
         ready,
         timestamp: new Date().toISOString(),
@@ -1124,11 +1125,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           checkDuration: `${checkDuration}ms`
         }
       };
-      
+
       if (poolStatus) {
         response.poolStatus = poolStatus;
       }
-      
+
       // Return 503 if not ready (orchestrator should not route traffic)
       res.status(ready ? 200 : 503).json(response);
     } catch (error) {
@@ -1144,10 +1145,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/metrics', async (req, res) => {
     try {
       const { performanceMonitor } = await import('./middleware/performance');
-      
+
       const globalMetrics = performanceMonitor.getGlobalMetrics();
       const slowestEndpoints = performanceMonitor.getSlowestEndpoints(5);
-      
+
       res.json({
         timestamp: new Date().toISOString(),
         global: globalMetrics,
@@ -1173,11 +1174,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/version', async (req, res) => {
     try {
       const { execSync } = await import('child_process');
-      
+
       let gitCommit = 'unknown';
       let gitBranch = 'unknown';
       let buildTime = new Date().toISOString();
-      
+
       // Try to get git information (may fail in production)
       try {
         gitCommit = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
@@ -1185,7 +1186,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         // Git not available or not in a repo
       }
-      
+
       res.json({
         version: process.env.npm_package_version || '1.0.0',
         gitCommit,
@@ -1206,7 +1207,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // CSRF Protection for state-changing routes
   app.use('/api', csrfProtectionForMutations);
-  
+
   // Rate limiting for API mutations (POST/PUT/PATCH/DELETE)
   app.use('/api', (req, res, next) => {
     const mutationMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -1215,7 +1216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     next();
   });
-  
+
   // Rate limiting for authentication routes (stricter)
   app.use('/api/auth', authRateLimiter);
 
@@ -1225,19 +1226,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Processes - Basic endpoint for fast initial loading - with 60s distributed cache
   app.get("/api/processes/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
-      // Try distributed cache first (60s TTL)
+      // Try two-tier cache first (L1: <1ms, L2: <100ms with timeout)
       const cacheKey = `processes-basic:single-tenant`;
-      const cached = await distributedCache.get(cacheKey);
+      const cached = await twoTierCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // PERFORMANCE: Only fetch process risk levels (not all entities)
       const [processes, allRiskLevels] = await Promise.all([
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
-      
+
       // Return essential fields with risk count for display
       const basicProcesses = processes.map((process) => {
         const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
@@ -1254,10 +1255,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           riskCount: riskLevels.riskCount
         };
       });
-      
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, basicProcesses, 60);
-      
+
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await twoTierCache.set(cacheKey, basicProcesses, 60);
+
       res.json(basicProcesses);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1276,16 +1277,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // PERFORMANCE: Only fetch process risk levels (not all entities)
       const [processes, allRiskLevels] = await Promise.all([
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
-      
+
       // Filter out soft-deleted records
       const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
-      
+
       const processesWithRisks = activeProcesses.map((process) => {
         const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
         return {
@@ -1293,10 +1294,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...riskLevels
         };
       });
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, processesWithRisks, 60);
-      
+
       res.json(processesWithRisks);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1311,23 +1312,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const processId = req.params.id;
       const cacheKey = `risk-levels-all`;
-      
+
       // Try to get from cache first
       let allRiskLevels = riskLevelsCache.get(cacheKey);
-      
+
       if (!allRiskLevels) {
         // Cache miss - compute and cache the result
         allRiskLevels = await storage.getAllRiskLevelsOptimized();
         riskLevelsCache.set(cacheKey, allRiskLevels);
       }
-      
+
       // Get risk levels for this specific process
-      const riskLevels = allRiskLevels.processes.get(processId) || { 
-        inherentRisk: 0, 
-        residualRisk: 0, 
-        riskCount: 0 
+      const riskLevels = allRiskLevels.processes.get(processId) || {
+        inherentRisk: 0,
+        residualRisk: 0,
+        riskCount: 0
       };
-      
+
       res.json(riskLevels);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1360,7 +1361,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Query ALL process codes (including soft-deleted) to avoid duplicates
         const allCodes = await requireDb().select({ code: processes.code })
           .from(processes);
-        
+
         const existingCodes = allCodes.map(p => p.code);
         let nextNumber = 1;
         while (existingCodes.includes(`PROC-${nextNumber.toString().padStart(3, '0')}`)) {
@@ -1368,21 +1369,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         code = `PROC-${nextNumber.toString().padStart(3, '0')}`;
       }
-      
+
       const validatedData = insertProcessSchema.parse({
         ...req.body,
         code
       });
-      
+
       // Inject audit fields (createdBy) using helper function
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withCreatedBy(validatedData, userId);
-      
+
       const process = await storage.createProcess(dataWithAudit);
-      
+
       // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
       await invalidateRiskControlCaches();
-      
+
       res.status(201).json(process);
     } catch (error) {
       console.error("Error creating process:", error);
@@ -1397,10 +1398,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!process) {
         return res.status(404).json({ message: "Process not found" });
       }
-      
+
       // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
       await invalidateRiskControlCaches();
-      
+
       res.json(process);
     } catch (error) {
       res.status(400).json({ message: "Invalid process data" });
@@ -1411,10 +1412,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // First check if process exists
       const process = await storage.getProcess(req.params.id);
       if (!process) {
@@ -1424,12 +1425,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if there are linked risks or subprocesos
       const linkedRisks = await storage.getRisksByProcess(req.params.id);
       const linkedSubprocesos = await storage.getSubprocesosByProceso(req.params.id);
-      
+
       if (linkedRisks.length > 0 || linkedSubprocesos.length > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Cannot delete process with linked risks or subprocesses",
           linkedRisksCount: linkedRisks.length,
-          linkedSubprocessesCount: linkedSubprocesos.length 
+          linkedSubprocessesCount: linkedSubprocesos.length
         });
       }
 
@@ -1441,14 +1442,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Process not found" });
       }
-      
+
       // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
       await invalidateRiskControlCaches();
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1478,7 +1479,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // First remove existing associations
       await storage.removeProcessFromFiscalEntities(req.params.id);
-      
+
       // Then add new associations if any
       if (fiscalEntityIds.length > 0) {
         await storage.assignProcessToFiscalEntities(req.params.id, fiscalEntityIds);
@@ -1498,7 +1499,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const isProd = process.env.NODE_ENV === 'production';
     const requestStart = Date.now();
     const timings: Record<string, number> = {};
-    
+
     // Helper to time async operations - ALWAYS time in production for diagnostics
     const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
       const start = Date.now();
@@ -1506,22 +1507,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       timings[label] = Date.now() - start;
       return result;
     };
-    
+
     try {
       if (profile) {
         console.log('[PROFILE] /api/risks/page-data START', { pool: getPoolMetrics() });
       }
-      
+
       // Measure pre-query phase (middleware + tenant resolution)
       const { tenantId } = await timed('resolveActiveTenant', () => resolveActiveTenant(req, { required: true }));
       const cacheKey = `risks-page-data:${CACHE_VERSION}:${tenantId}`;
-      
+
       // Log time spent before any DB queries (middleware overhead)
       timings['preQuery'] = Date.now() - requestStart;
       if (timings['preQuery'] > 200) {
         console.warn(`[PERF] /api/risks/page-data PRE-QUERY SLOW: ${timings['preQuery']}ms (tenant resolution + middleware)`);
       }
-      
+
       // Try cache first (30 second TTL)
       const cached = await timed('cache:get', () => distributedCache.get(cacheKey));
       if (cached) {
@@ -1531,10 +1532,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         return res.json(cached);
       }
-      
+
       console.log(`[CACHE MISS] ${cacheKey} - fetching all data in parallel`);
       const dbStart = Date.now();
-      
+
       // Fetch all data in parallel for maximum performance
       // When profiling, wrap each call to measure individual times
       const [
@@ -1558,10 +1559,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         timed('db:riskControls', () => storage.getAllRiskControlsWithDetails()),
         timed('db:processGerencias', () => storage.getAllProcessGerenciasRelations())
       ]);
-      
+
       // Measure DB query phase
       timings['dbQueries'] = Date.now() - dbStart;
-      
+
       // Filter out soft-deleted records
       const filterStart = Date.now();
       const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
@@ -1569,7 +1570,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
       const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
       timings['filter'] = Date.now() - filterStart;
-      
+
       const response = {
         gerencias: activeGerencias,
         macroprocesos: activeMacroprocesos,
@@ -1582,16 +1583,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processGerencias: processGerenciasRelations,
         macroprocesoGerencias: [] // Placeholder - can be populated if needed
       };
-      
+
       // Cache for 30 seconds
       await timed('cache:set', () => distributedCache.set(cacheKey, response, 30));
-      
+
       timings['total'] = Date.now() - requestStart;
-      
+
       // Always log timings for diagnostics (>100ms or in production)
       if (profile || isProd || timings['total'] > 100) {
-        console.log('[PERF] /api/risks/page-data COMPLETE', { 
-          timings, 
+        console.log('[PERF] /api/risks/page-data COMPLETE', {
+          timings,
           pool: getPoolMetrics(),
           counts: {
             gerencias: activeGerencias.length,
@@ -1601,11 +1602,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         });
       }
-      
+
       if (profile) {
         res.set('X-Profile-Timings', JSON.stringify(timings));
       }
-      
+
       res.json(response);
     } catch (error) {
       if (profile) {
@@ -1624,20 +1625,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Heavy JOINs (riskProcessLinks, riskControlsWithDetails) are loaded on-demand
   app.get("/api/risks/page-data-lite", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
-      
+
       // Try cache first (60 second TTL - longer since this data changes less frequently)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
-      
+
       console.log(`[CACHE MISS] ${cacheKey} - fetching lite data in parallel`);
-      
+
       // Fetch only essential data for filters (no heavy JOINs)
       const [
         gerencias,
@@ -1654,13 +1655,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getRiskCategories(),
         storage.getAllProcessGerenciasRelations()
       ]);
-      
+
       // Filter out soft-deleted records
       const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
       const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
       const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
       const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
-      
+
       const response = {
         gerencias: activeGerencias,
         macroprocesos: activeMacroprocesos,
@@ -1669,10 +1670,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskCategories,
         processGerencias: processGerenciasRelations
       };
-      
+
       // Cache for 60 seconds (this data changes infrequently)
       await distributedCache.set(cacheKey, response, 60);
-      
+
       console.log(`[PERF] /api/risks/page-data-lite COMPLETE in ${Date.now() - requestStart}ms`, {
         counts: {
           gerencias: activeGerencias.length,
@@ -1681,7 +1682,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           processes: activeProcesses.length
         }
       });
-      
+
       res.json(response);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1696,29 +1697,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Returns aggregated counts of risks per process using SQL GROUP BY (efficient)
   app.get("/api/risks/grouped-by-process", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `risks-grouped-by-process:${CACHE_VERSION}:${tenantId}`;
-      
+
       // Try cache first (60 second TTL)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
-      
+
       // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
       const result = await storage.getRisksGroupedByProcess();
-      
+
       // Sort by risk count descending
       result.sort((a, b) => b.riskCount - a.riskCount);
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, result, 60);
-      
+
       console.log(`[PERF] /api/risks/grouped-by-process COMPLETE in ${Date.now() - requestStart}ms, ${result.length} processes (SQL GROUP BY)`);
-      
+
       res.json(result);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1733,29 +1734,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Returns aggregated counts of risks per process owner using SQL GROUP BY (efficient)
   app.get("/api/risks/grouped-by-owner", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `risks-grouped-by-owner:${CACHE_VERSION}:${tenantId}`;
-      
+
       // Try cache first (60 second TTL)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
-      
+
       // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
       const result = await storage.getRisksGroupedByOwner();
-      
+
       // Sort by risk count descending
       result.sort((a, b) => b.riskCount - a.riskCount);
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, result, 60);
-      
+
       console.log(`[PERF] /api/risks/grouped-by-owner COMPLETE in ${Date.now() - requestStart}ms, ${result.length} owners (SQL GROUP BY)`);
-      
+
       res.json(result);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -1771,12 +1772,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Replaces 5+ parallel API calls with 1 optimized call
   app.get("/api/risks/bootstrap", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       // Parse pagination params (default 50 risks per page)
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Parse filters
       const filters = {
         status: req.query.status as string,
@@ -1789,15 +1790,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         residualRiskLevel: req.query.residualRiskLevel as string,
         ownerId: req.query.ownerId as string,
       };
-      
+
       // Build cache key including filters (catalogs have longer TTL)
       const filterKey = JSON.stringify(filters);
       const cacheKeyRisks = `risks-bootstrap:risks:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
       const cacheKeyCatalogs = `risks-bootstrap:catalogs:${CACHE_VERSION}`;
-      
+
       // Try to get catalogs from cache (5 min TTL - they rarely change)
       let catalogs = await distributedCache.get(cacheKeyCatalogs);
-      
+
       // If catalogs not cached, fetch them in parallel with risks
       const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
         const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations] = await Promise.all([
@@ -1808,7 +1809,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           storage.getProcessOwners(),
           storage.getAllProcessGerenciasRelations()
         ]);
-        
+
         // Filter out deleted records and map to minimal fields
         const result = {
           gerencias: gerencias.filter((g: any) => g.status !== 'deleted').map((g: any) => ({
@@ -1828,12 +1829,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })),
           processGerencias: processGerenciasRelations
         };
-        
+
         // Cache catalogs for 5 minutes
         await distributedCache.set(cacheKeyCatalogs, result, 300);
         return result;
       })();
-      
+
       // Build SQL query for risks with BATCH QUERY pattern (no LEFT JOIN LATERAL)
       // Pattern: Simple risks query + batch control summary query + in-memory calculation
       const risksPromise = (async () => {
@@ -1843,37 +1844,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - requestStart}ms`);
           return cachedRisks;
         }
-        
+
         const batchStart = Date.now();
-        
+
         // Build WHERE conditions
         const conditions: any[] = [sql`r.status <> 'deleted'`];
-        
+
         if (filters.status && filters.status !== 'all') {
           conditions.push(sql`r.status = ${filters.status}`);
         }
-        
+
         if (filters.search) {
           const searchPattern = `%${filters.search}%`;
           conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
         }
-        
+
         if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
           conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
         }
-        
+
         if (filters.processId && filters.processId !== 'all') {
           conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
         }
-        
+
         if (filters.subprocesoId && filters.subprocesoId !== 'all') {
           conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
         }
-        
-        const whereClause = conditions.length > 0 
-          ? sql`WHERE ${sql.join(conditions, sql` AND `)}` 
+
+        const whereClause = conditions.length > 0
+          ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
           : sql``;
-        
+
         // STEP 1: Simple risks query (no joins) - very fast
         const [risksResult, countResult] = await Promise.all([
           db.execute(sql`
@@ -1902,17 +1903,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ${whereClause}
           `)
         ]);
-        
+
         const risks = risksResult.rows as any[];
         const total = (countResult.rows[0] as any)?.total || 0;
-        
+
         // STEP 2: Batch query for control summaries (single query for ALL risks on this page)
         // Only if we have risks to process
         let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number }>();
-        
+
         if (risks.length > 0) {
           const riskIds = risks.map(r => r.id);
-          
+
           // Single batch query: get control count and avg effectiveness per risk
           // Use sql.join to properly build the IN clause for UUID array
           const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
@@ -1926,7 +1927,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
             GROUP BY rc.risk_id
           `);
-          
+
           // Build lookup map for O(1) access
           for (const row of controlSummary.rows as any[]) {
             controlSummaryMap.set(row.risk_id, {
@@ -1935,7 +1936,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           }
         }
-        
+
         // STEP 3: In-memory calculation (O(n) - very fast)
         const data = risks.map((row: any) => {
           const summary = controlSummaryMap.get(row.id);
@@ -1944,13 +1945,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const rawEffectiveness = summary?.avgEffectiveness || 0;
           const avgEffectiveness = Math.max(0, Math.min(100, rawEffectiveness));
           const inherentRisk = parseFloat(row.inherent_risk) || 0;
-          
+
           // Calculate residual risk: inherent * (1 - avg_effectiveness/100)
           // Result is always >= 0 due to clamped effectiveness
-          const calculatedResidual = controlCount > 0 
+          const calculatedResidual = controlCount > 0
             ? inherentRisk * (1 - avgEffectiveness / 100)
             : inherentRisk;
-          
+
           return {
             id: row.id,
             code: row.code,
@@ -1969,9 +1970,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             calculatedResidual
           };
         });
-        
+
         console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls)`);
-        
+
         const result = {
           data,
           pagination: {
@@ -1981,15 +1982,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             hasMore: offset + limit < total
           }
         };
-        
+
         // Cache risks for 30 seconds (increased from 15s for better hit rate)
         await distributedCache.set(cacheKeyRisks, result, 30);
         return result;
       })();
-      
+
       // Execute both in parallel
       const [catalogsResult, risksResult] = await Promise.all([catalogsPromise, risksPromise]);
-      
+
       const response = {
         risks: risksResult,
         catalogs: catalogsResult,
@@ -1998,13 +1999,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           duration: Date.now() - requestStart
         }
       };
-      
+
       console.log(`[PERF] /api/risks/bootstrap COMPLETE in ${Date.now() - requestStart}ms`, {
         risksCount: risksResult.data.length,
         total: risksResult.pagination.total,
         catalogsCached: !!catalogs
       });
-      
+
       res.json(response);
     } catch (error) {
       console.error("[ERROR] /api/risks/bootstrap failed:", error);
@@ -2016,13 +2017,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks-basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `risks-basic:single-tenant`;
-      
+
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CATALOG CACHE HIT] risks-basic`);
         return res.json(cached);
       }
-      
+
       console.log(`[CATALOG CACHE MISS] risks-basic`);
       const data = await requireDb()
         .select({
@@ -2032,10 +2033,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(risks)
         .where(isNull(risks.deletedAt));
-      
+
       // Cache for 5 minutes (risks change more often than processes)
       await distributedCache.set(cacheKey, data, 300);
-      
+
       res.json(data);
     } catch (error) {
       console.error('Error in /api/risks-basic:', error);
@@ -2051,14 +2052,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 50; // Reduced from 1000 to 50
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Cache bypass for debugging
       const bypassCache = req.query.nocache === '1' || req.headers['x-bypass-cache'] === '1';
-      
+
       // Build filters object
       const filters: import('./storage').RiskFilters = {
         search: req.query.search as string,
@@ -2072,10 +2073,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minImpact: req.query.minImpact ? parseInt(req.query.minImpact as string) : undefined,
         maxImpact: req.query.maxImpact ? parseInt(req.query.maxImpact as string) : undefined,
       };
-      
+
       // Create cache key including all filters
       const cacheKey = `risks:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
-      
+
       // Try cache first (unless bypassed)
       if (!bypassCache) {
         const cached = await distributedCache.get(cacheKey);
@@ -2085,14 +2086,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.json(cached);
         }
       }
-      
+
       console.log(`[CACHE ${bypassCache ? 'BYPASS' : 'MISS'}] /api/risks key=${cacheKey.slice(0, 50)}...`);
-      
+
       // Cache miss - query database (single-tenant mode - no tenantId needed)
       const { risks: paginatedRisks, total } = await storage.getRisksPaginated(filters, limit, offset);
-      
+
       console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total}`);
-      
+
       // Prepare response
       const response = {
         data: paginatedRisks,
@@ -2103,12 +2104,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hasMore: offset + limit < total
         }
       };
-      
+
       // Cache for 15 seconds (invalidated automatically on mutations) - skip if bypassed
       if (!bypassCache) {
         await distributedCache.set(cacheKey, response, 15);
       }
-      
+
       res.setHeader('X-Cache', bypassCache ? 'BYPASS' : 'MISS');
       res.json(response);
     } catch (error) {
@@ -2121,20 +2122,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks/with-control-summary", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
       const requestStart = Date.now();
-      
+
       // Parse pagination params
       const limit = parseInt(req.query.limit as string) || 50;
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       const cacheKey = `risks-control-summary:${CACHE_VERSION}:${limit}:${offset}`;
-      
+
       // Try cache first (15 second TTL)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] /api/risks/with-control-summary in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
-      
+
       // Efficient SQL query: Get risks with control summary in a single query using subqueries
       const risksWithSummary = await db.execute(sql`
         SELECT 
@@ -2160,13 +2161,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ORDER BY r.created_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `);
-      
+
       // Get total count
       const countResult = await db.execute(sql`
         SELECT COUNT(*)::int as total FROM risks WHERE status <> 'deleted'
       `);
       const total = (countResult.rows[0] as any)?.total || 0;
-      
+
       const response = {
         data: risksWithSummary.rows.map((row: any) => ({
           ...row,
@@ -2180,12 +2181,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hasMore: offset + limit < total
         }
       };
-      
+
       // Cache for 15 seconds
       await distributedCache.set(cacheKey, response, 15);
-      
+
       console.log(`[PERF] /api/risks/with-control-summary COMPLETE in ${Date.now() - requestStart}ms, ${risksWithSummary.rows.length} risks`);
-      
+
       res.json(response);
     } catch (error) {
       console.error("[ERROR] /api/risks/with-control-summary failed:", error);
@@ -2200,7 +2201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       // Use distributed cache with 30s TTL for performance
       // Versioned key matches invalidation in cache-helpers.ts
       const cacheKey = `risks-with-details:${CACHE_VERSION}:${tenantId}`;
@@ -2208,16 +2209,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (cachedData) {
         return res.json(cachedData);
       }
-      
+
       // Fetch basic risks only for list view - use paginated endpoint for performance (single-tenant mode)
       const { risks: paginatedRisks, total } = await storage.getRisksPaginated({}, 1000, 0);
-      
+
       // Filter out soft-deleted records (only return active records)
       const activeRisks = paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
-      
+
       // Cache for 30 seconds (invalidated on mutations via invalidateRiskControlCaches)
       await distributedCache.set(cacheKey, activeRisks, 30);
-      
+
       res.json(activeRisks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch risks with details" });
@@ -2235,13 +2236,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const startTime = Date.now();
     try {
       const cacheKey = `risk-matrix-lite:${CACHE_VERSION}:single-tenant`;
-      
+
       const cachedData = await distributedCache.get(cacheKey);
       if (cachedData) {
         console.log(`[CACHE HIT] /api/risk-matrix/lite in ${Date.now() - startTime}ms`);
         return res.json(cachedData);
       }
-      
+
       // Single optimized SQL query for heatmap data
       // Uses CTE for control effectiveness calculation
       const heatmapData = await requireDb().execute(sql`
@@ -2313,21 +2314,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           AND r.deleted_at IS NULL
         ORDER BY r.inherent_risk DESC
       `);
-      
+
       // Get risk level ranges config
-      const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config => 
+      const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
         config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
       );
-      
+
       const result = {
         risks: heatmapData.rows,
         riskLevelRanges,
         timestamp: new Date().toISOString()
       };
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, result, 60);
-      
+
       console.log(`[CACHE MISS] /api/risk-matrix/lite computed in ${Date.now() - startTime}ms (${heatmapData.rows.length} risks)`);
       res.json(result);
     } catch (error) {
@@ -2336,11 +2337,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============== IN-MEMORY CACHE FOR LOOKUPS ==============
+  // Performance optimization: 2-tier cache (memory + Redis)
+  // Memory cache provides <10ms response times for frequently accessed catalogs
+  interface MemoryCacheEntry {
+    data: any;
+    timestamp: number;
+  }
+
+  const lookupMemoryCache = new Map<string, MemoryCacheEntry>();
+  const MEMORY_CACHE_TTL = 60000; // 60 seconds
+
+  // Helper function to get from 2-tier cache
+  async function getFromTieredCache<T>(
+    cacheKey: string,
+    fetchFn: () => Promise<T>,
+    redisTTL: number = 300
+  ): Promise<T> {
+    // Tier 1: Memory cache (fastest, <10ms)
+    const memCached = lookupMemoryCache.get(cacheKey);
+    if (memCached && Date.now() - memCached.timestamp < MEMORY_CACHE_TTL) {
+      return memCached.data;
+    }
+
+    // Tier 2: Redis cache (fast, ~50ms)
+    const redisCached = await distributedCache.get(cacheKey);
+    if (redisCached) {
+      lookupMemoryCache.set(cacheKey, { data: redisCached, timestamp: Date.now() });
+      return redisCached;
+    }
+
+    // Tier 3: Database (slow, 500-1200ms)
+    const data = await fetchFn();
+
+    // Populate both caches
+    await distributedCache.set(cacheKey, data, redisTTL);
+    lookupMemoryCache.set(cacheKey, { data, timestamp: Date.now() });
+
+    return data;
+  }
+
+  // Invalidate memory cache when data changes
+  function invalidateMemoryCache(pattern?: string) {
+    if (pattern) {
+      for (const key of lookupMemoryCache.keys()) {
+        if (key.includes(pattern)) {
+          lookupMemoryCache.delete(key);
+        }
+      }
+    } else {
+      lookupMemoryCache.clear();
+    }
+  }
+
   // LOOKUPS endpoints: Cached catalogs that change rarely (5 min cache)
   app.get("/api/lookups/macroprocesos", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:macroprocesos:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getMacroprocesos();
@@ -2352,7 +2406,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             gerenciaId: m.gerenciaId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2363,7 +2417,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/processes", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:processes:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getProcesses();
@@ -2374,7 +2428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             macroprocesoId: p.macroprocesoId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2385,7 +2439,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/subprocesos", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:subprocesos:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getSubprocesos();
@@ -2396,7 +2450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             procesoId: s.procesoId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2407,7 +2461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/gerencias", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:gerencias:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getGerencias();
@@ -2419,7 +2473,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             parentId: g.parentId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2457,7 +2511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       // Use versioned cache with 60s TTL for the entire aggregated response
       const cacheKey = `risk-matrix-aggregated:${CACHE_VERSION}:${tenantId}`;
       const aggregatedData = await distributedCache.getOrSet(
@@ -2466,14 +2520,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Load all data in parallel with timing metrics
           const startTime = Date.now();
           const timings: Record<string, number> = {};
-          
+
           const timedQuery = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
             const queryStart = Date.now();
             const result = await fn();
             timings[name] = Date.now() - queryStart;
             return result;
           };
-          
+
           const [
             risksWithDetails,
             processes,
@@ -2497,11 +2551,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timedQuery('actionPlans', () => storage.getActionPlans()),
             timedQuery('controls', () => storage.getControls()),
             timedQuery('processOwners', () => storage.getProcessOwners()),
-            timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges').then(config => 
+            timedQuery('riskLevelRanges', () => storage.getSystemConfig('risk_level_ranges').then(config =>
               config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
             )),
           ]);
-          
+
           // Log timing breakdown sorted by duration
           const totalTime = Date.now() - startTime;
           const sortedTimings = Object.entries(timings).sort((a, b) => b[1] - a[1]);
@@ -2510,7 +2564,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const pct = ((duration / totalTime) * 100).toFixed(1);
             console.log(`  ${name}: ${duration}ms (${pct}%)`);
           });
-          
+
           return {
             risksWithDetails: risksWithDetails.filter((risk: any) => risk.status !== 'deleted'),
             processes: processes.filter((p: any) => !p.deletedAt),
@@ -2527,7 +2581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         60 // 60 seconds TTL
       );
-      
+
       res.json(aggregatedData);
     } catch (error) {
       console.error("Error fetching risk matrix data:", error);
@@ -2543,11 +2597,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       // Get all active risks for this tenant
       const allRisks = await requireDb().select().from(risks).where(
         and(
@@ -2555,23 +2609,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eq(risks.tenantId, tenantId)
         )
       );
-      
+
       // MULTI-TENANT FIX: Get risk-process links filtered by tenant
       // Join with risks table to ensure tenant ownership
       const allRiskProcessLinks = await requireDb().select({
         riskId: riskProcessLinks.riskId
       })
-      .from(riskProcessLinks)
-      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .where(eq(risks.tenantId, tenantId));
-      
+        .from(riskProcessLinks)
+        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+        .where(eq(risks.tenantId, tenantId));
+
       const linkedRiskIds = new Set(allRiskProcessLinks.map(link => link.riskId));
-      
+
       // Filter risks that have no links in riskProcessLinks
-      const orphanedRisks = allRisks.filter(risk => 
+      const orphanedRisks = allRisks.filter(risk =>
         !linkedRiskIds.has(risk.id)
       );
-      
+
       res.json({
         count: orphanedRisks.length,
         risks: orphanedRisks.map(risk => ({
@@ -2597,7 +2651,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const risk = await storage.getRiskWithDetails(req.params.id, tenantId);
       if (!risk) {
         return res.status(404).json({ message: "Risk not found" });
@@ -2613,40 +2667,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
       const { riskIds } = req.body;
-      
+
       if (!Array.isArray(riskIds) || riskIds.length === 0) {
         return res.json({ riskProcessLinks: [], riskControls: [] });
       }
-      
+
       // Limit batch size to prevent abuse
       const limitedIds = riskIds.slice(0, 100);
       const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}`;
-      
+
       // Try cache first (15 second TTL)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         return res.json(cached);
       }
-      
+
       const startTime = Date.now();
-      
+
       // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
       const [filteredLinks, filteredControls] = await Promise.all([
         storage.getRiskProcessLinksByRiskIds(limitedIds),
         storage.getRiskControlsByRiskIds(limitedIds)
       ]);
-      
+
       const duration = Date.now() - startTime;
       console.log(`[batch-relations] Fetched ${filteredLinks.length} links + ${filteredControls.length} controls for ${limitedIds.length} risks in ${duration}ms`);
-      
+
       const response = {
         riskProcessLinks: filteredLinks,
         riskControls: filteredControls
       };
-      
+
       // Cache for 15 seconds
       await distributedCache.set(cacheKey, response, 15);
-      
+
       res.json(response);
     } catch (error) {
       console.error("Error fetching batch relations:", error);
@@ -2659,28 +2713,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const riskId = req.params.id;
       const cacheKey = `risk-full-details:${CACHE_VERSION}:${riskId}`;
-      
+
       // Try cache first (30 second TTL)
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         return res.json(cached);
       }
-      
+
       // Fetch risk, controls, and process links in parallel
       const [riskControls, processLinks] = await Promise.all([
         storage.getRiskControls(riskId),
         storage.getRiskProcessLinks(riskId)
       ]);
-      
+
       const response = {
         riskId,
         controls: riskControls,
         processLinks
       };
-      
+
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, response, 30);
-      
+
       res.json(response);
     } catch (error) {
       console.error("Error fetching risk full details:", error);
@@ -2692,11 +2746,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks/:id/validation-status", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
       const riskId = req.params.id;
-      
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       // Get all process links for this risk with process details
       const processLinksData = await requireDb()
         .select({
@@ -2751,10 +2805,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       console.log("Risk creation request body:", JSON.stringify(req.body, null, 2));
       const validatedData = insertRiskSchema.parse(req.body);
-      
+
       // Extract probabilityOverride and directProbability from validated data  
       const { probabilityOverride, directProbability, ...riskData } = validatedData;
-      
+
       // Calculate final probability: use override, then direct, then calculate from factors
       let finalProbability: number;
       if (probabilityOverride !== undefined) {
@@ -2765,11 +2819,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Try dynamic criteria system first, fallback to legacy system
         try {
           const activeCriteria = await storage.getActiveProbabilityCriteria();
-          
+
           if (activeCriteria && activeCriteria.length > 0) {
             // Use dynamic criteria system
             const dynamicFactors: DynamicProbabilityFactors = {};
-            
+
             // Extract available factors from request data
             for (const criterion of activeCriteria) {
               switch (criterion.fieldName) {
@@ -2793,7 +2847,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   dynamicFactors[criterion.fieldName] = 3;
               }
             }
-            
+
             finalProbability = calculateDynamicProbability(dynamicFactors, activeCriteria);
             console.log("Using dynamic probability calculation:", { dynamicFactors, activeCriteria: activeCriteria.map(c => ({ name: c.name, weight: c.weight })), finalProbability });
           } else {
@@ -2801,7 +2855,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         } catch (error) {
           console.log("Falling back to legacy probability calculation:", error instanceof Error ? error.message : String(error));
-          
+
           // Fallback to legacy calculation system
           const probabilityFactors: ProbabilityFactors = {
             frequencyOccurrence: riskData.frequencyOccurrence ?? 3,
@@ -2816,13 +2870,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           finalProbability = calculateProbability(probabilityFactors, configuredWeights);
         }
       }
-      
+
       // Calculate inherent risk
       const inherentRisk = finalProbability * (riskData.impact ?? 1);
-      
+
       // Auto-assign processOwner based on hierarchy if not provided
       let processOwner = riskData.processOwner; // Keep if provided manually
-      
+
       if (!processOwner) {
         // Search owner automatically based on hierarchy: subproceso > proceso > macroproceso
         if (riskData.subprocesoId) {
@@ -2842,7 +2896,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Prepare data for storage (exclude probabilityOverride and add calculated values)
       const dataToSave = {
         ...riskData,
@@ -2850,30 +2904,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         probability: finalProbability,
         inherentRisk: inherentRisk
       };
-      
+
       // Inject audit fields (createdBy) using helper function
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withCreatedBy(dataToSave, userId);
-      
+
       const risk = await storage.createRisk(await withTenantId(req, dataWithAudit));
-      
+
       // Log audit trail for risk creation
       try {
         // Prepare changes object with all risk fields (for creation, all fields are "new")
         const changes: Record<string, any> = {};
-        
+
         // Fields to exclude from audit logs (internal/audit fields)
         const excludedFields = [
           'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
           'deletedAt', 'deletedBy', 'validatedAt', 'validatedBy'
         ];
-        
+
         for (const key in risk) {
           if (!excludedFields.includes(key) && (risk as any)[key] !== undefined) {
             changes[key] = { old: null, new: (risk as any)[key] };
           }
         }
-        
+
         // Insert audit log for creation
         if (Object.keys(changes).length > 0) {
           if (!db) {
@@ -2894,18 +2948,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Don't fail the request if audit logging fails
         console.error('Failed to log audit for risk creation:', auditError);
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation for risk creation
       await invalidateRiskDataCaches();
-      
+
       res.status(201).json(risk);
     } catch (error) {
       console.error("Risk creation validation error:", error);
       if (error instanceof z.ZodError) {
         console.error("Zod validation errors:", error.errors);
-        res.status(400).json({ 
-          message: "Invalid risk data", 
-          errors: error.errors 
+        res.status(400).json({
+          message: "Invalid risk data",
+          errors: error.errors
         });
       } else {
         res.status(400).json({ message: "Invalid risk data" });
@@ -2920,53 +2974,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       console.log('PUT /api/risks/:id received body:', {
         directProbability: req.body.directProbability,
         probability: req.body.probability,
         impact: req.body.impact,
         inherentRisk: req.body.inherentRisk
       });
-      
+
       const validatedData = baseInsertRiskSchema.partial().parse(req.body);
-      
+
       console.log('After validation:', {
         directProbability: validatedData.directProbability,
         probability: (validatedData as any).probability,
         impact: validatedData.impact
       });
-      
+
       // Extract probabilityOverride and directProbability from validated data
       const { probabilityOverride, directProbability, ...riskData } = validatedData;
-      
+
       console.log('After extraction:', {
         probabilityOverride,
         directProbability,
         impact: riskData.impact
       });
-      
+
       // Get existing risk to access current values for calculation
       const existingRisk = await storage.getRisk(req.params.id, tenantId);
       if (!existingRisk) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       // Prepare data for calculation with fallback to existing values
       let dataToSave = { ...riskData };
-      
+
       // Check if probability or impact are being updated
       const factorKeys: (keyof ProbabilityFactors)[] = [
-        'frequencyOccurrence', 'exposureVolume', 'exposureMassivity', 
+        'frequencyOccurrence', 'exposureVolume', 'exposureMassivity',
         'exposureCriticalPath', 'complexity', 'changeVolatility', 'vulnerabilities'
       ];
       const factorsAreBeingUpdated = factorKeys.some(k => (riskData as Partial<ProbabilityFactors>)[k] !== undefined);
       const probabilityIsBeingUpdated = probabilityOverride !== undefined || directProbability !== undefined || factorsAreBeingUpdated;
       const impactIsBeingUpdated = riskData.impact !== undefined;
-      
+
       // Recalculate if probability or impact are being updated
       if (probabilityIsBeingUpdated || impactIsBeingUpdated) {
         let finalProbability: number;
-        
+
         if (probabilityIsBeingUpdated) {
           if (probabilityOverride !== undefined) {
             finalProbability = probabilityOverride;
@@ -2976,11 +3030,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Try dynamic criteria system first, fallback to legacy system
             try {
               const activeCriteria = await storage.getActiveProbabilityCriteria();
-              
+
               if (activeCriteria && activeCriteria.length > 0) {
                 // Use dynamic criteria system
                 const dynamicFactors: DynamicProbabilityFactors = {};
-                
+
                 // Extract available factors from request data or existing values
                 for (const criterion of activeCriteria) {
                   switch (criterion.fieldName) {
@@ -3004,7 +3058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                       dynamicFactors[criterion.fieldName] = 3;
                   }
                 }
-                
+
                 finalProbability = calculateDynamicProbability(dynamicFactors, activeCriteria);
                 console.log("Using dynamic probability calculation for update:", { dynamicFactors, activeCriteria: activeCriteria.map(c => ({ name: c.name, weight: c.weight })), finalProbability });
               } else {
@@ -3012,7 +3066,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
             } catch (error) {
               console.log("Falling back to legacy probability calculation for update:", error instanceof Error ? error.message : String(error));
-              
+
               // Fallback to legacy calculation system
               const probabilityFactors: ProbabilityFactors = {
                 frequencyOccurrence: riskData.frequencyOccurrence ?? existingRisk.frequencyOccurrence,
@@ -3031,11 +3085,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Use existing probability if not being updated
           finalProbability = existingRisk.probability;
         }
-        
+
         // Calculate inherent risk with final probability and impact (updated or existing)
         const finalImpact = riskData.impact ?? existingRisk.impact;
         const inherentRisk = finalProbability * finalImpact;
-        
+
         // Add calculated values to data to save
         dataToSave = {
           ...dataToSave,
@@ -3043,22 +3097,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           inherentRisk: inherentRisk
         } as any;
       }
-      
+
       // Auto-assign processOwner based on hierarchy if not provided manually AND if process assignment is changing
       const processAssignmentChanged = (
-        riskData.subprocesoId !== undefined || 
-        riskData.processId !== undefined || 
+        riskData.subprocesoId !== undefined ||
+        riskData.processId !== undefined ||
         riskData.macroprocesoId !== undefined
       );
-      
+
       if (processAssignmentChanged && !riskData.processOwner) {
         // Search owner automatically based on hierarchy: subproceso > proceso > macroproceso
         let autoProcessOwner: string | undefined;
-        
+
         const finalSubprocesoId = riskData.subprocesoId ?? existingRisk.subprocesoId;
         const finalProcessId = riskData.processId ?? existingRisk.processId;
         const finalMacroprocesoId = riskData.macroprocesoId ?? existingRisk.macroprocesoId;
-        
+
         if (finalSubprocesoId) {
           const subprocesoWithOwner = await storage.getSubprocesoWithOwner(finalSubprocesoId);
           if (subprocesoWithOwner?.owner) {
@@ -3075,7 +3129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             autoProcessOwner = `${macroprocesoWithOwner.owner.name} - ${macroprocesoWithOwner.owner.email}`;
           }
         }
-        
+
         if (autoProcessOwner) {
           dataToSave = {
             ...dataToSave,
@@ -3083,33 +3137,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } as any;
         }
       }
-      
+
       // Inject audit fields (updatedBy) using helper function
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withUpdatedBy(dataToSave, userId);
-      
+
       if (!tenantId) {
         return res.status(400).json({ message: "Tenant ID required" });
       }
-      
+
       const risk = await storage.updateRisk(req.params.id, dataWithAudit, tenantId);
       if (!risk) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       // Log changes to audit_logs
       try {
         const changes: Record<string, { old: any; new: any }> = {};
-        
+
         // Helper function to normalize HTML entities
         const normalizeValue = (val: any): any => {
           if (typeof val === 'string') {
             // Decode HTML entities
             return val.replace(/&amp;/g, '&')
-                     .replace(/&lt;/g, '<')
-                     .replace(/&gt;/g, '>')
-                     .replace(/&quot;/g, '"')
-                     .replace(/&#39;/g, "'");
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/&quot;/g, '"')
+              .replace(/&#39;/g, "'");
           }
           if (Array.isArray(val)) {
             return val.map(normalizeValue);
@@ -3123,45 +3177,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           return val;
         };
-        
+
         // Helper function to check if values are actually different
         const hasChanged = (oldVal: any, newVal: any): boolean => {
           // Normalize both values to handle HTML entity encoding differences
           const normalizedOld = normalizeValue(oldVal);
           const normalizedNew = normalizeValue(newVal);
-          
+
           // If both are null/undefined, no change
           if (normalizedOld == null && normalizedNew == null) return false;
           // If one is null/undefined and the other isn't, it changed
           if (normalizedOld == null || normalizedNew == null) return true;
           // For arrays and objects, compare serialized versions
           if ((Array.isArray(normalizedOld) && Array.isArray(normalizedNew)) ||
-              (typeof normalizedOld === 'object' && typeof normalizedNew === 'object')) {
+            (typeof normalizedOld === 'object' && typeof normalizedNew === 'object')) {
             return JSON.stringify(normalizedOld) !== JSON.stringify(normalizedNew);
           }
           // For primitives, direct comparison
           return normalizedOld !== normalizedNew;
         };
-        
+
         // Fields to exclude from audit logs (internal/audit fields)
         const excludedFields = [
           'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
           'deletedAt', 'deletedBy', 'validatedAt', 'validatedBy'
         ];
-        
+
         // Compare existingRisk with dataWithAudit to detect changes
         for (const key in dataWithAudit) {
           // Skip excluded fields
           if (excludedFields.includes(key)) continue;
-          
+
           const oldValue = (existingRisk as any)[key];
           const newValue = (dataWithAudit as any)[key];
-          
+
           if (hasChanged(oldValue, newValue) && newValue !== undefined) {
             changes[key] = { old: oldValue, new: newValue };
           }
         }
-        
+
         // Only insert audit log if there are actual changes
         if (Object.keys(changes).length > 0) {
           if (!db) {
@@ -3182,25 +3236,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Don't fail the request if audit logging fails
         console.error('Failed to log audit changes:', auditError);
       }
-      
       // OPTIMIZED: Use granular cache invalidation for risk update
       if (tenantId) {
         await invalidateRiskDataCaches();
       }
-      
+
       res.json(risk);
     } catch (error) {
       console.error("Risk update error:", error);
       if (error instanceof z.ZodError) {
         console.error("Zod validation errors:", error.errors);
-        res.status(400).json({ 
-          message: "Datos de riesgo inválidos", 
-          errors: error.errors 
+        res.status(400).json({
+          message: "Datos de riesgo inválidos",
+          errors: error.errors
         });
       } else if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       } else {
-        res.status(400).json({ 
+        res.status(400).json({
           message: error instanceof Error ? error.message : "No se pudo actualizar el riesgo"
         });
       }
@@ -3214,24 +3267,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Perform soft delete by updating status and soft-delete fields
       const softDeleteData = withSoftDelete(userId, deletionReason);
       const deleted = await storage.updateRisk(req.params.id, softDeleteData, tenantId);
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation for risk deletion
       await invalidateRiskDataCaches();
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -3253,22 +3306,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       // Create cache key for validation center
       const cacheKey = `validation:risks:pending:${tenantId}`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // Cache miss - query database
       const risks = await storage.getPendingValidationRisks();
-      
+
       // Cache for 15 seconds (critical validation data needs fresher updates)
       await distributedCache.set(cacheKey, risks, 15);
-      
+
       res.json(risks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch pending validation risks" });
@@ -3282,7 +3335,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const risks = await storage.getRisksByValidationStatus(req.params.status, tenantId);
       res.json(risks);
     } catch (error) {
@@ -3297,9 +3350,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         body: req.body,
         user: (req as any).user?.claims?.sub
       });
-      
+
       const validatedData = validateRiskSchema.parse(req.body);
-      
+
       // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
       const validatedBy = getAuthenticatedUserId(req);
 
@@ -3309,26 +3362,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userPermissions = (req as any).user?.permissions || [];
       const isAdmin = userPermissions.includes('*') || (req as any).user?.isPlatformAdmin;
       const hasValidatePermission = userPermissions.includes('validate_risks');
-      
+
       // Allow validation if: user is owner OR is admin OR has explicit validate_risks permission with admin role
       if (!canValidate && !isAdmin) {
-        return res.status(403).json({ 
+        return res.status(403).json({
           message: "Access denied: Only the macroproceso owner or administrators can validate this risk",
           details: "Risk validation must be performed by the owner of the macroproceso or a platform administrator"
         });
       }
-      
+
       const risk = await storage.validateRisk(
-        req.params.id, 
-        validatedBy, 
+        req.params.id,
+        validatedBy,
         validatedData.validationStatus,
         validatedData.validationComments
       );
-      
+
       if (!risk) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       // Invalidate all risk-related caches (validation changes risk state)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
@@ -3336,7 +3389,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
         distributedCache.set(`validation:risks:pending:${tenantId}`, null, 0)
       ]);
-      
+
       res.json(risk);
     } catch (error) {
       console.error("Risk validation error:", error);
@@ -3354,7 +3407,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
 
       const canValidate = await storage.canUserValidateRisk(userId, req.params.id);
-      
+
       res.json({ canValidate });
     } catch (error) {
       console.error("Error checking risk validation permissions:", error);
@@ -3411,7 +3464,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Update all risk-process links for this risk to mark as notified
         const now = new Date();
         await requireDb().update(riskProcessLinks)
-          .set({ 
+          .set({
             notificationSent: true,
             lastNotificationSent: now
           })
@@ -3419,15 +3472,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eq(riskProcessLinks.riskId, req.params.id),
             eq(riskProcessLinks.validationStatus, 'pending_validation')
           ));
-        
-        res.json({ 
-          success: true, 
-          message: `Notification sent to ${risk.processOwner} (${owner.email})` 
+
+        res.json({
+          success: true,
+          message: `Notification sent to ${risk.processOwner} (${owner.email})`
         });
       } else {
-        res.status(500).json({ 
-          success: false, 
-          message: "Failed to send email notification" 
+        res.status(500).json({
+          success: false,
+          message: "Failed to send email notification"
         });
       }
     } catch (error: unknown) {
@@ -3444,24 +3497,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Create cache key for validation center
       const cacheKey = `validation:controls:pending:${tenantId}`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // Cache miss - query database
       console.log('🔍 Routes: Getting pending validation controls...');
       const controls = await storage.getPendingValidationControls();
       console.log(`📊 Routes: Found ${controls.length} pending validation controls`);
-      
+
       // Cache for 15 seconds (critical validation data needs fresher updates)
       await distributedCache.set(cacheKey, controls, 15);
-      
+
       res.json(controls);
     } catch (error) {
       console.error('❌ Routes: Error getting pending validation controls:', error);
@@ -3472,11 +3525,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/controls/validation/notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
       const { limit, offset } = normalizePaginationParams(req.query);
-      
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       const notifiedControls = await requireDb()
         .select({
           control: controls,
@@ -3493,15 +3546,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eq(controls.validationStatus, 'pending_validation'),
           isNotNull(controls.notifiedAt)
         ));
-      
+
       const controlsWithOwner = notifiedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
-      
+
       const total = controlsWithOwner.length;
       const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
-      
+
       // Get associated risks for paginated controls
       const controlIds = paginatedControls.map(c => c.id);
       if (controlIds.length > 0) {
@@ -3516,7 +3569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
           .where(inArray(riskControls.controlId, controlIds));
-        
+
         // Map risks to controls
         const controlsWithRisks = paginatedControls.map(control => ({
           ...control,
@@ -3529,7 +3582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-        
+
         res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
       } else {
         res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
@@ -3542,12 +3595,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/controls/validation/not-notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
-      const { limit, offset} = normalizePaginationParams(req.query);
-      
+      const { limit, offset } = normalizePaginationParams(req.query);
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       const notNotifiedControls = await requireDb()
         .select({
           control: controls,
@@ -3569,15 +3622,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             )
           )
         ));
-      
+
       const controlsWithOwner = notNotifiedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
-      
+
       const total = controlsWithOwner.length;
       const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
-      
+
       // Get associated risks for paginated controls
       const controlIds = paginatedControls.map(c => c.id);
       if (controlIds.length > 0) {
@@ -3592,7 +3645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
           .where(inArray(riskControls.controlId, controlIds));
-        
+
         // Map risks to controls
         const controlsWithRisks = paginatedControls.map(control => ({
           ...control,
@@ -3605,7 +3658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-        
+
         res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
       } else {
         res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
@@ -3621,7 +3674,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       const validatedControls = await requireDb()
         .select({
           control: controls,
@@ -3637,12 +3690,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(controls.deletedAt),
           eq(controls.validationStatus, 'validated')
         ));
-      
+
       const controlsWithOwner = validatedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
-      
+
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
       if (controlIds.length > 0) {
@@ -3657,7 +3710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
           .where(inArray(riskControls.controlId, controlIds));
-        
+
         // Map risks to controls
         const controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
@@ -3670,7 +3723,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-        
+
         res.json(controlsWithRisks);
       } else {
         res.json(controlsWithOwner);
@@ -3686,7 +3739,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       const observedControls = await requireDb()
         .select({
           control: controls,
@@ -3702,12 +3755,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(controls.deletedAt),
           eq(controls.validationStatus, 'observed')
         ));
-      
+
       const controlsWithOwner = observedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
-      
+
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
       if (controlIds.length > 0) {
@@ -3722,7 +3775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
           .where(inArray(riskControls.controlId, controlIds));
-        
+
         // Map risks to controls
         const controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
@@ -3735,7 +3788,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-        
+
         res.json(controlsWithRisks);
       } else {
         res.json(controlsWithOwner);
@@ -3751,7 +3804,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       const rejectedControls = await requireDb()
         .select({
           control: controls,
@@ -3767,12 +3820,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(controls.deletedAt),
           eq(controls.validationStatus, 'rejected')
         ));
-      
+
       const controlsWithOwner = rejectedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
-      
+
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
       if (controlIds.length > 0) {
@@ -3787,7 +3840,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
           .where(inArray(riskControls.controlId, controlIds));
-        
+
         // Map risks to controls
         const controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
@@ -3800,7 +3853,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-        
+
         res.json(controlsWithRisks);
       } else {
         res.json(controlsWithOwner);
@@ -3818,23 +3871,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         body: req.body,
         user: (req as any).user?.claims?.sub
       });
-      
+
       const validatedData = validateControlSchema.parse(req.body);
-      
+
       // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
       const validatedBy = getAuthenticatedUserId(req);
-      
+
       const control = await storage.validateControl(
-        req.params.id, 
-        validatedBy, 
+        req.params.id,
+        validatedBy,
         validatedData.validationStatus,
         validatedData.validationComments
       );
-      
+
       if (!control) {
         return res.status(404).json({ message: "Control not found" });
       }
-      
+
       // Invalidate validation center caches and risk-matrix
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
@@ -3843,7 +3896,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
         distributedCache.set(`validation:controls:pending:${tenantId}`, null, 0)
       ]);
-      
+
       res.json(control);
     } catch (error) {
       console.error("Control validation error:", error);
@@ -3858,11 +3911,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/controls/send-bulk-validation-email", requirePermission("validate_risks"), async (req, res) => {
     try {
       const { controlIds } = req.body;
-      
+
       if (!Array.isArray(controlIds) || controlIds.length === 0) {
         return res.status(400).json({ message: "Control IDs array is required" });
       }
-      
+
       // Get all controls by IDs with their owners
       const controlsData = await requireDb()
         .select({
@@ -3876,19 +3929,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ))
         .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
         .where(inArray(controls.id, controlIds));
-      
+
       if (controlsData.length === 0) {
         return res.status(404).json({ message: "No se encontraron controles con los IDs proporcionados" });
       }
-      
+
       // GROUP CONTROLS BY RESPONSIBLE EMAIL
       const controlsByResponsible = new Map<string, Array<typeof controlsData[number]>>();
       const emailResults: Array<{ controlId: string; success: boolean; email?: string; error?: string; }> = [];
-      
+
       for (const row of controlsData) {
         const control = row.control;
         const owner = row.owner;
-        
+
         if (!owner?.email) {
           emailResults.push({
             controlId: control.id,
@@ -3897,7 +3950,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           continue;
         }
-        
+
         // Group by email
         const email = owner.email;
         if (!controlsByResponsible.has(email)) {
@@ -3905,25 +3958,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         controlsByResponsible.get(email)!.push(row);
       }
-      
+
       // Now send one email per responsible (grouped)
       let sentCount = 0;
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
-      
+
       for (const [responsibleEmail, controlRows] of controlsByResponsible.entries()) {
         const controlsList = controlRows.map(r => r.control);
         const processOwner = controlRows[0].owner;
         if (!processOwner) continue;
-        
+
         // Generate batch validation token
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
-        
+
         const batchTokenValue = randomBytes(32).toString('hex');
         const entityIds = controlsList.map(c => c.id);
-        
+
         const validationData = controlsList.map(control => ({
           id: control.id,
           code: control.code,
@@ -3932,10 +3985,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           type: control.type,
           automationLevel: control.automationLevel
         }));
-        
+
         // Get tenantId from first control (all controls should belong to same tenant)
         const tenantId = controlsList[0].tenantId;
-        
+
         // Create batch token in database
         const batchToken = await storage.createBatchValidationToken({
           token: batchTokenValue,
@@ -3949,10 +4002,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           partiallyUsed: false,
           expiresAt
         });
-        
+
         // Create validation URL (points to batch validation page)
         const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
-        
+
         // Helper function to get control type text in Spanish
         const getControlTypeText = (type: string) => {
           const typeMap: Record<string, string> = {
@@ -3962,7 +4015,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
           return typeMap[type] || type;
         };
-        
+
         // Build email with grouped controls table
         const controlsTableRows = controlsList.map(control => {
           return `
@@ -3973,7 +4026,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </tr>
           `;
         }).join('');
-        
+
         const emailHtml = `
           <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
             <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
@@ -4033,7 +4086,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </div>
           </div>
         `;
-        
+
         // Send grouped email
         try {
           const emailSent = await sendEmail({
@@ -4042,10 +4095,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             subject: `Validación de ${controlsList.length} control${controlsList.length > 1 ? 'es' : ''}`,
             html: emailHtml
           });
-          
+
           if (emailSent) {
             sentCount++;
-            
+
             // Update notifiedAt timestamp for all controls in this batch
             for (const control of controlsList) {
               if (!db) {
@@ -4056,7 +4109,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 .update(controls)
                 .set({ notifiedAt: new Date() })
                 .where(eq(controls.id, control.id));
-              
+
               emailResults.push({
                 controlId: control.id,
                 success: true,
@@ -4083,11 +4136,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Return results
       const successCount = emailResults.filter(r => r.success).length;
       const failureCount = emailResults.filter(r => !r.success).length;
-      
+
       res.json({
         message: `Emails enviados: ${sentCount} correo(s) agrupado(s)`,
         emailsSent: sentCount,
@@ -4105,11 +4158,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/controls/:id/resend-validation", requirePermission("validate_risks"), async (req, res) => {
     try {
       const { id } = req.params;
-      
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
-      
+
       // Get control with owner information
       const controlData = await requireDb()
         .select({
@@ -4124,25 +4177,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
         .where(eq(controls.id, id))
         .limit(1);
-      
+
       if (controlData.length === 0 || !controlData[0].control) {
         return res.status(404).json({ message: "Control no encontrado" });
       }
-      
+
       const control = controlData[0].control;
       const owner = controlData[0].owner;
-      
+
       if (!owner?.email) {
         return res.status(400).json({ message: "El control no tiene un responsable con email configurado" });
       }
-      
+
       // Generate new batch validation token
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
-      
+
       const batchTokenValue = randomBytes(32).toString('hex');
       const entityIds = [control.id];
-      
+
       const validationData = [{
         id: control.id,
         code: control.code,
@@ -4151,7 +4204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         type: control.type,
         automationLevel: control.automationLevel
       }];
-      
+
       // Create batch token in database
       await storage.createBatchValidationToken({
         token: batchTokenValue,
@@ -4165,13 +4218,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         partiallyUsed: false,
         expiresAt
       });
-      
+
       // Create validation URL
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
       const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
-      
+
       // Helper function to get control type text in Spanish
       const getControlTypeText = (type: string) => {
         const typeMap: Record<string, string> = {
@@ -4181,7 +4234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
         return typeMap[type] || type;
       };
-      
+
       // Build email
       const emailHtml = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
@@ -4246,7 +4299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         </div>
       `;
-      
+
       // Send email
       const emailSent = await sendEmail({
         from: 'noreply@unigrc.app',
@@ -4254,17 +4307,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subject: `Recordatorio: Validación de Control ${control.code}`,
         html: emailHtml
       });
-      
+
       if (!emailSent) {
         return res.status(500).json({ message: "Error al enviar el email" });
       }
-      
+
       // Update notifiedAt timestamp
       await requireDb()
         .update(controls)
         .set({ notifiedAt: new Date() })
         .where(eq(controls.id, control.id));
-      
+
       res.json({
         success: true,
         message: "Email de validación reenviado exitosamente",
@@ -4285,7 +4338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       const controls = await storage.getControlsByValidationStatus(req.params.status, tenantId);
       res.json(controls);
     } catch (error) {
@@ -4294,26 +4347,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== PROCESS VALIDATION ROUTES ==============
-  
+
   // Process Validation Dashboard - Get all process validations (with 15s cache for validation center)
   app.get("/api/process-validations/dashboard", requirePermission("view_all"), async (req, res) => {
     try {
       // Extract tenant ID for cache key (validation dashboard may not be strictly tenant-scoped in current impl)
       const tenantId = (req as any).user?.activeTenantId || 'global';
       const cacheKey = `validation:process-dashboard:${tenantId}`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // Cache miss - query database
       const processValidations = await storage.getProcessValidationDashboard();
-      
+
       // Cache for 15 seconds (critical validation data needs fresher updates)
       await distributedCache.set(cacheKey, processValidations, 15);
-      
+
       res.json(processValidations);
     } catch (error) {
       console.error("Error fetching process validation dashboard:", error);
@@ -4326,18 +4379,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const tenantId = (req as any).user?.activeTenantId || 'global';
       const cacheKey = `validation:process-list:${tenantId}`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       const processValidations = await storage.getProcessValidations();
-      
+
       // Cache for 15 seconds
       await distributedCache.set(cacheKey, processValidations, 15);
-      
+
       res.json(processValidations);
     } catch (error) {
       console.error("Error fetching process validations:", error);
@@ -4438,7 +4491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/process-risk-validations/:processId/:riskId", requirePermission("validate_risks"), async (req, res) => {
     try {
       const validatedData = validateProcessRiskValidationSchema.parse(req.body);
-      
+
       // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
       const validatedBy = getAuthenticatedUserId(req);
 
@@ -4485,8 +4538,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { riskId } = req.query;
       const validation = await storage.getProcessControlValidation(
-        req.params.processId, 
-        req.params.controlId, 
+        req.params.processId,
+        req.params.controlId,
         riskId as string || undefined
       );
       if (!validation) {
@@ -4519,7 +4572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = validateProcessControlValidationSchema.parse(req.body);
       const { riskId } = req.query;
-      
+
       // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
       const validatedBy = getAuthenticatedUserId(req);
 
@@ -4532,8 +4585,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!riskId || typeof riskId !== 'string') {
         const updated = await storage.updateProcessControlValidation(
-          req.params.processId, 
-          req.params.controlId, 
+          req.params.processId,
+          req.params.controlId,
           undefined,
           updateData
         );
@@ -4543,10 +4596,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.updateProcessValidationSummary(req.params.processId);
         return res.json(updated);
       }
-      
+
       const updated = await storage.updateProcessControlValidation(
-        req.params.processId, 
-        req.params.controlId, 
+        req.params.processId,
+        req.params.controlId,
         riskId,
         updateData
       );
@@ -4588,10 +4641,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "Process risk validation not found" });
       }
-      
+
       // Update process validation summary
       await storage.updateProcessValidationSummary(req.params.processId);
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting process risk validation:", error);
@@ -4604,17 +4657,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { riskId } = req.query;
       const deleted = await storage.deleteProcessControlValidation(
-        req.params.processId, 
-        req.params.controlId, 
+        req.params.processId,
+        req.params.controlId,
         riskId as string || undefined
       );
       if (!deleted) {
         return res.status(404).json({ message: "Process control validation not found" });
       }
-      
+
       // Update process validation summary
       await storage.updateProcessValidationSummary(req.params.processId);
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting process control validation:", error);
@@ -4623,7 +4676,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== RISK-PROCESS ASSOCIATION ROUTES ==============
-  
+
   // Get all risk-process associations
   app.get("/api/risk-processes", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
@@ -4631,21 +4684,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Use distributed cache with versioned key (60s TTL)
       const cacheKey = `risk-processes:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       const riskProcesses = await storage.getRiskProcessLinksWithDetails();
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, riskProcesses, 60);
-      
+
       res.json(riskProcesses);
     } catch (error) {
       console.error("Error fetching risk processes:", error);
@@ -4678,7 +4731,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate that exactly one process parameter is provided
       const processParams = processFilterSchema.parse(req.query);
       const { macroprocesoId, processId, subprocesoId } = processParams;
-      
+
       const riskProcesses = await storage.getRiskProcessLinksByProcess(
         tenantId,
         macroprocesoId,
@@ -4700,14 +4753,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertRiskProcessLinkSchema.parse(req.body);
       const riskProcess = await storage.createRiskProcessLink(validatedData);
-      
+
       if (!riskProcess) {
         return res.status(400).json({ message: "Failed to create risk-process association" });
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
-      
+
       res.status(201).json(riskProcess);
     } catch (error) {
       console.error("Error creating risk process:", error);
@@ -4724,14 +4777,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use specific update schema to prevent overposting
       const updateData = updateRiskProcessLinkSchema.parse(req.body);
       const riskProcess = await storage.updateRiskProcessLink(req.params.id, updateData);
-      
+
       if (!riskProcess) {
         return res.status(404).json({ message: "Risk-process association not found" });
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
-      
+
       res.json(riskProcess);
     } catch (error) {
       console.error("Error updating risk process:", error);
@@ -4746,14 +4799,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/risk-processes/:id", isAuthenticated, async (req, res) => {
     try {
       const success = await storage.deleteRiskProcessLink(req.params.id);
-      
+
       if (!success) {
         return res.status(404).json({ message: "Risk-process association not found" });
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting risk process:", error);
@@ -4804,7 +4857,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Cache for 30s (validation data needs fresher updates but not real-time)
       const cacheKey = `validation:lite:${CACHE_VERSION}:${tenantId}`;
       const cachedData = await distributedCache.get(cacheKey);
@@ -4812,7 +4865,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - startTime}ms`);
         return res.json(cachedData);
       }
-      
+
       // Single SQL query with CTEs for all validation data
       const result = await requireDb().execute(sql`
         WITH status_counts AS (
@@ -4936,7 +4989,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         WHERE vd.row_num <= 50
         ORDER BY 1, 7, 11
       `);
-      
+
       // Parse results: separate counts from data
       const rows = result.rows as any[];
       const counts: Record<string, { total: number; notified: number; notNotified: number }> = {};
@@ -4946,7 +4999,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         observed: [],
         rejected: []
       };
-      
+
       for (const row of rows) {
         if (row.result_type === 'counts') {
           counts[row.val_status] = {
@@ -4985,7 +5038,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       const response = {
         counts,
         pending: byStatus.pending_validation,
@@ -4994,7 +5047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rejected: byStatus.rejected,
         timestamp: new Date().toISOString()
       };
-      
+
       await distributedCache.set(cacheKey, response, 30);
       console.log(`[CACHE MISS] ${cacheKey} in ${Date.now() - startTime}ms`);
       res.json(response);
@@ -5013,14 +5066,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const { status } = req.params;
       const validStatuses = ['pending_validation', 'validated', 'observed', 'rejected'];
-      
+
       if (!validStatuses.includes(status) && status !== 'pending') {
         return res.status(400).json({ message: "Invalid validation status" });
       }
-      
+
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
-      
+
       // Cache for 15s (validation data needs fresher updates)
       const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       const cached = await distributedCache.get(cacheKey);
@@ -5028,11 +5081,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       const riskProcessLinks = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
-      
+
       await distributedCache.set(cacheKey, riskProcessLinks, 15);
-      
+
       res.json(riskProcessLinks);
     } catch (error) {
       console.error("Error fetching risk processes by validation status:", error);
@@ -5046,7 +5099,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
-      
+
       // Cache for 30s per page
       const cacheKey = `validation:notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
       const cached = await distributedCache.get(cacheKey);
@@ -5054,11 +5107,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       // Use paginated query with DB-level LIMIT/OFFSET
       const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(true, limit, offset);
       const response = createPaginatedResponse(data, total, limit, offset);
-      
+
       await distributedCache.set(cacheKey, response, 30);
       res.json(response);
     } catch (error) {
@@ -5073,7 +5126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
-      
+
       // Cache for 30s per page
       const cacheKey = `validation:not-notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
       const cached = await distributedCache.get(cacheKey);
@@ -5081,11 +5134,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       // Use paginated query with DB-level LIMIT/OFFSET
       const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(false, limit, offset);
       const response = createPaginatedResponse(data, total, limit, offset);
-      
+
       await distributedCache.set(cacheKey, response, 30);
       res.json(response);
     } catch (error) {
@@ -5109,11 +5162,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risk-processes/send-bulk-validation-email", requirePermission("validate_risks"), async (req, res) => {
     try {
       const { riskProcessLinkIds } = req.body;
-      
+
       if (!Array.isArray(riskProcessLinkIds) || riskProcessLinkIds.length === 0) {
         return res.status(400).json({ message: "Risk process link IDs array is required" });
       }
-      
+
       // Get all risk-process-links with full details
       const riskProcessLinksData = await requireDb()
         .select({
@@ -5137,40 +5190,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
         .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
         .where(inArray(riskProcessLinks.id, riskProcessLinkIds));
-      
+
       if (riskProcessLinksData.length === 0) {
         return res.status(404).json({ message: "No se encontraron riesgos con los IDs proporcionados" });
       }
-      
+
       // Fetch process owners for each link
       const enrichedLinks = await Promise.all(riskProcessLinksData.map(async (row) => {
         let processOwner = null;
-        
+
         if (row.responsibleOwnerId) {
           const owners = await requireDb().select()
             .from(processOwners)
             .where(eq(processOwners.id, row.responsibleOwnerId))
             .limit(1);
-          
+
           if (owners.length > 0) {
             processOwner = owners[0];
           }
         }
-        
+
         return {
           ...row,
           processOwner
         };
       }));
-      
+
       // GROUP RISK-PROCESS-LINKS BY RESPONSIBLE EMAIL
       const risksByResponsible = new Map<string, Array<typeof enrichedLinks[number]>>();
       const emailResults: Array<{ riskProcessLinkId: string; success: boolean; email?: string; error?: string; }> = [];
-      
+
       for (const row of enrichedLinks) {
         const rpl = row.riskProcessLink;
         const owner = row.processOwner;
-        
+
         if (!owner?.email) {
           emailResults.push({
             riskProcessLinkId: rpl.id,
@@ -5179,7 +5232,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           continue;
         }
-        
+
         // Group by email
         const email = owner.email;
         if (!risksByResponsible.has(email)) {
@@ -5187,13 +5240,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         risksByResponsible.get(email)!.push(row);
       }
-      
+
       // Now send one email per responsible (grouped)
       let sentCount = 0;
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
-      
+
       for (const [responsibleEmail, riskRows] of risksByResponsible.entries()) {
         const riskProcessLinksList = riskRows.map(r => ({
           id: r.riskProcessLink.id,
@@ -5204,14 +5257,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }));
         const processOwner = riskRows[0].processOwner;
         if (!processOwner) continue;
-        
+
         // Generate batch validation token
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
-        
+
         const batchTokenValue = randomBytes(32).toString('hex');
         const entityIds = riskProcessLinksList.map(r => r.id);
-        
+
         const validationData = riskProcessLinksList.map(rpl => ({
           id: rpl.id,
           riskId: rpl.risk.id,
@@ -5221,10 +5274,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           inherentRisk: rpl.risk.inherentRisk,
           processName: rpl.subproceso?.name || rpl.process?.name || rpl.macroproceso?.name
         }));
-        
+
         // Get tenantId from first risk (all risks should belong to same tenant)
         const tenantId = riskProcessLinksList[0].risk.tenantId;
-        
+
         // Create batch token in database
         const batchToken = await storage.createBatchValidationToken({
           token: batchTokenValue,
@@ -5238,10 +5291,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           partiallyUsed: false,
           expiresAt
         });
-        
+
         // Create validation URL (points to batch validation page)
         const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
-        
+
         // Helper function to get risk level text in Spanish
         const getRiskLevelText = (inherentRisk: number) => {
           if (inherentRisk >= 15) return { text: 'Crítico', color: '#dc2626' };
@@ -5249,13 +5302,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (inherentRisk >= 6) return { text: 'Medio', color: '#f59e0b' };
           return { text: 'Bajo', color: '#10b981' };
         };
-        
+
         // Build email with grouped risks table
         const risksTableRows = riskProcessLinksList.map(rpl => {
           const risk = rpl.risk;
           const riskLevel = getRiskLevelText(risk.inherentRisk);
           const processName = rpl.subproceso?.name || rpl.process?.name || rpl.macroproceso?.name || 'N/A';
-          
+
           return `
             <tr style="border-bottom: 1px solid #e5e7eb;">
               <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${risk.code}</td>
@@ -5269,7 +5322,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </tr>
           `;
         }).join('');
-        
+
         const emailHtml = `
           <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
             <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
@@ -5330,7 +5383,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </div>
           </div>
         `;
-        
+
         // Send grouped email
         try {
           const emailSent = await sendEmail({
@@ -5339,20 +5392,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             subject: `Validación de ${riskProcessLinksList.length} riesgo${riskProcessLinksList.length > 1 ? 's' : ''}`,
             html: emailHtml
           });
-          
+
           if (emailSent) {
             sentCount++;
-            
+
             // Update notificationSent flag for all risk-process-links in this batch
             for (const rpl of riskProcessLinksList) {
               await requireDb()
                 .update(riskProcessLinks)
-                .set({ 
+                .set({
                   notificationSent: true,
                   lastNotificationSent: new Date()
                 })
                 .where(eq(riskProcessLinks.id, rpl.id));
-              
+
               emailResults.push({
                 riskProcessLinkId: rpl.id,
                 success: true,
@@ -5379,11 +5432,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Return results
       const successCount = emailResults.filter(r => r.success).length;
       const failureCount = emailResults.filter(r => !r.success).length;
-      
+
       // Invalidate validation caches if any notifications were sent
       if (successCount > 0) {
         const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -5394,14 +5447,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ]);
         }
       }
-      
+
       res.json({
         emailsSent: sentCount,
         linksNotified: successCount,
         failures: failureCount,
         details: emailResults
       });
-      
+
     } catch (error) {
       console.error("Error sending bulk risk validation emails:", error);
       res.status(500).json({ message: "Failed to send bulk validation emails" });
@@ -5416,70 +5469,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       console.log("📧 [RESEND] Endpoint called for risk-process link:", riskProcessLinkId);
       console.log("   User:", req.user?.id, req.user?.email);
       console.log("   Active tenant:", tenantId);
-      
+
       // Check if email service is configured
       const emailServiceAvailable = getEmailService();
       if (!emailServiceAvailable) {
         console.error("❌ [RESEND] Email service not configured");
-        return res.status(503).json({ 
+        return res.status(503).json({
           message: "Servicio de email no configurado. Por favor, configure el servicio de email en la configuración del sistema.",
           code: "EMAIL_SERVICE_NOT_CONFIGURED"
         });
       }
-      
+
       // Get risk-process-link data
       const rplData = await requireDb().select().from(riskProcessLinks).where(eq(riskProcessLinks.id, riskProcessLinkId)).limit(1);
-      
+
       if (rplData.length === 0) {
         return res.status(404).json({ message: "Risk-process link not found" });
       }
-      
+
       const rpl = rplData[0];
-      
+
       // Get risk data
       const riskData = await requireDb().select().from(risks).where(eq(risks.id, rpl.riskId)).limit(1);
-      
+
       if (riskData.length === 0) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       const risk = riskData[0];
-      
+
       // Get responsible owner - try override first, then hierarchy
       let ownerId = rpl.responsibleOverrideId;
-      
+
       if (!ownerId && rpl.subprocesoId) {
         const spData = await requireDb().select().from(subprocesos).where(eq(subprocesos.id, rpl.subprocesoId)).limit(1);
         if (spData.length > 0) ownerId = spData[0].ownerId;
       }
-      
+
       if (!ownerId && rpl.processId) {
         const pData = await requireDb().select().from(processes).where(eq(processes.id, rpl.processId)).limit(1);
         if (pData.length > 0) ownerId = pData[0].ownerId;
       }
-      
+
       if (!ownerId && rpl.macroprocesoId) {
         const mpData = await requireDb().select().from(macroprocesos).where(eq(macroprocesos.id, rpl.macroprocesoId)).limit(1);
         if (mpData.length > 0) ownerId = mpData[0].ownerId;
       }
-      
+
       if (!ownerId) {
         return res.status(400).json({ message: "No se encontró responsable asignado" });
       }
-      
+
       // Get process owner details
       const poData = await requireDb().select().from(processOwners).where(eq(processOwners.id, ownerId)).limit(1);
-      
+
       if (poData.length === 0 || !poData[0].email) {
         return res.status(400).json({ message: "No se encontró email del responsable" });
       }
-      
+
       const processOwner = poData[0];
-      
+
       // Get process name
       let processName = 'N/A';
       if (rpl.subprocesoId) {
@@ -5492,12 +5545,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const mpData = await requireDb().select().from(macroprocesos).where(eq(macroprocesos.id, rpl.macroprocesoId)).limit(1);
         if (mpData.length > 0) processName = mpData[0].name;
       }
-      
+
       // Generate validation token
       const tokenValue = randomBytes(32).toString('hex');
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
-      
+
       // Create batch token
       await storage.createBatchValidationToken({
         token: tokenValue,
@@ -5519,13 +5572,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         partiallyUsed: false,
         expiresAt
       });
-      
+
       // Create validation URL
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
       const validationUrl = `${baseUrl}/public/batch-validation/${tokenValue}`;
-      
+
       // Get risk level
       const getRiskLevelText = (inherentRisk: number) => {
         if (inherentRisk >= 15) return { text: 'Crítico', color: '#dc2626' };
@@ -5533,11 +5586,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (inherentRisk >= 6) return { text: 'Medio', color: '#f59e0b' };
         return { text: 'Bajo', color: '#10b981' };
       };
-      
+
       const riskLevel = getRiskLevelText(risk.inherentRisk || 0);
-      
+
       console.log("📧 [RESEND] Sending email to:", processOwner.email);
-      
+
       // Send email
       const emailSent = await sendEmail({
         from: 'noreply@unigrc.app',
@@ -5564,52 +5617,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         `
       });
-      
+
       if (!emailSent) {
         console.error("❌ [RESEND] Email failed to send");
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "No se pudo enviar el email. Verifique la configuración del servicio de email.",
           code: "EMAIL_SEND_FAILED"
         });
       }
-      
+
       console.log("✅ [RESEND] Email sent successfully to:", processOwner.email);
-      
+
       // Update notification flags
       await requireDb().update(riskProcessLinks).set({
         notificationSent: true,
         lastNotificationSent: new Date()
       }).where(eq(riskProcessLinks.id, rpl.id));
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: "Notificación reenviada exitosamente",
-        email: processOwner.email 
+        email: processOwner.email
       });
-      
+
     } catch (error) {
       console.error("❌ [RESEND] Error resending validation notification:", error);
-      res.status(500).json({ 
-        message: "Error al reenviar notificación", 
-        error: error instanceof Error ? error.message : String(error) 
+      res.status(500).json({
+        message: "Error al reenviar notificación",
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
 
   // ============== RISK-PROCESS MIGRATION ROUTES ==============
-  
+
   // Execute migration from legacy risk fields to riskProcessLinks
   app.post("/api/risk-processes/migrate", requirePermission("admin"), async (req, res) => {
     try {
       console.log("Starting migration from legacy risk fields to riskProcessLinks...");
       const result = await storage.migrateRisksToRiskProcessLinks();
-      
+
       // Invalidate all risk caches after migration (associations changed)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (tenantId) {
         await invalidateRiskControlCaches();
       }
-      
+
       if (result.success) {
         res.json({
           message: "Migration completed successfully",
@@ -5625,9 +5678,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error("Error during migration:", error);
-      res.status(500).json({ 
-        message: "Migration failed", 
-        error: error instanceof Error ? error.message : String(error) 
+      res.status(500).json({
+        message: "Migration failed",
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -5637,13 +5690,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       console.log("Starting cleanup of legacy risk fields...");
       const result = await storage.cleanupLegacyRiskFields();
-      
+
       // Invalidate all risk caches after cleanup (data structure changed)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (tenantId) {
         await invalidateRiskControlCaches();
       }
-      
+
       if (result.success) {
         res.json({
           message: "Cleanup completed successfully",
@@ -5659,15 +5712,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error("Error during cleanup:", error);
-      res.status(500).json({ 
-        message: "Cleanup failed", 
-        error: error instanceof Error ? error.message : String(error) 
+      res.status(500).json({
+        message: "Cleanup failed",
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
 
   // ============== CONTROL-PROCESS ASSOCIATION ROUTES ==============
-  
+
   // Get all control-process associations
   app.get("/api/control-processes", requirePermission("view_all"), async (req, res) => {
     try {
@@ -5696,7 +5749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate query parameters with improved schema
       const validatedQuery = processFilterSchema.parse(req.query);
       const { macroprocesoId, processId, subprocesoId } = validatedQuery;
-      
+
       const controlProcesses = await storage.getControlProcessesByProcess(
         macroprocesoId,
         processId,
@@ -5714,17 +5767,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertControlProcessSchema.parse(req.body);
       const controlProcess = await storage.createControlProcess(validatedData);
-      
+
       if (!controlProcess) {
         return res.status(400).json({ message: "Failed to create control-process association" });
       }
-      
+
       // Invalidate caches after creation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (tenantId) {
         await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
       }
-      
+
       res.status(201).json(controlProcess);
     } catch (error) {
       console.error("Error creating control process:", error);
@@ -5741,17 +5794,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use specific update schema to prevent overposting
       const updateData = updateControlProcessSchema.parse(req.body);
       const controlProcess = await storage.updateControlProcess(req.params.id, updateData);
-      
+
       if (!controlProcess) {
         return res.status(404).json({ message: "Control-process association not found" });
       }
-      
+
       // Invalidate caches after update
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (tenantId) {
         await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
       }
-      
+
       res.json(controlProcess);
     } catch (error) {
       console.error("Error updating control process:", error);
@@ -5766,17 +5819,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/control-processes/:id", requirePermission("delete_all"), async (req, res) => {
     try {
       const success = await storage.deleteControlProcess(req.params.id);
-      
+
       if (!success) {
         return res.status(404).json({ message: "Control-process association not found" });
       }
-      
+
       // Invalidate caches after delete
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (tenantId) {
         await distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0);
       }
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting control process:", error);
@@ -5823,11 +5876,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Use specific self-evaluation schema
       const validatedData = controlProcessSelfEvaluationSchema.parse(req.body);
-      const { 
-        selfEvaluationStatus, 
-        selfEvaluationComments, 
-        selfEvaluationScore, 
-        nextEvaluationDate 
+      const {
+        selfEvaluationStatus,
+        selfEvaluationComments,
+        selfEvaluationScore,
+        nextEvaluationDate
       } = validatedData;
 
       // Get authenticated user ID using centralized helper (supports both OAuth and local auth)
@@ -5865,7 +5918,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============== AI RISK SUGGESTIONS (DEPRECATED - Moved to Azure OpenAI) ==============
   // These endpoints are no longer used. AI functionality now uses Azure OpenAI via AI Assistant.
-  
+
   /*
   // AI Risk Suggestions endpoint (DEPRECATED)
   app.post("/api/risks/ai-suggestions", isAuthenticated, async (req: Request, res: Response) => {
@@ -6144,7 +6197,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============== END OF DEPRECATED AI RISK SUGGESTIONS ==============
 
   // ============== RISK EVENTS ==============
-  
+
   // OPTIMIZED: Lightweight endpoint for risk events page
   // Strategy: Return minimal event fields + relation IDs only
   // Frontend prefetches catalogs (macroprocesos/processes/subprocesos) and does client-side joins
@@ -6154,19 +6207,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse pagination parameters - default to 50 for faster initial load
       const limit = parseInt(req.query.limit as string) || 50;
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Cache key includes pagination for proper caching
       const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant:${limit}:${offset}`;
-      
+
       // Try to get from cache
       const cached = await distributedCache.get<any>(cacheKey);
       if (cached) {
         console.log(`[CACHE HIT] risk-events/page-data (${Date.now() - startTime}ms)`);
         return res.json(cached);
       }
-      
+
       console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
-      
+
       // OPTIMIZED: Fetch only essential columns for table display
       // Removed: description, resolution_notes (large text fields)
       const [eventsData, totalCountResult] = await Promise.all([
@@ -6185,56 +6238,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
           createdBy: riskEvents.createdBy,
           updatedAt: riskEvents.updatedAt
         })
-        .from(riskEvents)
-        .where(isNull(riskEvents.deletedAt))
-        .orderBy(desc(riskEvents.eventDate))
-        .limit(limit)
-        .offset(offset),
-        
+          .from(riskEvents)
+          .where(isNull(riskEvents.deletedAt))
+          .orderBy(desc(riskEvents.eventDate))
+          .limit(limit)
+          .offset(offset),
+
         requireDb().select({ count: sql<number>`count(*)` })
           .from(riskEvents)
           .where(isNull(riskEvents.deletedAt))
       ]);
-      
+
       const eventIds = eventsData.map(e => e.id);
-      
+
       // OPTIMIZED: Only fetch relation IDs (no JOINs with catalog tables)
       // Frontend will use cached catalogs to resolve names client-side
       const [macroRelations, processRelations, subprocesoRelations] = await Promise.all([
         eventIds.length > 0
           ? requireDb()
-              .select({
-                riskEventId: riskEventMacroprocesos.riskEventId,
-                macroprocesoId: riskEventMacroprocesos.macroprocesoId
-              })
-              .from(riskEventMacroprocesos)
-              .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
+            .select({
+              riskEventId: riskEventMacroprocesos.riskEventId,
+              macroprocesoId: riskEventMacroprocesos.macroprocesoId
+            })
+            .from(riskEventMacroprocesos)
+            .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-              .select({
-                riskEventId: riskEventProcesses.riskEventId,
-                processId: riskEventProcesses.processId
-              })
-              .from(riskEventProcesses)
-              .where(inArray(riskEventProcesses.riskEventId, eventIds))
+            .select({
+              riskEventId: riskEventProcesses.riskEventId,
+              processId: riskEventProcesses.processId
+            })
+            .from(riskEventProcesses)
+            .where(inArray(riskEventProcesses.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-              .select({
-                riskEventId: riskEventSubprocesos.riskEventId,
-                subprocesoId: riskEventSubprocesos.subprocesoId
-              })
-              .from(riskEventSubprocesos)
-              .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+            .select({
+              riskEventId: riskEventSubprocesos.riskEventId,
+              subprocesoId: riskEventSubprocesos.subprocesoId
+            })
+            .from(riskEventSubprocesos)
+            .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
           : Promise.resolve([])
       ]);
-      
+
       // Group relation IDs by eventId for O(1) lookup
       const macroMap = new Map<string, string[]>();
       const processMap = new Map<string, string[]>();
       const subprocesoMap = new Map<string, string[]>();
-      
+
       for (const m of macroRelations) {
         if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
         if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
@@ -6247,7 +6300,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
         if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
       }
-      
+
       // Build lightweight events list (IDs only, no names)
       const eventsForList = eventsData.map(event => ({
         ...event,
@@ -6260,7 +6313,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subprocesoIds: subprocesoMap.get(event.id) || [],
         selectedRisks: event.riskId ? [event.riskId] : []
       }));
-      
+
       const response = {
         riskEvents: {
           data: eventsForList,
@@ -6271,13 +6324,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       };
-      
+
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, response, 30);
-      
+
       const duration = Date.now() - startTime;
       console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
-      
+
       res.json(response);
     } catch (error) {
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
@@ -6291,7 +6344,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse pagination parameters
       const limit = parseInt(req.query.limit as string) || 100; // Default 100 events
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Fetch events with pagination (basic data only for list view)
       // Single-tenant mode: no tenantId filtering needed
       const [events, totalCount] = await Promise.all([
@@ -6304,7 +6357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskEvents)
           .where(isNull(riskEvents.deletedAt))
       ]);
-      
+
       // Load related entities for all events in parallel
       const eventsForList = await Promise.all(events.map(async (event) => {
         // Get related macroprocesos
@@ -6317,7 +6370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskEventMacroprocesos)
           .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
           .where(eq(riskEventMacroprocesos.riskEventId, event.id));
-        
+
         // Get related processes
         const relatedProcesses = await requireDb()
           .select({
@@ -6328,7 +6381,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskEventProcesses)
           .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
           .where(eq(riskEventProcesses.riskEventId, event.id));
-        
+
         // Get related subprocesos
         const relatedSubprocesos = await requireDb()
           .select({
@@ -6339,7 +6392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskEventSubprocesos)
           .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
           .where(eq(riskEventSubprocesos.riskEventId, event.id));
-        
+
         return {
           ...event,
           eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
@@ -6352,7 +6405,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           selectedRisks: event.riskId ? [event.riskId] : []
         };
       }));
-      
+
       res.json({
         data: eventsForList,
         pagination: {
@@ -6374,7 +6427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!event) {
         return res.status(404).json({ message: "Risk event not found" });
       }
-      
+
       // Get related macroprocesos
       const relatedMacroprocesos = await requireDb()
         .select({
@@ -6385,7 +6438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventMacroprocesos)
         .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
         .where(eq(riskEventMacroprocesos.riskEventId, event.id));
-      
+
       // Get related processes
       const relatedProcesses = await requireDb()
         .select({
@@ -6396,7 +6449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventProcesses)
         .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
         .where(eq(riskEventProcesses.riskEventId, event.id));
-      
+
       // Get related subprocesos
       const relatedSubprocesos = await requireDb()
         .select({
@@ -6407,7 +6460,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventSubprocesos)
         .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
         .where(eq(riskEventSubprocesos.riskEventId, event.id));
-      
+
       // Serialize dates to ISO strings to avoid "Invalid date" errors in frontend
       const eventWithRelations = {
         ...event,
@@ -6510,13 +6563,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         ...(req.body.eventDate && { eventDate: new Date(req.body.eventDate) })
       };
-      
+
       // Transitional compatibility: ensure riskId is set BEFORE parsing
       const riskId = bodyWithDateTransform.riskId ?? bodyWithDateTransform.selectedRisks?.[0];
       const bodyWithRiskId = { ...bodyWithDateTransform, riskId };
-      
+
       const validatedData = insertRiskEventSchema.parse(bodyWithRiskId);
-      
+
       // Get authenticated user ID for audit fields
       const userId = getAuthenticatedUserId(req);
       const eventWithAudit = {
@@ -6524,18 +6577,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reportedBy: validatedData.reportedBy || userId,
         createdBy: userId
       };
-      
+
       // Single-tenant mode: create event directly without tenant injection
       const event = await storage.createRiskEvent(eventWithAudit);
-      
+
       // Handle related entities if provided
       if (req.body.relatedEntities && Array.isArray(req.body.relatedEntities)) {
         await storage.setRiskEventEntities(event.id, req.body.relatedEntities);
       }
-      
+
       // Send response immediately, then invalidate caches asynchronously
       res.status(201).json(event);
-      
+
       // Fire-and-forget cache invalidation (don't block response)
       Promise.all([
         invalidateRiskControlCaches(),
@@ -6556,17 +6609,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/risk-events/:id", isAuthenticated, async (req, res) => {
     try {
       // Single-tenant mode: no tenant resolution needed
-      
+
       // Get existing risk event for audit logging
       const existingEvent = await storage.getRiskEvent(req.params.id);
       if (!existingEvent) {
         return res.status(404).json({ message: "Risk event not found" });
       }
-      
+
       // Helper function to safely parse event date
       const parseEventDate = (dateValue: any): Date | undefined => {
         if (!dateValue) return undefined;
-        
+
         try {
           const parsedDate = typeof dateValue === 'string' ? new Date(dateValue) : dateValue;
           // Check if date is valid
@@ -6576,36 +6629,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (error) {
           console.warn('Invalid date value in update, skipping:', dateValue);
         }
-        
+
         return undefined;
       };
-      
+
       // Transform eventDate string to Date if present (with validation)
       const bodyWithDateTransform = {
         ...req.body,
         ...(req.body.eventDate && { eventDate: parseEventDate(req.body.eventDate) })
       };
-      
+
       // Transitional compatibility: ensure riskId is set BEFORE parsing
       const riskId = bodyWithDateTransform.riskId ?? bodyWithDateTransform.selectedRisks?.[0];
       const bodyWithRiskId = { ...bodyWithDateTransform, riskId };
-      
+
       const validatedData = insertRiskEventSchema.partial().parse(bodyWithRiskId);
-      
+
       // Inject audit fields (updatedBy)
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withUpdatedBy(validatedData, userId);
-      
+
       const event = await storage.updateRiskEvent(req.params.id, dataWithAudit);
       if (!event) {
         return res.status(404).json({ message: "Risk event not found" });
       }
-      
+
       // Handle related entities if provided
       if (req.body.relatedEntities !== undefined) {
         await storage.setRiskEventEntities(req.params.id, req.body.relatedEntities || []);
       }
-      
+
       // Load related entities for response
       const relatedMacroprocesos = await requireDb()
         .select({
@@ -6616,7 +6669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventMacroprocesos)
         .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
         .where(eq(riskEventMacroprocesos.riskEventId, event.id));
-      
+
       const relatedProcesses = await requireDb()
         .select({
           id: processes.id,
@@ -6626,7 +6679,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventProcesses)
         .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
         .where(eq(riskEventProcesses.riskEventId, event.id));
-      
+
       const relatedSubprocesos = await requireDb()
         .select({
           id: subprocesos.id,
@@ -6636,31 +6689,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskEventSubprocesos)
         .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
         .where(eq(riskEventSubprocesos.riskEventId, event.id));
-      
+
       // Log changes to audit_logs
       try {
         const changes: Record<string, { old: any; new: any }> = {};
-        
+
         // Fields to exclude from audit logs (internal/audit fields)
         const excludedFields = [
           'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
           'deletedAt', 'deletedBy'
         ];
-        
+
         // Compare existingEvent with dataWithAudit to detect changes
         for (const key in dataWithAudit) {
           // Skip excluded fields
           if (excludedFields.includes(key)) continue;
-          
+
           const oldValue = (existingEvent as any)[key];
           const newValue = (dataWithAudit as any)[key];
-          
+
           // Check if values are different
           if (oldValue !== newValue && newValue !== undefined) {
             changes[key] = { old: oldValue, new: newValue };
           }
         }
-        
+
         // Only insert audit log if there are actual changes
         if (Object.keys(changes).length > 0) {
           await requireDb().insert(auditLogs).values({
@@ -6677,13 +6730,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Don't fail the request if audit logging fails
         console.error('Failed to log audit changes for risk event:', auditError);
       }
-      
+
       // Invalidate risk caches (risk event update affects residual risk)
       await Promise.all([
         invalidateRiskControlCaches(),
         invalidateRiskEventsPageDataCache()
       ]);
-      
+
       // Serialize dates and return with relations loaded
       const eventWithRelations = {
         ...event,
@@ -6712,14 +6765,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "Risk event not found" });
       }
-      
+
       // Invalidate risk caches (risk event deletion affects residual risk)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskControlCaches(),
         invalidateRiskEventsPageDataCache()
       ]);
-      
+
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete risk event" });
@@ -6730,14 +6783,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risk-events/fraud-history/check", isAuthenticated, async (req, res) => {
     try {
       const { year, startMonth = 1 } = req.query;
-      
+
       if (!year) {
         return res.status(400).json({ message: "Year parameter is required" });
       }
 
       const planYear = parseInt(year as string);
       const planStartMonth = parseInt(startMonth as string);
-      
+
       // Calculate cutoff date: 3 years before today (to capture recent fraud history)
       const today = new Date();
       const cutoffDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
@@ -6764,7 +6817,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build map of entities with fraud history
       const fraudHistoryMap: Record<string, boolean> = {};
-      
+
       recentEvents.rows.forEach((row: any) => {
         if (row.entity_key) {
           fraudHistoryMap[row.entity_key] = true;
@@ -6795,11 +6848,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get active tenant ID
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Build filters object
       const filters: import('./storage').ControlFilters = {
         search: req.query.search as string,
@@ -6810,29 +6863,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
         maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
       };
-      
+
       // Create cache key including all filters
       const cacheKey = `controls:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
-      
+
       // Try cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // Cache miss - query database with optimized paginated method
       const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(
         filters,
         limit,
         offset
       );
-      
+
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;
       try {
         const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
         const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
-        
+
         controlsWithEffectivenessLimit = paginatedControls.map(control => ({
           ...control,
           effectiveness: Math.min(control.effectiveness, maxEffectivenessLimit)
@@ -6840,7 +6893,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (configError) {
         // Continue with original effectiveness values if config fetch fails
       }
-      
+
       // Prepare response
       const response = {
         data: controlsWithEffectivenessLimit,
@@ -6851,10 +6904,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hasMore: offset + limit < total
         }
       };
-      
+
       // Cache for 15 seconds (invalidated automatically on mutations)
       await distributedCache.set(cacheKey, response, 15);
-      
+
       res.json(response);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch controls" });
@@ -6864,20 +6917,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/controls", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Transform lastReview string to Date if present
       const bodyWithDateTransform = {
         ...req.body,
         ...(req.body.lastReview && { lastReview: new Date(req.body.lastReview) })
       };
-      
+
       const validatedData = insertControlSchema.parse(bodyWithDateTransform);
-      
+
       // Inject audit fields (createdBy) using helper function
       const dataWithAudit = withCreatedBy(validatedData, userId);
-      
+
       const control = await storage.createControl(await withTenantId(req, dataWithAudit));
-      
+
       // Save audit log for creation
       await requireDb().insert(auditLogs).values({
         entityType: 'control',
@@ -6888,12 +6941,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
         userAgent: req.headers['user-agent'] || 'unknown'
       });
-      
+
       // Invalidate caches
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await distributedCache.invalidate(`risks-with-details:${tenantId}`);
       await distributedCache.invalidatePattern(`controls:${tenantId}:*`); // Invalidate all controls cache variants
-      
+
       res.status(201).json(control);
     } catch (error) {
       console.error("Error creating control:", error);
@@ -6905,34 +6958,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get active tenant ID for ownership validation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const controlId = req.params.id;
       const userId = getAuthenticatedUserId(req);
-      
+
       // Get original control for audit trail
       const originalControl = await requireDb()
         .select()
         .from(controls)
         .where(eq(controls.id, controlId))
         .limit(1);
-      
+
       if (!originalControl.length) {
         return res.status(404).json({ message: "Control not found" });
       }
-      
+
       // Transform lastReview string to Date if present
       const bodyWithDateTransform = {
         ...req.body,
         ...(req.body.lastReview && { lastReview: new Date(req.body.lastReview) })
       };
-      
+
       const validatedData = insertControlSchema.partial().parse(bodyWithDateTransform);
       const control = await storage.updateControl(controlId, validatedData, tenantId);
-      
+
       if (!control) {
         return res.status(404).json({ message: "Control not found" });
       }
-      
+
       // Save audit log with changes
       const changes: Record<string, { old: any; new: any }> = {};
       Object.keys(validatedData).forEach((key) => {
@@ -6942,7 +6995,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           changes[key] = { old: oldValue, new: newValue };
         }
       });
-      
+
       await requireDb().insert(auditLogs).values({
         entityType: 'control',
         entityId: controlId,
@@ -6952,10 +7005,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
         userAgent: req.headers['user-agent'] || 'unknown'
       });
-      
+
       // OPTIMIZED: Use granular cache invalidation for control updates
       await invalidateControlDataCaches();
-      
+
       res.json(control);
     } catch (error) {
       res.status(400).json({ message: "Invalid control data" });
@@ -6966,13 +7019,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get active tenant ID for ownership validation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateControl(req.params.id, {
         status: 'deleted',
@@ -6981,14 +7034,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       }, tenantId);
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Control not found" });
       }
-      
+
       // OPTIMIZED: Use granular cache invalidation for control deletion
       await invalidateControlDataCaches();
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -7122,7 +7175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/control-evaluation-options/reorder", isAuthenticated, async (req, res) => {
     try {
       const { options } = req.body as { options: { id: string; order: number }[] };
-      
+
       if (!Array.isArray(options)) {
         return res.status(400).json({ message: "Options array is required" });
       }
@@ -7139,7 +7192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const criteriaWithOptions = await storage.getControlEvaluationsByCriteria();
-      
+
       // Transform data to match frontend expectations (label, score, description instead of name, weight)
       const transformedData = criteriaWithOptions.map(({ criteria, options }) => ({
         criteria,
@@ -7150,7 +7203,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           description: option.description || ""
         }))
       }));
-      
+
       res.json(transformedData);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -7191,8 +7244,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertControlEvaluationSchema.partial().parse(req.body);
       const evaluation = await storage.updateControlEvaluation(
-        req.params.controlId, 
-        req.params.criteriaId, 
+        req.params.controlId,
+        req.params.criteriaId,
         validatedData
       );
       if (!evaluation) {
@@ -7238,11 +7291,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startDate = req.query.startDate as string;
       const endDate = req.query.endDate as string;
       const vigente = req.query.vigente === 'true'; // Latest evaluation only
-      
+
       // Get all evaluations from all controls
       const allControls = await storage.getControlsWithRiskCount();
       let allEvaluations: any[] = [];
-      
+
       for (const control of allControls) {
         const evaluations = await storage.getControlEvaluations(control.id);
         allEvaluations = allEvaluations.concat(
@@ -7253,34 +7306,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }))
         );
       }
-      
+
       // Apply filters
       let filteredEvaluations = allEvaluations;
-      
+
       if (controlId) {
         filteredEvaluations = filteredEvaluations.filter(ev => ev.controlId === controlId);
       }
-      
+
       if (evaluatedBy) {
         filteredEvaluations = filteredEvaluations.filter(ev => ev.evaluatedBy === evaluatedBy);
       }
-      
+
       if (criteriaId) {
         filteredEvaluations = filteredEvaluations.filter(ev => ev.criteriaId === criteriaId);
       }
-      
+
       if (startDate) {
-        filteredEvaluations = filteredEvaluations.filter(ev => 
+        filteredEvaluations = filteredEvaluations.filter(ev =>
           new Date(ev.evaluatedAt) >= new Date(startDate)
         );
       }
-      
+
       if (endDate) {
-        filteredEvaluations = filteredEvaluations.filter(ev => 
+        filteredEvaluations = filteredEvaluations.filter(ev =>
           new Date(ev.evaluatedAt) <= new Date(endDate)
         );
       }
-      
+
       // If vigente flag is set, only return the latest evaluation per control
       if (vigente) {
         const latestByControl = new Map();
@@ -7292,12 +7345,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         filteredEvaluations = Array.from(latestByControl.values());
       }
-      
+
       const total = filteredEvaluations.length;
-      
+
       // Apply pagination
       const paginatedEvaluations = filteredEvaluations.slice(offset, offset + limit);
-      
+
       res.json({
         data: paginatedEvaluations,
         pagination: {
@@ -7317,7 +7370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // This requires looking up across all controls - not optimal but works
       const allControls = await storage.getControlsWithRiskCount();
-      
+
       for (const control of allControls) {
         const evaluations = await storage.getControlEvaluations(control.id);
         const evaluation = evaluations.find(ev => ev.id === req.params.id);
@@ -7329,7 +7382,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       res.status(404).json({ message: "Control evaluation not found" });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch control evaluation" });
@@ -7341,10 +7394,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get active tenant ID for multi-tenant validation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Calculate effectiveness based on evaluations
       const effectiveness = await storage.calculateControlEffectiveness(req.params.controlId);
-      
+
       // Update the control with calculated effectiveness
       const updatedControl = await storage.updateControl(req.params.controlId, {
         effectiveness
@@ -7354,9 +7407,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Control not found" });
       }
 
-      res.json({ 
-        control: updatedControl, 
-        effectiveness 
+      res.json({
+        control: updatedControl,
+        effectiveness
       });
     } catch (error) {
       console.error("Error completing control evaluation:", error);
@@ -7368,12 +7421,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= CONTROL SELF-ASSESSMENTS ROUTES =============
-  
+
   // Get all control self-assessments
   app.get("/api/control-assessments", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const controls = await storage.getControls();
       const assessments = controls
         .filter(control => control.selfAssessment)
@@ -7396,12 +7449,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/control-assessment-stats", async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const controls = await storage.getControls();
       const totalControls = controls.length;
       const completedAssessments = controls.filter(control => control.selfAssessment).length;
       const completionPercentage = totalControls > 0 ? Math.round((completedAssessments / totalControls) * 100) : 0;
-      
+
       // Calculate average effectiveness based on assessment levels
       const effectivenessMap = {
         'efectivo': 100,
@@ -7409,13 +7462,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         'no_efectivo': 25,
         'no_aplica': 0
       };
-      
+
       const controlsWithAssessment = controls.filter(control => control.selfAssessment);
-      const averageEffectiveness = controlsWithAssessment.length > 0 
-        ? Math.round(controlsWithAssessment.reduce((sum, control) => 
-            sum + (effectivenessMap[control.selfAssessment as keyof typeof effectivenessMap] || 0), 0) / controlsWithAssessment.length)
+      const averageEffectiveness = controlsWithAssessment.length > 0
+        ? Math.round(controlsWithAssessment.reduce((sum, control) =>
+          sum + (effectivenessMap[control.selfAssessment as keyof typeof effectivenessMap] || 0), 0) / controlsWithAssessment.length)
         : 0;
-      
+
       res.json({
         totalControls,
         completedAssessments,
@@ -7431,7 +7484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/control-assessments", isAuthenticated, async (req, res) => {
     try {
       const { controlId, selfAssessment, evidenceDescription, observations, evaluatedBy } = req.body;
-      
+
       if (!controlId || !selfAssessment || !evidenceDescription) {
         return res.status(400).json({ message: "Missing required fields" });
       }
@@ -7484,7 +7537,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const assessmentId = req.params.id;
       const controlId = assessmentId.replace('assessment-', '');
       const { selfAssessment, evidenceDescription, observations, evaluatedBy } = req.body;
-      
+
       if (!selfAssessment || !evidenceDescription) {
         return res.status(400).json({ message: "Missing required fields" });
       }
@@ -7537,7 +7590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= PROBABILITY CRITERIA ROUTES =============
-  
+
   // Get all probability criteria
   app.get("/api/probability-criteria", async (req, res) => {
     try {
@@ -7624,7 +7677,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= IMPACT CRITERIA ROUTES =============
-  
+
   // Get all impact criteria
   app.get("/api/impact-criteria", async (req, res) => {
     try {
@@ -7740,47 +7793,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const limit = Math.min(50, Math.max(10, parseInt(req.query.limit as string) || 25));
       const search = (req.query.search as string) || '';
-      
+
       // Cache key includes riskId, page, limit, and search
       const cacheKey = `risk-control-summary:${riskId}:p${page}:l${limit}:s${search}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey} (${Date.now() - startTime}ms)`);
         return res.json(cached);
       }
-      
+
       // Get the risk to access inherent risk value
       const risk = await storage.getRisk(riskId);
       if (!risk) {
         return res.status(404).json({ message: "Risk not found" });
       }
-      
+
       // Get already associated control IDs for this risk
       const associatedRiskControls = await storage.getRiskControls(riskId, tenantId);
       const associatedControlIds = new Set(associatedRiskControls.map((rc: any) => rc.controlId));
-      
+
       // Get all controls with basic fields only
       const allControls = await storage.getControls();
-      
+
       // Filter to available controls (not already associated) and apply search
       let availableControls = allControls.filter((c: any) => !associatedControlIds.has(c.id));
-      
+
       if (search) {
         const searchLower = search.toLowerCase();
-        availableControls = availableControls.filter((c: any) => 
-          c.name?.toLowerCase().includes(searchLower) || 
+        availableControls = availableControls.filter((c: any) =>
+          c.name?.toLowerCase().includes(searchLower) ||
           c.code?.toLowerCase().includes(searchLower)
         );
       }
-      
+
       // Calculate total before pagination
       const total = availableControls.length;
-      
+
       // Apply pagination
       const offset = (page - 1) * limit;
       const paginatedControls = availableControls.slice(offset, offset + limit);
-      
+
       // Pre-calculate projected residual risk for each control (simple formula)
       const inherentRisk = risk.inherentRisk || (risk.probability * risk.impact);
       const controlsWithProjection = paginatedControls.map((control: any) => ({
@@ -7792,7 +7845,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         effectiveness: control.effectiveness || 0,
         projectedResidualRisk: Math.round((inherentRisk * (1 - (control.effectiveness || 0) / 100)) * 10) / 10
       }));
-      
+
       const result = {
         data: controlsWithProjection,
         associated: associatedRiskControls.map((rc: any) => ({
@@ -7816,10 +7869,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         inherentRisk
       };
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, result, 60);
-      
+
       console.log(`[CACHE MISS] ${cacheKey} (${Date.now() - startTime}ms)`);
       res.json(result);
     } catch (error: any) {
@@ -7842,22 +7895,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risk-controls-with-details", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Use distributed cache to prevent slow queries (60s TTL)
       const cacheKey = `risk-controls-with-details:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       if (storage.getAllRiskControlsWithDetails) {
         const riskControls = await storage.getAllRiskControlsWithDetails();
-        
+
         // Cache for 60 seconds
         await distributedCache.set(cacheKey, riskControls, 60);
-        
+
         res.json(riskControls);
       } else {
         res.status(404).json({ message: "Method not available" });
@@ -7865,7 +7918,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[ERROR] /api/risk-controls-with-details failed:", error);
       console.error("Stack:", error.stack);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch risk controls with details",
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
@@ -7880,7 +7933,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskId: req.params.riskId,
       });
       const riskControl = await storage.createRiskControl(validatedData);
-      
+
       // Invalidate all risk-control related caches for real-time UI updates
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
@@ -7888,13 +7941,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
         distributedCache.invalidatePattern(`risk-control-summary:${req.params.riskId}*`)
       ]);
-      
+
       res.status(201).json(riskControl);
     } catch (error: any) {
       if (error.name === 'ZodError') {
-        return res.status(400).json({ 
-          message: "Invalid risk control data", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Invalid risk control data",
+          errors: error.errors
         });
       }
       console.error("Error creating risk control:", error);
@@ -7910,28 +7963,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskControls)
         .where(eq(riskControls.id, req.params.id))
         .limit(1);
-      
+
       const riskId = riskControlData[0]?.riskId;
-      
+
       const deleted = await storage.deleteRiskControl(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Risk control not found" });
       }
-      
+
       // Invalidate all risk-control related caches for real-time UI updates
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const invalidations = [
         invalidateRiskControlCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
       ];
-      
+
       // Also invalidate the controls-summary cache for this specific risk
       if (riskId) {
         invalidations.push(distributedCache.invalidatePattern(`risk-control-summary:${riskId}*`));
       }
-      
+
       await Promise.all(invalidations);
-      
+
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete risk control" });
@@ -7945,8 +7998,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateRiskControlCaches();
-      
-      res.json({ 
+
+      res.json({
         message: "Caché invalidado exitosamente",
         tenantId,
         timestamp: new Date().toISOString()
@@ -7961,15 +8014,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risk-controls/recalculate-all", isAuthenticated, async (req, res) => {
     try {
       const recalculateResult = await storage.recalculateAllResidualRisks();
-      
+
       // Invalidate all risk-control related caches after bulk recalculation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskControlCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
       ]);
-      
-      res.json({ 
+
+      res.json({
         message: "Recálculo completado exitosamente",
         updated: recalculateResult?.updated || 0,
         total: recalculateResult?.total || 0
@@ -7988,30 +8041,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "Tenant ID is required" });
       }
-      
+
       // Use distributed cache with versioned key (30s TTL)
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey} (${Date.now() - startTime}ms)`);
         return res.json(cached);
       }
-      
+
       const actionPlans = await storage.getActionPlans();
-      
+
       // Early return if no plans - avoid unnecessary queries
       if (actionPlans.length === 0) {
         await distributedCache.set(cacheKey, [], 30);
         return res.json([]);
       }
-      
+
       const planIds = actionPlans.map(p => p.id);
       const actionCodes = actionPlans.map(p => p.code);
       const riskIds = actionPlans
         .map(p => p.riskId)
         .filter((id): id is string => id !== null && id !== undefined);
-      
+
       // PHASE 1: Execute independent queries in parallel
       const [allActions, auditLogsData, riskProcessLinksData] = await Promise.all([
         // Get all actions to find corresponding action_id for each plan
@@ -8019,7 +8072,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .select({ id: actions.id, code: actions.code })
           .from(actions)
           .where(and(eq(actions.tenantId, tenantId), inArray(actions.code, actionCodes))),
-        
+
         // Audit logs for reschedule counting
         requireDb()
           .select()
@@ -8029,13 +8082,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eq(auditLogs.action, 'update'),
             inArray(auditLogs.entityId, planIds)
           )),
-        
+
         // Risk-process links
         riskIds.length > 0
           ? requireDb().select().from(riskProcessLinks).where(inArray(riskProcessLinks.riskId, riskIds))
           : Promise.resolve([])
       ]);
-      
+
       // Count reschedules
       const rescheduleCounts = new Map<string, number>();
       for (const log of auditLogsData) {
@@ -8043,7 +8096,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rescheduleCounts.set(log.entityId, (rescheduleCounts.get(log.entityId) || 0) + 1);
         }
       }
-      
+
       // If no risks linked, return early with simplified data
       if (riskIds.length === 0) {
         const plansWithoutRisks = actionPlans.map(plan => ({
@@ -8057,27 +8110,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[ACTION-PLANS] Completed (no risks) in ${Date.now() - startTime}ms`);
         return res.json(plansWithoutRisks);
       }
-      
+
       // Extract IDs from risk-process links
       const processIds = [...new Set(riskProcessLinksData.map(l => l.processId).filter((id): id is string => !!id))];
       const subprocesoIds = [...new Set(riskProcessLinksData.map(l => l.subprocesoId).filter((id): id is string => !!id))];
       const macroprocesoIds = [...new Set(riskProcessLinksData.map(l => l.macroprocesoId).filter((id): id is string => !!id))];
-      
+
       // PHASE 2: Fetch processes, subprocesos, and associated risks in parallel
       const actionIds = allActions.map(a => a.id);
       const [processesData, subprocesosData, processesFromMacro, allAssociatedRisks] = await Promise.all([
         processIds.length > 0
           ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, processIds)))
           : Promise.resolve([]),
-        
+
         subprocesoIds.length > 0
           ? requireDb().select().from(subprocesos).where(and(eq(subprocesos.tenantId, tenantId), inArray(subprocesos.id, subprocesoIds)))
           : Promise.resolve([]),
-        
+
         macroprocesoIds.length > 0
           ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.macroprocesoId, macroprocesoIds)))
           : Promise.resolve([]),
-        
+
         // Associated risks query
         requireDb()
           .select({
@@ -8098,36 +8151,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
             )
           ))
       ]);
-      
+
       // Get additional parent process IDs from subprocesos
       const additionalProcessIds = subprocesosData
         .map(s => s.procesoId)
         .filter((id): id is string => !!id && !processIds.includes(id));
-      
+
       // PHASE 3: Fetch additional processes and gerencias data in parallel
       const allProcessesMap = new Map([...processesData, ...processesFromMacro].map(p => [p.id, p]));
-      
+
       const [additionalProcesses, processGerenciasData] = await Promise.all([
         additionalProcessIds.length > 0
           ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, additionalProcessIds)))
           : Promise.resolve([]),
-        
+
         allProcessesMap.size > 0
           ? requireDb().select().from(processGerencias).where(inArray(processGerencias.processId, Array.from(allProcessesMap.keys())))
           : Promise.resolve([])
       ]);
-      
+
       // Add additional processes to map
       additionalProcesses.forEach(p => allProcessesMap.set(p.id, p));
-      
+
       // Get gerencia IDs and fetch in final phase
       const gerenciaIds = [...new Set(processGerenciasData.map(pg => pg.gerenciaId).filter((id): id is string => !!id))];
       const gerenciasData = gerenciaIds.length > 0
         ? await requireDb().select().from(gerencias).where(inArray(gerencias.id, gerenciaIds))
         : [];
-      
+
       const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
-      
+
       // Build final result
       const plansWithCounts = actionPlans.map(plan => {
         let process = null;
@@ -8144,19 +8197,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           }
         }
-        
+
         const gerenciasForPlan = process
           ? processGerenciasData
-              .filter(pg => pg.processId === process.id)
-              .map(pg => gerenciasMap.get(pg.gerenciaId))
-              .filter((g): g is NonNullable<typeof g> => !!g)
+            .filter(pg => pg.processId === process.id)
+            .map(pg => gerenciasMap.get(pg.gerenciaId))
+            .filter((g): g is NonNullable<typeof g> => !!g)
           : [];
-        
+
         const correspondingAction = allActions.find(a => a.code === plan.code);
-        const associatedRisksForPlan = allAssociatedRisks.filter(ar => 
+        const associatedRisksForPlan = allAssociatedRisks.filter(ar =>
           ar.actionPlanId === plan.id || (correspondingAction && ar.actionId === correspondingAction.id)
         );
-        
+
         return {
           ...plan,
           title: plan.name,
@@ -8165,11 +8218,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, plansWithCounts, 30);
       console.log(`[ACTION-PLANS] Completed in ${Date.now() - startTime}ms (${actionPlans.length} plans)`);
-      
+
       res.json(plansWithCounts);
     } catch (error) {
       console.error("Failed to fetch action plans:", error);
@@ -8185,7 +8238,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/action-plans", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Convert string dates back to Date objects and prepare data for unified actions table
       const processedData = {
         origin: 'risk' as const,
@@ -8198,23 +8251,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: req.body.status || 'pending',
         progress: req.body.progress || 0,
       };
-      
+
       // Validate and create action in unified table
       const validatedData = insertActionSchema.parse(processedData);
       // Add createdBy AFTER validation (it's omitted from schema)
       const actionData = { ...validatedData, createdBy: userId };
       const action = await storage.createAction(await withTenantId(req, actionData));
-      
+
       // Return data in ActionPlan format for backward compatibility
       const actionPlan = {
         ...action,
         name: action.title, // Map title back to name
       };
-      
+
       // Invalidate action plans cache
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.status(201).json(actionPlan);
     } catch (error) {
       console.error("Failed to create action plan:", error);
@@ -8225,10 +8278,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/action-plans/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Try to get from actions table first (new system)
       const currentAction = await storage.getAction(req.params.id);
-      
+
       if (currentAction) {
         // Found in actions table - update it
         // Map action plan fields to action fields
@@ -8244,12 +8297,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           progress: req.body.progress !== undefined ? req.body.progress : 0,
           updatedBy: userId
         };
-        
+
         // Track due date changes and rescheduling
         if (actionData.dueDate && currentAction.dueDate) {
           const oldDate = new Date(currentAction.dueDate);
           const newDate = new Date(actionData.dueDate);
-          
+
           if (oldDate.getTime() !== newDate.getTime()) {
             // If this is the first reschedule, save the original date
             if (!currentAction.originalDueDate) {
@@ -8257,7 +8310,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             // Increment reschedule counter
             actionData.rescheduleCount = (currentAction.rescheduleCount || 0) + 1;
-            
+
             await requireDb().insert(auditLogs).values({
               entityType: 'action',
               entityId: req.params.id,
@@ -8272,31 +8325,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
           }
         }
-        
+
         const updatedAction = await storage.updateAction(req.params.id, actionData);
         return res.json(updatedAction);
       }
-      
+
       // Not found in actions, try legacy action_plans table
       const currentPlan = await storage.getActionPlan(req.params.id);
       if (!currentPlan) {
         return res.status(404).json({ message: "Action plan not found" });
       }
-      
+
       // Found in action_plans table - update it
       const processedData = {
         ...req.body,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null,
         originalDueDate: req.body.originalDueDate ? new Date(req.body.originalDueDate) : null
       };
-      
+
       const validatedData = insertActionSchema.partial().parse(processedData);
-      
+
       // Track due date changes in audit logs
       if (validatedData.dueDate && currentPlan.dueDate) {
         const oldDate = new Date(currentPlan.dueDate);
         const newDate = new Date(validatedData.dueDate);
-        
+
         if (oldDate.getTime() !== newDate.getTime()) {
           // If this is the first reschedule, save the original date
           if (!currentPlan.originalDueDate) {
@@ -8304,7 +8357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           // Increment reschedule counter
           validatedData.rescheduleCount = (currentPlan.rescheduleCount || 0) + 1;
-          
+
           // Date changed - log it
           await requireDb().insert(auditLogs).values({
             entityType: 'action_plan',
@@ -8320,20 +8373,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       const actionPlan = await storage.updateActionPlan(req.params.id, validatedData);
-      
+
       // Invalidate action plans cache
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.json(actionPlan);
     } catch (error) {
       if (error instanceof z.ZodError) {
         console.error("Action plan validation error:", error.errors);
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: error.errors[0].message,
-          errors: error.errors 
+          errors: error.errors
         });
       }
       console.error("Failed to update action plan:", error);
@@ -8345,10 +8398,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateActionPlan(req.params.id, {
         status: 'deleted',
@@ -8357,15 +8410,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Action plan not found" });
       }
-      
+
       // Invalidate action plans cache
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -8381,7 +8434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/action-plans/:id/risks", isAuthenticated, async (req, res) => {
     try {
       const id = req.params.id;
-      
+
       // Check if it's in actions table (new) or action_plans (legacy)
       const action = await storage.getAction(id);
       if (action) {
@@ -8395,12 +8448,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           code: risks.code,
           name: risks.name,
         })
-        .from(actionPlanRisks)
-        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
-        .where(eq(actionPlanRisks.actionId, id));
+          .from(actionPlanRisks)
+          .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+          .where(eq(actionPlanRisks.actionId, id));
         return res.json(riskAssociations);
       }
-      
+
       // Fallback to legacy action_plans table
       const actionPlanRisksData = await storage.getActionPlanRisks(id);
       res.json(actionPlanRisksData);
@@ -8418,7 +8471,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if it's in actions table (new) or action_plans (legacy)
       const action = await storage.getAction(id);
-      
+
       let newRelation;
       if (action) {
         // Insert with actionId for new actions table
@@ -8445,7 +8498,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateRiskControlCaches();
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.status(201).json(newRelation);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -8460,10 +8513,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/action-plans/:id/risks/:riskId", isAuthenticated, async (req, res) => {
     try {
       const { id, riskId } = req.params;
-      
+
       // Check if it's in actions table (new) or action_plans (legacy)
       const action = await storage.getAction(id);
-      
+
       let deleted;
       if (action) {
         // Delete from action_plan_risks using action_id
@@ -8476,16 +8529,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Delete using legacy method
         deleted = await storage.removeRiskFromActionPlan(id, riskId);
       }
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Risk association not found" });
       }
-      
+
       // Invalidate risk caches (action plan association removed)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateRiskControlCaches();
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Failed to remove risk from action plan:", error);
@@ -8498,22 +8551,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { relationId } = req.params;
       const { mitigationStatus, notes } = req.body;
-      
+
       if (!mitigationStatus) {
         return res.status(400).json({ message: "mitigationStatus is required" });
       }
 
       const updated = await storage.updateActionPlanRiskStatus(relationId, mitigationStatus, notes);
-      
+
       if (!updated) {
         return res.status(404).json({ message: "Risk association not found" });
       }
-      
+
       // Invalidate risk caches (action plan status may affect risk views)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateRiskControlCaches();
       await invalidateActionPlanCaches(tenantId);
-      
+
       res.json(updated);
     } catch (error) {
       console.error("Failed to update risk mitigation status:", error);
@@ -8532,11 +8585,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(actions.deletedAt),
           eq(actions.validationStatus, 'pending_validation')
         ));
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks
       const allAssociatedRisks = await requireDb()
         .select({
@@ -8548,7 +8601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = pendingPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8559,7 +8612,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch pending action plans:", error);
@@ -8577,11 +8630,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(actions.deletedAt),
           eq(actions.validationStatus, 'validated')
         ));
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks
       const allAssociatedRisks = await requireDb()
         .select({
@@ -8593,7 +8646,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = validatedPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8604,7 +8657,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch validated action plans:", error);
@@ -8622,11 +8675,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(actions.deletedAt),
           eq(actions.validationStatus, 'observed')
         ));
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks
       const allAssociatedRisks = await requireDb()
         .select({
@@ -8638,7 +8691,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = observedPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8667,11 +8720,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(actions.deletedAt),
           eq(actions.validationStatus, 'rejected')
         ));
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks
       const allAssociatedRisks = await requireDb()
         .select({
@@ -8683,7 +8736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = rejectedPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8694,7 +8747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch rejected action plans:", error);
@@ -8705,7 +8758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/action-plans/validation/notified", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { limit, offset } = normalizePaginationParams(req.query);
-      
+
       // Get all action plans that have been notified for validation
       const notifiedPlans = await requireDb()
         .select()
@@ -8715,14 +8768,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eq(actions.validationStatus, 'pending_validation'),
           isNotNull(actions.notifiedAt)
         ));
-      
+
       const total = notifiedPlans.length;
       const paginatedPlans = notifiedPlans.slice(offset, offset + limit);
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks for paginated plans
       const planIds = paginatedPlans.map(p => p.id);
       const allAssociatedRisks = planIds.length > 0 ? await requireDb()
@@ -8736,7 +8789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
         .where(inArray(actionPlanRisks.actionId, planIds)) : [];
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = paginatedPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8747,7 +8800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       res.json(createPaginatedResponse(plansWithRisks, total, limit, offset));
     } catch (error) {
       console.error("Failed to fetch notified action plans:", error);
@@ -8758,7 +8811,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/action-plans/validation/not-notified", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { limit, offset } = normalizePaginationParams(req.query);
-      
+
       const notNotifiedPlans = await requireDb()
         .select()
         .from(actions)
@@ -8775,14 +8828,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             )
           )
         ));
-      
+
       const total = notNotifiedPlans.length;
       const paginatedPlans = notNotifiedPlans.slice(offset, offset + limit);
-      
+
       // Get all processes
       const allProcesses = await requireDb().select().from(processes);
       const processMap = new Map(allProcesses.map(p => [p.id, p]));
-      
+
       // Get all associated risks for paginated plans
       const planIds = paginatedPlans.map(p => p.id);
       const allAssociatedRisks = planIds.length > 0 ? await requireDb()
@@ -8796,7 +8849,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
         .where(inArray(actionPlanRisks.actionId, planIds)) : [];
-      
+
       // Add associated risks and process info to each action plan
       const plansWithRisks = paginatedPlans.map(plan => {
         const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
@@ -8807,7 +8860,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           associatedRisks: associatedRisksForPlan
         };
       });
-      
+
       res.json(createPaginatedResponse(plansWithRisks, total, limit, offset));
     } catch (error) {
       console.error("Failed to fetch not-notified action plans:", error);
@@ -8820,7 +8873,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { status, comments, sendNotification } = req.body;
-      
+
       // Validate status
       if (!['validated', 'observed', 'rejected'].includes(status)) {
         return res.status(400).json({ message: "Invalid validation status" });
@@ -8907,7 +8960,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { planIds, status, comments, sendNotification } = req.body;
-      
+
       // Validate status
       if (!['validated', 'observed', 'rejected'].includes(status)) {
         return res.status(400).json({ message: "Invalid validation status" });
@@ -9001,19 +9054,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .select()
         .from(auditLogs)
         .where(eq(auditLogs.entityType, 'action_plan'));
-      
+
       // Filter rescheduled plans (where originalDueDate !== dueDate)
-      const rescheduledPlans = actionPlans.filter(plan => 
-        plan.originalDueDate && 
-        plan.dueDate && 
+      const rescheduledPlans = actionPlans.filter(plan =>
+        plan.originalDueDate &&
+        plan.dueDate &&
         new Date(plan.originalDueDate).getTime() !== new Date(plan.dueDate).getTime()
       );
-      
+
       // Calculate statistics
       const totalPlans = actionPlans.filter(p => p.status !== 'deleted').length;
       const rescheduledCount = rescheduledPlans.length;
       const reschedulingRate = totalPlans > 0 ? (rescheduledCount / totalPlans) * 100 : 0;
-      
+
       // Calculate average extension days
       let totalExtensionDays = 0;
       for (const plan of rescheduledPlans) {
@@ -9023,17 +9076,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalExtensionDays += daysDiff;
       }
       const avgExtensionDays = rescheduledCount > 0 ? Math.round(totalExtensionDays / rescheduledCount) : 0;
-      
+
       // Get date change audit logs
-      const dateChangeLogs = auditLogsData.filter(log => 
-        log.entityType === 'action_plan' && 
+      const dateChangeLogs = auditLogsData.filter(log =>
+        log.entityType === 'action_plan' &&
         log.action === 'update' &&
-        log.changes && 
+        log.changes &&
         typeof log.changes === 'object' &&
         'field' in log.changes &&
         (log.changes as any).field === 'dueDate'
       );
-      
+
       // Plans by status
       const byStatus = {
         pending: rescheduledPlans.filter(p => p.status === 'pending').length,
@@ -9044,15 +9097,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return isOverdue;
         }).length
       };
-      
+
       // Recent rescheduling activity (last 30 days)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
-      const recentChanges = dateChangeLogs.filter(log => 
+
+      const recentChanges = dateChangeLogs.filter(log =>
         new Date(log.timestamp) >= thirtyDaysAgo
       ).length;
-      
+
       res.json({
         summary: {
           totalPlans,
@@ -9083,19 +9136,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
-      
+
       const plansData = await storage.getActionPlans();
       const risksData = await requireDb().select().from(risks);
       const usersData = await requireDb().select().from(users);
       const processesData = await requireDb().select().from(processes);
       const gerenciasData = await requireDb().select().from(gerencias);
       const processGerenciasData = await requireDb().select().from(processGerencias);
-      
+
       const risksMap = new Map(risksData.map(r => [r.id, r]));
       const usersMap = new Map(usersData.map(u => [u.id, u]));
       const processesMap = new Map(processesData.map(p => [p.id, p]));
       const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
-      
+
       const processGerenciasMap = new Map<string, string[]>();
       processGerenciasData.forEach(pg => {
         if (!processGerenciasMap.has(pg.processId)) {
@@ -9103,7 +9156,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         processGerenciasMap.get(pg.processId)?.push(pg.gerenciaId);
       });
-      
+
       const summary = {
         total: plansData.filter(p => p.status !== 'deleted').length,
         draft: plansData.filter(p => p.status === 'draft').length,
@@ -9113,7 +9166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rejected: plansData.filter(p => p.status === 'rejected').length,
         overdue: plansData.filter(p => p.status !== 'approved' && p.dueDate && new Date(p.dueDate) < new Date()).length
       };
-      
+
       const summarySheet = workbook.addWorksheet('Resumen');
       summarySheet.columns = [
         { header: 'Indicador', key: 'indicator', width: 30 },
@@ -9128,7 +9181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { indicator: 'Rechazados', value: summary.rejected },
         { indicator: 'Vencidos', value: summary.overdue }
       ]);
-      
+
       const detailSheet = workbook.addWorksheet('Detalle');
       detailSheet.columns = [
         { header: 'Codigo', key: 'code', width: 12 },
@@ -9140,7 +9193,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { header: 'Estado', key: 'status', width: 15 },
         { header: 'Progreso %', key: 'progress', width: 12 }
       ];
-      
+
       const statusMap: Record<string, string> = {
         'draft': 'Borrador',
         'in_progress': 'En Progreso',
@@ -9148,20 +9201,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         'approved': 'Aprobado',
         'rejected': 'Rechazado'
       };
-      
+
       const rows = plansData
         .filter(p => p.status !== 'deleted')
         .map(p => {
           const risk = risksMap.get(p.riskId);
           let gerenciaNames: string[] = [];
-          
+
           if (risk?.processId) {
             const gerenciaIds = processGerenciasMap.get(risk.processId) || [];
             gerenciaNames = gerenciaIds
               .map(gId => gerenciasMap.get(gId)?.name)
               .filter((name): name is string => !!name);
           }
-          
+
           return {
             code: p.code,
             name: p.name,
@@ -9173,12 +9226,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             progress: `${p.progress || 0}%`
           };
         });
-      
+
       detailSheet.addRows(rows);
-      
+
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=reporte-general-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -9192,13 +9245,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
-      
+
       const plansData = await storage.getActionPlans();
       const logsData = await requireDb().select().from(auditLogs).where(eq(auditLogs.entityType, 'action_plan')).orderBy(desc(auditLogs.timestamp));
       const usersData = await requireDb().select().from(users);
-      
+
       const usersMap = new Map(usersData.map(u => [u.id, u]));
-      
+
       const rejectedPlans = plansData.filter(p => p.rejectionCount && p.rejectionCount > 0);
       const rejectionSheet = workbook.addWorksheet('Analisis Rechazos');
       rejectionSheet.columns = [
@@ -9213,7 +9266,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         count: p.rejectionCount || 0,
         reason: p.lastRejectionReason || 'N/A'
       })));
-      
+
       const auditSheet = workbook.addWorksheet('Historial Cambios');
       auditSheet.columns = [
         { header: 'Fecha', key: 'timestamp', width: 20 },
@@ -9227,10 +9280,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         action: log.action,
         user: usersMap.get(log.userId || '')?.fullName || 'Sistema'
       })));
-      
+
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=reporte-trazabilidad-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -9244,23 +9297,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
-      
+
       const plansData = await storage.getActionPlans();
       const usersData = await requireDb().select().from(users);
-      
+
       const usersMap = new Map(usersData.map(u => [u.id, u]));
-      
+
       const completedPlans = plansData.filter(p => p.status === 'approved');
-      const avgCompletionTime = completedPlans.length > 0 
+      const avgCompletionTime = completedPlans.length > 0
         ? completedPlans.reduce((acc, plan) => {
-            if (plan.createdAt && plan.reviewedAt) {
-              const days = Math.ceil((new Date(plan.reviewedAt).getTime() - new Date(plan.createdAt).getTime()) / (1000 * 60 * 60 * 24));
-              return acc + days;
-            }
-            return acc;
-          }, 0) / completedPlans.length
+          if (plan.createdAt && plan.reviewedAt) {
+            const days = Math.ceil((new Date(plan.reviewedAt).getTime() - new Date(plan.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+            return acc + days;
+          }
+          return acc;
+        }, 0) / completedPlans.length
         : 0;
-      
+
       const kpiSheet = workbook.addWorksheet('KPIs');
       kpiSheet.columns = [
         { header: 'Indicador', key: 'indicator', width: 40 },
@@ -9271,7 +9324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { indicator: 'Total Aprobados', value: completedPlans.length },
         { indicator: 'Total Planes', value: plansData.filter(p => p.status !== 'deleted').length }
       ]);
-      
+
       const byResponsible = new Map();
       for (const plan of plansData.filter(p => p.status !== 'deleted')) {
         const responsibleId = plan.responsible || 'Sin asignar';
@@ -9286,7 +9339,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         stats.total++;
         if (plan.status === 'approved') stats.approved++;
       }
-      
+
       const responsibleSheet = workbook.addWorksheet('Por Responsable');
       responsibleSheet.columns = [
         { header: 'Responsable', key: 'name', width: 30 },
@@ -9300,10 +9353,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         approved: stat.approved,
         rate: stat.total > 0 ? ((stat.approved / stat.total) * 100).toFixed(1) : '0'
       })));
-      
+
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=reporte-eficiencia-planes-${new Date().toISOString().split('T')[0]}.xlsx`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -9317,19 +9370,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
-      
+
       // Get all action plans and gerencias
       const actionsData = await requireDb().select().from(actions);
       const gerenciasData = await requireDb().select().from(gerencias);
-      
+
       // Get process-gerencia associations
       const processGerenciasData = await requireDb().select().from(processGerencias);
       const processesData = await requireDb().select().from(processes);
-      
+
       // Create maps for lookups
       const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
       const processMap = new Map(processesData.map(p => [p.id, p]));
-      
+
       // Build process -> gerencias mapping
       const processToGerencias = new Map<string, string[]>();
       for (const pg of processGerenciasData) {
@@ -9338,7 +9391,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         processToGerencias.get(pg.processId)!.push(pg.gerenciaId);
       }
-      
+
       // Group actions by gerencia and count by status
       const gerenciaStats = new Map<string, {
         name: string;
@@ -9348,7 +9401,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cancelled: number;
         total: number;
       }>();
-      
+
       // Initialize all gerencias with zero counts
       for (const gerencia of gerenciasData) {
         gerenciaStats.set(gerencia.id, {
@@ -9360,14 +9413,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           total: 0
         });
       }
-      
+
       // Count actions by gerencia
       for (const action of actionsData) {
         if (action.status === 'deleted') continue;
-        
+
         // Get gerencias associated with this action's process
         const gerenciaIds = action.processId ? processToGerencias.get(action.processId) || [] : [];
-        
+
         if (gerenciaIds.length === 0) {
           // Actions without gerencia - add to "Sin Gerencia" category
           if (!gerenciaStats.has('sin-gerencia')) {
@@ -9382,7 +9435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           gerenciaIds.push('sin-gerencia');
         }
-        
+
         // Count for each gerencia
         for (const gerenciaId of gerenciaIds) {
           const stats = gerenciaStats.get(gerenciaId);
@@ -9395,10 +9448,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Create worksheet
       const worksheet = workbook.addWorksheet('Planes por Gerencia');
-      
+
       // Define columns
       worksheet.columns = [
         { header: 'Gerencia', key: 'gerencia', width: 40 },
@@ -9408,7 +9461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { header: 'Cancelados', key: 'cancelled', width: 15 },
         { header: 'Total', key: 'total', width: 12 }
       ];
-      
+
       // Style header row
       worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
       worksheet.getRow(1).fill = {
@@ -9417,12 +9470,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         fgColor: { argb: 'FF4F46E5' }
       };
       worksheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle' };
-      
+
       // Add data rows
       const statsArray = Array.from(gerenciaStats.values())
         .filter(stats => stats.total > 0) // Only show gerencias with actions
         .sort((a, b) => a.name.localeCompare(b.name, 'es'));
-      
+
       for (const stats of statsArray) {
         worksheet.addRow({
           gerencia: stats.name,
@@ -9433,7 +9486,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           total: stats.total
         });
       }
-      
+
       // Calculate totals
       const totals = {
         gerencia: 'TOTAL',
@@ -9443,7 +9496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cancelled: statsArray.reduce((sum, s) => sum + s.cancelled, 0),
         total: statsArray.reduce((sum, s) => sum + s.total, 0)
       };
-      
+
       // Add totals row with styling
       const totalRow = worksheet.addRow(totals);
       totalRow.font = { bold: true };
@@ -9452,7 +9505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pattern: 'solid',
         fgColor: { argb: 'FFE5E7EB' }
       };
-      
+
       // Add borders to all cells
       worksheet.eachRow((row, rowNumber) => {
         row.eachCell((cell) => {
@@ -9467,14 +9520,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         });
       });
-      
+
       // Set first column alignment to left
       worksheet.getColumn(1).alignment = { horizontal: 'left', vertical: 'middle' };
-      
+
       // Send file
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=reporte-planes-por-gerencia-${new Date().toISOString().split('T')[0]}.xlsx`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -9487,15 +9540,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/reports/generate", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const { reportType, format, title, startDate, endDate } = req.body;
-      
+
       // Get data based on report type (single-tenant mode)
       const risksData = await storage.getRisks();
       const controlsData = await storage.getControls();
       const actionPlansData = await storage.getActionPlans();
       const processesData = await requireDb().select().from(processes);
-      
+
       // Generate HTML content based on report type
       let htmlContent = `
         <!DOCTYPE html>
@@ -9542,7 +9595,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </thead>
             <tbody>
       `;
-      
+
       risksData.slice(0, 50).forEach(risk => {
         const riskClass = risk.inherentRisk >= 20 ? 'high-risk' : risk.inherentRisk >= 13 ? 'medium-risk' : 'low-risk';
         htmlContent += `
@@ -9555,7 +9608,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               </tr>
         `;
       });
-      
+
       htmlContent += `
             </tbody>
           </table>
@@ -9573,7 +9626,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </thead>
             <tbody>
       `;
-      
+
       controlsData.slice(0, 30).forEach(control => {
         htmlContent += `
               <tr>
@@ -9585,14 +9638,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
               </tr>
         `;
       });
-      
+
       htmlContent += `
             </tbody>
           </table>
         </body>
         </html>
       `;
-      
+
       // Return HTML or convert to PDF/Excel based on format
       if (format === 'html') {
         res.setHeader('Content-Type', 'text/html');
@@ -9608,7 +9661,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const ExcelJS = (await import('exceljs')).default;
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Reporte');
-        
+
         // Add headers
         worksheet.columns = [
           { header: 'Código', key: 'code', width: 15 },
@@ -9617,7 +9670,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           { header: 'Nivel Inherente', key: 'inherentRisk', width: 15 },
           { header: 'Estado', key: 'status', width: 15 },
         ];
-        
+
         // Add data
         risksData.forEach(risk => {
           worksheet.addRow({
@@ -9628,7 +9681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             status: risk.status,
           });
         });
-        
+
         // Style header
         worksheet.getRow(1).font = { bold: true };
         worksheet.getRow(1).fill = {
@@ -9636,10 +9689,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           pattern: 'solid',
           fgColor: { argb: 'FF4F46E5' }
         };
-        
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=reporte_${reportType}_${new Date().toISOString().split('T')[0]}.xlsx`);
-        
+
         await workbook.xlsx.write(res);
         res.end();
       } else {
@@ -9655,38 +9708,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/action-plans/send-email", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate request body
       const { planIds, subject, message } = sendActionPlansEmailSchema.parse(req.body);
-      
+
       // Get all action plans by IDs (using actions table, not deprecated actionPlans)
       const actionPlansToEmail = await requireDb()
         .select()
         .from(actions)
         .where(inArray(actions.id, planIds));
-      
+
       if (actionPlansToEmail.length === 0) {
         return res.status(404).json({ message: "No se encontraron planes de acción con los IDs proporcionados" });
       }
-      
+
       // Get process owners for the responsible names
       const responsibleNames = actionPlansToEmail
         .map(plan => plan.responsible)
         .filter(Boolean);
-      
-      const processOwnersData = responsibleNames.length > 0 
+
+      const processOwnersData = responsibleNames.length > 0
         ? await requireDb()
-            .select()
-            .from(processOwners)
-            .where(inArray(processOwners.name, responsibleNames as string[]))
+          .select()
+          .from(processOwners)
+          .where(inArray(processOwners.name, responsibleNames as string[]))
         : [];
-      
+
       const processOwnersMap = new Map(processOwnersData.map(po => [po.name, po]));
-      
+
       // GROUP PLANS BY RESPONSIBLE EMAIL
       const plansByResponsible = new Map<string, Array<typeof actionPlansToEmail[number]>>();
       const emailResults: Array<{ planId: string; success: boolean; email?: string; error?: string; }> = [];
-      
+
       for (const plan of actionPlansToEmail) {
         if (!plan.responsible) {
           emailResults.push({
@@ -9696,9 +9749,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           continue;
         }
-        
+
         const processOwner = processOwnersMap.get(plan.responsible);
-        
+
         if (!processOwner?.email) {
           emailResults.push({
             planId: plan.id,
@@ -9707,7 +9760,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           continue;
         }
-        
+
         // Group by email
         const email = processOwner.email;
         if (!plansByResponsible.has(email)) {
@@ -9715,25 +9768,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         plansByResponsible.get(email)!.push(plan);
       }
-      
+
       // Now send one email per responsible (grouped)
       let sentCount = 0;
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
-      
+
       for (const [responsibleEmail, plans] of plansByResponsible.entries()) {
         // Find the process owner for this email
         const processOwner = processOwnersData.find(po => po.email === responsibleEmail);
         if (!processOwner) continue;
-        
+
         // Generate batch validation token
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
-        
+
         const batchTokenValue = randomBytes(32).toString('hex');
         const entityIds = plans.map(p => p.id);
-        
+
         const validationData = plans.map(plan => ({
           id: plan.id,
           code: plan.code,
@@ -9742,7 +9795,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           dueDate: plan.dueDate,
           responsible: plan.responsible
         }));
-        
+
         // Create batch token in database
         const batchToken = await storage.createBatchValidationToken({
           token: batchTokenValue,
@@ -9755,20 +9808,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           partiallyUsed: false,
           expiresAt
         });
-        
+
         // Create validation URL (points to batch validation page)
         const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
-        
+
         // Build email with grouped plans table
         const plansTableRows = plans.map(plan => {
-          const dueDateText = plan.dueDate 
-            ? new Date(plan.dueDate).toLocaleDateString('es-CL', { 
-                year: 'numeric', 
-                month: 'short', 
-                day: 'numeric' 
-              })
+          const dueDateText = plan.dueDate
+            ? new Date(plan.dueDate).toLocaleDateString('es-CL', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric'
+            })
             : 'Sin fecha límite';
-          
+
           return `
             <tr style="border-bottom: 1px solid #e5e7eb;">
               <td style="padding: 12px 8px; color: #1f2937; font-weight: 600;">${plan.code}</td>
@@ -9777,7 +9830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </tr>
           `;
         }).join('');
-        
+
         const emailHtml = `
           <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
             <div style="background-color: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
@@ -9844,7 +9897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             </div>
           </div>
         `;
-        
+
         // Send grouped email
         try {
           const emailSent = await sendEmail({
@@ -9852,16 +9905,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             subject: subject || `Validación de ${plans.length} plan${plans.length > 1 ? 'es' : ''} de acción`,
             html: emailHtml
           });
-          
+
           if (emailSent) {
             sentCount++;
-            
+
             // Update notifiedAt timestamp for all plans in this batch
             for (const plan of plans) {
               await storage.updateActionPlan(plan.id, {
                 notifiedAt: new Date()
               });
-              
+
               emailResults.push({
                 planId: plan.id,
                 success: true,
@@ -9888,7 +9941,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -9903,18 +9956,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           results: emailResults
         }
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         sentCount,
         totalPlans: actionPlansToEmail.length,
         results: emailResults
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: error.errors[0].message,
-          errors: error.errors 
+          errors: error.errors
         });
       }
       console.error("Failed to send emails to action plans:", error);
@@ -9927,57 +9980,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const { id } = req.params;
-      
+
       // Get the action plan
       const plan = await requireDb()
         .select()
         .from(actions)
         .where(eq(actions.id, id))
         .limit(1);
-      
+
       if (plan.length === 0) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       const actionPlan = plan[0];
-      
+
       // Check if plan is rejected or observed
       if (actionPlan.validationStatus !== 'rejected' && actionPlan.validationStatus !== 'observed') {
-        return res.status(400).json({ 
-          message: "Solo se pueden reenviar planes rechazados u observados" 
+        return res.status(400).json({
+          message: "Solo se pueden reenviar planes rechazados u observados"
         });
       }
-      
+
       // Get process owner
       if (!actionPlan.responsible) {
-        return res.status(400).json({ 
-          message: "Plan sin responsable asignado" 
+        return res.status(400).json({
+          message: "Plan sin responsable asignado"
         });
       }
-      
+
       const processOwnerData = await requireDb()
         .select()
         .from(processOwners)
         .where(eq(processOwners.name, actionPlan.responsible))
         .limit(1);
-      
+
       if (processOwnerData.length === 0 || !processOwnerData[0].email) {
-        return res.status(400).json({ 
-          message: "Responsable sin email configurado" 
+        return res.status(400).json({
+          message: "Responsable sin email configurado"
         });
       }
-      
+
       const processOwner = processOwnerData[0];
       const baseUrl = process.env.REPLIT_DOMAINS
         ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
         : 'http://localhost:5000';
-      
+
       // Generate batch validation token (with single plan)
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiration
-      
+
       const batchTokenValue = randomBytes(32).toString('hex');
-      
+
       const validationData = [{
         id: actionPlan.id,
         code: actionPlan.code,
@@ -9986,7 +10039,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dueDate: actionPlan.dueDate,
         responsible: actionPlan.responsible
       }];
-      
+
       // Create batch token in database
       await storage.createBatchValidationToken({
         token: batchTokenValue,
@@ -9999,18 +10052,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         partiallyUsed: false,
         expiresAt
       });
-      
+
       // Create validation URL
       const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
-      
-      const dueDateText = actionPlan.dueDate 
-        ? new Date(actionPlan.dueDate).toLocaleDateString('es-CL', { 
-            year: 'numeric', 
-            month: 'short', 
-            day: 'numeric' 
-          })
+
+      const dueDateText = actionPlan.dueDate
+        ? new Date(actionPlan.dueDate).toLocaleDateString('es-CL', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric'
+        })
         : 'Sin fecha límite';
-      
+
       // Build revalidation email
       const emailHtml = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
@@ -10075,26 +10128,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         </div>
       `;
-      
+
       // Send email
       const emailSent = await sendEmail({
         to: processOwner.email,
         subject: `Revalidación de Plan de Acción ${actionPlan.code}`,
         html: emailHtml
       });
-      
+
       if (!emailSent) {
-        return res.status(500).json({ 
-          message: "Error al enviar email de revalidación" 
+        return res.status(500).json({
+          message: "Error al enviar email de revalidación"
         });
       }
-      
+
       // Update notifiedAt timestamp and reset validation status to pending
       await storage.updateActionPlan(actionPlan.id, {
         notifiedAt: new Date(),
         validationStatus: 'pending_validation'
       });
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -10107,9 +10160,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: processOwner.email
         }
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         message: "Email de revalidación enviado exitosamente",
         email: processOwner.email
       });
@@ -10120,38 +10173,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== PUBLIC ACTION PLAN VALIDATION ENDPOINTS ==============
-  
+
   // GET /api/public/validate-action-plan/:token - Get validation details without authentication
   app.get("/api/public/validate-action-plan/:token", async (req, res) => {
     try {
       const { token } = req.params;
-      
+
       const validationResult = await storage.validateAndUseActionPlanToken(token);
-      
+
       if (!validationResult.valid || !validationResult.token) {
-        return res.status(400).json({ 
-          success: false, 
-          error: validationResult.error || 'Token inválido' 
+        return res.status(400).json({
+          success: false,
+          error: validationResult.error || 'Token inválido'
         });
       }
-      
+
       const tokenData = validationResult.token;
-      
+
       // Get action plan details
       const actionPlan = await storage.getActionPlan(tokenData.entityId);
-      
+
       if (!actionPlan) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Plan de acción no encontrado' 
+        return res.status(404).json({
+          success: false,
+          error: 'Plan de acción no encontrado'
         });
       }
-      
+
       // Get related data for comprehensive view
       // For public validation, we need to allow access without tenant context
       // We'll fetch the process and risk directly by ID instead
       const processData = actionPlan.processId ? await requireDb().select().from(processes).where(eq(processes.id, actionPlan.processId)).then(r => r[0]) : null;
-      
+
       // Get associated risks from action_plan_risks table (many-to-many)
       const associatedRisks = await requireDb()
         .select({
@@ -10163,7 +10216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
         .where(eq(actionPlanRisks.actionPlanId, actionPlan.id));
-      
+
       // Fallback: If no risks found in action_plan_risks but riskId exists (legacy data), load from riskId
       let riskData = null;
       if (associatedRisks.length > 0) {
@@ -10177,7 +10230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const [risk] = await requireDb().select().from(risks).where(eq(risks.id, actionPlan.riskId));
         riskData = risk ? { id: risk.id, code: risk.code, name: risk.name } : null;
       }
-      
+
       res.json({
         success: true,
         actionPlan: {
@@ -10195,57 +10248,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('Error fetching validation token data:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Error al obtener la información de validación' 
+      res.status(500).json({
+        success: false,
+        error: 'Error al obtener la información de validación'
       });
     }
   });
-  
+
   // POST /api/public/validate-action-plan/:token - Submit validation action
   app.post("/api/public/validate-action-plan/:token", async (req, res) => {
     try {
       const { token } = req.params;
       const { comments } = req.body;
-      
+
       const validationResult = await storage.validateAndUseActionPlanToken(token);
-      
+
       if (!validationResult.valid || !validationResult.token) {
-        return res.status(400).json({ 
-          success: false, 
-          error: validationResult.error || 'Token inválido' 
+        return res.status(400).json({
+          success: false,
+          error: validationResult.error || 'Token inválido'
         });
       }
-      
+
       const tokenData = validationResult.token;
-      
+
       // Get action plan
       const actionPlan = await storage.getActionPlan(tokenData.entityId);
-      
+
       if (!actionPlan) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Plan de acción no encontrado' 
+        return res.status(404).json({
+          success: false,
+          error: 'Plan de acción no encontrado'
         });
       }
-      
+
       // Map action to validationStatus (using schema-defined values)
       const statusMap: Record<string, string> = {
         'validated': 'validated',
         'observed': 'observed',
         'rejected': 'rejected'
       };
-      
+
       const newStatus = tokenData.action ? statusMap[tokenData.action] : 'pending_validation';
       const now = new Date();
-      
+
       // Update action plan with validation status in action_plans table
       await storage.updateActionPlan(tokenData.entityId, {
         validationStatus: newStatus,
         validationComments: comments || null,
         reviewedAt: now
       });
-      
+
       // CRITICAL: Sync validation status to actions table
       await syncActionPlanValidation(actionPlan.code, {
         validationStatus: newStatus,
@@ -10253,10 +10306,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reviewedAt: now,
         validatedAt: now
       });
-      
+
       // Mark token as used
       await storage.markTokenAsUsed(token, tokenData.action || 'validated', comments);
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -10271,7 +10324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           responsibleEmail: tokenData.responsibleEmail
         }
       });
-      
+
       res.json({
         success: true,
         message: `Plan de acción ${tokenData.action === 'validated' ? 'aprobado' : tokenData.action === 'observed' ? 'observado' : 'rechazado'} exitosamente`,
@@ -10284,66 +10337,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('Error processing validation:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Error al procesar la validación' 
+      res.status(500).json({
+        success: false,
+        error: 'Error al procesar la validación'
       });
     }
   });
 
   // ============== BATCH VALIDATION ENDPOINTS (GROUPED) ==============
-  
+
   // GET /api/public/batch-validation/:token - Get batch validation details
   app.get("/api/public/batch-validation/:token", async (req, res) => {
     try {
       const { token } = req.params;
-      
+
       console.log("🔍 [GET BATCH VALIDATION] Token received from URL");
       console.log("   Raw token (first 20 chars):", token.substring(0, 20));
       console.log("   Token length:", token.length);
       console.log("   Full token:", token);
-      
+
       // Get batch token data
       const batchToken = await storage.getBatchValidationToken(token);
-      
+
       console.log("   Token found:", !!batchToken);
-      
+
       if (!batchToken) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Token inválido o expirado' 
+        return res.status(404).json({
+          success: false,
+          error: 'Token inválido o expirado'
         });
       }
-      
+
       // Check if token is expired
       if (new Date() > batchToken.expiresAt) {
-        return res.status(410).json({ 
-          success: false, 
-          error: 'El token ha expirado' 
+        return res.status(410).json({
+          success: false,
+          error: 'El token ha expirado'
         });
       }
-      
+
       // Check if already fully used
       if (batchToken.isUsed) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Este token ya ha sido utilizado completamente' 
+        return res.status(400).json({
+          success: false,
+          error: 'Este token ya ha sido utilizado completamente'
         });
       }
-      
+
       // Handle different entity types
       if (batchToken.type === 'control') {
         // Use tenantId from token for security isolation
         const tenantId = batchToken.tenantId;
-        
+
         // Get control details for all entities with proper tenantId
         const controlsData = await Promise.all(
           batchToken.entityIds.map(id => storage.getControl(id, tenantId))
         );
-        
+
         // Filter out nulls
         const validControls = controlsData.filter(Boolean);
-        
+
         const controlsWithDetails = validControls.map(control => ({
           id: control.id,
           code: control.code,
@@ -10353,7 +10406,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           automationLevel: control.automationLevel,
           validationStatus: control.validationStatus
         }));
-        
+
         return res.json({
           success: true,
           type: batchToken.type,
@@ -10372,7 +10425,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(riskProcessLinks)
           .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
           .where(inArray(riskProcessLinks.id, batchToken.entityIds));
-        
+
         const risksWithDetails = riskProcessLinksData
           .filter(row => row.risk)
           .map(row => ({
@@ -10385,7 +10438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             processName: batchToken.validationData.find((v: any) => v.id === row.riskProcessLink.id)?.processName || null,
             validationStatus: row.riskProcessLink.validationStatus
           }));
-        
+
         return res.json({
           success: true,
           type: batchToken.type,
@@ -10399,11 +10452,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const actionPlans = await Promise.all(
           batchToken.entityIds.map(id => storage.getActionPlan(id))
         );
-        
+
         // Filter out nulls and get associated risks
         const validPlans = actionPlans.filter(Boolean);
         const risks = await storage.getRisks();
-        
+
         const plansWithDetails = validPlans.map(plan => {
           const associatedRisk = risks.find(r => r.id === plan.riskId);
           return {
@@ -10421,7 +10474,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             } : null
           };
         });
-        
+
         return res.json({
           success: true,
           type: batchToken.type,
@@ -10433,37 +10486,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error('Error fetching batch validation token:', error);
-      res.status(500).json({ 
-        success: false, 
-        error: 'Error al obtener la información de validación' 
-        });
+      res.status(500).json({
+        success: false,
+        error: 'Error al obtener la información de validación'
+      });
     }
   });
-  
+
   // POST /api/public/batch-validation/:token - Submit batch validation
   app.post("/api/public/batch-validation/:token", async (req, res) => {
     try {
       const { token } = req.params;
       const { validations, generalComments } = req.body;
-      
+
       console.log("🔍 [BATCH VALIDATION DEBUG] Received validation request");
       console.log("   Token received (first 20 chars):", token.substring(0, 20));
       console.log("   Token length:", token.length);
       console.log("   Validations count:", validations?.length || 0);
-      
+
       // validations format: [{ entityId, action: 'validated'|'observed'|'rejected', comments }]
-      
+
       if (!Array.isArray(validations) || validations.length === 0) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Se requiere al menos una validación' 
+        return res.status(400).json({
+          success: false,
+          error: 'Se requiere al menos una validación'
         });
       }
-      
+
       // Get batch token data
       console.log("🔍 [BATCH VALIDATION DEBUG] Calling getBatchValidationToken with token");
       const batchToken = await storage.getBatchValidationToken(token);
-      
+
       console.log("🔍 [BATCH VALIDATION DEBUG] getBatchValidationToken result:", {
         found: !!batchToken,
         tokenId: batchToken?.id,
@@ -10472,52 +10525,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         entityIds: batchToken?.entityIds,
         expiresAt: batchToken?.expiresAt
       });
-      
+
       if (!batchToken) {
         console.error("❌ [BATCH VALIDATION ERROR] Token not found in database");
         // Let's also try to search the DB directly for debugging
         const directQuery = await requireDb().select().from(batchValidationTokens).limit(5);
         console.log("   Sample tokens in DB (count):", directQuery.length);
         console.log("   Sample token (first):", directQuery[0] ? { id: directQuery[0].id, tenantId: directQuery[0].tenantId, type: directQuery[0].type } : 'none');
-        
-        return res.status(404).json({ 
-          success: false, 
-          error: 'Token inválido o expirado' 
+
+        return res.status(404).json({
+          success: false,
+          error: 'Token inválido o expirado'
         });
       }
-      
+
       // Check if token is expired
       if (new Date() > batchToken.expiresAt) {
-        return res.status(410).json({ 
-          success: false, 
-          error: 'El token ha expirado' 
+        return res.status(410).json({
+          success: false,
+          error: 'El token ha expirado'
         });
       }
-      
+
       // Check if already fully used
       if (batchToken.isUsed) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Este token ya ha sido utilizado completamente' 
+        return res.status(400).json({
+          success: false,
+          error: 'Este token ya ha sido utilizado completamente'
         });
       }
-      
+
       const now = new Date();
       const results = [];
-      
+
       // Map action to validationStatus
       const statusMap: Record<string, "validated" | "rejected" | "observed"> = {
         'validated': 'validated',
         'observed': 'observed',
         'rejected': 'rejected'
       };
-      
+
       // Process based on entity type
       if (batchToken.type === 'control') {
         // Process control validations
         for (const validation of validations) {
           const { entityId, action, comments } = validation;
-          
+
           // Verify entity is part of this batch
           if (!batchToken.entityIds.includes(entityId)) {
             results.push({
@@ -10527,10 +10580,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           // Get control (use tenant from batch token)
           const control = await requireDb().select().from(controls).where(eq(controls.id, entityId)).limit(1).then(r => r[0]);
-          
+
           if (!control) {
             results.push({
               entityId,
@@ -10539,9 +10592,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           const newStatus = statusMap[action];
-          
+
           // Update control validation status directly via DB (bypass storage layer for public validation)
           if (newStatus) {
             await requireDb().update(controls)
@@ -10553,7 +10606,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               })
               .where(eq(controls.id, entityId));
           }
-          
+
           /**
            * CRITICAL: Log audit action with userId: null
            * 
@@ -10577,7 +10630,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               responsibleEmail: batchToken.responsibleEmail
             }
           });
-          
+
           results.push({
             entityId,
             success: true,
@@ -10589,7 +10642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Process risk-process-link validations
         for (const validation of validations) {
           const { entityId, action, comments } = validation;
-          
+
           // Verify entity is part of this batch
           if (!batchToken.entityIds.includes(entityId)) {
             results.push({
@@ -10599,14 +10652,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           // Get risk-process-link
           const riskProcessLinkData = await requireDb()
             .select()
             .from(riskProcessLinks)
             .where(eq(riskProcessLinks.id, entityId))
             .limit(1);
-          
+
           if (riskProcessLinkData.length === 0) {
             results.push({
               entityId,
@@ -10615,9 +10668,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           const newStatus = statusMap[action];
-          
+
           // Update risk-process-link validation status
           if (newStatus) {
             await requireDb().update(riskProcessLinks)
@@ -10629,7 +10682,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               })
               .where(eq(riskProcessLinks.id, entityId));
           }
-          
+
           // Log audit action for each risk
           await requireDb().insert(auditLogs).values({
             entityType: 'risk',
@@ -10645,7 +10698,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               responsibleEmail: batchToken.responsibleEmail
             }
           });
-          
+
           results.push({
             entityId,
             success: true,
@@ -10657,7 +10710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Process action plan validations
         for (const validation of validations) {
           const { entityId, action, comments } = validation;
-          
+
           // Verify entity is part of this batch
           if (!batchToken.entityIds.includes(entityId)) {
             results.push({
@@ -10667,10 +10720,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           // Get action plan
           const actionPlan = await storage.getActionPlan(entityId);
-          
+
           if (!actionPlan) {
             results.push({
               entityId,
@@ -10679,16 +10732,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
             continue;
           }
-          
+
           const newStatus = statusMap[action] || 'pending_validation';
-          
+
           // Update action plan
           await storage.updateActionPlan(entityId, {
             validationStatus: newStatus,
             validationComments: comments || generalComments || null,
             reviewedAt: now
           });
-          
+
           // Sync to actions table
           await syncActionPlanValidation(actionPlan.code, {
             validationStatus: newStatus,
@@ -10696,7 +10749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             reviewedAt: now,
             validatedAt: now
           });
-          
+
           // Log audit action for each plan
           await requireDb().insert(auditLogs).values({
             entityType: 'action_plan',
@@ -10712,7 +10765,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               responsibleEmail: batchToken.responsibleEmail
             }
           });
-          
+
           results.push({
             entityId,
             success: true,
@@ -10721,7 +10774,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       // Check how many entities have been validated in total
       let validatedCount = 0;
       if (batchToken.type === 'control') {
@@ -10739,7 +10792,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       // Mark batch token as used only when ALL entities have been validated
       const allEntitiesProcessed = validatedCount === batchToken.entityIds.length;
       await storage.updateBatchValidationToken(batchToken.id, {
@@ -10747,14 +10800,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         partiallyUsed: validatedCount > 0 && !allEntitiesProcessed,
         usedAt: allEntitiesProcessed ? now : batchToken.usedAt
       });
-      
+
       // ========================================
       // MONITORING METRICS
       // ========================================
       const successfulValidations = results.filter(r => r.success).length;
       const failedValidations = results.filter(r => !r.success).length;
       const successRate = validations.length > 0 ? (successfulValidations / validations.length * 100).toFixed(2) : '0';
-      
+
       console.log('[VALIDATION_METRICS]', JSON.stringify({
         timestamp: now.toISOString(),
         type: batchToken.type,
@@ -10784,60 +10837,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
         token: req.params.token?.substring(0, 10) + '...',
         stack: error instanceof Error ? error.stack : undefined
       }));
-      
-      res.status(500).json({ 
-        success: false, 
-        error: 'Error al procesar las validaciones' 
+
+      res.status(500).json({
+        success: false,
+        error: 'Error al procesar las validaciones'
       });
     }
   });
 
   // ============== ACTION PLAN EVIDENCE SYSTEM ==============
-  
+
   // 1. POST /api/action-plans/:id/attachments - Subir evidencias
   app.post("/api/action-plans/:id/attachments", isAuthenticated, upload.array('files', 5), async (req: any, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionPlanId = req.params.id;
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       if (!req.files || req.files.length === 0) {
         return res.status(400).json({ message: "No se proporcionaron archivos" });
       }
-      
+
       const privateDir = process.env.PRIVATE_OBJECT_DIR;
       if (!privateDir) {
         return res.status(500).json({ message: "PRIVATE_OBJECT_DIR no configurado" });
       }
-      
+
       // Parse bucket and path from PRIVATE_OBJECT_DIR (format: /bucket-name/path)
       const match = privateDir.match(/^\/([^\/]+)(\/.*)?$/);
       if (!match) {
         return res.status(500).json({ message: "Formato de PRIVATE_OBJECT_DIR inválido" });
       }
-      
+
       const bucketName = match[1];
       const basePath = (match[2] || '').replace(/^\//, '');
       const bucket = objectStorageClient.bucket(bucketName);
-      
+
       const uploadedAttachments = [];
-      
+
       for (const file of req.files) {
         // Generate unique filename
         const uniqueId = randomBytes(8).toString('hex');
         const timestamp = Date.now();
         const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const storagePath = basePath 
+        const storagePath = basePath
           ? `${basePath}/action-plans/${actionPlanId}/${timestamp}_${uniqueId}_${sanitizedFileName}`
           : `action-plans/${actionPlanId}/${timestamp}_${uniqueId}_${sanitizedFileName}`;
-        
+
         const fileObj = bucket.file(storagePath);
-        
+
         // Upload file to object storage
         await fileObj.save(file.buffer, {
           contentType: file.mimetype,
@@ -10847,7 +10900,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             actionPlanId: actionPlanId
           }
         });
-        
+
         // Create database record
         const attachment = await storage.createActionPlanAttachment({
           actionPlanId: actionPlanId,
@@ -10858,10 +10911,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           description: req.body.description || null,
           uploadedBy: userId
         });
-        
+
         uploadedAttachments.push(attachment);
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -10873,25 +10926,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fileNames: uploadedAttachments.map(a => a.fileName)
         }
       });
-      
+
       res.status(201).json(uploadedAttachments);
     } catch (error) {
       console.error("Error uploading attachments:", error);
       res.status(500).json({ message: "Error al subir archivos" });
     }
   });
-  
+
   // 2. GET /api/action-plans/:id/attachments - Obtener lista de evidencias
   app.get("/api/action-plans/:id/attachments", isAuthenticated, async (req, res) => {
     try {
       const actionPlanId = req.params.id;
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       const attachments = await storage.getActionPlanAttachments(actionPlanId);
       res.json(attachments);
     } catch (error) {
@@ -10899,21 +10952,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Error al obtener evidencias" });
     }
   });
-  
+
   // 3. DELETE /api/action-plans/:id/attachments/:attachmentId - Eliminar evidencia
   app.delete("/api/action-plans/:id/attachments/:attachmentId", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const { id: actionPlanId, attachmentId } = req.params;
-      
+
       // Get attachment details
       const attachments = await storage.getActionPlanAttachments(actionPlanId);
       const attachment = attachments.find(a => a.id === attachmentId);
-      
+
       if (!attachment) {
         return res.status(404).json({ message: "Evidencia no encontrada" });
       }
-      
+
       // Delete file from object storage
       try {
         // Parse bucket and path from fileUrl (format: /bucket-name/path)
@@ -10923,21 +10976,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const filePath = match[2];
           const bucket = objectStorageClient.bucket(bucketName);
           const file = bucket.file(filePath);
-          
+
           await file.delete();
         }
       } catch (storageError) {
         console.error("Error deleting file from storage:", storageError);
         // Continue to delete DB record even if file deletion fails
       }
-      
+
       // Delete database record
       const deleted = await storage.deleteActionPlanAttachment(attachmentId);
-      
+
       if (!deleted) {
         return res.status(500).json({ message: "Error al eliminar evidencia de la base de datos" });
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -10949,41 +11002,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fileName: attachment.fileName
         }
       });
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting attachment:", error);
       res.status(500).json({ message: "Error al eliminar evidencia" });
     }
   });
-  
+
   // 4. POST /api/action-plans/:id/submit-evidence - Cambiar estado a evidence_submitted
   app.post("/api/action-plans/:id/submit-evidence", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionPlanId = req.params.id;
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       // Check if there are attachments
       const attachments = await storage.getActionPlanAttachments(actionPlanId);
       if (attachments.length === 0) {
         return res.status(400).json({ message: "No se pueden enviar evidencias sin adjuntos" });
       }
-      
+
       // Update status to evidence_submitted
       const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, 'evidence_submitted', {
         evidenceSubmittedBy: userId
       });
-      
+
       if (!updatedPlan) {
         return res.status(500).json({ message: "Error al actualizar el estado del plan de acción" });
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -10998,7 +11051,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           attachmentsCount: attachments.length
         }
       });
-      
+
       // Create notification for auditors/reviewers
       await notificationService.createNotification({
         recipientId: userId, // This would ideally be the auditor's ID
@@ -11018,55 +11071,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tenantId: actionPlan.tenantId,
         createdBy: userId
       });
-      
+
       res.json(updatedPlan);
     } catch (error) {
       console.error("Error submitting evidence:", error);
       res.status(500).json({ message: "Error al enviar evidencias" });
     }
   });
-  
+
   // 5. POST /api/action-plans/:id/review - Aprobar/rechazar evidencias (solo auditores)
   app.post("/api/action-plans/:id/review", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionPlanId = req.params.id;
-      
+
       // Check if user has auditor permissions
       const userRoles = await storage.getUserRoles(userId);
       const roles = await storage.getRoles();
       const userRoleObjects = userRoles.map(ur => roles.find(r => r.id === ur.roleId)).filter(Boolean);
-      
-      const isAuditorOrAdmin = userRoleObjects.some(role => 
-        role?.name === 'Administrador' || 
+
+      const isAuditorOrAdmin = userRoleObjects.some(role =>
+        role?.name === 'Administrador' ||
         role?.name === 'Auditor' ||
         role?.permissions?.includes('audit_action_plans')
       );
-      
+
       if (!isAuditorOrAdmin) {
         return res.status(403).json({ message: "No tiene permisos para revisar evidencias" });
       }
-      
+
       // Validate request body
       const reviewSchema = z.object({
         status: z.enum(['approved', 'rejected']),
         reviewComments: z.string().min(1, "Los comentarios de revisión son requeridos")
       });
-      
+
       const { status, reviewComments } = reviewSchema.parse(req.body);
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       // Update status with review information and rejection tracking
       const updateData: any = {
         reviewedBy: userId,
         reviewComments: reviewComments
       };
-      
+
       // If rejected, increment rejection counter and track details for full traceability
       if (status === 'rejected') {
         updateData.rejectionCount = (actionPlan.rejectionCount || 0) + 1;
@@ -11074,13 +11127,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         updateData.lastRejectionReason = reviewComments;
         updateData.lastRejectedBy = userId;
       }
-      
+
       const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, status, updateData);
-      
+
       if (!updatedPlan) {
         return res.status(500).json({ message: "Error al actualizar el estado del plan de acción" });
       }
-      
+
       // Log audit action with rejection details
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -11100,7 +11153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } : {})
         }
       });
-      
+
       // Notify responsible person (only if exists)
       if (actionPlan.responsible) {
         try {
@@ -11129,46 +11182,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Don't fail the review if notification fails
         }
       }
-      
+
       res.json(updatedPlan);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: error.errors[0].message,
-          errors: error.errors 
+          errors: error.errors
         });
       }
       console.error("Error reviewing evidence:", error);
       res.status(500).json({ message: "Error al revisar evidencias" });
     }
   });
-  
+
   // 6. POST /api/action-plans/:id/reopen - Reopen rejected action plan
   app.post("/api/action-plans/:id/reopen", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionPlanId = req.params.id;
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       // Only rejected plans can be reopened
       if (actionPlan.status !== 'rejected') {
         return res.status(400).json({ message: "Solo los planes rechazados pueden ser reabiertos" });
       }
-      
+
       // Update to in_progress status
       const updatedPlan = await storage.updateActionPlanStatus(actionPlanId, 'in_progress', {
         updatedBy: userId
       });
-      
+
       if (!updatedPlan) {
         return res.status(500).json({ message: "Error al reabrir el plan de acción" });
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -11183,33 +11236,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
           reopenedAfterRejections: actionPlan.rejectionCount
         }
       });
-      
+
       res.json(updatedPlan);
     } catch (error) {
       console.error("Error reopening action plan:", error);
       res.status(500).json({ message: "Error al reabrir el plan de acción" });
     }
   });
-  
+
   // 7. POST /api/action-plans/:id/generate-access-token - Generar token para email
   app.post("/api/action-plans/:id/generate-access-token", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionPlanId = req.params.id;
-      
+
       // Verify action plan exists
       const actionPlan = await storage.getActionPlan(actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       // Generate secure token
       const token = randomBytes(32).toString('hex');
-      
+
       // Set expiration to 7 days from now
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
-      
+
       // Create access token
       const accessToken = await storage.createActionPlanAccessToken({
         token: token,
@@ -11218,7 +11271,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         expiresAt: expiresAt,
         createdBy: userId
       });
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -11230,8 +11283,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           expiresAt: expiresAt.toISOString()
         }
       });
-      
-      res.json({ 
+
+      res.json({
         token: accessToken.token,
         expiresAt: accessToken.expiresAt
       });
@@ -11240,29 +11293,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Error al generar token de acceso" });
     }
   });
-  
+
   // 7. GET /api/action-plans/by-token/:token - Acceso vía token (sin auth)
   app.get("/api/action-plans/by-token/:token", async (req, res) => {
     try {
       const token = req.params.token;
       const ipAddress = req.ip;
-      
+
       // Validate token
       const validation = await storage.validateAndUseToken(token, ipAddress);
-      
+
       if (!validation.valid || !validation.actionPlanId) {
         return res.status(401).json({ message: "Token inválido o expirado" });
       }
-      
+
       // Get action plan
       const actionPlan = await storage.getActionPlan(validation.actionPlanId);
       if (!actionPlan) {
         return res.status(404).json({ message: "Plan de acción no encontrado" });
       }
-      
+
       // Get attachments
       const attachments = await storage.getActionPlanAttachments(validation.actionPlanId);
-      
+
       res.json({
         actionPlan,
         attachments
@@ -11275,15 +11328,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============== UNIFIED ACTIONS API (Risk & Audit) ==============
   // Nueva API unificada para acciones de riesgos y auditoría
-  
+
   app.get("/api/actions", requirePermission("actions:read"), async (req, res) => {
     try {
       const origin = req.query.origin as 'risk' | 'audit' | undefined;
-      
-      const actions = origin 
+
+      const actions = origin
         ? await storage.getActionsByOrigin(origin)
         : await storage.getActions();
-      
+
       // Get all associated risks for all actions
       const allAssociatedRisks = await requireDb()
         .select({
@@ -11296,19 +11349,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(actionPlanRisks)
         .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
-      
+
       // Add associated risks to each action
       const actionsWithRisks = actions.map(action => {
-        const associatedRisksForAction = allAssociatedRisks.filter(ar => 
+        const associatedRisksForAction = allAssociatedRisks.filter(ar =>
           ar.actionId === action.id
         );
-        
+
         return {
           ...action,
           associatedRisks: associatedRisksForAction
         };
       });
-      
+
       res.json(actionsWithRisks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch actions" });
@@ -11352,22 +11405,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null
       };
-      
+
       const validatedData = insertActionSchema.parse(processedData);
-      
+
       // Derive createdBy from authenticated user (never trust client)
       const userId = (req as any).user?.claims?.sub || 'user-1'; // Usuario autenticado (fallback para desarrollo)
       const actionWithCreatedBy = {
         ...validatedData,
         createdBy: userId
       };
-      
+
       const action = await storage.createAction(actionWithCreatedBy);
-      
+
       // ============= ACTION PLAN NOTIFICATION HOOKS (STRUCTURE READY - FUNCTIONALITY DISABLED) =============
       // Para activar estas notificaciones, cambiar ACTION_PLAN_NOTIFICATIONS_ENABLED a true en notification-service.ts
       // También descomentar las siguientes líneas:
-      
+
       /* HOOK: Notificar creación de plan de acción
       try {
         await notificationService.notifyActionPlanCreated(
@@ -11382,7 +11435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // No failing the request if notification fails
       }
       */
-      
+
       res.status(201).json(action);
     } catch (error) {
       console.error("Error creating action:", error);
@@ -11400,19 +11453,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!currentAction) {
         return res.status(404).json({ message: "Action not found" });
       }
-      
+
       // Convert string dates back to Date objects
       const processedData = {
         ...req.body,
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : null
       };
-      
+
       // RESCHEDULE LOGIC: Track when due dates change
       const newDueDate = processedData.dueDate;
       const currentDueDate = currentAction.dueDate;
-      const isDateChanged = newDueDate && currentDueDate && 
+      const isDateChanged = newDueDate && currentDueDate &&
         new Date(newDueDate).getTime() !== new Date(currentDueDate).getTime();
-      
+
       if (isDateChanged) {
         // If this is the first reschedule, save the current due date as originalDueDate
         if (!currentAction.originalDueDate) {
@@ -11421,15 +11474,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Increment reschedule counter
         processedData.rescheduleCount = (currentAction.rescheduleCount || 0) + 1;
       }
-      
+
       const validatedData = insertActionSchema.parse(processedData);
       const userId = (req as any).user?.claims?.sub || 'user-1';
       const updatedAction = await storage.updateAction(req.params.id, validatedData);
-      
+
       if (!updatedAction) {
         return res.status(404).json({ message: "Action not found" });
       }
-      
+
       // ============= ACTION PLAN NOTIFICATION HOOKS (STRUCTURE READY - FUNCTIONALITY DISABLED) =============
       // Para activar estas notificaciones, cambiar ACTION_PLAN_NOTIFICATIONS_ENABLED a true en notification-service.ts
       // También descomentar las siguientes secciones según los cambios detectados:
@@ -11516,7 +11569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       */
-      
+
       res.json(updatedAction);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Invalid action data";
@@ -11528,10 +11581,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateAction(req.params.id, {
         status: 'deleted',
@@ -11540,11 +11593,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Action not found" });
       }
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -11556,7 +11609,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== ACTION EVIDENCE ENDPOINTS ==============
-  
+
   // Get all evidences for an action
   app.get("/api/actions/:id/evidence", requirePermission("actions:read"), async (req: any, res) => {
     try {
@@ -11574,17 +11627,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const actionId = req.params.id;
-      
+
       // Verify action exists
       const action = await storage.getAction(actionId);
       if (!action) {
         return res.status(404).json({ message: "Action not found" });
       }
-      
+
       if (!req.files || req.files.length === 0) {
         return res.status(400).json({ message: "No files provided" });
       }
-      
+
       // Validate description field with Zod if provided
       let validatedDescription: string | null = null;
       if (req.body.description) {
@@ -11598,35 +11651,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-      
+
       const privateDir = process.env.PRIVATE_OBJECT_DIR;
       if (!privateDir) {
         return res.status(500).json({ message: "PRIVATE_OBJECT_DIR not configured" });
       }
-      
+
       // Parse bucket and path from PRIVATE_OBJECT_DIR (format: /bucket-name/path)
       const match = privateDir.match(/^\/([^\/]+)(\/.*)?$/);
       if (!match) {
         return res.status(500).json({ message: "Invalid PRIVATE_OBJECT_DIR format" });
       }
-      
+
       const bucketName = match[1];
       const basePath = (match[2] || '').replace(/^\//, '');
       const bucket = objectStorageClient.bucket(bucketName);
-      
+
       const uploadedEvidences = [];
-      
+
       for (const file of req.files) {
         // Generate unique filename
         const uniqueId = randomBytes(8).toString('hex');
         const timestamp = Date.now();
         const sanitizedFileName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const storagePath = basePath 
+        const storagePath = basePath
           ? `${basePath}/actions/${actionId}/${timestamp}_${uniqueId}_${sanitizedFileName}`
           : `actions/${actionId}/${timestamp}_${uniqueId}_${sanitizedFileName}`;
-        
+
         const fileObj = bucket.file(storagePath);
-        
+
         // Upload file to object storage
         await fileObj.save(file.buffer, {
           contentType: file.mimetype,
@@ -11636,9 +11689,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             actionId: actionId
           }
         });
-        
+
         const storageUrl = `/${bucketName}/${storagePath}`;
-        
+
         // Create database record with validated data
         const evidence = await storage.createActionEvidence({
           actionId: actionId,
@@ -11650,10 +11703,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           description: validatedDescription,
           uploadedBy: userId
         });
-        
+
         uploadedEvidences.push(evidence);
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action',
@@ -11665,7 +11718,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           fileNames: uploadedEvidences.map(e => e.fileName)
         }
       });
-      
+
       res.status(201).json(uploadedEvidences);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -11681,48 +11734,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { actionId, evidenceId } = req.params;
       const tenantId = req.user?.activeTenantId;
-      
+
       // Get evidence details with tenant scoping
       const evidences = await storage.getActionEvidence(actionId, tenantId);
       const evidence = evidences.find(e => e.id === evidenceId);
-      
+
       if (!evidence) {
         return res.status(404).json({ message: "Evidence not found" });
       }
-      
+
       // Verify ownership - ensure evidence belongs to this action
       if (evidence.actionId !== actionId) {
         return res.status(403).json({ message: "Evidence does not belong to this action" });
       }
-      
+
       if (!evidence.storageUrl) {
         return res.status(404).json({ message: "File not found in storage" });
       }
-      
+
       // Parse bucket and path from storageUrl (format: /bucket-name/path)
       const match = evidence.storageUrl.match(/^\/([^\/]+)\/(.+)$/);
       if (!match) {
         return res.status(500).json({ message: "Invalid storage URL format" });
       }
-      
+
       const bucketName = match[1];
       const filePath = match[2];
       const bucket = objectStorageClient.bucket(bucketName);
       const file = bucket.file(filePath);
-      
+
       // Check if file exists
       const [exists] = await file.exists();
       if (!exists) {
         return res.status(404).json({ message: "File not found in object storage" });
       }
-      
+
       // Stream file to response
       res.setHeader('Content-Type', evidence.mimeType || 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${evidence.fileName}"`);
-      
+
       const readStream = file.createReadStream();
       readStream.pipe(res);
-      
+
       readStream.on('error', (error) => {
         console.error('Error streaming file:', error);
         if (!res.headersSent) {
@@ -11743,20 +11796,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const { actionId, evidenceId } = req.params;
       const tenantId = req.user?.activeTenantId;
-      
+
       // Get evidence details before deletion with tenant scoping
       const evidences = await storage.getActionEvidence(actionId, tenantId);
       const evidence = evidences.find(e => e.id === evidenceId);
-      
+
       if (!evidence) {
         return res.status(404).json({ message: "Evidence not found" });
       }
-      
+
       // Verify ownership - ensure evidence belongs to this action
       if (evidence.actionId !== actionId) {
         return res.status(403).json({ message: "Evidence does not belong to this action" });
       }
-      
+
       // Delete file from object storage
       if (evidence.storageUrl) {
         try {
@@ -11767,7 +11820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const filePath = match[2];
             const bucket = objectStorageClient.bucket(bucketName);
             const file = bucket.file(filePath);
-            
+
             await file.delete();
           }
         } catch (storageError) {
@@ -11775,13 +11828,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Continue to delete DB record even if file deletion fails
         }
       }
-      
+
       // Delete database record with tenant scoping
       const deleted = await storage.deleteActionEvidence(evidenceId, tenantId);
       if (!deleted) {
         return res.status(500).json({ message: "Failed to delete evidence from database" });
       }
-      
+
       // Log audit action
       await requireDb().insert(auditLogs).values({
         entityType: 'action',
@@ -11795,7 +11848,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       });
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Failed to delete action evidence:", error);
@@ -11807,13 +11860,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/actions/:id/mark-implemented", requirePermission("actions:write"), async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate user role - only specific roles can mark as implemented
       const user = await storage.getUser(userId);
       if (!user) {
         return res.status(401).json({ message: "User not found" });
       }
-      
+
       const userRoles = await storage.getUserRoles(userId);
       const roleNames = await Promise.all(
         userRoles.map(async (ur) => {
@@ -11821,23 +11874,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return role?.name || '';
         })
       );
-      
+
       const allowedRoles = ['analista_riesgo', 'analista_cumplimiento', 'administrador', 'usuario_auditor'];
       const hasPermission = roleNames.some(roleName => allowedRoles.includes(roleName));
-      
+
       if (!hasPermission) {
-        return res.status(403).json({ 
-          message: "Solo analistas de riesgo, analistas de cumplimiento, administradores y usuarios auditores pueden marcar acciones como implementadas" 
+        return res.status(403).json({
+          message: "Solo analistas de riesgo, analistas de cumplimiento, administradores y usuarios auditores pueden marcar acciones como implementadas"
         });
       }
-      
+
       const { comments } = req.body;
       const action = await storage.markActionAsImplemented(req.params.id, userId, comments);
-      
+
       if (!action) {
         return res.status(404).json({ message: "Action not found" });
       }
-      
+
       res.json(action);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Failed to mark action as implemented";
@@ -11860,8 +11913,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("❌ Migration failed:", error);
-      res.status(500).json({ 
-        message: "Migration failed", 
+      res.status(500).json({
+        message: "Migration failed",
         error: error instanceof Error ? error.message || 'Unknown error' : 'Unknown error'
       });
     }
@@ -11899,7 +11952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(category);
     } catch (error) {
       console.error("Error creating risk category:", error);
-      res.status(400).json({ 
+      res.status(400).json({
         message: "Invalid risk category data",
         error: error instanceof Error ? error.message : 'Unknown error'
       });
@@ -11916,7 +11969,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(category);
     } catch (error) {
       console.error("Error updating risk category:", error);
-      res.status(400).json({ 
+      res.status(400).json({
         message: "Invalid risk category data",
         error: error instanceof Error ? error.message : 'Unknown error'
       });
@@ -12013,14 +12066,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (method === 'weighted') {
         if (!weights || typeof weights.critical !== 'number' || typeof weights.high !== 'number' ||
-            typeof weights.medium !== 'number' || typeof weights.low !== 'number') {
+          typeof weights.medium !== 'number' || typeof weights.low !== 'number') {
           return res.status(400).json({ message: "Invalid weights configuration" });
         }
-        
+
         if (weights.critical < 1 || weights.critical > 10 ||
-            weights.high < 1 || weights.high > 10 ||
-            weights.medium < 1 || weights.medium > 10 ||
-            weights.low < 1 || weights.low > 10) {
+          weights.high < 1 || weights.high > 10 ||
+          weights.medium < 1 || weights.medium > 10 ||
+          weights.low < 1 || weights.low > 10) {
           return res.status(400).json({ message: "Weights must be between 1 and 10" });
         }
       }
@@ -12160,7 +12213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/system-config/notification-intervals", isAuthenticated, async (req, res) => {
     try {
-      const { 
+      const {
         interval1, interval2, interval3, overdueInterval1, overdueInterval2, overdueInterval3,
         notificationsEnabled, interval1Enabled, interval2Enabled, interval3Enabled,
         overdueInterval1Enabled, overdueInterval2Enabled, overdueInterval3Enabled
@@ -12319,9 +12372,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await Promise.all(updates);
 
-      res.json({ 
-        interval1, 
-        interval2, 
+      res.json({
+        interval1,
+        interval2,
         interval3,
         overdueInterval1: overdueInterval1 || null,
         overdueInterval2: overdueInterval2 || null,
@@ -12409,8 +12462,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     changeVolatility: z.number().int().min(1).max(99).describe("Peso para cambio/volatilidad (1-99)"),
     vulnerabilities: z.number().int().min(1).max(99).describe("Peso para vulnerabilidades (1-99)")
   }).refine(data => {
-    const total = data.frequency + data.exposureAndScope + data.complexity + 
-                  data.changeVolatility + data.vulnerabilities;
+    const total = data.frequency + data.exposureAndScope + data.complexity +
+      data.changeVolatility + data.vulnerabilities;
     return total === 100;
   }, {
     message: "Los pesos deben sumar exactamente 100"
@@ -12426,8 +12479,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     people: z.number().int().min(1).max(99).describe("Peso para personas (1-99)"),
     information: z.number().int().min(1).max(99).describe("Peso para información (1-99)")
   }).refine(data => {
-    const total = data.infrastructure + data.reputation + data.economic + 
-                  data.permits + data.knowhow + data.people + data.information;
+    const total = data.infrastructure + data.reputation + data.economic +
+      data.permits + data.knowhow + data.people + data.information;
     return total === 100;
   }, {
     message: "Los pesos deben sumar exactamente 100"
@@ -12484,14 +12537,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Recalculate all risk probabilities with new weights
       await storage.recalculateAllRiskProbabilities();
-      
+
       const updatedWeights = await storage.getProbabilityWeights();
       res.json(updatedWeights);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: "Datos de pesos inválidos", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Datos de pesos inválidos",
+          errors: error.errors
         });
       }
       res.status(500).json({ message: "Error al actualizar pesos de probabilidad" });
@@ -12565,14 +12618,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Recalculate all risk impacts with new weights
       await storage.recalculateAllRiskImpacts();
-      
+
       const updatedWeights = await storage.getImpactWeights();
       res.json(updatedWeights);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: "Datos de pesos inválidos", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Datos de pesos inválidos",
+          errors: error.errors
         });
       }
       res.status(500).json({ message: "Error al actualizar pesos de impacto" });
@@ -12583,10 +12636,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { configValue } = req.body;
       const updatedBy = (req as any).user.claims?.sub; // Usuario autenticado
-      
+
       // Try to update first
       let config = await storage.updateSystemConfig(req.params.configKey, configValue, updatedBy);
-      
+
       // If config doesn't exist, create it (upsert behavior)
       if (!config) {
         config = await storage.setSystemConfig({
@@ -12624,7 +12677,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const emailConfig = JSON.parse(config.configValue) as EmailConfig;
-      
+
       // Remove sensitive data before sending to client
       const safeConfig = {
         provider: emailConfig.provider,
@@ -12725,7 +12778,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Test connection first
       const connectionTest = await testService.testConnection();
       if (!connectionTest) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Error de conexión con el servicio de email",
           success: false
         });
@@ -12758,19 +12811,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if (sent) {
-        res.json({ 
+        res.json({
           message: "Email de prueba enviado exitosamente",
           success: true
         });
       } else {
-        res.status(500).json({ 
+        res.status(500).json({
           message: "Error al enviar email de prueba",
           success: false
         });
       }
     } catch (error) {
       console.error('Error testing email:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error al probar configuración de email",
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'
@@ -12790,14 +12843,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risk-controls/recalculate-all-residual-risks", requirePermission("admin:calculate"), async (req, res) => {
     try {
       await storage.recalculateAllResidualRisks();
-      
+
       // Invalidate all risk-control related caches after bulk recalculation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskControlCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
       ]);
-      
+
       res.json({ message: "All residual risks recalculated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Failed to recalculate residual risks" });
@@ -12807,14 +12860,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/risks/recalculate-all-probabilities", requirePermission("admin:calculate"), async (req, res) => {
     try {
       await storage.recalculateAllRiskProbabilities();
-      
+
       // Invalidate all risk-related caches after bulk probability recalculation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskControlCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
       ]);
-      
+
       res.json({ message: "All risk probabilities recalculated successfully" });
     } catch (error) {
       res.status(500).json({ message: "Failed to recalculate risk probabilities" });
@@ -12830,13 +12883,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       const users = await storage.getUsers();
       console.log(`✅ Successfully fetched ${users.length} users`);
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, users, 60);
-      
+
       res.json(users);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
@@ -12859,10 +12912,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { riskType, processType } = req.query;
       let auditors;
-      
+
       if (riskType || processType) {
         auditors = await storage.getAuditorsWithCompetencies(
-          riskType as string, 
+          riskType as string,
           processType as string
         );
       } else {
@@ -12891,10 +12944,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertUserSchema.parse(req.body);
       const user = await storage.createUser(validatedData);
-      
+
       // Invalidate users cache
       await distributedCache.invalidate(`users:all`);
-      
+
       res.status(201).json(user);
     } catch (error) {
       res.status(400).json({ message: "Invalid user data" });
@@ -12908,13 +12961,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      
+
       // Invalidate BOTH auth caches for this user (profile changed)
       authCache.invalidate(req.params.id);
       await distributedCache.invalidate(`auth-me:${req.params.id}`);
       // Invalidate users list cache
       await distributedCache.invalidate(`users:all`);
-      
+
       res.json(user);
     } catch (error) {
       res.status(400).json({ message: "Invalid user data" });
@@ -12927,10 +12980,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "User not found" });
       }
-      
+
       // Invalidate users list cache
       await distributedCache.invalidate(`users:all`);
-      
+
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete user" });
@@ -12976,10 +13029,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!role) {
         return res.status(404).json({ message: "Role not found" });
       }
-      
+
       // Invalidate ALL users' auth cache because role permissions changed
       authCache.invalidateAll();
-      
+
       res.json(role);
     } catch (error) {
       res.status(400).json({ message: "Invalid role data" });
@@ -13024,15 +13077,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId: req.params.userId,
       });
       const userRole = await storage.assignUserRole(validatedData);
-      
+
       // Invalidate BOTH auth caches for this user (permissions changed)
       authCache.invalidate(req.params.userId);
       await distributedCache.invalidate(`auth-me:${req.params.userId}`);
-      
+
       res.status(201).json(userRole);
     } catch (error) {
       console.error("Error assigning user role:", error);
-      res.status(400).json({ 
+      res.status(400).json({
         message: "Invalid user role data",
         details: error instanceof Error ? error.message : "Unknown error"
       });
@@ -13045,11 +13098,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!deleted) {
         return res.status(404).json({ message: "User role assignment not found" });
       }
-      
+
       // Invalidate BOTH auth caches for this user (permissions changed)
       authCache.invalidate(req.params.userId);
       await distributedCache.invalidate(`auth-me:${req.params.userId}`);
-      
+
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to remove user role" });
@@ -13113,7 +13166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!name || !permissions || !Array.isArray(permissions)) {
         return res.status(400).json({ message: "Name and permissions array are required" });
       }
-      
+
       const roleId = `role-${name.toLowerCase().replace(/\s+/g, '-')}`;
       const role = await storage.createRole({
         id: roleId,
@@ -13138,7 +13191,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (description !== undefined) updateData.description = description;
       if (permissions !== undefined) updateData.permissions = permissions;
       if (isActive !== undefined) updateData.isActive = isActive;
-      
+
       const updated = await storage.updateRole(req.params.id, updateData);
       if (!updated) {
         return res.status(404).json({ message: "Role not found" });
@@ -13155,12 +13208,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if role is in use
       const usersCount = await storage.countUsersWithRole(req.params.id);
       if (usersCount > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Cannot delete role that is assigned to users",
-          usersCount 
+          usersCount
         });
       }
-      
+
       const deleted = await storage.deleteRole(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Role not found" });
@@ -13176,12 +13229,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/platform-admin/users", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
     try {
       const users = await storage.getUsers();
-      
+
       // Enrich users with roles only (no tenant memberships in single-tenant mode)
       const enrichedUsers = await Promise.all(
         users.map(async (user) => {
           const roles = await storage.getUserRoles(user.id);
-          
+
           return {
             id: user.id,
             username: user.username,
@@ -13198,7 +13251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         })
       );
-      
+
       res.json(enrichedUsers);
     } catch (error) {
       console.error("Error fetching users:", error);
@@ -13211,9 +13264,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validar con Zod
       const validationResult = createUserSchema.safeParse(req.body);
       if (!validationResult.success) {
-        return res.status(400).json({ 
-          message: "Validation failed", 
-          errors: validationResult.error.errors 
+        return res.status(400).json({
+          message: "Validation failed",
+          errors: validationResult.error.errors
         });
       }
 
@@ -13259,14 +13312,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validar con Zod
       const validationResult = updateUserSchema.safeParse(req.body);
       if (!validationResult.success) {
-        return res.status(400).json({ 
-          message: "Validation failed", 
-          errors: validationResult.error.errors 
+        return res.status(400).json({
+          message: "Validation failed",
+          errors: validationResult.error.errors
         });
       }
 
       const { username, email, fullName, isPlatformAdmin, password } = validationResult.data;
-      
+
       // Verificar que el usuario existe
       const existingUser = await storage.getUser(req.params.userId);
       if (!existingUser) {
@@ -13295,7 +13348,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (fullName !== undefined) updateData.fullName = fullName;
       if (isPlatformAdmin !== undefined) updateData.isPlatformAdmin = isPlatformAdmin;
-      
+
       // Si se proporciona password, hashearlo
       if (password && password.length > 0) {
         if (password.length < 8) {
@@ -13362,9 +13415,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validar con Zod
       const validationResult = assignRoleSchema.safeParse(req.body);
       if (!validationResult.success) {
-        return res.status(400).json({ 
-          message: "Validation failed", 
-          errors: validationResult.error.errors 
+        return res.status(400).json({
+          message: "Validation failed",
+          errors: validationResult.error.errors
         });
       }
 
@@ -13465,16 +13518,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get basic stats first
       const baseStats = await storage.getDashboardStats();
-      
+
       // Calculate organizational risk metrics including residual risk
       const allRisks = await requireDb().select().from(risks);
       const allRiskControls = await requireDb().select().from(riskControls);
-      
+
       if (allRisks.length > 0) {
         // Calculate residual risk for each risk
         const riskResidualMap = new Map<string, number>();
         const riskControlMap = new Map<string, any[]>();
-        
+
         // Group controls by risk
         for (const rc of allRiskControls) {
           if (!riskControlMap.has(rc.riskId)) {
@@ -13482,7 +13535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           riskControlMap.get(rc.riskId)!.push(rc);
         }
-        
+
         // Calculate minimum residual risk per risk
         for (const risk of allRisks) {
           const controls = riskControlMap.get(risk.id) || [];
@@ -13494,24 +13547,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           riskResidualMap.set(risk.id, residualRisk);
         }
-        
+
         // Calculate organizational risk averages (both inherent and residual)
         const totalInherentRisk = allRisks.reduce((sum: number, risk: any) => sum + risk.inherentRisk, 0);
         const totalResidualRisk = allRisks.reduce((sum: number, risk: any) => sum + (riskResidualMap.get(risk.id) || risk.inherentRisk), 0);
         const organizationalRiskAvg = Math.round((totalInherentRisk / allRisks.length) * 10) / 10;
         const organizationalResidualRiskAvg = Math.round((totalResidualRisk / allRisks.length) * 10) / 10;
-        
+
         // Count processes and regulations with risks
         const processIds = Array.from(new Set(allRisks.filter((r: any) => r.processId != null).map((r: any) => r.processId)));
         const processCount = processIds.length;
         const processRisks = allRisks.filter((r: any) => r.processId != null);
-        const processInherentAvg = processRisks.length > 0 
+        const processInherentAvg = processRisks.length > 0
           ? Math.round((processRisks.reduce((sum: number, r: any) => sum + r.inherentRisk, 0) / processRisks.length) * 10) / 10
           : 0;
-        const processResidualAvg = processRisks.length > 0 
+        const processResidualAvg = processRisks.length > 0
           ? Math.round((processRisks.reduce((sum: number, r: any) => sum + (riskResidualMap.get(r.id) || r.inherentRisk), 0) / processRisks.length) * 10) / 10
           : 0;
-        
+
         // Enhanced stats with organizational metrics including residual risk
         const enhancedStats = {
           ...baseStats,
@@ -13526,7 +13579,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             regulationAvg: 14.0 // From our regulation calculations
           }
         };
-        
+
         res.json(enhancedStats);
       } else {
         res.json(baseStats);
@@ -13542,11 +13595,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.params.userId;
       const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
-      
+
       // Check if user is requesting their own data or has appropriate permissions
       if (userId !== authenticatedUserId) {
         const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_assignments') ||
-                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+          await storage.hasPermission(authenticatedUserId, 'view_all');
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view other user's dashboard" });
         }
@@ -13564,11 +13617,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.params.userId;
       const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
-      
+
       // Check if user is requesting their own data or has appropriate supervisor permissions
       if (userId !== authenticatedUserId) {
         const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_teams') ||
-                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+          await storage.hasPermission(authenticatedUserId, 'view_all');
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view other supervisor's dashboard" });
         }
@@ -13587,21 +13640,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get tenant from authenticated user - admins see org-specific metrics, not platform-wide
       const tenantId = req.user?.activeTenantId;
       console.log('[Admin Dashboard] tenantId:', tenantId, 'user:', req.user?.email);
-      
+
       // Cache dashboard metrics for 30 seconds to improve performance
       const cacheKey = `dashboard-admin:${tenantId || 'platform'}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log('[Admin Dashboard] Cache hit');
         return res.json(cached);
       }
-      
+
       const metrics = await storage.getAdminDashboardMetrics();
-      
+
       // Cache for 30 seconds
       await distributedCache.set(cacheKey, metrics, 30);
-      
+
       res.json(metrics);
     } catch (error) {
       console.error("Error fetching admin dashboard metrics:", error);
@@ -13616,11 +13669,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
       const limit = parseInt(req.query.limit as string) || 20;
       const days = parseInt(req.query.days as string) || 7;
-      
+
       // Check if user can view this activity feed
       if (userId !== authenticatedUserId) {
         const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_assignments') ||
-                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+          await storage.hasPermission(authenticatedUserId, 'view_all');
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view user activity" });
         }
@@ -13650,11 +13703,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.query.userId as string;
       const days = parseInt(req.query.days as string) || 30;
       const authenticatedUserId = getAuthenticatedUserId(req, { allowDevDemo: true });
-      
+
       // Check if user can view performance trends
       if (userId && userId !== authenticatedUserId) {
         const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_teams') ||
-                                   await storage.hasPermission(authenticatedUserId, 'view_all');
+          await storage.hasPermission(authenticatedUserId, 'view_all');
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view performance trends" });
         }
@@ -13672,16 +13725,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/dashboard/risk-trends", isAuthenticated, async (req, res) => {
     try {
       const days = parseInt(req.query.days as string) || 30;
-      
+
       // Generate trend data based on current stats (simulated evolution)
       const currentStats = await storage.getDashboardStats();
       const allRisks = await requireDb().select().from(risks);
-      
+
       // Calculate current organizational risk
       const currentOrgRisk = allRisks.length > 0
         ? allRisks.reduce((sum, r) => sum + r.inherentRisk, 0) / allRisks.length
         : 0;
-      
+
       // Generate time series data (simulated)
       const trendData = [];
       const now = new Date();
@@ -13698,7 +13751,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           controlEffectiveness: Math.min(100, Math.max(0, 78 + variation * 2))
         });
       }
-      
+
       res.json(trendData);
     } catch (error) {
       console.error("Error fetching risk trends:", error);
@@ -13710,12 +13763,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/dashboard/alerts", isAuthenticated, async (req, res) => {
     try {
       const alerts = [];
-      
+
       // Critical risks without controls
       const risksQuery = await requireDb().select().from(risks).where(sql`inherent_risk > 19`);
       const controlAssociations = await requireDb().select().from(riskControls);
       const controlMap = new Map(controlAssociations.map(rc => [rc.riskId, true]));
-      
+
       const risksWithoutControls = risksQuery.filter(r => !controlMap.has(r.id));
       if (risksWithoutControls.length > 0) {
         alerts.push({
@@ -13728,10 +13781,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           link: '/risks'
         });
       }
-      
+
       // Overdue action plans
       const actionPlansData = await requireDb().select().from(actions).where(isNull(actions.deletedAt));
-      const overduePlans = actionPlansData.filter(ap => 
+      const overduePlans = actionPlansData.filter(ap =>
         ap.dueDate && new Date(ap.dueDate) < new Date() && ap.status !== 'completed'
       );
       if (overduePlans.length > 0) {
@@ -13745,7 +13798,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           link: '/action-plans'
         });
       }
-      
+
       // Controls needing review (90+ days since last review)
       const controlsData = await requireDb().select().from(controls);
       const controlsNeedingReview = controlsData.filter(c => {
@@ -13764,22 +13817,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           link: '/controls'
         });
       }
-      
+
       // Orphaned risks (risks without process associations)
       const allActiveRisks = await requireDb().select().from(risks).where(eq(risks.status, 'active'));
       const allRiskProcessLinksData = await requireDb().select({
         riskId: riskProcessLinks.riskId
       }).from(riskProcessLinks);
-      
+
       const linkedRiskIds = new Set(allRiskProcessLinksData.map(link => link.riskId));
-      
-      const orphanedRisks = allActiveRisks.filter(risk => 
-        !linkedRiskIds.has(risk.id) && 
-        !risk.macroprocesoId && 
-        !risk.processId && 
+
+      const orphanedRisks = allActiveRisks.filter(risk =>
+        !linkedRiskIds.has(risk.id) &&
+        !risk.macroprocesoId &&
+        !risk.processId &&
         !risk.subprocesoId
       );
-      
+
       if (orphanedRisks.length > 0) {
         alerts.push({
           id: 'orphaned-risks',
@@ -13791,7 +13844,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           link: '/risks'
         });
       }
-      
+
       res.json(alerts);
     } catch (error) {
       console.error("Error fetching dashboard alerts:", error);
@@ -13817,33 +13870,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       console.log('🔄 Switch user request received:', req.body);
       const { userId } = req.body;
-      
+
       if (!userId) {
         console.log('❌ No userId provided');
         return res.status(400).json({ message: "userId is required" });
       }
-      
+
       console.log('🔍 Looking for user:', userId);
       const user = await storage.getUser(userId);
       if (!user) {
         console.log('❌ User not found:', userId);
         return res.status(404).json({ message: "User not found" });
       }
-      
+
       console.log('✅ User found:', user.username, user.fullName);
-      
+
       // CRITICAL FIX: Store the switched user ID in session for subsequent requests
       if (req.session) {
         req.session.switchedUserId = userId;
         console.log('✅ Switched user saved in session:', userId);
       }
-      
+
       // SINGLE-TENANT MODE: Get global permissions directly
       const permissions = (await storage.getUserPermissions(userId)) ?? [];
       console.log('✅ User permissions loaded:', permissions.length, 'permissions');
-      
+
       const roles = await storage.getUserRolesList(userId);
-      
+
       // Complete user data for demo switch
       res.json({
         success: true,
@@ -13892,7 +13945,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!date || typeof date !== 'string') {
         return res.status(400).json({ message: "Date parameter is required" });
       }
-      
+
       const snapshots = await storage.getRiskSnapshotsByDate(new Date(date));
       res.json(snapshots);
     } catch (error) {
@@ -13906,9 +13959,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
         return res.status(400).json({ message: "startDate and endDate parameters are required" });
       }
-      
+
       const snapshots = await storage.getRiskSnapshotsByDateRange(
-        new Date(startDate), 
+        new Date(startDate),
         new Date(endDate)
       );
       res.json(snapshots);
@@ -13934,9 +13987,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
         return res.status(400).json({ message: "startDate and endDate parameters are required" });
       }
-      
+
       const comparison = await storage.getSnapshotComparison(
-        new Date(startDate), 
+        new Date(startDate),
         new Date(endDate)
       );
       res.json(comparison);
@@ -13953,9 +14006,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!startDate || !endDate || typeof startDate !== 'string' || typeof endDate !== 'string') {
         return res.status(400).json({ message: "startDate and endDate parameters are required" });
       }
-      
+
       const comparison = await storage.getHistoricalRiskComparison(
-        new Date(startDate), 
+        new Date(startDate),
         new Date(endDate)
       );
       res.json(comparison);
@@ -13969,18 +14022,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // LIGHTWEIGHT CATALOG ENDPOINTS - 10 min cache
   // For client-side joins to reduce per-request data transfer
   // ============================================
-  
+
   // Macroprocesos Basic - minimal fields for lookups (10 min cache)
   app.get("/api/macroprocesos/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `macroprocesos-basic:single-tenant`;
-      
+
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CATALOG CACHE HIT] macroprocesos-basic`);
         return res.json(cached);
       }
-      
+
       console.log(`[CATALOG CACHE MISS] macroprocesos-basic`);
       const data = await requireDb()
         .select({
@@ -13990,10 +14043,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(macroprocesos)
         .where(isNull(macroprocesos.deletedAt));
-      
+
       // Cache for 10 minutes
       await distributedCache.set(cacheKey, data, 600);
-      
+
       res.json(data);
     } catch (error) {
       console.error('Error in /api/macroprocesos/basic:', error);
@@ -14005,43 +14058,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `macroprocesos:single-tenant`;
-      
-      // Try to get from cache first
-      const cached = await distributedCache.get(cacheKey);
+
+      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      const cached = await twoTierCache.get(cacheKey);
       if (cached) {
         return res.json(cached);
       }
-      
+
       // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
       const [macroprocesos, allRiskLevels] = await Promise.all([
         storage.getMacroprocesos(),
         storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
       ]);
-      
+
       // Filter out soft-deleted records
       const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
-      
+
       // Fetch process owners for macroprocesos that have ownerId
       const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
-      const owners = ownerIds.length > 0 
+      const owners = ownerIds.length > 0
         ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
         : [];
       const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-      
+
       const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
         const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
         const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
-        
+
         return {
           ...macroproceso,
           ...riskLevels,
           owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
         };
       });
-      
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, macroprocesoswithRisks, 60);
-      
+
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
+
       res.json(macroprocesoswithRisks);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch macroprocesos" });
@@ -14053,14 +14106,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const startTime = Date.now();
     try {
       const cacheKey = `org-structure:single-tenant`;
-      
+
       // Try cache first (5 minute TTL for org structure which changes infrequently)
       const cached = await distributedCache.get(cacheKey);
       if (cached && !req.query.nocache) {
         console.log(`[CACHE HIT] /api/org-structure in ${Date.now() - startTime}ms`);
         return res.json(cached);
       }
-      
+
       // Fetch all data in parallel with a single risk levels call
       const [macroList, procList, subprocList, allRiskLevels] = await Promise.all([
         storage.getMacroprocesos(),
@@ -14068,7 +14121,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getSubprocesosWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos', 'processes', 'subprocesos'] })
       ]);
-      
+
       // Filter deleted and add risk levels - minimal fields for list views
       const macroprocesos = macroList
         .filter((m: any) => m.status !== 'deleted')
@@ -14081,7 +14134,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ownerId: m.ownerId,
           ...(allRiskLevels.macroprocesos.get(m.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
         }));
-      
+
       const processes = procList
         .filter((p: any) => p.status !== 'deleted')
         .map((p: any) => ({
@@ -14093,7 +14146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           owner: p.owner ? { id: p.owner.id, name: p.owner.name } : null,
           ...(allRiskLevels.processes.get(p.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
         }));
-      
+
       const subprocesos = subprocList
         .filter((s: any) => s.status !== 'deleted')
         .map((s: any) => ({
@@ -14105,7 +14158,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           owner: s.owner ? { id: s.owner.id, name: s.owner.name } : null,
           ...(allRiskLevels.subprocesos.get(s.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 })
         }));
-      
+
       const result = {
         macroprocesos,
         processes,
@@ -14116,10 +14169,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           subprocesos: subprocesos.length
         }
       };
-      
+
       // Cache for 5 minutes (org structure changes infrequently)
       await distributedCache.set(cacheKey, result, 300);
-      
+
       console.log(`[DB] /api/org-structure in ${Date.now() - startTime}ms (${macroprocesos.length} macros, ${processes.length} procs, ${subprocesos.length} subs)`);
       res.json(result);
     } catch (error) {
@@ -14140,14 +14193,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const macroprocesosCacheKey = `risk-matrix:macroprocesos:single-tenant`;
       const processesCacheKey = `risk-matrix:processes:single-tenant`;
       const heatmapCacheKey = `risk-matrix:heatmap:single-tenant`;
-      
+
       // Try to get each from cache independently (granular caching)
       const [cachedMacroprocesos, cachedProcesses, cachedHeatmap] = await Promise.all([
         distributedCache.get(macroprocesosCacheKey),
         distributedCache.get(processesCacheKey),
         distributedCache.get(heatmapCacheKey)
       ]);
-      
+
       // If all cached, return immediately
       if (cachedMacroprocesos && cachedProcesses && cachedHeatmap) {
         console.log(`[CACHE HIT] /api/risk-matrix/bootstrap in ${Date.now() - startTime}ms`);
@@ -14157,11 +14210,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           heatmapData: cachedHeatmap
         });
       }
-      
+
       // Fetch only what's missing in parallel
       const fetchPromises: Promise<any>[] = [];
       const fetchOrder: string[] = [];
-      
+
       if (!cachedMacroprocesos) {
         fetchOrder.push('macroprocesos');
         fetchPromises.push(storage.getMacroprocesos());
@@ -14179,14 +14232,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ])
         );
       }
-      
+
       const fetchResults = await Promise.all(fetchPromises);
-      
+
       // Build result object
       let macroprocesos = cachedMacroprocesos;
       let processes = cachedProcesses;
       let heatmapData = cachedHeatmap;
-      
+
       fetchOrder.forEach((key, index) => {
         if (key === 'macroprocesos') {
           const macroList = fetchResults[index] as any[];
@@ -14210,7 +14263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }));
         } else if (key === 'heatmap') {
           const [risksWithDetails, riskControls] = fetchResults[index] as [any[], any[]];
-          
+
           // Build control effectiveness map
           const controlsByRiskId = new Map<string, number[]>();
           riskControls.forEach((rc: any) => {
@@ -14221,7 +14274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               controlsByRiskId.get(rc.riskId)!.push(rc.control.effectiveness);
             }
           });
-          
+
           // Transform risks to heatmap format
           heatmapData = risksWithDetails
             .filter((risk: any) => risk.status !== 'deleted')
@@ -14241,7 +14294,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }));
         }
       });
-      
+
       // Cache each component separately (60 seconds for catalogs, 30 seconds for heatmap)
       const cachePromises = [];
       if (!cachedMacroprocesos && macroprocesos) {
@@ -14254,7 +14307,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cachePromises.push(distributedCache.set(heatmapCacheKey, heatmapData, 30));
       }
       await Promise.all(cachePromises);
-      
+
       console.log(`[DB] /api/risk-matrix/bootstrap in ${Date.now() - startTime}ms (${fetchOrder.length} fetched, ${3 - fetchOrder.length} cached)`);
       res.json({
         macroprocesos,
@@ -14276,21 +14329,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       const startTime = Date.now();
       const validatedRisks = await storage.getProcessMapValidatedRisks();
-      
+
       // Convert Maps to plain objects for JSON serialization
       const response = {
         macroprocesos: Object.fromEntries(validatedRisks.macroprocesos),
         processes: Object.fromEntries(validatedRisks.processes),
         subprocesos: Object.fromEntries(validatedRisks.subprocesos)
       };
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, response, 60);
       console.log(`[DB] /api/organization/process-map-risks in ${Date.now() - startTime}ms`);
-      
+
       res.status(200).json(response);
     } catch (error) {
       console.error("Error fetching process map validated risks:", error);
@@ -14325,13 +14378,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/macroprocesos", isAuthenticated, async (req, res) => {
     try {
       const validatedData = insertMacroprocesoSchema.parse(req.body);
-      
+
       // Inject audit fields (createdBy) using helper function
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withCreatedBy(validatedData, userId);
-      
+
       const macroproceso = await storage.createMacroproceso(dataWithAudit);
-      
+
       // Invalidate caches after creation (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
@@ -14339,7 +14392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
-      
+
       res.status(201).json(macroproceso);
     } catch (error) {
       console.error("Error creating macroproceso:", error);
@@ -14354,7 +14407,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!macroproceso) {
         return res.status(404).json({ message: "Macroproceso not found" });
       }
-      
+
       // Invalidate caches after update (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
@@ -14362,7 +14415,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
-      
+
       res.json(macroproceso);
     } catch (error) {
       res.status(400).json({ message: "Invalid macroproceso data" });
@@ -14375,28 +14428,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!Array.isArray(updates) || updates.length === 0) {
         return res.status(400).json({ message: "Updates must be a non-empty array" });
       }
-      
+
       // Basic validation
       for (const update of updates) {
         if (!update.id || typeof update.order !== 'number') {
           return res.status(400).json({ message: "Each update must have id and order" });
         }
-        
+
         if (!Number.isInteger(update.order) || update.order < 1) {
           return res.status(400).json({ message: "Order must be a positive integer" });
         }
       }
-      
+
       // Check for duplicate orders
       const orders = updates.map(u => u.order);
       const uniqueOrders = new Set(orders);
       if (uniqueOrders.size !== orders.length) {
         return res.status(400).json({ message: "Order values must be unique" });
       }
-      
+
       // Atomic reorder using storage method
       const reorderedMacroprocesos = await storage.reorderMacroprocesos(updates);
-      
+
       // Invalidate caches after reorder (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
@@ -14404,11 +14457,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
-      
-      res.json({ 
-        success: true, 
-        updated: reorderedMacroprocesos.length, 
-        macroprocesos: reorderedMacroprocesos 
+
+      res.json({
+        success: true,
+        updated: reorderedMacroprocesos.length,
+        macroprocesos: reorderedMacroprocesos
       });
     } catch (error) {
       if (error instanceof Error) {
@@ -14422,10 +14475,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // First check if macroproceso exists
       const macroproceso = await storage.getMacroproceso(req.params.id);
       if (!macroproceso) {
@@ -14435,9 +14488,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if there are linked processes
       const linkedProcesses = await storage.getProcessesByMacroproceso(req.params.id);
       if (linkedProcesses.length > 0) {
-        return res.status(400).json({ 
-          message: "Cannot delete macroproceso with linked processes", 
-          linkedProcessesCount: linkedProcesses.length 
+        return res.status(400).json({
+          message: "Cannot delete macroproceso with linked processes",
+          linkedProcessesCount: linkedProcesses.length
         });
       }
 
@@ -14449,11 +14502,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Macroproceso not found" });
       }
-      
+
       // Invalidate caches after delete (including risk-matrix bootstrap granular cache)
       await Promise.all([
         distributedCache.set(`macroprocesos:single-tenant`, null, 0),
@@ -14461,7 +14514,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix:macroprocesos:single-tenant`, null, 0)
       ]);
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -14501,7 +14554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // First remove existing associations
       await storage.removeMacroprocesoFromFiscalEntities(req.params.id);
-      
+
       // Then add new associations if any
       if (fiscalEntityIds.length > 0) {
         await storage.assignMacroprocesoToFiscalEntities(req.params.id, fiscalEntityIds);
@@ -14518,13 +14571,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/subprocesos/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `subprocesos-basic:single-tenant`;
-      
+
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         console.log(`[CATALOG CACHE HIT] subprocesos-basic`);
         return res.json(cached);
       }
-      
+
       console.log(`[CATALOG CACHE MISS] subprocesos-basic`);
       const data = await requireDb()
         .select({
@@ -14535,10 +14588,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .from(subprocesos)
         .where(isNull(subprocesos.deletedAt));
-      
+
       // Cache for 10 minutes
       await distributedCache.set(cacheKey, data, 600);
-      
+
       res.json(data);
     } catch (error) {
       console.error('Error in /api/subprocesos/basic:', error);
@@ -14550,7 +14603,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/subprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const profile = req.headers['x-profile'] === '1';
     const timings: Record<string, number> = {};
-    
+
     const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
       if (!profile) return fn();
       const start = Date.now();
@@ -14558,36 +14611,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       timings[label] = Date.now() - start;
       return result;
     };
-    
+
     try {
       if (profile) {
         console.log('[PROFILE] /api/subprocesos START', { pool: getPoolMetrics() });
       }
-      
+
       const cacheKey = `subprocesos:single-tenant`;
-      
-      // Try to get from cache first
-      const cached = await timed('cache:get', () => distributedCache.get(cacheKey));
+
+      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      const cached = await timed('cache:get', () => twoTierCache.get(cacheKey));
       if (cached) {
         if (profile) {
           console.log('[PROFILE] /api/subprocesos CACHE HIT', { timings, pool: getPoolMetrics() });
         }
         return res.json(cached);
       }
-      
+
       const startTime = Date.now();
-      
+
       // PERFORMANCE: Only fetch subproceso risk levels (not all entities)
       const [subprocesos, allRiskLevels] = await Promise.all([
         timed('db:subprocesos', () => storage.getSubprocesosWithOwners()),
         timed('db:riskLevels', () => storage.getAllRiskLevelsOptimized({ entities: ['subprocesos'] }))
       ]);
-      
+
       // Filter out soft-deleted records
       const filterStart = Date.now();
       const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
       if (profile) timings['filter'] = Date.now() - filterStart;
-      
+
       // Use optimized risk levels lookup
       const mapStart = Date.now();
       const subprocesosWithRisks = activeSubprocesos.map((subproceso) => {
@@ -14598,20 +14651,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
       if (profile) timings['map'] = Date.now() - mapStart;
-      
-      // Cache for 60 seconds
-      await timed('cache:set', () => distributedCache.set(cacheKey, subprocesosWithRisks, 60));
-      
+
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await timed('cache:set', () => twoTierCache.set(cacheKey, subprocesosWithRisks, 60));
+
       if (profile) {
         timings['total'] = Date.now() - startTime;
-        console.log('[PROFILE] /api/subprocesos COMPLETE', { 
-          timings, 
+        console.log('[PROFILE] /api/subprocesos COMPLETE', {
+          timings,
           pool: getPoolMetrics(),
           count: subprocesosWithRisks.length
         });
         res.set('X-Profile-Timings', JSON.stringify(timings));
       }
-      
+
       res.json(subprocesosWithRisks);
     } catch (error) {
       if (profile) {
@@ -14648,19 +14701,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/subprocesos", isAuthenticated, async (req, res) => {
     try {
       const validatedData = insertSubprocesoSchema.parse(req.body);
-      
+
       // Inject audit fields (createdBy) using helper function
       const userId = getAuthenticatedUserId(req);
       const dataWithAudit = withCreatedBy(validatedData, userId);
-      
+
       const subproceso = await storage.createSubproceso(dataWithAudit);
-      
+
       // Invalidate subprocesos and org-structure cache
       await Promise.all([
         distributedCache.set(`subprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0)
       ]);
-      
+
       res.status(201).json(subproceso);
     } catch (error) {
       console.error("Error creating subproceso:", error);
@@ -14675,13 +14728,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!subproceso) {
         return res.status(404).json({ message: "Subproceso not found" });
       }
-      
+
       // Invalidate subprocesos and org-structure cache
       await Promise.all([
         distributedCache.set(`subprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0)
       ]);
-      
+
       res.json(subproceso);
     } catch (error) {
       res.status(400).json({ message: "Invalid subproceso data" });
@@ -14692,10 +14745,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateSubproceso(req.params.id, {
         status: 'deleted',
@@ -14704,17 +14757,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Subproceso not found" });
       }
-      
+
       // Invalidate subprocesos and org-structure cache
       await Promise.all([
         distributedCache.set(`subprocesos:single-tenant`, null, 0),
         distributedCache.set(`org-structure:single-tenant`, null, 0)
       ]);
-      
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -14746,22 +14799,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== GERENCIAS ROUTES - with 60s distributed cache ==============
-  
+
+  // BASIC endpoint: Fast listing without risk calculations (< 100ms)
+  app.get("/api/gerencias/basic", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `gerencias:basic:single-tenant`;
+      const cached = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const gerencias = await storage.getGerencias();
+          return gerencias
+            .filter(g => !g.deletedAt)
+            .map(g => ({
+              id: g.id,
+              code: g.code,
+              name: g.name,
+              level: g.level,
+              parentId: g.parentId,
+              createdAt: g.createdAt,
+              updatedAt: g.updatedAt
+            }));
+        },
+        300 // 5 minutes in Redis
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias" });
+    }
+  });
+
+  // RISK SUMMARY endpoint: Fast risk aggregation by gerencia for dashboards (~200ms)
+  app.get("/api/gerencias/risk-summary", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `gerencias:risk-summary:single-tenant`;
+      const cached = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          // Direct SQL aggregation for performance (similar to risk-matrix/lite)
+          const result = await requireDb().execute(sql`
+            WITH gerencia_risks AS (
+              SELECT 
+                g.id as gerencia_id,
+                g.code,
+                g.name,
+                g.level,
+                g.parent_id,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.id IS NOT NULL) as risk_count,
+                ROUND(AVG(r.inherent_risk), 1) as avg_inherent_risk,
+                ROUND(AVG(
+                  CASE 
+                    WHEN rc.residual_risk IS NOT NULL THEN rc.residual_risk
+                    ELSE r.inherent_risk
+                  END
+                ), 1) as avg_residual_risk,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk >= 15 THEN r.id END) as critical_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk BETWEEN 10 AND 14 THEN r.id END) as high_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk BETWEEN 5 AND 9 THEN r.id END) as medium_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk < 5 THEN r.id END) as low_risks
+              FROM gerencias g
+              LEFT JOIN macroproceso_gerencias mg ON g.id = mg.gerencia_id
+              LEFT JOIN macroprocesos m ON mg.macroproceso_id = m.id AND m.deleted_at IS NULL
+              LEFT JOIN risks r ON r.macroproceso_id = m.id 
+                AND r.status = 'active' 
+                AND r.deleted_at IS NULL
+              LEFT JOIN (
+                SELECT 
+                  rc.risk_id,
+                  MIN(rc.residual_risk) as residual_risk
+                FROM risk_controls rc
+                JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+                GROUP BY rc.risk_id
+              ) rc ON r.id = rc.risk_id
+              WHERE g.deleted_at IS NULL
+              GROUP BY g.id, g.code, g.name, g.level, g.parent_id
+            )
+            SELECT 
+              gerencia_id as id,
+              code,
+              name,
+              level,
+              parent_id,
+              risk_count,
+              COALESCE(avg_inherent_risk, 0) as avg_inherent_risk,
+              COALESCE(avg_residual_risk, 0) as avg_residual_risk,
+              critical_risks,
+              high_risks,
+              medium_risks,
+              low_risks
+            FROM gerencia_risks
+            ORDER BY avg_residual_risk DESC NULLS LAST, name
+          `);
+
+          return result.rows;
+        },
+        60 // 1 minute cache
+      );
+      res.json(cached);
+    } catch (error) {
+      console.error("Error fetching gerencias risk summary:", error);
+      res.status(500).json({ message: "Failed to fetch gerencias risk summary" });
+    }
+  });
+
   app.get("/api/gerencias", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `gerencias:single-tenant`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
         return res.json(cached);
       }
-      
+
       const gerencias = await storage.getGerencias();
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, gerencias, 60);
-      
+
       res.json(gerencias);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch gerencias" });
@@ -14796,13 +14950,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Add createdBy AFTER validation (it's omitted from schema)
       const gerenciaData = { ...validatedData, createdBy: userId };
       const gerencia = await storage.createGerencia(gerenciaData);
-      
+
       // Invalidate caches after creation
       await Promise.all([
         distributedCache.set(`gerencias:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
       ]);
-      
+
       res.status(201).json(gerencia);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -14816,7 +14970,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/gerencias/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       const validatedData = insertGerenciaSchema.partial().parse(req.body);
       // Add updatedBy AFTER validation (it's omitted from schema)
       const gerenciaData = { ...validatedData, updatedBy: userId };
@@ -14824,13 +14978,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!gerencia) {
         return res.status(404).json({ message: "Gerencia not found" });
       }
-      
+
       // Invalidate caches after update
       await Promise.all([
         distributedCache.set(`gerencias:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
       ]);
-      
+
       res.json(gerencia);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -14844,18 +14998,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/gerencias/:id", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       const success = await storage.deleteGerencia(req.params.id, userId);
       if (!success) {
         return res.status(404).json({ message: "Gerencia not found" });
       }
-      
+
       // Invalidate caches after delete
       await Promise.all([
         distributedCache.set(`gerencias:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
       ]);
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Failed to delete gerencia:", error);
@@ -14870,13 +15024,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!gerencia) {
         return res.status(404).json({ message: "Gerencia not found" });
       }
-      
+
       // Invalidate caches after restore
       await Promise.all([
         distributedCache.set(`gerencias:single-tenant`, null, 0),
         distributedCache.set(`risk-matrix-aggregated:single-tenant`, null, 0)
       ]);
-      
+
       res.json(gerencia);
     } catch (error) {
       console.error("Failed to restore gerencia:", error);
@@ -14900,10 +15054,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processId: req.params.id,
         gerenciaId,
       });
-      
+
       // Invalidate process-gerencias cache
       await invalidateProcessRelationsCaches();
-      
+
       res.status(201).json(relation);
     } catch (error: any) {
       console.error("Failed to add gerencia to process:", error);
@@ -14920,10 +15074,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!success) {
         return res.status(404).json({ message: "Relation not found" });
       }
-      
+
       // Invalidate process-gerencias cache
       await invalidateProcessRelationsCaches();
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Failed to remove gerencia from process:", error);
@@ -15051,23 +15205,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      
+
       // Use distributed cache with versioned key (60s TTL)
       const cacheKey = `gerencias-risk-levels:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       const riskLevelsMap = await storage.getGerenciasRiskLevels();
       // Convert Map to object for JSON serialization
       const riskLevels = Object.fromEntries(riskLevelsMap);
-      
+
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, riskLevels, 60);
-      
+
       res.json(riskLevels);
     } catch (error) {
       console.error("Failed to fetch gerencias risk levels:", error);
@@ -15079,17 +15233,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/process-gerencias-all", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const cacheKey = `process-gerencias:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-      
+
       if (cached) {
         return res.json(cached);
       }
-      
+
       const relations = await storage.getAllProcessGerenciasRelations();
       await distributedCache.set(cacheKey, relations, 60); // Cache for 60 seconds
-      
+
       res.json(relations);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -15101,13 +15255,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== AUDIT PLANNING & PRIORITIZATION ROUTES ==============
-  
+
   // Audit Plans
   app.get("/api/audit-plans", isAuthenticated, async (req, res) => {
     try {
       // Single-tenant mode: no tenantId needed
       const plans = await storage.getAuditPlans();
-      
+
       // Enrich plans with approver names
       const enrichedPlans = await Promise.all(
         plans.map(async (plan) => {
@@ -15121,7 +15275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return plan;
         })
       );
-      
+
       res.json(enrichedPlans);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch audit plans" });
@@ -15146,22 +15300,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get authenticated user ID
       const userId = getAuthenticatedUserId(req);
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const validatedData = insertAuditPlanSchema.parse({
         ...req.body,
         createdBy: userId
       });
-      
+
       // If status is approved, set approvedBy and approvedAt
       const planData: any = {
         ...validatedData
       };
-      
+
       if (validatedData.status === 'approved') {
         planData.approvedBy = userId;
         planData.approvedAt = new Date();
       }
-      
+
       // Generate unique code atomically using database transaction
       const year = validatedData.year || new Date().getFullYear();
       const plan = await storage.createAuditPlanWithUniqueCode(
@@ -15169,7 +15323,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         year,
         tenantId
       );
-      
+
       res.status(201).json(plan);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -15195,14 +15349,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         reviewPeriodStartDate: req.body.reviewPeriodStartDate ? new Date(req.body.reviewPeriodStartDate) : null,
         reviewPeriodEndDate: req.body.reviewPeriodEndDate ? new Date(req.body.reviewPeriodEndDate) : null,
       });
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const audit = await storage.createAudit(await withTenantId(req, validatedData));
-      
+
       // Invalidate audits cache
       const tenantId = await resolveActiveTenantId(req, { required: true });
       await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
-      
+
       res.status(201).json(audit);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -15220,7 +15374,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Build filters object
       const filters: import('./storage').AuditFilters = {
         search: req.query.search as string,
@@ -15228,20 +15382,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         type: req.query.type as string,
         assignedAuditorId: req.query.assignedAuditorId as string,
       };
-      
+
       // Create cache key based on tenant and filters
       const filterKey = JSON.stringify({ limit, offset, filters });
       const cacheKey = `audits:${tenantId}:${filterKey}`;
-      
+
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
-      
+
       // Cache miss - query database
       const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, tenantId, limit, offset);
-      
+
       // Prepare response
       const response = {
         data: paginatedAudits,
@@ -15252,10 +15406,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hasMore: offset + limit < total
         }
       };
-      
+
       // Cache for 60 seconds (less frequently updated than controls)
       await distributedCache.set(cacheKey, response, 60);
-      
+
       // Return with pagination metadata
       res.json(response);
     } catch (error) {
@@ -15298,11 +15452,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!audit) {
         return res.status(404).json({ message: "Audit not found" });
       }
-      
+
       // Invalidate audits cache
       const tenantId = await resolveActiveTenantId(req, { required: true });
       await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
-      
+
       res.json(audit);
     } catch (error) {
       console.error("Update audit error:", error);
@@ -15313,14 +15467,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Approve/Reject/Reopen audit work program
   app.post("/api/audits/:id/approve-program", isAuthenticated, async (req, res) => {
     try {
-      const { action } = z.object({ 
-        action: z.enum(['approve', 'reject', 'reopen']) 
+      const { action } = z.object({
+        action: z.enum(['approve', 'reject', 'reopen'])
       }).parse(req.body);
-      
+
       const userId = req.user?.id || 'user-1';
-      
+
       let updateData: any = {};
-      
+
       if (action === 'approve') {
         updateData = {
           programApprovalStatus: 'approved',
@@ -15340,13 +15494,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           programApprovedAt: null
         };
       }
-      
+
       const audit = await storage.updateAudit(req.params.id, updateData);
-      
+
       if (!audit) {
         return res.status(404).json({ message: "Audit not found" });
       }
-      
+
       res.json(audit);
     } catch (error) {
       console.error("Approve program error:", error);
@@ -15373,14 +15527,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Load workflow configuration
       const workflowConfig = await import('../config/audit_workflow.json');
       const workflow = workflowConfig.default || workflowConfig;
-      
+
       // Find transition
-      const transition = workflow.transitions.find((t: any) => 
+      const transition = workflow.transitions.find((t: any) =>
         t.from === audit.status && t.to === toState
       );
 
       if (!transition) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: `Invalid transition from ${audit.status} to ${toState}`,
           availableTransitions: workflow.transitions
             .filter((t: any) => t.from === audit.status)
@@ -15390,8 +15544,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Verify comment if required
       if (transition.requiresComment && !comment) {
-        return res.status(400).json({ 
-          message: "This transition requires a comment" 
+        return res.status(400).json({
+          message: "This transition requires a comment"
         });
       }
 
@@ -15418,7 +15572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (missingFields.length > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Missing required fields for this state",
           missingFields,
           validations: transition.validations
@@ -15427,7 +15581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Update audit status
       const updatedAudit = await storage.updateAudit(auditId, { status: toState });
-      
+
       // Log the transition
       await requireDb().insert(auditStateLog).values({
         auditId,
@@ -15452,9 +15606,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("State transition error:", error);
-      res.status(500).json({ 
-        message: "Failed to transition state", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(500).json({
+        message: "Failed to transition state",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15467,7 +15621,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(auditStateLog)
         .where(eq(auditStateLog.auditId, req.params.id))
         .orderBy(auditStateLog.changedAt);
-      
+
       res.json(logs);
     } catch (error) {
       console.error("Get state log error:", error);
@@ -15479,13 +15633,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       const auditId = req.params.id;
       console.log(`Soft-deleting auditoría: ${auditId}`);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateAudit(auditId, {
         status: 'deleted',
@@ -15494,15 +15648,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Audit not found" });
       }
-      
+
       // Invalidate audits cache
       const tenantId = await resolveActiveTenantId(req, { required: true });
       await distributedCache.invalidatePattern(`audits:${tenantId}:*`);
-      
+
       console.log(`Auditoría ${auditId} soft-deleted exitosamente`);
       res.status(204).send();
     } catch (error) {
@@ -15529,7 +15683,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/audit-controls", isAuthenticated, async (req, res) => {
     try {
       const validatedData = insertAuditControlSchema.parse(req.body);
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const auditControl = await storage.createAuditControl(await withTenantId(req, validatedData));
       res.status(201).json(auditControl);
@@ -15570,13 +15724,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ================= AUDIT FINDINGS API ROUTES =================
-  
+
   app.get("/api/audit-findings", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const withDetails = req.query.withDetails === 'true';
       const auditId = req.query.auditId as string;
-      
+
       let findings;
       if (auditId) {
         findings = await storage.getAuditFindingsByAudit(auditId);
@@ -15585,7 +15739,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         findings = await storage.getAuditFindings();
       }
-      
+
       res.json(findings);
     } catch (error) {
       console.error("Get audit findings error:", error);
@@ -15597,11 +15751,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const withDetails = req.query.withDetails === 'true';
-      
-      const finding = withDetails 
+
+      const finding = withDetails
         ? await storage.getAuditFindingWithDetails(req.params.id, tenantId)
         : await storage.getAuditFinding(req.params.id, tenantId);
-        
+
       if (!finding) {
         return res.status(404).json({ message: "Audit finding not found" });
       }
@@ -15621,9 +15775,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         responsiblePerson: req.body.responsiblePerson || null, // Convertir cadena vacía a null
         identifiedBy: userId // Usuario autenticado
       };
-      
+
       const validatedData = insertAuditFindingSchema.parse(processedData);
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const finding = await storage.createAuditFinding(await withTenantId(req, validatedData));
       res.status(201).json(finding);
@@ -15632,9 +15786,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.message });
       }
       console.error("Create audit finding error:", error);
-      res.status(400).json({ 
-        message: "Invalid audit finding data", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(400).json({
+        message: "Invalid audit finding data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15643,7 +15797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/audit-findings/with-commitment", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Procesar datos del hallazgo
       const findingData = {
         auditId: req.body.auditId,
@@ -15663,13 +15817,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: req.body.status,
         identifiedBy: userId
       };
-      
+
       const validatedFindingData = insertAuditFindingSchema.parse(findingData);
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const finding = await storage.createAuditFinding(await withTenantId(req, validatedFindingData));
-      
+
       let commitment = null;
-      
+
       // Si se solicita crear un compromiso, crearlo
       if (req.body.createCommitment) {
         const commitmentData = {
@@ -15686,19 +15840,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           agreedAction: req.body.commitmentAgreedAction,
           createdBy: userId
         };
-        
+
         commitment = await storage.createAction(commitmentData);
       }
-      
+
       res.status(201).json({ finding, commitment });
     } catch (error) {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
       console.error("Create audit finding with commitment error:", error);
-      res.status(400).json({ 
-        message: "Invalid audit finding or commitment data", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(400).json({
+        message: "Invalid audit finding or commitment data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15707,7 +15861,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/audit-findings/:id/with-commitment", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Actualizar datos del hallazgo
       const findingData = {
         auditId: req.body.auditId,
@@ -15727,16 +15881,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: req.body.status,
         identifiedBy: userId
       };
-      
+
       const validatedFindingData = insertAuditFindingSchema.partial().parse(findingData);
       const finding = await storage.updateAuditFinding(req.params.id, validatedFindingData);
-      
+
       if (!finding) {
         return res.status(404).json({ message: "Audit finding not found" });
       }
-      
+
       let commitment = null;
-      
+
       // Si hay datos de compromiso, crear el compromiso
       if (req.body.createCommitment && req.body.commitmentTitle) {
         const commitmentData = {
@@ -15753,16 +15907,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           agreedAction: req.body.commitmentAgreedAction,
           createdBy: userId
         };
-        
+
         commitment = await storage.createAction(commitmentData);
       }
-      
+
       res.json({ finding, commitment });
     } catch (error) {
       console.error("Update audit finding with commitment error:", error);
-      res.status(400).json({ 
-        message: "Invalid audit finding or commitment data", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(400).json({
+        message: "Invalid audit finding or commitment data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15774,19 +15928,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dueDate: req.body.dueDate ? new Date(req.body.dueDate) : undefined,
         responsiblePerson: req.body.responsiblePerson || null // Convertir cadena vacía a null
       };
-      
+
       const validatedData = insertAuditFindingSchema.partial().parse(processedData);
       const finding = await storage.updateAuditFinding(req.params.id, validatedData);
-      
+
       if (!finding) {
         return res.status(404).json({ message: "Audit finding not found" });
       }
       res.json(finding);
     } catch (error) {
       console.error("Update audit finding error:", error);
-      res.status(400).json({ 
-        message: "Invalid audit finding data", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(400).json({
+        message: "Invalid audit finding data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15805,7 +15959,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ================= AUDIT FINDINGS ACTION PLANS API ROUTES =================
-  
+
   // Get all action plans for a specific audit finding
   app.get("/api/audit-findings/:id/actions", async (req, res) => {
     try {
@@ -15822,13 +15976,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const findingId = req.params.id;
-      
+
       // Verify the finding exists
       const finding = await storage.getAuditFinding(findingId);
       if (!finding) {
         return res.status(404).json({ message: "Audit finding not found" });
       }
-      
+
       // Prepare action data
       const actionData = {
         origin: 'audit' as const,
@@ -15844,16 +15998,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         agreedAction: req.body.agreedAction || null,
         createdBy: userId
       };
-      
+
       const validatedData = insertActionSchema.parse(actionData);
       const action = await storage.createAction(validatedData);
-      
+
       res.status(201).json(action);
     } catch (error) {
       console.error("Create audit finding action error:", error);
-      res.status(400).json({ 
-        message: "Invalid action plan data", 
-        error: error instanceof Error ? error.message : "Unknown error" 
+      res.status(400).json({
+        message: "Invalid action plan data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -15862,17 +16016,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID
       const userId = getAuthenticatedUserId(req);
-      
+
       const validatedData = insertAuditPlanSchema.partial().parse(req.body);
-      
+
       // If status is being changed to approved, set approvedBy and approvedAt
       const updateData: any = { ...validatedData };
-      
+
       if (validatedData.status === 'approved') {
         updateData.approvedBy = userId;
         updateData.approvedAt = new Date();
       }
-      
+
       const plan = await storage.updateAuditPlan(req.params.id, updateData);
       if (!plan) {
         return res.status(404).json({ message: "Audit plan not found" });
@@ -15888,36 +16042,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const planId = req.params.id;
-      
+
       // Validate wizard progress data
       const { wizardStep, wizardData } = req.body;
-      
+
       // Allow null to clear wizard progress when plan is finalized
       if (wizardStep !== null && wizardStep !== undefined) {
         if (typeof wizardStep !== 'number' || wizardStep < 0 || wizardStep > 3) {
           return res.status(400).json({ message: "Invalid wizard step. Must be between 0 and 3, or null to clear." });
         }
       }
-      
+
       // Update wizard progress in database
       const plan = await storage.updateAuditPlan(planId, {
         wizardStep: wizardStep === undefined ? null : wizardStep,
         wizardData: wizardData === undefined ? null : wizardData,
         updatedBy: userId,
       });
-      
+
       if (!plan) {
         return res.status(404).json({ message: "Audit plan not found" });
       }
-      
-      res.json({ 
-        success: true, 
-        wizardStep: plan.wizardStep, 
-        message: wizardStep === null ? "Wizard progress cleared successfully" : "Wizard progress saved successfully" 
+
+      res.json({
+        success: true,
+        wizardStep: plan.wizardStep,
+        message: wizardStep === null ? "Wizard progress cleared successfully" : "Wizard progress saved successfully"
       });
     } catch (error) {
       console.error("Error saving wizard progress:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to save wizard progress",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -15928,13 +16082,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Validate deletion reason using Zod schema
       const { deletionReason } = softDeleteSchema.parse(req.body);
-      
+
       const planId = req.params.id;
       console.log(`Soft-deleting plan de auditoría: ${planId}`);
-      
+
       // Perform soft-delete by setting status and audit fields
       const deleted = await storage.updateAuditPlan(planId, {
         status: 'deleted',
@@ -15943,21 +16097,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deletionReason,
         updatedBy: userId
       });
-      
+
       if (!deleted) {
         return res.status(404).json({ message: "Plan de auditoría no encontrado" });
       }
 
       console.log(`Plan de auditoría ${planId} soft-deleted exitosamente`);
       res.status(204).send();
-      
+
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
       }
       console.error("Error deleting audit plan:", error);
       console.error("Error stack:", error instanceof Error ? error.stack : 'No stack');
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error al eliminar el plan de auditoría",
         details: error instanceof Error ? error.message : "Error desconocido"
       });
@@ -15969,32 +16123,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const planId = req.params.id;
-      
+
       // Verify user has permission to approve audit plans
       // Only System Administrator and Audit Supervisor can approve
       const userRoles = await storage.getUserRoles(userId);
       const roleNames = userRoles.map((r: any) => r.role?.name).filter(Boolean);
-      
-      const canApprove = roleNames.includes('Administrador del Sistema') || 
-                        roleNames.includes('Supervisor de Auditoría');
-      
+
+      const canApprove = roleNames.includes('Administrador del Sistema') ||
+        roleNames.includes('Supervisor de Auditoría');
+
       if (!canApprove) {
-        return res.status(403).json({ 
-          message: "No tiene permisos para aprobar planes de auditoría. Solo Administradores del Sistema y Supervisores de Auditoría pueden aprobar." 
+        return res.status(403).json({
+          message: "No tiene permisos para aprobar planes de auditoría. Solo Administradores del Sistema y Supervisores de Auditoría pueden aprobar."
         });
       }
-      
+
       // Get the current plan to check its status
       const currentPlan = await storage.getAuditPlan(planId);
       if (!currentPlan) {
         return res.status(404).json({ message: "Plan de auditoría no encontrado" });
       }
-      
+
       // Check if plan is already approved
       if (currentPlan.status === 'approved') {
         return res.status(400).json({ message: "El plan ya está aprobado" });
       }
-      
+
       // Update plan to approved status
       const updatedPlan = await storage.updateAuditPlan(planId, {
         status: 'approved',
@@ -16002,17 +16156,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         approvedAt: new Date(),
         updatedBy: userId
       });
-      
+
       if (!updatedPlan) {
         return res.status(404).json({ message: "Error al aprobar el plan de auditoría" });
       }
-      
+
       console.log(`Plan de auditoría ${planId} aprobado por usuario ${userId}`);
       res.json(updatedPlan);
-      
+
     } catch (error) {
       console.error("Error approving audit plan:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error al aprobar el plan de auditoría",
         details: error instanceof Error ? error.message : "Error desconocido"
       });
@@ -16023,19 +16177,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/audit-universe", async (req, res) => {
     try {
       console.log('🔍 Fetching audit universe with details...');
-      
+
       // First check raw count
       const rawItems = await storage.getAuditUniverse();
       console.log(`📊 Raw audit universe items in DB: ${rawItems.length}`);
-      
+
       const universe = await storage.getAuditUniverseWithDetails();
       console.log(`✅ Found ${universe.length} audit universe items with details`);
-      
+
       // Log if there's a mismatch
       if (rawItems.length !== universe.length) {
         console.warn(`⚠️ Mismatch: ${rawItems.length} raw items vs ${universe.length} with details`);
       }
-      
+
       res.json(universe);
     } catch (error) {
       console.error('❌ Error fetching audit universe:', error);
@@ -16048,13 +16202,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/audit-universe/residual-risks", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       console.log('🔍 Calculating residual risks for VALIDATED risks in audit universe entities...');
-      
+
       // Get all audit universe items and all validated risk-process links (single-tenant mode)
       const universeItems = await storage.getAuditUniverse();
       const allRisks = await storage.getRisks();
-      
+
       // Get validated risk-process links (single-tenant mode - no tenant filtering)
       const allValidatedLinks = await requireDb()
         .select({
@@ -16068,16 +16222,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(riskProcessLinks)
         .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
         .where(eq(riskProcessLinks.validationStatus, 'validated'));
-      
+
       const result = [];
-      
+
       // For each audit universe item, calculate its accumulated residual risk from VALIDATED risks only
       for (const item of universeItems) {
         let accumulatedResidualRisk = 0;
-        
+
         // Find validated risk-process links that belong to this audit universe item
         let relevantLinks = [];
-        
+
         if (item.entityType === 'subproceso') {
           // Real subproceso: get links where subprocesoId matches
           relevantLinks = allValidatedLinks.filter(link => link.subprocesoId === item.subprocesoId);
@@ -16088,50 +16242,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Macroproceso acting as process and subproceso: get links where macroprocesoId matches AND processId is null
           relevantLinks = allValidatedLinks.filter(link => link.macroprocesoId === item.macroprocesoId && !link.processId);
         }
-        
+
         // Calculate residual risk for each validated risk
         for (const link of relevantLinks) {
           const risk = allRisks.find(r => r.id === link.riskId);
           if (!risk) continue;
-          
+
           const riskControls = await storage.getRiskControls(risk.id);
-          
+
           let residualRisk = risk.inherentRisk || 0;
-          
+
           if (riskControls.length > 0) {
             // Calculate control effectiveness
             let totalEffectiveness = 0;
             let controlCount = 0;
-            
+
             for (const rc of riskControls) {
               const control = await storage.getControl(rc.controlId, tenantId);
               if (control) {
                 // Map selfAssessment to effectiveness score (0-1)
                 const effectiveness = control.selfAssessment === 'effective' ? 0.9 :
-                                     control.selfAssessment === 'partially_effective' ? 0.5 :
-                                     control.selfAssessment === 'ineffective' ? 0.1 : 0;
+                  control.selfAssessment === 'partially_effective' ? 0.5 :
+                    control.selfAssessment === 'ineffective' ? 0.1 : 0;
                 totalEffectiveness += effectiveness;
                 controlCount++;
               }
             }
-            
+
             if (controlCount > 0) {
               const avgEffectiveness = totalEffectiveness / controlCount;
               // Reduce inherent risk based on control effectiveness
               residualRisk = risk.inherentRisk * (1 - avgEffectiveness);
             }
           }
-          
+
           accumulatedResidualRisk += residualRisk;
         }
-        
+
         result.push({
           processId: item.processId,
           subprocesoId: item.subprocesoId,
           accumulatedResidualRisk: Math.round(accumulatedResidualRisk * 100) / 100 // Round to 2 decimals
         });
       }
-      
+
       console.log(`✅ Calculated residual risks for ${result.length} entities (VALIDATED risks only)`);
       res.json(result);
     } catch (error) {
@@ -16157,7 +16311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get active tenant ID for tenant isolation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const generatedItems = await storage.generateUniverseFromExistingProcesses();
       res.status(201).json(generatedItems);
     } catch (error) {
@@ -16220,14 +16374,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Validation error in prioritization factors:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: "Invalid prioritization factors data", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Invalid prioritization factors data",
+          errors: error.errors
         });
       }
-      res.status(400).json({ 
-        message: "Invalid prioritization factors data", 
-        error: error instanceof Error ? error.message : String(error) 
+      res.status(400).json({
+        message: "Invalid prioritization factors data",
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -16292,9 +16446,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(item);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid audit plan item data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       console.error("Error creating audit plan item:", error);
@@ -16407,10 +16561,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/audits/:id/scope", isAuthenticated, requirePermission("manage_audits"), async (req, res) => {
     try {
       const { processes, subprocesses } = req.body;
-      
+
       // Create scope entries for processes and subprocesses
       const scopeEntries: any[] = [];
-      
+
       if (processes && Array.isArray(processes)) {
         for (const processId of processes) {
           scopeEntries.push({
@@ -16420,7 +16574,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       if (subprocesses && Array.isArray(subprocesses)) {
         for (const subprocesoId of subprocesses) {
           scopeEntries.push({
@@ -16430,7 +16584,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       await storage.setAuditScope(req.params.id, scopeEntries);
       res.json({ success: true });
     } catch (error) {
@@ -16446,7 +16600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const risks = await storage.getRisksForAuditScope(req.params.id, tenantId);
       res.json(risks);
     } catch (error) {
@@ -16469,9 +16623,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Extract and validate tenantId
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const auditId = req.params.id;
-      
+
       // Fetch audit to get scopeEntities
       const audit = await storage.getAudit(auditId, tenantId);
       if (!audit) {
@@ -16480,20 +16634,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get risks filtered by audit scope
       const risks = await storage.getRisksForAuditScope(auditId, tenantId);
-      
+
       // Get controls for these risks
       const controls = await storage.getControlsForAuditScope(auditId);
-      
+
       // Get existing risk evaluations
       const riskEvaluations = await storage.getAuditRiskEvaluations(auditId);
-      
+
       // Get existing control evaluations
       const controlEvaluations = await storage.getAuditControlEvaluations(auditId);
-      
+
       // Get risk-control relationships for the scope risks
       const riskIds = risks.map(r => r.id);
       const riskControlsMap: Record<string, any[]> = {};
-      
+
       if (riskIds.length > 0) {
         for (const risk of risks) {
           const riskControls = await storage.getRiskControls(risk.id);
@@ -16551,18 +16705,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/audits/:id/risk-evaluations/:evalId", isAuthenticated, async (req, res) => {
     try {
       const data = req.body;
-      
+
       // Calculate newInherentRisk if not confirmed and new values provided
       if (!data.confirmed && data.newProbability && data.newImpact) {
         data.newInherentRisk = data.newProbability * data.newImpact;
       }
 
       const evaluation = await storage.updateAuditRiskEvaluation(req.params.evalId, data);
-      
+
       if (!evaluation) {
         return res.status(404).json({ message: "Risk evaluation not found" });
       }
-      
+
       res.json(evaluation);
     } catch (error) {
       console.error("Error updating risk evaluation:", error);
@@ -16587,18 +16741,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         evaluatedBy: safeEvaluatedBy,
         evaluatedDate: new Date()
       };
-      
+
       // Set newEffectivenessRating to 0 if designEffectiveness is "ineffective"
       if (data.designEffectiveness === "ineffective") {
         data.newEffectivenessRating = 0;
       }
 
       const evaluation = await storage.updateAuditControlEvaluation(req.params.evalId, data);
-      
+
       if (!evaluation) {
         return res.status(404).json({ message: "Control evaluation not found" });
       }
-      
+
       res.json(evaluation);
     } catch (error) {
       console.error("Error updating control evaluation:", error);
@@ -16645,11 +16799,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertAuditCriterionSchema.partial().parse(req.body);
       const criterion = await storage.updateAuditCriterion(req.params.id, validatedData);
-      
+
       if (!criterion) {
         return res.status(404).json({ message: "Audit criterion not found" });
       }
-      
+
       res.json(criterion);
     } catch (error) {
       console.error("Error updating audit criterion:", error);
@@ -16660,11 +16814,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/audits/:auditId/criteria/:id", isAuthenticated, async (req, res) => {
     try {
       const success = await storage.deleteAuditCriterion(req.params.id);
-      
+
       if (!success) {
         return res.status(404).json({ message: "Audit criterion not found" });
       }
-      
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting audit criterion:", error);
@@ -16677,15 +16831,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = auditGenerateTestsSchema.parse(req.body);
       const { scopeSelections } = validatedData;
-      
+
       // Validate scope selections have required properties
-      const invalidSelections = scopeSelections.filter(s => 
+      const invalidSelections = scopeSelections.filter(s =>
         !s.riskId || typeof s.isSelected !== 'boolean'
       );
-      
+
       if (invalidSelections.length > 0) {
-        return res.status(400).json({ 
-          message: "Each selection must have riskId (string) and isSelected (boolean)" 
+        return res.status(400).json({
+          message: "Each selection must have riskId (string) and isSelected (boolean)"
         });
       }
 
@@ -16697,7 +16851,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!safeCreatedBy) {
         return res.status(401).json({ message: "Authentication required" });
       }
-      
+
       // Validate audit can generate tests
       const validation = await storage.validateAuditForTestGeneration(req.params.id);
       if (!validation.isValid) {
@@ -16718,15 +16872,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to generate audit tests:", error);
-      
+
       // Handle Zod validation errors with 400 status
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: "Invalid request data", 
-          details: error.errors 
+        return res.status(400).json({
+          message: "Invalid request data",
+          details: error.errors
         });
       }
-      
+
       const errorMessage = error instanceof Error ? error.message : "Failed to generate audit tests";
       res.status(500).json({ message: errorMessage });
     }
@@ -16740,7 +16894,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const risks = await storage.getRisksWithControlsByProcess(req.params.processId, tenantId);
       res.json(risks);
     } catch (error) {
@@ -16755,7 +16909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const risks = await storage.getRisksWithControlsBySubproceso(req.params.subprocesoId, tenantId);
       res.json(risks);
     } catch (error) {
@@ -16785,13 +16939,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // STATIC ROUTES FIRST - Must come before dynamic :id routes to prevent route shadowing
-  
+
   // Get overdue tests
   app.get("/api/audit-tests/overdue", isAuthenticated, requirePermission("view_all"), async (req, res) => {
     try {
       const { days = 0 } = req.query;
       const overdueTests = await storage.getOverdueTests(Number(days));
-      
+
       const summary = {
         total: overdueTests.length,
         byDaysOverdue: overdueTests.reduce((acc, test) => {
@@ -16842,11 +16996,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       console.log(`[MY-TESTS] Fetching audit tests for user: ${userId}`);
-      
+
       // Get all tests assigned to this user
       const myTests = await storage.getAuditTestsByAssignee(userId, tenantId);
       console.log(`[MY-TESTS] Found ${myTests.length} tests assigned to user ${userId}`);
-      
+
       // Enrich tests with audit information for better context
       const testsWithAuditInfo = await Promise.all(
         myTests.map(async (test) => {
@@ -16871,12 +17025,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(testsWithAuditInfo);
     } catch (error) {
       console.error("[MY-TESTS] Error fetching my tests:", error);
-      
+
       // Handle authentication errors specifically
       if (error instanceof Error && error.message === "User not authenticated") {
         return res.status(401).json({ message: "Autenticación requerida para ver tus pruebas asignadas" });
       }
-      
+
       res.status(500).json({ message: "Error al obtener las pruebas asignadas" });
     }
   });
@@ -16904,7 +17058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // DYNAMIC ROUTES - Must come after static routes
-  
+
   app.get("/api/audit-tests/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -16934,10 +17088,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/audits/:auditId/tests", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
-      
+
       // Resolve tenant ID before creating test
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const testData = {
         ...req.body,
         // Map frontend field names to database field names (use testName if provided, otherwise use name from AI suggestions)
@@ -16978,27 +17132,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Validate request body with update schema (allows partial updates including risk/control assignment)
       const validatedData = updateAuditTestSchema.parse(req.body);
-      
+
       // Convert date strings to Date objects if they're strings
       const processedData = {
         ...validatedData,
-        plannedStartDate: validatedData.plannedStartDate 
+        plannedStartDate: validatedData.plannedStartDate
           ? (typeof validatedData.plannedStartDate === 'string' ? new Date(validatedData.plannedStartDate) : validatedData.plannedStartDate)
           : undefined,
-        plannedEndDate: validatedData.plannedEndDate 
+        plannedEndDate: validatedData.plannedEndDate
           ? (typeof validatedData.plannedEndDate === 'string' ? new Date(validatedData.plannedEndDate) : validatedData.plannedEndDate)
           : undefined,
-        actualStartDate: validatedData.actualStartDate 
+        actualStartDate: validatedData.actualStartDate
           ? (typeof validatedData.actualStartDate === 'string' ? new Date(validatedData.actualStartDate) : validatedData.actualStartDate)
           : undefined,
-        actualEndDate: validatedData.actualEndDate 
+        actualEndDate: validatedData.actualEndDate
           ? (typeof validatedData.actualEndDate === 'string' ? new Date(validatedData.actualEndDate) : validatedData.actualEndDate)
           : undefined,
-        assignedAt: validatedData.assignedAt 
+        assignedAt: validatedData.assignedAt
           ? (typeof validatedData.assignedAt === 'string' ? new Date(validatedData.assignedAt) : validatedData.assignedAt)
           : undefined,
       };
-      
+
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const test = await storage.updateAuditTest(req.params.id, processedData, tenantId);
       if (!test) {
@@ -17039,7 +17193,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const assignedBy = getAuthenticatedUserId(req as any);
       const test = await storage.assignAuditorToTest(req.params.id, executorId, assignedBy);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17064,7 +17218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const assignedBy = getAuthenticatedUserId(req as any);
       const test = await storage.assignSupervisorToTest(req.params.id, supervisorId, assignedBy);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17115,14 +17269,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/audit-tests/:id/reassign", isAuthenticated, requirePermission("edit_all"), async (req, res) => {
     try {
       const { newExecutorId, newSupervisorId, reason } = req.body;
-      
+
       if (!newExecutorId && !newSupervisorId) {
         return res.status(400).json({ message: "Either newExecutorId or newSupervisorId is required" });
       }
 
       const reassignedBy = getAuthenticatedUserId(req as any);
       const test = await storage.reassignAuditor(req.params.id, newExecutorId, newSupervisorId, reassignedBy, reason);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17144,29 +17298,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const testId = req.params.id;
       const userId = getAuthenticatedUserId(req as any);
-      
+
       // Get the test to check permissions
       const test = await storage.getAuditTest(testId);
       if (!test) {
         return res.status(404).json({ message: "Prueba no encontrada" });
       }
-      
+
       // Get the audit to check if user is supervisor
       const audit = await storage.getAudit(test.auditId);
       if (!audit) {
         return res.status(404).json({ message: "Auditoría no encontrada" });
       }
-      
+
       // Check permissions: only admin or audit lead can delete tests
       const hasEditAll = await storage.hasPermission(userId, "edit_all");
       const isAuditLead = audit.leadAuditor === userId;
-      
+
       if (!hasEditAll && !isAuditLead) {
-        return res.status(403).json({ 
-          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas" 
+        return res.status(403).json({
+          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas"
         });
       }
-      
+
       // Check dependencies
       const dependencies = await storage.checkAuditTestDependencies(testId);
       res.json(dependencies);
@@ -17181,39 +17335,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const testId = req.params.id;
       const userId = getAuthenticatedUserId(req as any);
-      
+
       // Get the test to check permissions
       const test = await storage.getAuditTest(testId);
       if (!test) {
         return res.status(404).json({ message: "Prueba no encontrada" });
       }
-      
+
       // Get the audit to check if user is supervisor
       const audit = await storage.getAudit(test.auditId);
       if (!audit) {
         return res.status(404).json({ message: "Auditoría no encontrada" });
       }
-      
+
       // Check permissions: only admin or audit lead can delete tests
       const hasEditAll = await storage.hasPermission(userId, "edit_all");
       const isAuditLead = audit.leadAuditor === userId;
-      
+
       if (!hasEditAll && !isAuditLead) {
-        return res.status(403).json({ 
-          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas" 
+        return res.status(403).json({
+          message: "Solo los administradores o el líder de la auditoría pueden eliminar pruebas"
         });
       }
-      
+
       // Perform deletion
       const deleted = await storage.deleteAuditTest(testId);
-      
+
       if (!deleted) {
         return res.status(500).json({ message: "No se pudo eliminar la prueba" });
       }
-      
-      res.json({ 
+
+      res.json({
         message: "Prueba eliminada exitosamente",
-        deleted: true 
+        deleted: true
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Error al eliminar la prueba";
@@ -17238,7 +17392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updatedBy = getAuthenticatedUserId(req as any);
       const test = await storage.updateTestStatus(req.params.id, status, updatedBy, comments);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17263,7 +17417,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const submittedBy = getAuthenticatedUserId(req as any);
       const test = await storage.submitTestForReview(req.params.id, submittedBy, workPerformed, conclusions);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17293,7 +17447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const reviewedBy = getAuthenticatedUserId(req as any);
       const test = await storage.reviewTest(req.params.id, reviewedBy, reviewStatus, reviewComments);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17315,19 +17469,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const approvalSchema = z.object({
         approvalStatus: z.enum(['approved', 'rejected'])
       });
-      
+
       const validationResult = approvalSchema.safeParse(req.body);
       if (!validationResult.success) {
-        return res.status(400).json({ 
-          message: "Invalid request body", 
-          errors: validationResult.error.errors 
+        return res.status(400).json({
+          message: "Invalid request body",
+          errors: validationResult.error.errors
         });
       }
 
       const { approvalStatus } = validationResult.data;
       const userId = getAuthenticatedUserId(req as any);
       const user = await storage.getUser(userId);
-      
+
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -17341,14 +17495,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate state transitions
       const allowedStatesForApproval = ['draft', 'pending_approval'];
       if (approvalStatus === 'approved' && !allowedStatesForApproval.includes(currentTest.approvalStatus || 'draft')) {
-        return res.status(400).json({ 
-          message: "Cannot approve test from current state. Test must be in draft or pending approval state." 
+        return res.status(400).json({
+          message: "Cannot approve test from current state. Test must be in draft or pending approval state."
         });
       }
 
       // Build update object based on approval status
       const updateData: any = { approvalStatus };
-      
+
       if (approvalStatus === 'approved') {
         // Set approval metadata only for approved status
         updateData.approvedBy = user.fullName || user.username;
@@ -17358,9 +17512,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         updateData.approvedBy = null;
         updateData.approvedAt = null;
       }
-      
+
       const test = await storage.updateAuditTest(req.params.id, updateData);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17382,7 +17536,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req as any);
       const test = await storage.getAuditTestForDevelopment(req.params.id, userId);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found or access denied" });
       }
@@ -17426,7 +17580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const updatedTest = await storage.updateTestProgress(req.params.id, progress, userId, notes);
-      
+
       if (!updatedTest) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17459,7 +17613,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Update progress with attachments using new method
       const updatedTest = await storage.updateProgressWithAttachments(req.params.id, progress, userId, notes, attachmentIds);
-      
+
       if (!updatedTest) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17479,7 +17633,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { progressPercentage } = req.query;
       const percentage = progressPercentage ? parseInt(progressPercentage as string) : undefined;
-      
+
       const attachments = await storage.getProgressAttachments(req.params.id, percentage);
       res.json(attachments);
     } catch (error) {
@@ -17523,7 +17677,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req as any);
       const { attachmentIds, ...workLogBody } = req.body;
-      
+
       const workLogData = insertAuditTestWorkLogSchema.parse({
         ...workLogBody,
         auditTestId: req.params.id,
@@ -17566,7 +17720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/audit-tests/:id/work-logs", isAuthenticated, async (req, res) => {
     try {
       const workLogs = await storage.getAuditTestWorkLogs(req.params.id);
-      
+
       // Calculate summary statistics
       const totalHours = workLogs.reduce((sum, log) => sum + parseFloat(log.hoursWorked.toString()), 0);
       const workTypeBreakdown = workLogs.reduce((acc, log) => {
@@ -17683,7 +17837,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const reviewedBy = getAuthenticatedUserId(req as any);
 
       const reviewedLog = await storage.reviewWorkLog(req.params.id, reviewedBy, reviewComments);
-      
+
       if (!reviewedLog) {
         return res.status(404).json({ message: "Work log not found" });
       }
@@ -17714,10 +17868,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const reviewedBy = getAuthenticatedUserId(req as any);
-      
+
       // Submit review with attachments using new method
       const test = await storage.submitReviewWithAttachments(req.params.id, reviewedBy, reviewStatus, reviewComments, attachmentIds);
-      
+
       if (!test) {
         return res.status(404).json({ message: "Test not found" });
       }
@@ -17748,7 +17902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { stage } = req.params;
       const validStages = ['general', 'work_log', 'progress_update', 'review', 'milestone'];
-      
+
       if (!validStages.includes(stage)) {
         return res.status(400).json({ message: `Invalid workflow stage. Must be one of: ${validStages.join(', ')}` });
       }
@@ -17765,7 +17919,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/audit-tests/:id/attachments/progress-range", isAuthenticated, async (req, res) => {
     try {
       const { minProgress, maxProgress } = req.query;
-      
+
       if (!minProgress || !maxProgress) {
         return res.status(400).json({ message: "minProgress and maxProgress query parameters are required" });
       }
@@ -17797,10 +17951,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create attachment with workflow context
-  app.post("/api/audit-tests/:auditTestId/attachments/workflow", 
-    isAuthenticated, 
-    requirePermission("upload_attachments"), 
-    upload.array('files', 5), 
+  app.post("/api/audit-tests/:auditTestId/attachments/workflow",
+    isAuthenticated,
+    requirePermission("upload_attachments"),
+    upload.array('files', 5),
     async (req, res) => {
       try {
         const files = req.files as Express.Multer.File[];
@@ -17809,10 +17963,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const userId = getAuthenticatedUserId(req as any);
-        const { 
-          category, 
-          description, 
-          tags, 
+        const {
+          category,
+          description,
+          tags,
           isConfidential,
           workLogId,
           reviewCommentId,
@@ -17835,10 +17989,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               size: file.size
             });
             if (!validation.isValid) {
-              uploadResults.push({ 
-                filename: file.originalname, 
-                success: false, 
-                error: validation.message 
+              uploadResults.push({
+                filename: file.originalname,
+                success: false,
+                error: validation.message
               });
               continue;
             }
@@ -18136,9 +18290,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check for duplicate milestone type
       const existingMilestones = await storage.getAuditMilestones(req.params.auditId);
       const duplicateExists = existingMilestones.find((m: any) => m.type === req.body.type);
-      
+
       if (duplicateExists) {
-        return res.status(409).json({ 
+        return res.status(409).json({
           message: "Milestone of this type already exists for this audit",
           existingMilestone: duplicateExists
         });
@@ -18146,7 +18300,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Convert date strings to Date objects before validation
       const dataToValidate = { ...req.body, auditId: req.params.auditId };
-      
+
       // Convert string dates to Date objects if present
       // Add time to noon UTC to avoid timezone issues
       if (dataToValidate.plannedDate && typeof dataToValidate.plannedDate === 'string') {
@@ -18158,22 +18312,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (dataToValidate.meetingDate && typeof dataToValidate.meetingDate === 'string') {
         dataToValidate.meetingDate = new Date(dataToValidate.meetingDate + 'T12:00:00.000Z');
       }
-      
+
       // Validate the request body with the schema
       const validatedData = insertAuditMilestoneSchema.parse(dataToValidate);
-      
+
       const milestoneData = {
         ...validatedData
       };
-      
+
       const milestone = await storage.createAuditMilestone(milestoneData);
       res.status(201).json(milestone);
     } catch (error) {
       console.error("Error creating milestone:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid audit milestone data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       res.status(400).json({ message: "Invalid audit milestone data" });
@@ -18184,7 +18338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Convert date strings to Date objects before validation
       const dataToValidate = { ...req.body };
-      
+
       // Convert string dates to Date objects if present
       // Add time to noon UTC to avoid timezone issues
       if (dataToValidate.plannedDate && typeof dataToValidate.plannedDate === 'string') {
@@ -18196,10 +18350,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (dataToValidate.meetingDate && typeof dataToValidate.meetingDate === 'string') {
         dataToValidate.meetingDate = new Date(dataToValidate.meetingDate + 'T12:00:00.000Z');
       }
-      
+
       // Validate and coerce the request body with the schema (partial for updates)
       const validatedData = insertAuditMilestoneSchema.partial().parse(dataToValidate);
-      
+
       const milestone = await storage.updateAuditMilestone(req.params.id, validatedData);
       if (!milestone) {
         return res.status(404).json({ message: "Audit milestone not found" });
@@ -18208,9 +18362,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating milestone:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid audit milestone data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       res.status(400).json({ message: "Invalid audit milestone data" });
@@ -18269,7 +18423,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get user ID from authenticated user, or use development fallback
       const userId = (req as any).user?.id || (req as any).user?.claims?.sub || 'dev-user';
-      
+
       // Validate the request body with the schema
       const validatedData = insertAuditRiskSchema.parse({
         ...req.body,
@@ -18277,15 +18431,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         identifiedBy: req.body.identifiedBy || userId,
         createdBy: req.body.createdBy || userId
       });
-      
+
       const auditRisk = await storage.createAuditRisk(validatedData);
       res.status(201).json(auditRisk);
     } catch (error) {
       console.error("Error creating audit risk:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid audit risk data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       res.status(400).json({ message: "Invalid audit risk data" });
@@ -18321,7 +18475,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/audit-risks/recalculate-all", isAuthenticated, async (req, res) => {
     try {
       const recalculatedCount = await storage.recalculateAllAuditRisksByFactors();
-      res.json({ 
+      res.json({
         message: "Audit risks recalculated successfully",
         count: recalculatedCount
       });
@@ -18427,7 +18581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const riskScore = await storage.calculateProcessRiskScore(req.params.processId, undefined, tenantId);
       const riskMetrics = await storage.getRiskMetricsForProcess(req.params.processId, undefined, tenantId);
       res.json({ riskScore, metrics: riskMetrics });
@@ -18443,7 +18597,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
-      
+
       const riskScore = await storage.calculateProcessRiskScore(undefined, req.params.subprocesoId, tenantId);
       const riskMetrics = await storage.getRiskMetricsForProcess(undefined, req.params.subprocesoId, tenantId);
       res.json({ riskScore, metrics: riskMetrics });
@@ -18453,20 +18607,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== COMPLIANCE MODULE ROUTES ==============
-  
+
   // Regulations
   app.get("/api/regulations", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const regulations = await storage.getRegulations();
-      
+
       // Calculate risk counts using storage
       const regulationsWithRisks = await Promise.all(regulations.map(async (regulation) => {
         try {
           // Get associated risks for this regulation
           const riskRegulationDetails = await storage.getRiskRegulationsByRegulation(regulation.id);
-          
+
           // Get unique risks (avoid counting duplicates)
           const uniqueRisks = riskRegulationDetails.reduce((acc, riskReg) => {
             const existing = acc.find(r => r.risk.id === riskReg.risk.id);
@@ -18475,16 +18629,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             return acc;
           }, [] as typeof riskRegulationDetails);
-          
+
           const count = uniqueRisks.length;
-          
+
           // Calculate actual average inherent risk if there are associated risks
           let avgInherentRisk = 0;
           if (count > 0) {
             const totalInherentRisk = uniqueRisks.reduce((sum, riskReg) => sum + riskReg.risk.inherentRisk, 0);
             avgInherentRisk = Math.round(totalInherentRisk / count);
           }
-          
+
           return {
             ...regulation,
             inherentRisk: avgInherentRisk,
@@ -18501,7 +18655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         }
       }));
-      
+
       res.json(regulationsWithRisks);
     } catch (error) {
       console.error("Error fetching regulations:", error);
@@ -18512,7 +18666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/regulations/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const regulation = await storage.getRegulation(req.params.id, tenantId);
       if (!regulation) {
         return res.status(404).json({ message: "Regulation not found" });
@@ -18526,7 +18680,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/regulations/:id/details", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const regulation = await storage.getRegulationWithDetails(req.params.id, tenantId);
       if (!regulation) {
         return res.status(404).json({ message: "Regulation not found" });
@@ -18547,17 +18701,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
         lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
       };
-      
+
       const validatedData = insertRegulationSchema.parse(processedData);
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const regulation = await storage.createRegulation(await withTenantId(req, validatedData));
-      
+
       // Si se especificó aplicabilidad, crearla
       if (req.body.applicabilityEntities) {
         await storage.setRegulationApplicability(regulation.id, req.body.applicabilityEntities);
       }
-      
+
       res.status(201).json(regulation);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -18582,7 +18736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
       lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
     };
-    
+
     try {
       const validatedData = insertRegulationSchema.partial().parse(processedData);
       const regulation = await storage.updateRegulation(req.params.id, validatedData);
@@ -18685,7 +18839,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-tests", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const complianceTests = await storage.getComplianceTests();
       res.json(complianceTests);
     } catch (error) {
@@ -18696,7 +18850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-tests/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const complianceTest = await storage.getComplianceTest(req.params.id, tenantId);
       if (!complianceTest) {
         return res.status(404).json({ message: "Compliance test not found" });
@@ -18710,7 +18864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-tests/:id/details", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const complianceTest = await storage.getComplianceTestWithDetails(req.params.id, tenantId);
       if (!complianceTest) {
         return res.status(404).json({ message: "Compliance test not found" });
@@ -18724,7 +18878,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/regulations/:regulationId/compliance-tests", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const complianceTests = await storage.getComplianceTestsByRegulation(req.params.regulationId, tenantId);
       res.json(complianceTests);
     } catch (error) {
@@ -18842,7 +18996,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const documents = await storage.getComplianceDocuments();
       res.json(documents);
     } catch (error) {
@@ -18853,7 +19007,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents/:id", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const document = await storage.getComplianceDocument(req.params.id, tenantId);
       if (!document) {
         return res.status(404).json({ message: "Compliance document not found" });
@@ -18867,7 +19021,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents/:id/details", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const document = await storage.getComplianceDocumentWithDetails(req.params.id, tenantId);
       if (!document) {
         return res.status(404).json({ message: "Compliance document not found" });
@@ -18882,47 +19036,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get user ID from auth context - fallback to default user if not authenticated properly
       const userId = (req as any).user?.claims?.sub || (req as any).user?.id || "user-1";
-      
+
       const processedData = {
         ...req.body,
         createdBy: userId,
         publicationDate: req.body.publicationDate ? new Date(req.body.publicationDate) : new Date(),
         tags: req.body.tags || []
       };
-      
+
       // If documentUrl is a temporary upload URL, finalize it to a permanent object path
       if (processedData.documentUrl && processedData.documentUrl.includes('storage.googleapis.com')) {
         try {
           // Initialize object storage service
           const objectStorageService = new ObjectStorageService();
-          
+
           // Extract the object path from the upload URL
           const url = new URL(processedData.documentUrl);
           const objectPath = decodeURIComponent(url.pathname.substring(1)); // Remove leading slash and decode
-          
+
           // Set ACL policy for the uploaded object
-          await objectStorageService.trySetObjectEntityAclPolicy(objectPath, { 
-            owner: userId, 
-            visibility: 'private' 
+          await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
+            owner: userId,
+            visibility: 'private'
           });
-          
+
           // Convert to permanent object serving URL
           const permanentUrl = `/objects/${objectPath}`;
           processedData.documentUrl = permanentUrl;
-          
+
           console.log(`Finalized document upload: ${objectPath} -> ${permanentUrl}`);
         } catch (aclError) {
           console.error("Failed to finalize object ACL:", aclError);
           // Fail the request rather than persisting temporary URL
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Failed to finalize document upload. Please try again.",
             error: "Object ACL configuration failed"
           });
         }
       }
-      
+
       const validatedData = insertComplianceDocumentSchema.parse(processedData);
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const document = await storage.createComplianceDocument(await withTenantId(req, validatedData));
       res.status(201).json(document);
@@ -18931,9 +19085,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.message });
       }
       if (error.name === 'ZodError') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid compliance document data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       res.status(400).json({ message: "Invalid compliance document data" });
@@ -18944,14 +19098,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Get user ID from auth context - fallback to default user if not authenticated properly
       const userId = (req as any).user?.claims?.sub || (req as any).user?.id || "user-1";
-      
+
       const processedData = {
         ...req.body,
         updatedBy: userId,
         publicationDate: req.body.publicationDate ? new Date(req.body.publicationDate) : undefined,
         tags: req.body.tags || []
       };
-      
+
       const validatedData = insertComplianceDocumentSchema.partial().parse(processedData);
       const document = await storage.updateComplianceDocument(req.params.id, validatedData);
       if (!document) {
@@ -18960,9 +19114,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(document);
     } catch (error: any) {
       if (error.name === 'ZodError') {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Invalid compliance document data",
-          errors: error.errors 
+          errors: error.errors
         });
       }
       res.status(400).json({ message: "Invalid compliance document data" });
@@ -18985,7 +19139,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents/search/:query", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const documents = await storage.searchComplianceDocuments(req.params.query, tenantId);
       res.json(documents);
     } catch (error) {
@@ -18997,7 +19151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents/area/:area", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const documents = await storage.getComplianceDocumentsByArea(req.params.area, tenantId);
       res.json(documents);
     } catch (error) {
@@ -19009,7 +19163,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/compliance-documents/classification/:classification", requirePermission("documents:read"), async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const documents = await storage.getComplianceDocumentsByClassification(req.params.classification, tenantId);
       res.json(documents);
     } catch (error) {
@@ -19021,7 +19175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/fiscal-entities", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const entities = await storage.getFiscalEntities();
       res.json(entities);
     } catch (error) {
@@ -19032,7 +19186,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/fiscal-entities/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const entity = await storage.getFiscalEntity(req.params.id, tenantId);
       if (!entity) {
         return res.status(404).json({ message: "Fiscal entity not found" });
@@ -19046,7 +19200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/fiscal-entities/by-code/:code", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const entity = await storage.getFiscalEntityByCode(req.params.code, tenantId);
       if (!entity) {
         return res.status(404).json({ message: "Fiscal entity not found" });
@@ -19063,7 +19217,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/fiscal-entities", isAuthenticated, async (req, res) => {
     try {
       const validatedData = insertFiscalEntitySchema.parse(req.body);
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const entity = await storage.createFiscalEntity(await withTenantId(req, validatedData));
       res.status(201).json(entity);
@@ -19072,9 +19226,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.message });
       }
       if (error.name === 'ZodError') {
-        return res.status(400).json({ 
-          message: "Datos de entidad fiscal inválidos", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Datos de entidad fiscal inválidos",
+          errors: error.errors
         });
       }
       if (error.message?.includes('unique constraint') || error.code === '23505') {
@@ -19100,9 +19254,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(entity);
     } catch (error: any) {
       if (error.name === 'ZodError') {
-        return res.status(400).json({ 
-          message: "Datos de entidad fiscal inválidos", 
-          errors: error.errors 
+        return res.status(400).json({
+          message: "Datos de entidad fiscal inválidos",
+          errors: error.errors
         });
       }
       if (error.message?.includes('unique constraint') || error.code === '23505') {
@@ -19204,7 +19358,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/processes/:id/check-validation-status", isAuthenticated, async (req, res) => {
     try {
       const processId = req.params.id;
-      
+
       // Check if process exists
       const process = await storage.getProcess(processId);
       if (!process) {
@@ -19213,17 +19367,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get already validated risks for this process
       const alreadyValidatedRisks = await storage.checkAlreadyValidatedRisks(processId);
-      
+
       // Get all risk-process links for this process
       const allRiskProcessLinks = await requireDb()
         .select()
         .from(riskProcessLinks)
         .where(eq(riskProcessLinks.processId, processId));
-      
+
       const totalRisks = allRiskProcessLinks.length;
       const validatedCount = alreadyValidatedRisks.length;
       const pendingCount = totalRisks - validatedCount;
-      
+
       res.json({
         processId,
         processName: process.name,
@@ -19244,7 +19398,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const processId = req.params.id;
       const { revalidateAll = true } = req.body; // Default to true for backward compatibility
-      
+
       // Check if process exists
       const process = await storage.getProcess(processId);
       if (!process) {
@@ -19254,7 +19408,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get macroproceso for notifications
       let macroprocesoId = process.macroprocesoId;
       let macroprocesoName = process.name;
-      
+
       if (process.macroprocesoId) {
         const macroproceso = await storage.getMacroproceso(process.macroprocesoId);
         if (macroproceso) {
@@ -19267,12 +19421,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .select()
         .from(riskProcessLinks)
         .where(eq(riskProcessLinks.processId, processId));
-      
+
       const allControlProcesses = await requireDb()
         .select()
         .from(controlProcesses)
         .where(eq(controlProcesses.processId, processId));
-      
+
       // If revalidateAll is false, filter out already validated risks
       let riskProcessLinksToNotify = allRiskProcessLinks;
       if (!revalidateAll) {
@@ -19280,13 +19434,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const validatedLinkIds = new Set(alreadyValidatedRisks.map(r => r.riskProcessLinkId));
         riskProcessLinksToNotify = allRiskProcessLinks.filter(link => !validatedLinkIds.has(link.id));
       }
-      
+
       const riskCount = riskProcessLinksToNotify.length;
       const controlCount = allControlProcesses.length;
 
       // Send notifications
       let notificationsSent = [];
-      
+
       if (riskCount > 0) {
         await notificationService.notifyProcessRiskValidationRequired(
           macroprocesoId || processId,
@@ -19295,7 +19449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         notificationsSent.push(`${riskCount} riesgos`);
       }
-      
+
       if (controlCount > 0) {
         await notificationService.notifyProcessControlValidationRequired(
           macroprocesoId || processId,
@@ -19306,16 +19460,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (notificationsSent.length === 0) {
-        return res.status(400).json({ 
-          message: revalidateAll 
+        return res.status(400).json({
+          message: revalidateAll
             ? "No se encontraron riesgos ni controles asociados a este proceso para enviar a validación"
             : "Todos los riesgos de este proceso ya han sido validados. No hay riesgos pendientes para enviar a validación."
         });
       }
 
       console.log(`Process validation notifications sent for "${macroprocesoName}": ${notificationsSent.join(', ')} (revalidateAll: ${revalidateAll})`);
-      
-      res.status(200).json({ 
+
+      res.status(200).json({
         message: `Notificaciones de validación enviadas exitosamente para ${notificationsSent.join(' y ')}`,
         details: {
           processName: macroprocesoName,
@@ -19374,22 +19528,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // NEW PERFORMANCE ENDPOINTS
-  
+
   // Streaming upload endpoint (improved performance)
   app.post("/api/objects/streaming-upload", requirePermission("documents:write"), handleStreamingUpload('files', 3), async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
       const files = req.files as Express.Multer.File[];
-      
+
       if (!files || files.length === 0) {
         return res.status(400).json({ error: "No files uploaded" });
       }
-      
+
       // Process uploaded files
       const results = await FileProcessor.processUploadedFiles(files, userId);
-      
+
       console.log(`✅ Streaming upload completed: ${files.length} files processed`);
-      
+
       res.json({
         success: true,
         message: `${files.length} file(s) uploaded successfully`,
@@ -19397,12 +19551,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("❌ Streaming upload error:", error);
-      res.status(500).json({ 
-        error: error instanceof Error ? error.message : "Upload failed" 
+      res.status(500).json({
+        error: error instanceof Error ? error.message : "Upload failed"
       });
     }
   });
-  
+
   // Queue statistics endpoint
   app.get("/api/system/queue-stats", requirePermission("admin:read"), async (req, res) => {
     try {
@@ -19416,31 +19570,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: "Failed to get queue statistics" });
     }
   });
-  
+
   // Asynchronous email endpoint (uses queues)
   app.post("/api/system/send-email-async", requirePermission("admin:write"), async (req, res) => {
     try {
       const { to, from, subject, html, priority = 'normal', delay = 0 } = req.body;
-      
+
       // Validate required fields
       if (!to || !from || !subject || !html) {
-        return res.status(400).json({ 
-          error: "Missing required fields: to, from, subject, html" 
+        return res.status(400).json({
+          error: "Missing required fields: to, from, subject, html"
         });
       }
-      
+
       // Add to email queue
       const job = await QueueService.addEmailJob(
         { to, from, subject, html },
-        { 
-          delay, 
+        {
+          delay,
           priority: priority === 'high' ? 1 : 0,
-          attempts: 3 
+          attempts: 3
         }
       );
-      
+
       console.log(`📧 Email queued successfully: ${job.id} -> ${to}`);
-      
+
       res.json({
         success: true,
         jobId: job.id,
@@ -19454,12 +19608,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Endpoint for uploading document file directly (multipart/form-data)
-  app.post("/api/compliance-documents/:id/upload", 
-    requirePermission("documents:write"), 
+  app.post("/api/compliance-documents/:id/upload",
+    requirePermission("documents:write"),
     upload.single('file'),
     async (req, res) => {
       const file = req.file as Express.Multer.File | undefined;
-      
+
       if (!file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
@@ -19487,7 +19641,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Clean objectPath: remove /objects/ prefix if present to store clean path
         const cleanObjectPath = normalizedPath.startsWith('/objects/') ? normalizedPath.substring(9) : normalizedPath;
         const documentUrl = `/objects/${cleanObjectPath}`;
-        
+
         const updateData = {
           documentUrl: documentUrl,
           fileName: file.originalname,
@@ -19504,7 +19658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         console.log(`✅ Document file uploaded: ${file.originalname} (${file.size} bytes)`);
-        
+
         res.status(200).json({
           objectPath: cleanObjectPath,
           document: document
@@ -19530,16 +19684,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 1. UPLOAD ATTACHMENT - POST /api/audit-tests/:auditTestId/attachments
-  app.post("/api/audit-tests/:auditTestId/attachments", 
-    isAuthenticated, 
+  app.post("/api/audit-tests/:auditTestId/attachments",
+    isAuthenticated,
     requirePermission("update_audit_progress"),
-    upload.array('files', 5), 
+    upload.array('files', 5),
     async (req, res) => {
       try {
         const auditTestId = req.params.auditTestId;
         const uploadedBy = getAuthenticatedUserId(req as any);
         const files = req.files as Express.Multer.File[];
-        
+
         if (!files || files.length === 0) {
           return res.status(400).json({ message: "No files uploaded" });
         }
@@ -19557,7 +19711,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const hasGeneralPermission = await storage.hasPermission(uploadedBy, "edit_all");
         const isExecutor = auditTest.executorId === uploadedBy;
         const isSupervisor = auditTest.supervisorId === uploadedBy;
-        
+
         if (!hasGeneralPermission && !isExecutor && !isSupervisor) {
           return res.status(403).json({ message: "Access denied. Must be executor, supervisor, or have edit_all permission" });
         }
@@ -19574,24 +19728,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
               mimeType: file.mimetype,
               size: file.size
             });
-            
+
             if (!validation.isValid) {
               return res.status(400).json({ message: validation.message });
             }
 
             // Generate hierarchical code
             const attachmentCode = await storage.generateNextAttachmentCode(auditTestId);
-            
+
             // Upload to object storage
             const uploadUrl = await objectStorageService.getObjectEntityUploadURL();
-            
+
             // Create object storage entry with ACL
             const fileName = `${attachmentCode}_${file.originalname}`;
             const objectPath = `audit-attachments/${auditTestId}/${fileName}`;
-            
+
             // Upload file to object storage (simplified - in production use proper upload flow)
             const storageUrl = uploadUrl; // Simplified for this implementation
-            
+
             // CRITICAL: Set ACL policy with proper error handling and comprehensive permissions
             try {
               console.log(`[OBJECT STORAGE ACL] Setting ACL for ${objectPath}`);
@@ -19625,7 +19779,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
 
             const attachment = await storage.createAuditTestAttachment(attachmentData);
-            
+
             // Log upload
             await storage.logAttachmentAccess(attachment.id, uploadedBy, 'upload', {
               fileName: file.originalname,
@@ -19634,11 +19788,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             });
 
             uploadedAttachments.push(attachment);
-            
+
           } catch (fileError: unknown) {
             console.error(`Error processing file ${file.originalname}:`, fileError);
-            return res.status(400).json({ 
-              message: `Error processing file ${file.originalname}: ${fileError instanceof Error ? fileError.message : 'Unknown error'}` 
+            return res.status(400).json({
+              message: `Error processing file ${file.originalname}: ${fileError instanceof Error ? fileError.message : 'Unknown error'}`
             });
           }
         }
@@ -19660,9 +19814,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // 2. LIST ATTACHMENTS - GET /api/audit-tests/:auditTestId/attachments
-  app.get("/api/audit-tests/:auditTestId/attachments", 
-    isAuthenticated, 
-    requirePermission("view_audit_development"), 
+  app.get("/api/audit-tests/:auditTestId/attachments",
+    isAuthenticated,
+    requirePermission("view_audit_development"),
     async (req, res) => {
       try {
         const auditTestId = req.params.auditTestId;
@@ -19706,8 +19860,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // 3. DOWNLOAD ATTACHMENT - GET /api/audit-test-attachments/:attachmentId/download
-  app.get("/api/audit-test-attachments/:attachmentId/download", 
-    isAuthenticated, 
+  app.get("/api/audit-test-attachments/:attachmentId/download",
+    isAuthenticated,
     async (req, res) => {
       try {
         const attachmentId = req.params.attachmentId;
@@ -19743,9 +19897,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // 4. UPDATE ATTACHMENT METADATA - PUT /api/audit-test-attachments/:attachmentId
-  app.put("/api/audit-test-attachments/:attachmentId", 
-    isAuthenticated, 
-    requirePermission("update_audit_progress"), 
+  app.put("/api/audit-test-attachments/:attachmentId",
+    isAuthenticated,
+    requirePermission("update_audit_progress"),
     async (req, res) => {
       try {
         const attachmentId = req.params.attachmentId;
@@ -19782,9 +19936,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         console.error("Error updating attachment metadata:", error);
         if (error instanceof z.ZodError) {
-          return res.status(400).json({ 
-            message: "Invalid request data", 
-            errors: error.errors 
+          return res.status(400).json({
+            message: "Invalid request data",
+            errors: error.errors
           });
         }
         res.status(500).json({ message: "Failed to update attachment metadata" });
@@ -19793,9 +19947,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // 5. DELETE ATTACHMENT - DELETE /api/audit-test-attachments/:attachmentId
-  app.delete("/api/audit-test-attachments/:attachmentId", 
-    isAuthenticated, 
-    requirePermission("delete_audit_attachments"), 
+  app.delete("/api/audit-test-attachments/:attachmentId",
+    isAuthenticated,
+    requirePermission("delete_audit_attachments"),
     async (req, res) => {
       try {
         const attachmentId = req.params.attachmentId;
@@ -19830,8 +19984,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ADDITIONAL HELPER ENDPOINTS
 
   // Get attachment details with security check
-  app.get("/api/audit-test-attachments/:attachmentId", 
-    isAuthenticated, 
+  app.get("/api/audit-test-attachments/:attachmentId",
+    isAuthenticated,
     async (req, res) => {
       try {
         const attachmentId = req.params.attachmentId;
@@ -19859,9 +20013,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // Get attachments summary for audit test
-  app.get("/api/audit-tests/:auditTestId/attachments/summary", 
-    isAuthenticated, 
-    requirePermission("view_audit_development"), 
+  app.get("/api/audit-tests/:auditTestId/attachments/summary",
+    isAuthenticated,
+    requirePermission("view_audit_development"),
     async (req, res) => {
       try {
         const auditTestId = req.params.auditTestId;
@@ -19884,7 +20038,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // ============= AUTOMATIC AUDIT TEST GENERATION API ENDPOINTS =============
-  
+
   // Import generation services
   const { auditTestGenerator } = await import('./audit-test-generator');
   const { riskAnalysisEngine } = await import('./risk-analysis-engine');
@@ -19894,7 +20048,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/audit-generation/analyze-risks', isAuthenticated, async (req, res) => {
     try {
       const { riskIds } = req.body;
-      
+
       if (!Array.isArray(riskIds) || riskIds.length === 0) {
         return res.status(400).json({ message: 'Risk IDs array is required' });
       }
@@ -19924,7 +20078,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/audit-generation/generate-tests', isAuthenticated, async (req, res) => {
     try {
       const generationParams = req.body;
-      
+
       // Validate required parameters
       if (!generationParams.auditId || !generationParams.selectedRisks) {
         return res.status(400).json({ message: 'Audit ID and selected risks are required' });
@@ -19935,7 +20089,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       generationParams.createdBy = userId;
 
       const generatedTests = await auditTestGenerator.generateAuditTests(generationParams);
-      
+
       res.status(201).json({
         success: true,
         testsGenerated: generatedTests.length,
@@ -19944,7 +20098,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('Error generating audit tests:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to generate audit tests',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -19954,13 +20108,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/audit-generation/preview', isAuthenticated, async (req, res) => {
     try {
       const generationParams = req.body;
-      
+
       if (!generationParams.selectedRisks) {
         return res.status(400).json({ message: 'Selected risks are required' });
       }
 
       const preview = await auditTestGenerator.previewGeneration(generationParams);
-      
+
       res.json({
         success: true,
         preview
@@ -19995,17 +20149,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Check if templates are already initialized
       const isInitialized = await templateSeedingService.isRepositoryInitialized();
-      
+
       if (isInitialized) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: 'Template repository is already initialized',
-          initialized: true 
+          initialized: true
         });
       }
 
       // Initialize the template repository
       await templateSeedingService.initializeTemplateRepository();
-      
+
       res.status(201).json({
         success: true,
         message: 'Template repository initialized successfully',
@@ -20013,7 +20167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error('Error initializing template repository:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to initialize template repository',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20025,7 +20179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isInitialized = await templateSeedingService.isRepositoryInitialized();
       const categories = await storage.getAuditTestTemplateCategories();
       const templates = await storage.getAuditTestTemplates();
-      
+
       res.json({
         initialized: isInitialized,
         categoriesCount: categories.length,
@@ -20043,10 +20197,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== INTELLIGENT RECOMMENDATION ENGINE ROUTES ==============
-  
+
   // Import recommendation engines
   const { intelligentRecommendationEngine } = await import('./intelligent-recommendation-engine');
-  
+
   // Complete Recommendations - Get all types of recommendations for an audit test
   app.post('/api/recommendations/complete', isAuthenticated, async (req, res) => {
     try {
@@ -20121,7 +20275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         auditContext,
         userId
       );
-      
+
       res.json({
         success: true,
         auditTestId: validatedData.auditTestId,
@@ -20129,16 +20283,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         generatedAt: new Date(),
         recommendationScore: recommendations.overallScore
       });
-      
+
     } catch (error) {
       console.error('Error generating complete recommendations:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: 'Invalid request data', 
-          details: error.errors 
+        return res.status(400).json({
+          message: 'Invalid request data',
+          details: error.errors
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to generate recommendations',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20215,7 +20369,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Call the correct existing function (recommendAuditProcedures)
       const procedureRecommendations = await intelligentRecommendationEngine.recommendAuditProcedures(auditContext);
-      
+
       res.json({
         success: true,
         riskCategory: validatedData.riskCategory,
@@ -20223,16 +20377,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         recommendationCount: procedureRecommendations.length,
         averageConfidence: procedureRecommendations.reduce((sum, rec) => sum + ((rec as any).overallScore || rec.confidence || 0), 0) / procedureRecommendations.length
       });
-      
+
     } catch (error) {
       console.error('Error generating procedure recommendations:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: 'Invalid request data', 
-          details: error.errors 
+        return res.status(400).json({
+          message: 'Invalid request data',
+          details: error.errors
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to generate procedure recommendations',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20310,23 +20464,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Call the correct existing function (recommendOptimalAuditor)
       const auditorRecommendations = await intelligentRecommendationEngine.recommendOptimalAuditor(auditContext);
-      
+
       res.json({
         success: true,
         auditorRecommendations,
         recommendationCount: auditorRecommendations.length,
         averageMatchScore: auditorRecommendations.reduce((sum, rec) => sum + rec.matchScore, 0) / auditorRecommendations.length
       });
-      
+
     } catch (error) {
       console.error('Error generating auditor recommendations:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: 'Invalid request data', 
-          details: error.errors 
+        return res.status(400).json({
+          message: 'Invalid request data',
+          details: error.errors
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to generate auditor recommendations',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20403,7 +20557,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Call the correct existing function (recommendTimeline)
       const timelineRecommendations = await intelligentRecommendationEngine.recommendTimeline(auditContext);
-      
+
       res.json({
         success: true,
         timelineRecommendations,
@@ -20411,16 +20565,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         confidence: (timelineRecommendations as any).overallScore || timelineRecommendations.confidence || 85,
         milestones: timelineRecommendations.milestones || []
       });
-      
+
     } catch (error) {
       console.error('Error generating timeline recommendations:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: 'Invalid request data', 
-          details: error.errors 
+        return res.status(400).json({
+          message: 'Invalid request data',
+          details: error.errors
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to generate timeline recommendations',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20443,7 +20597,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId,
         submittedAt: new Date()
       });
-      
+
       // Store the feedback for learning
       await storage.createRecommendationFeedback({
         recommendationId: validatedData.recommendationId,
@@ -20454,23 +20608,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         outcomeData: JSON.stringify(validatedData.outcomeData || {}),
         isUsefulForLearning: true
       });
-      
+
       res.json({
         success: true,
         message: 'Feedback submitted successfully',
         feedback,
         learningImpact: 'Feedback will be used to improve future recommendations'
       });
-      
+
     } catch (error) {
       console.error('Error processing recommendation feedback:', error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-          message: 'Invalid request data', 
-          details: error.errors 
+        return res.status(400).json({
+          message: 'Invalid request data',
+          details: error.errors
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to submit feedback',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -20481,7 +20635,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/recommendations/history/:auditTestId', isAuthenticated, async (req, res) => {
     try {
       const { auditTestId } = req.params;
-      
+
       const recommendationHistory = await storage.getRecommendationsByAuditTest(auditTestId);
       const feedback = await Promise.all(
         recommendationHistory.map(async rec => {
@@ -20489,19 +20643,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return { recommendation: rec, feedback: feedbackList };
         })
       );
-      
+
       res.json({
         success: true,
         auditTestId,
         recommendationHistory: feedback,
         totalRecommendations: recommendationHistory.length
       });
-      
+
     } catch (error) {
       console.error('Error fetching recommendation history:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch recommendation history',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20510,37 +20664,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/recommendations/recent', isAuthenticated, async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
-      
+
       const recentRecommendations = await storage.getRecentRecommendations(limit);
-      
+
       // Enhance with performance data
       const enhancedRecommendations = await Promise.all(
         recentRecommendations.map(async rec => {
           const effectiveness = await storage.getRecommendationEffectivenessByRecommendation(rec.id);
           const feedback = await storage.getRecommendationFeedbackByRecommendation(rec.id);
-          
+
           return {
             ...rec,
             effectiveness: effectiveness[0] || null,
             feedbackCount: feedback.length,
-            averageSatisfaction: feedback.length > 0 
+            averageSatisfaction: feedback.length > 0
               ? feedback.reduce((sum, fb) => sum + fb.satisfactionScore, 0) / feedback.length
               : null
           };
         })
       );
-      
+
       res.json({
         success: true,
         recentRecommendations: enhancedRecommendations,
         count: enhancedRecommendations.length
       });
-      
+
     } catch (error) {
       console.error('Error fetching recent recommendations:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch recent recommendations',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20563,19 +20717,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         })
       );
-      
+
       res.json({
         success: true,
         modelPerformance: performanceMetrics,
         totalModels: models.length,
         averagePerformance: models.reduce((sum, model) => sum + (model.performanceScore || 0), 0) / models.length
       });
-      
+
     } catch (error) {
       console.error('Error fetching ML model performance:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch model performance',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20611,19 +20765,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           improvementRate: recentEffectiveness.filter(e => e.improvementAchieved).length / Math.max(1, recentEffectiveness.length)
         }
       };
-      
+
       res.json({
         success: true,
         insights,
         lastUpdated: new Date(),
         dataFreshness: 'real-time'
       });
-      
+
     } catch (error) {
       console.error('Error fetching learning insights:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch learning insights',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20632,12 +20786,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/ml/train-models', isAuthenticated, async (req, res) => {
     try {
       const { modelTypes, forceRetrain } = req.body;
-      
+
       // Get recent audit outcomes for training
       const actualOutcomes = await storage.getActualOutcomes();
-      
+
       if (actualOutcomes.length < 10) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: 'Insufficient training data. Need at least 10 completed audits.',
           currentDataPoints: actualOutcomes.length
         });
@@ -20650,7 +20804,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         forceRetrain: forceRetrain || false,
         triggeredBy: getAuthenticatedUserId(req)
       });
-      
+
       res.json({
         success: true,
         message: 'Model training initiated successfully',
@@ -20658,12 +20812,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estimatedCompletionTime: '2-5 minutes',
         dataPointsUsed: actualOutcomes.length
       });
-      
+
     } catch (error) {
       console.error('Error training models:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to initiate model training',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20672,13 +20826,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/ml/validate-predictions', isAuthenticated, async (req, res) => {
     try {
       const { timeframe, modelTypes } = req.body;
-      
+
       const validationResults = await intelligentRecommendationEngine.validatePredictionAccuracy({
         timeframe: timeframe || 'last_30_days',
         modelTypes: modelTypes || ['procedure', 'auditor', 'timeline'],
         requestedBy: getAuthenticatedUserId(req)
       });
-      
+
       res.json({
         success: true,
         validationResults,
@@ -20689,12 +20843,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         validatedAt: new Date()
       });
-      
+
     } catch (error) {
       console.error('Error validating predictions:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to validate predictions',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20703,12 +20857,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/recommendations/analytics', isAuthenticated, async (req, res) => {
     try {
       const { timeframe, type } = req.query;
-      
+
       // Get recommendations within timeframe
       const recommendations = await storage.getIntelligentRecommendations();
       const effectiveness = await storage.getRecommendationEffectiveness();
       const feedback = await storage.getRecommendationFeedback();
-      
+
       // Calculate analytics
       const analytics = {
         summary: {
@@ -20733,19 +20887,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           userSatisfactionTrend: 'stable'
         }
       };
-      
+
       res.json({
         success: true,
         analytics,
         timeframe: timeframe || 'last_30_days',
         generatedAt: new Date()
       });
-      
+
     } catch (error) {
       console.error('Error fetching recommendation analytics:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch recommendation analytics',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20754,7 +20908,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/recommendations/feedback/stats', isAuthenticated, async (req, res) => {
     try {
       const feedback = await storage.getRecommendationFeedback();
-      
+
       const stats = {
         totalFeedback: feedback.length,
         averageSatisfaction: feedback.reduce((sum, f) => sum + (f.feedbackScore || 3), 0) / Math.max(1, feedback.length),
@@ -20767,7 +20921,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           outcome: { count: Math.floor(feedback.length * 0.1), averageScore: 4.0 }
         }
       };
-      
+
       res.json(stats);
     } catch (error) {
       console.error('Error fetching feedback stats:', error);
@@ -20778,7 +20932,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/recommendations/effectiveness', isAuthenticated, async (req, res) => {
     try {
       const effectiveness = await storage.getRecommendationEffectiveness();
-      
+
       const metrics = {
         overallEffectiveness: 84.2,
         byType: {
@@ -20795,18 +20949,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         implementationRate: 73.5,
         accuracyRate: 81.9
       };
-      
+
       res.json({
         success: true,
         effectiveness: metrics,
         lastUpdated: new Date()
       });
-      
+
     } catch (error) {
       console.error('Error fetching recommendation effectiveness:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to fetch effectiveness metrics',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
@@ -20815,7 +20969,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = getAuthenticatedUserId(req);
       const metricsData = req.body;
-      
+
       await storage.createLearningSystemMetrics({
         metricType: metricsData.type || 'user_interaction',
         metricValue: JSON.stringify(metricsData),
@@ -20823,29 +20977,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isSignificant: metricsData.significant || false,
         calculatedBy: userId
       });
-      
+
       res.json({
         success: true,
         message: 'Metrics recorded successfully',
         metricsId: `metric_${Date.now()}`
       });
-      
+
     } catch (error) {
       console.error('Error recording metrics:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to record metrics',
-        error: error instanceof Error ? error.message : String(error) 
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });
 
   // ============= PROCESS OWNERS MANAGEMENT =============
-  
+
   // Get all process owners
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Use cache with 5 min TTL for process owners (low mutation frequency)
       const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
@@ -20853,13 +21007,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[CACHE HIT] ${cacheKey}`);
         return res.json(cached);
       }
-      
+
       const processOwners = await storage.getProcessOwners();
       console.log("📝 [API] Fetching process owners. Count:", processOwners.length);
-      
+
       // Cache for 5 minutes
       await distributedCache.set(cacheKey, processOwners, 300);
-      
+
       res.json(processOwners);
     } catch (error) {
       console.error("Error fetching process owners:", error);
@@ -20871,7 +21025,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/process-owners/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const processOwner = await storage.getProcessOwner(req.params.id, tenantId);
       if (!processOwner) {
         return res.status(404).json({ message: "Process owner not found" });
@@ -20909,25 +21063,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/process-owners", isAuthenticated, async (req, res) => {
     try {
       const validatedData = insertProcessOwnerSchema.parse(req.body);
-      
+
       // Normalize email to lowercase for consistent comparison
       if (validatedData.email) {
         validatedData.email = validatedData.email.toLowerCase().trim();
       }
-      
+
       // Check if email already exists
       const existingOwner = await storage.getProcessOwnerByEmail(validatedData.email);
       if (existingOwner) {
         return res.status(400).json({ message: `Este correo electrónico ya está en uso por ${existingOwner.name}` });
       }
-      
+
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const dataWithTenant = await withTenantId(req, validatedData);
       const processOwner = await storage.createProcessOwner(dataWithTenant);
-      
+
       // Invalidate cache
       await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
-      
+
       res.status(201).json(processOwner);
     } catch (error) {
       console.error("Error creating process owner:", error);
@@ -20957,52 +21111,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/process-owners/:id", isAuthenticated, async (req, res) => {
     try {
       console.log(`📝 Updating process owner ${req.params.id}`, req.body);
-      
+
       const validatedData = updateProcessOwnerSchema.parse(req.body);
-      
+
       // Normalize email to lowercase for consistent comparison
       if (validatedData.email) {
         validatedData.email = validatedData.email.toLowerCase().trim();
       }
-      
+
       console.log('✅ Validation passed:', validatedData);
-      
+
       // If email is being updated, check if it already exists
       if (validatedData.email) {
         console.log(`🔍 Checking if email ${validatedData.email} is already in use...`);
         const existingOwner = await storage.getProcessOwnerByEmail(validatedData.email);
-        
+
         if (existingOwner) {
           console.log(`📧 Email found in database:`, { id: existingOwner.id, name: existingOwner.name, email: existingOwner.email });
           console.log(`🆔 Comparing: existingOwner.id=${existingOwner.id} vs req.params.id=${req.params.id}`);
         }
-        
+
         if (existingOwner && existingOwner.id !== req.params.id) {
           const errorMessage = `Este correo electrónico ya está en uso por ${existingOwner.name}`;
           console.log(`⚠️  DUPLICATE EMAIL DETECTED - Returning error:`, errorMessage);
           return res.status(400).json({ message: errorMessage });
         }
       }
-      
+
       const processOwner = await storage.updateProcessOwner(req.params.id, validatedData);
       if (!processOwner) {
         console.log(`❌ Process owner ${req.params.id} not found`);
         return res.status(404).json({ message: "Responsable no encontrado" });
       }
-      
+
       // Invalidate cache
       await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
-      
+
       console.log(`✅ Process owner updated successfully:`, processOwner.id);
       res.json(processOwner);
     } catch (error: any) {
       console.error("❌ Error updating process owner:", error);
-      
+
       if (error.name === 'ZodError') {
         console.log('Zod validation error:', error.errors);
         return res.status(400).json({ message: "Datos de responsable inválidos", errors: error.errors });
       }
-      
+
       // Check for database unique constraint violations
       if (error.code === '23505') {
         if (error.constraint === 'process_owners_email_unique') {
@@ -21012,7 +21166,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('Database constraint error:', error.constraint);
         return res.status(409).json({ message: "Este valor ya existe en el sistema" });
       }
-      
+
       // Generic error with details in development
       const isDev = process.env.NODE_ENV !== 'production';
       const errorMessage = isDev && error.message ? `Error: ${error.message}` : "No se pudo actualizar el responsable";
@@ -21025,15 +21179,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/process-owners/:id", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       const deleted = await storage.deleteProcessOwner(req.params.id);
       if (!deleted) {
         return res.status(404).json({ message: "Process owner not found" });
       }
-      
+
       // Invalidate cache
       await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${tenantId}`);
-      
+
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting process owner:", error);
@@ -21042,7 +21196,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= CONTROL OWNERS ENDPOINTS =============
-  
+
   // Get control owner by control ID
   app.get("/api/control-owners/by-control/:controlId", requirePermission("view_all"), async (req, res) => {
     try {
@@ -21050,7 +21204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!controlOwner) {
         return res.status(404).json({ message: "Control owner not found" });
       }
-      
+
       // Get process owner details for the control owner
       const processOwner = await storage.getProcessOwner(controlOwner.processOwnerId);
       const response = {
@@ -21061,9 +21215,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           position: processOwner.position
         } : null
       };
-      
+
       console.log(`[Control Owner API] Control ${req.params.controlId}:`, JSON.stringify(response, null, 2));
-      
+
       res.json(response);
     } catch (error) {
       console.error("Error fetching control owner by control:", error);
@@ -21072,7 +21226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= VALIDATION TOKENS MANAGEMENT =============
-  
+
   // Get all validation tokens (admin only)
   app.get("/api/validation-tokens", requirePermission("manage_system"), async (req, res) => {
     try {
@@ -21088,32 +21242,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/validation-tokens", requirePermission("validate_risks"), async (req, res) => {
     try {
       const { entityType, entityId, processOwnerEmail } = req.body;
-      
+
       // Validate required fields
       if (!entityType || !entityId || !processOwnerEmail) {
-        return res.status(400).json({ 
-          message: "Missing required fields: entityType, entityId, processOwnerEmail" 
+        return res.status(400).json({
+          message: "Missing required fields: entityType, entityId, processOwnerEmail"
         });
       }
-      
+
       // Find process owner by email
       const processOwners = await storage.getProcessOwners();
       const processOwner = processOwners.find(po => po.email === processOwnerEmail);
-      
+
       if (!processOwner) {
-        return res.status(400).json({ 
-          message: "Process owner not found with email: " + processOwnerEmail 
+        return res.status(400).json({
+          message: "Process owner not found with email: " + processOwnerEmail
         });
       }
-      
+
       // Generate secure random token
       const crypto = await import('crypto');
       const tokenValue = crypto.randomBytes(32).toString('hex');
-      
+
       // Set expiration to 7 days from now
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
-      
+
       // Create token data
       const tokenData = {
         token: tokenValue,
@@ -21122,25 +21276,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processOwnerId: processOwner.id,
         expiresAt: expiresAt,
       };
-      
+
       const createdToken = await storage.createValidationToken(tokenData);
-      
+
       // Send validation email
       try {
         const emailService = getEmailService();
         if (!emailService) {
           console.error('Email service not configured');
-          return res.status(201).json({ 
-            ...createdToken, 
+          return res.status(201).json({
+            ...createdToken,
             emailSent: false,
             error: 'Email service not configured'
           });
         }
-        
+
         // Get entity details
         let entityName = 'Entity';
         let entityCode = '';
-        
+
         if (entityType === 'control') {
           const control = await requireDb().select().from(controls).where(eq(controls.id, entityId)).limit(1).then(r => r[0]);
           if (control) {
@@ -21154,10 +21308,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             entityCode = risk.code;
           }
         }
-        
+
         // Build validation URL
         const validationUrl = `${process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/validate/${createdToken.token}`;
-        
+
         // Build email HTML
         const emailHtml = `
 <!DOCTYPE html>
@@ -21225,18 +21379,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 </body>
 </html>
         `;
-        
+
         await emailService.sendEmail({
           to: processOwnerEmail,
           subject: `Validación requerida: ${entityCode} - ${entityName}`,
           html: emailHtml,
         });
-        
+
         res.status(201).json({ ...createdToken, emailSent: true });
       } catch (emailError) {
         console.error('Error sending validation email:', emailError);
-        res.status(201).json({ 
-          ...createdToken, 
+        res.status(201).json({
+          ...createdToken,
           emailSent: false,
           error: 'Token created but failed to send email'
         });
@@ -21259,18 +21413,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { token } = req.params;
       const { result, comments } = req.body;
-      
+
       // Input validation
       if (!result || !['validated', 'rejected'].includes(result)) {
-        return res.status(400).json({ 
-          message: "Invalid validation result. Must be 'validated' or 'rejected'" 
+        return res.status(400).json({
+          message: "Invalid validation result. Must be 'validated' or 'rejected'"
         });
       }
-      
+
       // Validate comments length if provided
       if (comments && comments.length > 1000) {
-        return res.status(400).json({ 
-          message: "Comments must be 1000 characters or less" 
+        return res.status(400).json({
+          message: "Comments must be 1000 characters or less"
         });
       }
 
@@ -21278,8 +21432,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get token information first to verify ownership
       const tokenInfo = await storage.getValidationToken(token);
       if (!tokenInfo) {
-        return res.status(404).json({ 
-          message: "Invalid, expired, or already used validation token" 
+        return res.status(404).json({
+          message: "Invalid, expired, or already used validation token"
         });
       }
 
@@ -21297,20 +21451,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (tokenInfo.type === 'risk') {
         const canValidate = await storage.canProcessOwnerValidateRisk(tokenInfo.processOwnerId, tokenInfo.entityId);
         if (!canValidate) {
-          return res.status(403).json({ 
+          return res.status(403).json({
             message: "Access denied: Only the macroproceso owner can validate this risk",
             details: "Risk validation must be performed by the owner of the macroproceso where the risk resides"
           });
         }
       }
-      
+
       const validationToken = await storage.useValidationToken(token, result, comments);
       if (!validationToken) {
-        return res.status(404).json({ 
-          message: "Invalid, expired, or already used validation token" 
+        return res.status(404).json({
+          message: "Invalid, expired, or already used validation token"
         });
       }
-      
+
       // Update the entity with validation status
       if (tokenInfo.type === 'control') {
         await storage.updateControl(tokenInfo.entityId, {
@@ -21327,10 +21481,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           validatedBy: null // NULL for email-based validations (no user in session)
         });
       }
-      
+
       // Only return success message without exposing token data
-      res.json({ 
-        message: "Validation completed successfully", 
+      res.json({
+        message: "Validation completed successfully",
         validationResult: result,
         timestamp: new Date().toISOString()
       });
@@ -21347,17 +21501,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!validationToken) {
         return res.status(404).json({ message: "Invalid or expired validation token" });
       }
-      
+
       // Check if token is expired
       if (new Date() > validationToken.expiresAt) {
         return res.status(410).json({ message: "Validation token has expired" });
       }
-      
+
       // Check if token is already used
       if (validationToken.isUsed) {
         return res.status(400).json({ message: "Validation token has already been used" });
       }
-      
+
       // Get entity details for validation
       let entityData = null;
       if (validationToken.type === 'control') {
@@ -21391,12 +21545,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         }
       }
-      
+
       // Get process owner details
-      const processOwner = validationToken.processOwnerId 
+      const processOwner = validationToken.processOwnerId
         ? await storage.getProcessOwner(validationToken.processOwnerId)
         : null;
-      
+
       // Only expose minimal necessary data for validation
       const publicTokenData = {
         id: validationToken.id,
@@ -21411,7 +21565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isUsed: validationToken.isUsed
         // Excluded: token (hashed), processOwnerId, validationResult, validationComments, usedAt
       };
-      
+
       res.json(publicTokenData);
     } catch (error) {
       console.error("Error fetching validation token:", error);
@@ -21631,7 +21785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Handle both legacy (fiscalEntityId) and new format (fiscalEntityIds)
       const { fiscalEntityIds, ...rest } = req.body;
-      
+
       // For backward compatibility, if only fiscalEntityId is provided, use it as single entity
       let fiscalEntitiesToAssign: string[] = [];
       if (fiscalEntityIds && Array.isArray(fiscalEntityIds)) {
@@ -21642,12 +21796,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const validatedData = insertComplianceOfficerSchema.parse(rest);
       const officer = await storage.createComplianceOfficer(validatedData);
-      
+
       // Create relationships with fiscal entities
       if (fiscalEntitiesToAssign.length > 0) {
         await storage.updateComplianceOfficerFiscalEntities(officer.id, fiscalEntitiesToAssign);
       }
-      
+
       res.status(201).json(officer);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -21663,7 +21817,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Handle both legacy (fiscalEntityId) and new format (fiscalEntityIds)
       const { fiscalEntityIds, ...rest } = req.body;
-      
+
       const validatedData = updateComplianceOfficerSchema.parse({ ...rest, id: req.params.id });
       const officer = await storage.updateComplianceOfficer(req.params.id, validatedData);
       if (!officer) {
@@ -21724,7 +21878,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fiscalEntitySchema = z.object({
         fiscalEntityId: z.string().min(1, "fiscalEntityId is required")
       });
-      
+
       const { fiscalEntityId } = fiscalEntitySchema.parse(req.body);
 
       const relation = await storage.addComplianceOfficerFiscalEntity({
@@ -21747,7 +21901,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fiscalEntitiesSchema = z.object({
         fiscalEntityIds: z.array(z.string().min(1)).min(0, "fiscalEntityIds must be an array")
       });
-      
+
       const { fiscalEntityIds } = fiscalEntitiesSchema.parse(req.body);
 
       const relations = await storage.updateComplianceOfficerFiscalEntities(req.params.id, fiscalEntityIds);
@@ -21821,7 +21975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const validatedData = insertComplianceOfficerAttachmentSchema.parse(attachmentData);
-      
+
       // Store file in object storage if available
       let objectPath = null;
       if (req.file.buffer) {
@@ -21892,16 +22046,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/imports/template", async (req, res) => {
     try {
       const templateBuffer = await importService.generateTemplate();
-      
+
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename="plantilla_importacion.xlsx"');
       res.setHeader('Content-Length', templateBuffer.length);
       res.send(templateBuffer);
     } catch (error) {
       console.error("Error generating import template:", error);
-      res.status(500).json({ 
-        message: "Error generando plantilla", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error generando plantilla",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -21948,9 +22102,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ sessionId });
     } catch (error) {
       console.error("Error creating import session:", error);
-      res.status(500).json({ 
-        message: "Error creando sesión de importación", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error creando sesión de importación",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -21959,7 +22113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/imports/:id", isAuthenticated, async (req, res) => {
     try {
       const session = await importService.getImportSession(req.params.id);
-      
+
       if (!session) {
         return res.status(404).json({ message: "Sesión de importación no encontrada" });
       }
@@ -21972,9 +22126,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(session);
     } catch (error) {
       console.error("Error getting import session:", error);
-      res.status(500).json({ 
-        message: "Error obteniendo estado de importación", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error obteniendo estado de importación",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -21983,7 +22137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/imports/:id/report", isAuthenticated, async (req, res) => {
     try {
       const session = await importService.getImportSession(req.params.id);
-      
+
       if (!session) {
         return res.status(404).json({ message: "Sesión de importación no encontrada" });
       }
@@ -21999,10 +22153,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Generar reporte de errores en CSV
       const csvHeaders = "Hoja,Fila,Campo,Mensaje,Código\n";
-      const csvData = session.errors.map((error: any) => 
+      const csvData = session.errors.map((error: any) =>
         `"${error.sheet}","${error.row}","${error.field}","${error.message}","${error.code || ''}"`
       ).join('\n');
-      
+
       const csvContent = csvHeaders + csvData;
       const filename = `errores_importacion_${session.id}.csv`;
 
@@ -22012,15 +22166,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.send(csvContent);
     } catch (error) {
       console.error("Error generating error report:", error);
-      res.status(500).json({ 
-        message: "Error generando reporte de errores", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error generando reporte de errores",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
 
   // ============= ENTITY-SPECIFIC IMPORT ROUTES =============
-  
+
   // Importar Entidades Fiscales
   app.post("/api/imports/fiscal-entities", isAuthenticated, upload.single('file'), async (req: any, res) => {
     try {
@@ -22030,17 +22184,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processFiscalEntitiesImport(
-        req.file, 
-        req.user.id, 
+        req.file,
+        req.user.id,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing fiscal entities:", error);
-      res.status(500).json({ 
-        message: "Error importando entidades fiscales", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando entidades fiscales",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22054,17 +22208,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processProcessOwnersImport(
-        req.file, 
-        req.user.id, 
+        req.file,
+        req.user.id,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing process owners:", error);
-      res.status(500).json({ 
-        message: "Error importando propietarios de procesos", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando propietarios de procesos",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22078,17 +22232,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processMacroprocesoImport(
-        req.file, 
-        req.user.id, 
+        req.file,
+        req.user.id,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing macroprocesos:", error);
-      res.status(500).json({ 
-        message: "Error importando macroprocesos", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando macroprocesos",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22102,17 +22256,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processRisksImport(
-        req.file, 
-        req.user.id, 
+        req.file,
+        req.user.id,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing risks:", error);
-      res.status(500).json({ 
-        message: "Error importando riesgos", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando riesgos",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22127,17 +22281,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processControlsImport(
-        req.file, 
-        userId, 
+        req.file,
+        userId,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing controls:", error);
-      res.status(500).json({ 
-        message: "Error importando controles", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando controles",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22152,17 +22306,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processProcessesImport(
-        req.file, 
-        userId, 
+        req.file,
+        userId,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing processes:", error);
-      res.status(500).json({ 
-        message: "Error importando procesos", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando procesos",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22177,17 +22331,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processSubprocesosImport(
-        req.file, 
-        userId, 
+        req.file,
+        userId,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing subprocesos:", error);
-      res.status(500).json({ 
-        message: "Error importando subprocesos", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando subprocesos",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22202,17 +22356,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = getAuthenticatedUserId(req);
       const isDryRun = req.body.isDryRun === 'true' || req.body.isDryRun === true;
       const { session, importResults } = await importService.processActionPlansImport(
-        req.file, 
-        userId, 
+        req.file,
+        userId,
         isDryRun
       );
 
       res.json({ session, importResults });
     } catch (error) {
       console.error("Error importing action plans:", error);
-      res.status(500).json({ 
-        message: "Error importando planes de acción", 
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      res.status(500).json({
+        message: "Error importando planes de acción",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   });
@@ -22220,7 +22374,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log('📂 Excel import routes registered successfully');
 
   // ============= TRASH/RECYCLE BIN ROUTES =============
-  
+
   /**
    * GET /api/trash - Lista todos los elementos eliminados (soft-deleted)
    * Devuelve elementos agrupados por tipo de entidad
@@ -22228,19 +22382,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/trash", isAuthenticated, async (req, res) => {
     try {
       // Consultar múltiples tablas para encontrar elementos con status='deleted'
-      const [deletedRisks, deletedControls, deletedMacroprocesos, deletedProcesses, 
-             deletedSubprocesos, deletedGerencias, deletedRiskEvents, deletedActions, deletedAuditPlans, deletedAudits] = await Promise.all([
-        requireDb().select().from(risks).where(eq(risks.status, 'deleted')),
-        requireDb().select().from(controls).where(eq(controls.status, 'deleted')),
-        requireDb().select().from(macroprocesos).where(eq(macroprocesos.status, 'deleted')),
-        requireDb().select().from(processes).where(eq(processes.status, 'deleted')),
-        requireDb().select().from(subprocesos).where(eq(subprocesos.status, 'deleted')),
-        storage.getDeletedGerencias(),
-        requireDb().select().from(riskEvents).where(sql`${riskEvents.deletedAt} IS NOT NULL`),
-        requireDb().select().from(actions).where(eq(actions.status, 'deleted')),
-        requireDb().select().from(auditPlans).where(eq(auditPlans.status, 'deleted')),
-        requireDb().select().from(audits).where(eq(audits.status, 'deleted'))
-      ]);
+      const [deletedRisks, deletedControls, deletedMacroprocesos, deletedProcesses,
+        deletedSubprocesos, deletedGerencias, deletedRiskEvents, deletedActions, deletedAuditPlans, deletedAudits] = await Promise.all([
+          requireDb().select().from(risks).where(eq(risks.status, 'deleted')),
+          requireDb().select().from(controls).where(eq(controls.status, 'deleted')),
+          requireDb().select().from(macroprocesos).where(eq(macroprocesos.status, 'deleted')),
+          requireDb().select().from(processes).where(eq(processes.status, 'deleted')),
+          requireDb().select().from(subprocesos).where(eq(subprocesos.status, 'deleted')),
+          storage.getDeletedGerencias(),
+          requireDb().select().from(riskEvents).where(sql`${riskEvents.deletedAt} IS NOT NULL`),
+          requireDb().select().from(actions).where(eq(actions.status, 'deleted')),
+          requireDb().select().from(auditPlans).where(eq(auditPlans.status, 'deleted')),
+          requireDb().select().from(audits).where(eq(audits.status, 'deleted'))
+        ]);
 
       // Agrupar por tipo de entidad con metadata
       const trashItems = {
@@ -22316,10 +22470,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/trash/:entity/:id/restore", isAuthenticated, async (req, res) => {
     try {
       const { entity, id } = req.params;
-      
+
       // Get authenticated user ID using helper function
       const userId = getAuthenticatedUserId(req);
-      
+
       // Datos de restauración: limpiar campos de soft-delete
       const restoreData = {
         status: 'active',
@@ -22381,9 +22535,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Item not found" });
       }
 
-      res.json({ 
+      res.json({
         message: "Item restored successfully",
-        item: restored 
+        item: restored
       });
     } catch (error) {
       console.error("Failed to restore item:", error);
@@ -22565,12 +22719,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log('💾 User Saved Views & Preferences routes registered successfully');
 
   // ============= AUDIT LOGS ENDPOINTS =============
-  
+
   // GET /api/audit-logs - Fetch audit logs for an entity
   app.get("/api/audit-logs", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { entity_type, entity_id } = req.query;
-      
+
       if (!entity_type || !entity_id) {
         return res.status(400).json({ error: "entity_type and entity_id are required" });
       }
@@ -22649,7 +22803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log('📋 Audit Logs routes registered successfully');
 
   // ============= QUERY ANALYZER (ADMIN ONLY) =============
-  
+
   app.get("/api/admin/query-analyze/critical", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const requestUser = (req as any).user;
@@ -22696,7 +22850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const queryKey = req.params.queryKey as CriticalQueryKey;
       if (!CRITICAL_QUERIES[queryKey]) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: `Unknown query key: ${queryKey}`,
           availableKeys: Object.keys(CRITICAL_QUERIES)
         });
@@ -22744,15 +22898,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============= INITIALIZE NOTIFICATION SCHEDULER =============
   console.log('📅 Starting NotificationScheduler with automated tasks...');
-  
+
   // Dynamic import to avoid circular dependency issues
   try {
     const { NotificationScheduler } = await import('./notification-scheduler');
     const notificationScheduler = NotificationScheduler.getInstance();
-    
+
     // Start all scheduled tasks
     notificationScheduler.startScheduledTasks();
-    
+
     console.log('✅ NotificationScheduler initialized successfully with automated workflows');
   } catch (error) {
     console.error('❌ Failed to initialize NotificationScheduler:', error);
@@ -22771,7 +22925,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 export async function warmCacheForAllTenants(): Promise<void> {
   const startTime = Date.now();
   console.log('🔥 [QUERY WARMING] Starting lightweight query pre-warming...');
-  
+
   try {
     // PHASE 1: Synchronous - Only lightweight lookup data (fast, small tables)
     // These are essential for dropdown filters and complete quickly
@@ -22792,13 +22946,13 @@ export async function warmCacheForAllTenants(): Promise<void> {
       storage.getRiskCategories(),
       storage.getAllProcessGerenciasRelations()
     ]);
-    
+
     // Filter out soft-deleted records
     const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
     const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
     const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
     const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
-    
+
     // Build lite response (without heavy riskProcessLinks and riskControls)
     const litePageData = {
       gerencias: activeGerencias,
@@ -22810,41 +22964,41 @@ export async function warmCacheForAllTenants(): Promise<void> {
       processGerencias,
       macroprocesoGerencias: []
     };
-    
+
     // Cache lite data with 60s TTL (longer than before since it's stable)
     const liteKey = `risks-page-data-lite:${CACHE_VERSION}:default`;
     await distributedCache.set(liteKey, litePageData, 60);
-    
+
     const phase1Duration = Date.now() - startTime;
     console.log(`✅ [QUERY WARMING] Phase 1 completed in ${phase1Duration}ms - Cached ${activeGerencias.length} gerencias, ${activeMacroprocesos.length} macroprocesos, ${activeProcesses.length} processes`);
-    
+
     // PHASE 2: Async background - Warm first page of heavy data (non-blocking)
     setImmediate(async () => {
       try {
         console.log('🔄 [QUERY WARMING] Phase 2 (async) - Warming first page of heavy data...');
         const phase2Start = Date.now();
-        
+
         // Warm first page of validation lists (50 items each)
         const [notifiedResult, notNotifiedResult] = await Promise.all([
           storage.getRiskProcessLinksByNotificationStatusPaginated(true, 50, 0),
           storage.getRiskProcessLinksByNotificationStatusPaginated(false, 50, 0)
         ]);
-        
+
         // Cache validation list first pages with 5 min TTL
         await Promise.all([
-          distributedCache.set(`validation:notified-list:${CACHE_VERSION}:default:50:0`, 
+          distributedCache.set(`validation:notified-list:${CACHE_VERSION}:default:50:0`,
             { data: notifiedResult.data, total: notifiedResult.total, limit: 50, offset: 0, hasMore: notifiedResult.total > 50 }, 300),
-          distributedCache.set(`validation:not-notified-list:${CACHE_VERSION}:default:50:0`, 
+          distributedCache.set(`validation:not-notified-list:${CACHE_VERSION}:default:50:0`,
             { data: notNotifiedResult.data, total: notNotifiedResult.total, limit: 50, offset: 0, hasMore: notNotifiedResult.total > 50 }, 300)
         ]);
-        
+
         const phase2Duration = Date.now() - phase2Start;
         console.log(`✅ [QUERY WARMING] Phase 2 completed in ${phase2Duration}ms - Cached ${notifiedResult.total} notified, ${notNotifiedResult.total} not-notified validation items`);
       } catch (error) {
         console.error('⚠️ [QUERY WARMING] Phase 2 (async) failed (non-blocking):', error);
       }
     });
-    
+
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(`❌ [QUERY WARMING] Failed after ${duration}ms:`, error);

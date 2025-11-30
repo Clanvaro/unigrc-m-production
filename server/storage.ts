@@ -15,12 +15,12 @@
 import { notificationService } from "./notification-service";
 import { NotificationTypes } from "@shared/schema";
 import { distributedCache } from "./services/redis";
-import { 
-  getSystemConfigFromCache, 
-  setSystemConfigCache, 
-  invalidateSystemConfigCache 
+import {
+  getSystemConfigFromCache,
+  setSystemConfigCache,
+  invalidateSystemConfigCache
 } from "./cache-helpers";
-import { 
+import {
   type Macroproceso, type InsertMacroproceso,
   type Process, type InsertProcess,
   type Subproceso, type InsertSubproceso,
@@ -129,7 +129,7 @@ import {
   type ApprovalMetrics, type ApproverPerformance, type EscalationRequirement,
   // AI Unified Document Interface
   type AIDocument,
-  macroprocesos, processes, subprocesos, risks, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, controls, riskControls, actionPlanRisks, actionPlanAttachments, actionEvidence, actionPlanAccessTokens, riskCategories, systemConfig, 
+  macroprocesos, processes, subprocesos, risks, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, controls, riskControls, actionPlanRisks, actionPlanAttachments, actionEvidence, actionPlanAccessTokens, riskCategories, systemConfig,
   fiscalEntities, macroprocesoFiscalEntities, processFiscalEntities,
   gerencias, processGerencias, macroprocesoGerencias, subprocesoGerencias,
   // Nuevas tablas junction para asociaciones múltiples
@@ -310,11 +310,11 @@ export interface IStorage {
   getAllRiskLevelsOptimized(
     options?: { entities?: ('macroprocesos' | 'processes' | 'subprocesos')[] }
   ): Promise<{
-    macroprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-    processes: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-    subprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>
+    macroprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    processes: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    subprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>
   }>;
-  
+
   // Risk Validation
   getPendingValidationRisks(): Promise<Risk[]>;
   getRisksByValidationStatus(status: string): Promise<Risk[]>;
@@ -326,14 +326,14 @@ export interface IStorage {
   validateRisk(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<Risk | undefined>;
 
   // ============= VALIDACIÓN CENTRADA EN PROCESOS =============
-  
+
   // Process Validation - Dashboard y estado general
   getProcessValidations(): Promise<ProcessValidation[]>;
   getProcessValidation(processId: string): Promise<ProcessValidation | undefined>;
   createProcessValidation(validation: InsertProcessValidation): Promise<ProcessValidation>;
   updateProcessValidation(processId: string, validation: Partial<InsertProcessValidation>): Promise<ProcessValidation | undefined>;
   deleteProcessValidation(processId: string): Promise<boolean>;
-  
+
   // Process Risk Validation - Validación de riesgos en contexto de proceso
   getProcessRiskValidations(): Promise<ProcessRiskValidation[]>;
   getProcessRiskValidationsByProcess(processId: string): Promise<ProcessRiskValidation[]>;
@@ -341,7 +341,7 @@ export interface IStorage {
   createProcessRiskValidation(validation: InsertProcessRiskValidation): Promise<ProcessRiskValidation>;
   updateProcessRiskValidation(processId: string, riskId: string, validation: Partial<InsertProcessRiskValidation>): Promise<ProcessRiskValidation | undefined>;
   deleteProcessRiskValidation(processId: string, riskId: string): Promise<boolean>;
-  
+
   // Process Control Validation - Validación de controles en contexto de proceso
   getProcessControlValidations(): Promise<ProcessControlValidation[]>;
   getProcessControlValidationsByProcess(processId: string): Promise<ProcessControlValidation[]>;
@@ -349,13 +349,13 @@ export interface IStorage {
   createProcessControlValidation(validation: InsertProcessControlValidation): Promise<ProcessControlValidation>;
   updateProcessControlValidation(processId: string, controlId: string, riskId: string | undefined, validation: Partial<InsertProcessControlValidation>): Promise<ProcessControlValidation | undefined>;
   deleteProcessControlValidation(processId: string, controlId: string, riskId?: string): Promise<boolean>;
-  
+
   // Métodos de agregación para dashboard de procesos
   updateProcessValidationSummary(processId: string): Promise<ProcessValidation | undefined>;
   getProcessValidationDashboard(): Promise<ProcessValidation[]>;
 
   // ============= MÉTODOS PARA ASOCIACIONES MÚLTIPLES RIESGO-PROCESO =============
-  
+
   // RiskProcessLinks - Nueva implementación con responsables independientes
   getRiskProcessLinks(): Promise<RiskProcessLink[]>;
   getRiskProcessLinksWithDetails(): Promise<RiskProcessLinkWithDetails[]>;
@@ -367,23 +367,23 @@ export interface IStorage {
   createRiskProcessLink(riskProcessLink: InsertRiskProcessLink): Promise<RiskProcessLink>;
   updateRiskProcessLink(id: string, riskProcessLink: Partial<InsertRiskProcessLink>): Promise<RiskProcessLink | undefined>;
   deleteRiskProcessLink(id: string): Promise<boolean>;
-  
+
   // RiskProcessLink validation
   validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined>;
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
-  
+
   // RiskProcessLink validation history
   createValidationHistoryEntry(historyEntry: InsertRiskProcessLinkValidationHistory): Promise<RiskProcessLinkValidationHistory>;
   getValidationHistory(riskProcessLinkId: string): Promise<RiskProcessLinkValidationHistoryWithDetails[]>;
   checkAlreadyValidatedRisks(processId: string): Promise<{ riskProcessLinkId: string; riskCode: string; riskName: string; validationStatus: string; validatedAt: Date | null; validatedBy: string | null; }[]>;
-  
+
   // Efficient aggregation methods using SQL GROUP BY (for tabbed risk views)
   getRisksGroupedByProcess(): Promise<{ processId: string; processName: string; processCode: string; macroprocesoId: string | null; macroprocesoName: string | null; riskCount: number; riskIds: string[] }[]>;
   getRisksGroupedByOwner(): Promise<{ ownerId: string; ownerName: string; ownerEmail: string; riskCount: number; riskIds: string[] }[]>;
-  
+
   // RiskProcessLink migration methods
   migrateRisksToRiskProcessLinks(): Promise<{ success: boolean; migratedCount: number; errors: string[] }>;
   cleanupLegacyRiskFields(): Promise<{ success: boolean; updatedCount: number; errors: string[] }>;
@@ -406,7 +406,7 @@ export interface IStorage {
   validateControl(id: string, validatedBy: string, validationStatus: "validated" | "rejected" | "observed", validationComments?: string): Promise<Control | undefined>;
 
   // ============= MÉTODOS PARA ASOCIACIONES MÚLTIPLES CONTROL-PROCESO =============
-  
+
   // ControlProcess associations  
   getControlProcesses(): Promise<ControlProcess[]>;
   getControlProcessesWithDetails(): Promise<ControlProcessWithDetails[]>;
@@ -417,12 +417,12 @@ export interface IStorage {
   createControlProcess(controlProcess: InsertControlProcess): Promise<ControlProcess>;
   updateControlProcess(id: string, controlProcess: Partial<InsertControlProcess>): Promise<ControlProcess | undefined>;
   deleteControlProcess(id: string): Promise<boolean>;
-  
+
   // ControlProcess validation
   validateControlProcess(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<ControlProcess | undefined>;
   getPendingValidationControlProcesses(): Promise<ControlProcessWithDetails[]>;
   getControlProcessesByValidationStatus(status: string): Promise<ControlProcessWithDetails[]>;
-  
+
   // ControlProcess self-evaluation
   updateControlProcessSelfEvaluation(id: string, selfEvaluationData: {
     selfEvaluatedBy: string;
@@ -444,9 +444,9 @@ export interface IStorage {
   updateControl(id: string, control: Partial<InsertControl>): Promise<Control | undefined>;
   deleteControl(id: string): Promise<boolean>;
   getProcessMapValidatedRisks(): Promise<{
-    macroprocesos: Map<string, {validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    processes: Map<string, {validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    subprocesos: Map<string, {validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string}>
+    macroprocesos: Map<string, { validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    processes: Map<string, { validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    subprocesos: Map<string, { validatedRiskCount: number, aggregatedResidualRisk: number, riskLevel: string }>
   }>;
 
   // Control Evaluation Criteria
@@ -459,15 +459,15 @@ export interface IStorage {
   updateControlEvaluationOption(id: string, option: Partial<InsertControlEvaluationOptions>): Promise<ControlEvaluationOptions | undefined>;
   deleteControlEvaluationOption(id: string): Promise<boolean>;
   updateControlEvaluationOptionsOrder(options: { id: string; order: number }[]): Promise<void>;
-  getControlEvaluationsByCriteria(): Promise<{criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[]}[]>;
+  getControlEvaluationsByCriteria(): Promise<{ criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[] }[]>;
   copyDefaultControlEvaluationConfig(): Promise<void>;
-  
+
   // Control Evaluations
   getControlEvaluations(controlId: string): Promise<ControlEvaluation[]>;
   createControlEvaluation(evaluation: InsertControlEvaluation): Promise<ControlEvaluation>;
   updateControlEvaluation(controlId: string, criteriaId: string, evaluation: Partial<InsertControlEvaluation>): Promise<ControlEvaluation | undefined>;
   deleteControlEvaluations(controlId: string): Promise<boolean>;
-  
+
   // Control Assessment History
   getControlAssessmentHistory(controlId: string): Promise<ControlAssessmentHistory[]>;
   createControlAssessmentHistory(history: InsertControlAssessmentHistory): Promise<ControlAssessmentHistory>;
@@ -485,13 +485,13 @@ export interface IStorage {
   recalculateAllRiskProbabilities(): Promise<void>;
 
   // Get configured impact weights
-  getImpactWeights(): Promise<{infrastructure: number, reputation: number, economic: number, permits: number, knowhow: number, people: number, information: number}>;
+  getImpactWeights(): Promise<{ infrastructure: number, reputation: number, economic: number, permits: number, knowhow: number, people: number, information: number }>;
 
   // Recalculate impact for all risks using current configured weights
   recalculateAllRiskImpacts(): Promise<void>;
 
   // ============= MÉTODOS PARA CRITERIOS DE PROBABILIDAD DINÁMICOS =============
-  
+
   // Probability Criteria CRUD
   getProbabilityCriteria(): Promise<ProbabilityCriteria[]>;
   getActiveProbabilityCriteria(): Promise<ProbabilityCriteria[]>;
@@ -502,7 +502,7 @@ export interface IStorage {
   reorderProbabilityCriteria(criteriaIds: string[]): Promise<void>;
 
   // ============= MÉTODOS PARA CRITERIOS DE IMPACTO =============
-  
+
   // Impact Criteria CRUD
   getImpactCriteria(): Promise<ImpactCriteria[]>;
   getActiveImpactCriteria(): Promise<ImpactCriteria[]>;
@@ -513,7 +513,7 @@ export interface IStorage {
   reorderImpactCriteria(criteriaIds: string[]): Promise<void>;
 
   // ============= MÉTODOS DE REVALIDACIÓN =============
-  
+
   // Control Owners
   getControlOwners(): Promise<ControlOwner[]>;
   getControlOwner(id: string): Promise<ControlOwner | undefined>;
@@ -524,7 +524,7 @@ export interface IStorage {
   updateControlOwner(id: string, owner: Partial<InsertControlOwner>): Promise<ControlOwner | undefined>;
   deactivateControlOwner(id: string): Promise<boolean>;
   deleteControlOwner(id: string): Promise<boolean>;
-  
+
   // Revalidations
   getRevalidations(): Promise<Revalidation[]>;
   getRevalidation(id: string): Promise<Revalidation | undefined>;
@@ -532,7 +532,7 @@ export interface IStorage {
   createRevalidation(revalidation: InsertRevalidation): Promise<Revalidation>;
   updateRevalidation(id: string, revalidation: Partial<InsertRevalidation>): Promise<Revalidation | undefined>;
   getLatestRevalidationByControl(controlId: string): Promise<Revalidation | undefined>;
-  
+
   // Revalidation Policies
   getRevalidationPolicies(): Promise<RevalidationPolicy[]>;
   getRevalidationPolicy(id: string): Promise<RevalidationPolicy | undefined>;
@@ -577,19 +577,19 @@ export interface IStorage {
   createActionPlan(actionPlan: InsertActionPlan): Promise<ActionPlan>;
   updateActionPlan(id: string, actionPlan: Partial<InsertActionPlan>): Promise<ActionPlan | undefined>;
   updateActionPlanStatus(id: string, status: string, additionalData?: { evidenceSubmittedBy?: string, reviewedBy?: string, reviewComments?: string }): Promise<ActionPlan | undefined>;
-  
+
   // Action Plan Risks (Many-to-Many relationship)
   getActionPlanRisks(actionPlanId: string): Promise<(ActionPlanRisk & { risk: Risk })[]>;
   addRiskToActionPlan(actionPlanRisk: InsertActionPlanRisk): Promise<ActionPlanRisk>;
   removeRiskFromActionPlan(actionPlanId: string, riskId: string): Promise<boolean>;
   updateActionPlanRiskStatus(id: string, mitigationStatus: string, notes?: string): Promise<ActionPlanRisk | undefined>;
-  
+
   // Action Plan Attachments
   getActionPlanAttachments(actionPlanId: string): Promise<ActionPlanAttachment[]>;
   getActionAttachments(actionId: string): Promise<ActionPlanAttachment[]>;
   createActionPlanAttachment(attachment: InsertActionPlanAttachment): Promise<ActionPlanAttachment>;
   deleteActionPlanAttachment(id: string): Promise<boolean>;
-  
+
   // Action Plan Access Tokens
   createActionPlanAccessToken(token: InsertActionPlanAccessToken): Promise<ActionPlanAccessToken>;
   getActionPlanAccessToken(token: string): Promise<ActionPlanAccessToken | undefined>;
@@ -619,9 +619,9 @@ export interface IStorage {
   setSystemConfig(config: InsertSystemConfig): Promise<SystemConfig>;
   updateSystemConfig(configKey: string, configValue: string, updatedBy?: string): Promise<SystemConfig | undefined>;
   getMaxEffectivenessLimit(): Promise<number>;
-  getRiskLevelRanges(): Promise<{lowMax: number, mediumMax: number, highMax: number}>;
-  getRiskDecimalsConfig(): Promise<{enabled: boolean, precision: number}>;
-  getProbabilityWeights(): Promise<{frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number}>;
+  getRiskLevelRanges(): Promise<{ lowMax: number, mediumMax: number, highMax: number }>;
+  getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }>;
+  getProbabilityWeights(): Promise<{ frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number }>;
 
   // Fiscal Entities
   getFiscalEntities(): Promise<FiscalEntity[]>;
@@ -688,7 +688,7 @@ export interface IStorage {
     byMacroproceso: Array<{ id: string; name: string; initial: number; final: number; change: number; changePercent: number }>;
     byProceso: Array<{ id: string; name: string; initial: number; final: number; change: number; changePercent: number }>;
   }>;
-  
+
   // Historical Risk Comparison (based on actual risk data, not manual snapshots)
   getHistoricalRiskComparison(startDate: Date, endDate: Date): Promise<{
     company: { initial: number; final: number; change: number; changePercent: number };
@@ -696,7 +696,7 @@ export interface IStorage {
     byMacroproceso: Array<{ id: string; name: string; initial: number; final: number; change: number; changePercent: number }>;
     byProceso: Array<{ id: string; name: string; initial: number; final: number; change: number; changePercent: number }>;
   }>;
-  
+
   // Audit Planning & Prioritization
   getAuditPlans(): Promise<AuditPlan[]>;
   getAuditPlan(id: string): Promise<AuditPlan | undefined>;
@@ -704,7 +704,7 @@ export interface IStorage {
   createAuditPlanWithUniqueCode(plan: InsertAuditPlan, year: number): Promise<AuditPlan>;
   updateAuditPlan(id: string, plan: Partial<InsertAuditPlan>): Promise<AuditPlan | undefined>;
   deleteAuditPlan(id: string): Promise<boolean>;
-  
+
   // Audit Universe Management
   getAuditUniverse(): Promise<AuditUniverse[]>;
   getAuditUniverseByMacroproceso(macroprocesoId: string): Promise<AuditUniverse[]>;
@@ -713,7 +713,7 @@ export interface IStorage {
   updateAuditUniverse(id: string, universe: Partial<InsertAuditUniverse>): Promise<AuditUniverse | undefined>;
   deleteAuditUniverse(id: string): Promise<boolean>;
   generateUniverseFromExistingProcesses(): Promise<AuditUniverse[]>;
-  
+
   // Audit Prioritization Factors
   getAuditPrioritizationFactors(planId: string): Promise<AuditPrioritizationFactors[]>;
   getPrioritizationFactorsWithDetails(planId: string): Promise<(AuditPrioritizationFactors & { universe: AuditUniverseWithDetails })[]>;
@@ -722,7 +722,7 @@ export interface IStorage {
   updatePrioritizationFactors(id: string, factors: Partial<InsertAuditPrioritizationFactors>): Promise<AuditPrioritizationFactors | undefined>;
   calculatePriorityScore(id: string): Promise<AuditPrioritizationFactors | undefined>;
   calculateAllPriorityScores(planId: string): Promise<AuditPrioritizationFactors[]>;
-  
+
   // Audit Plan Items
   getAuditPlanItems(planId: string): Promise<AuditPlanItem[]>;
   getAuditPlanItemsWithDetails(planId: string): Promise<AuditPlanItemWithDetails[]>;
@@ -730,7 +730,7 @@ export interface IStorage {
   updateAuditPlanItem(id: string, item: Partial<InsertAuditPlanItem>): Promise<AuditPlanItem | undefined>;
   deleteAuditPlanItem(id: string): Promise<boolean>;
   selectAuditItemsForPlan(planId: string, maxHours: number): Promise<AuditPlanItem[]>;
-  
+
   // Audit Plan Capacity
   getAuditPlanCapacity(planId: string): Promise<AuditPlanCapacity | undefined>;
   createAuditPlanCapacity(capacity: InsertAuditPlanCapacity): Promise<AuditPlanCapacity>;
@@ -751,7 +751,7 @@ export interface IStorage {
   setAuditScope(auditId: string, scopes: InsertAuditScope[]): Promise<void>;
   getRisksForAuditScope(auditId: string): Promise<Risk[]>;
   getControlsForAuditScope(auditId: string): Promise<Control[]>;
-  
+
   // Audit Risk and Control Re-evaluation (NOGAI 13.2)
   getAuditRiskEvaluations(auditId: string): Promise<AuditRiskEvaluation[]>;
   createAuditRiskEvaluation(evaluation: InsertAuditRiskEvaluation): Promise<AuditRiskEvaluation>;
@@ -759,13 +759,13 @@ export interface IStorage {
   getAuditControlEvaluations(auditId: string): Promise<AuditControlEvaluation[]>;
   createAuditControlEvaluation(evaluation: InsertAuditControlEvaluation): Promise<AuditControlEvaluation>;
   updateAuditControlEvaluation(id: string, data: Partial<InsertAuditControlEvaluation>): Promise<AuditControlEvaluation | undefined>;
-  
+
   // Audit Criteria (Criterios de Auditoría)
   getAuditCriteria(auditId: string): Promise<AuditCriterion[]>;
   createAuditCriterion(criterion: InsertAuditCriterion): Promise<AuditCriterion>;
   updateAuditCriterion(id: string, criterion: Partial<InsertAuditCriterion>): Promise<AuditCriterion | undefined>;
   deleteAuditCriterion(id: string): Promise<boolean>;
-  
+
   // Audit Findings
   getAuditFindings(): Promise<AuditFinding[]>;
   getAuditFinding(id: string): Promise<AuditFinding | undefined>;
@@ -775,16 +775,16 @@ export interface IStorage {
   createAuditFinding(finding: InsertAuditFinding): Promise<AuditFinding>;
   updateAuditFinding(id: string, finding: Partial<InsertAuditFinding>): Promise<AuditFinding | undefined>;
   deleteAuditFinding(id: string): Promise<boolean>;
-  
+
   // Audit Controls
   getAuditControls(auditId: string): Promise<(AuditControl & { control: Control; risk?: Risk })[]>;
   createAuditControl(auditControl: InsertAuditControl): Promise<AuditControl>;
   updateAuditControl(id: string, auditControl: Partial<InsertAuditControl>): Promise<AuditControl | undefined>;
   deleteAuditControl(id: string): Promise<boolean>;
-  
+
   // Regulation Controls (helper method)
   getRegulationControls(regulationId: string): Promise<{ control: Control; risk: Risk; riskRegulation: RiskRegulation }[]>;
-  
+
   // Audit Tests (Pruebas de Auditoría)
   createAuditTest(test: InsertAuditTest): Promise<AuditTest>;
   getAuditTests(auditId: string): Promise<AuditTest[]>;
@@ -807,34 +807,34 @@ export interface IStorage {
   assignSupervisorToTest(testId: string, supervisorId: string, assignedBy: string): Promise<AuditTest | undefined>;
   bulkAssignAuditors(auditId: string, assignments: { testId: string; executorId: string; supervisorId?: string }[], assignedBy: string): Promise<AuditTest[]>;
   reassignAuditor(testId: string, reassignedBy: string, newExecutorId?: string, newSupervisorId?: string, reason?: string): Promise<AuditTest | undefined>;
-  
+
   // Workflow Status Management
   updateTestStatus(testId: string, newStatus: string, updatedBy: string, comments?: string): Promise<AuditTest | undefined>;
   submitTestForReview(testId: string, submittedBy: string, workPerformed: string, conclusions: string): Promise<AuditTest | undefined>;
   reviewTest(testId: string, reviewedBy: string, reviewStatus: 'approved' | 'rejected' | 'needs_revision', reviewComments: string): Promise<AuditTest | undefined>;
-  
+
   // Team Management and Queries
   getAvailableAuditors(): Promise<User[]>;
   getAuditorsWithCompetencies(riskType?: string, processType?: string): Promise<User[]>;
   getAssignedTestsForUser(userId: string, status?: string): Promise<AuditTest[]>;
   getPendingReviewsForSupervisor(supervisorId: string): Promise<AuditTest[]>;
   getAuditTeamMembers(auditId: string): Promise<{ auditor: User; role: string; testsCount: number; completedTests: number }[]>;
-  
+
   // Assignment Validation
   validateAuditorAssignment(testId: string, executorId: string, supervisorId?: string): Promise<{ isValid: boolean; errors: string[] }>;
   validateStatusTransition(testId: string, fromStatus: string, toStatus: string, userId: string): Promise<{ isValid: boolean; error?: string }>;
-  
+
   // Notifications and Tracking
   createAssignmentNotification(testId: string, userId: string, type: string, title: string, message: string, actionUrl?: string): Promise<AuditNotification>;
   logAssignmentAction(testId: string, userId: string, action: string, details: any): Promise<AuditTestWorkLog>;
-  
+
   // Audit Attachments (Adjuntos de Auditoría)
   createAuditAttachment(attachment: InsertAuditAttachment): Promise<AuditAttachment>;
   getAuditAttachments(entityId: string, entityType: 'audit' | 'test' | 'finding' | 'program' | 'workingPaper'): Promise<AuditAttachment[]>;
   getAuditAttachment(id: string): Promise<AuditAttachment | undefined>;
   getAuditAttachmentWithDetails(id: string): Promise<AuditAttachmentWithDetails | undefined>;
   deleteAuditAttachment(id: string): Promise<boolean>;
-  
+
   // Audit Review Comments (Comentarios de Revisión)
   createAuditReviewComment(comment: InsertAuditReviewComment): Promise<AuditReviewComment>;
   getAuditReviewComments(entityId: string, entityType: 'audit' | 'test' | 'finding' | 'workingPaper'): Promise<AuditReviewComment[]>;
@@ -842,7 +842,7 @@ export interface IStorage {
   updateAuditReviewComment(id: string, comment: Partial<InsertAuditReviewComment>): Promise<AuditReviewComment | undefined>;
   deleteAuditReviewComment(id: string): Promise<boolean>;
   resolveAuditReviewComment(id: string, resolvedBy: string): Promise<AuditReviewComment | undefined>;
-  
+
   // Audit Milestones (Hitos del Proyecto)
   createAuditMilestone(milestone: InsertAuditMilestone): Promise<AuditMilestone>;
   getAuditMilestones(auditId: string): Promise<AuditMilestone[]>;
@@ -850,7 +850,7 @@ export interface IStorage {
   updateAuditMilestone(id: string, milestone: Partial<InsertAuditMilestone>): Promise<AuditMilestone | undefined>;
   deleteAuditMilestone(id: string): Promise<boolean>;
   completeAuditMilestone(id: string, completedBy: string): Promise<AuditMilestone | undefined>;
-  
+
   // Audit Risks (Riesgos Ad-hoc de Auditoría)
   createAuditRisk(auditRisk: InsertAuditRisk): Promise<AuditRisk>;
   getAuditRisks(auditId: string): Promise<AuditRisk[]>;
@@ -860,7 +860,7 @@ export interface IStorage {
   getAuditRiskByCode(auditId: string, code: string): Promise<AuditRisk | undefined>;
   recalculateAllAuditRisksByFactors(): Promise<number>;
   getWorkProgramData(auditId: string): Promise<WorkProgramItem[]>;
-  
+
   // Audit Notifications (Notificaciones)
   createAuditNotification(notification: InsertAuditNotification): Promise<AuditNotification>;
   getAuditNotifications(userId: string): Promise<AuditNotification[]>;
@@ -868,13 +868,13 @@ export interface IStorage {
   getAuditNotification(id: string): Promise<AuditNotification | undefined>;
   markAuditNotificationAsRead(id: string): Promise<AuditNotification | undefined>;
   deleteAuditNotification(id: string): Promise<boolean>;
-  
+
   // Audit Scope (Alcance de Auditoría) - Links audits with selected risks
   createAuditScope(scope: InsertAuditScope): Promise<AuditScope>;
   updateAuditScope(id: string, scope: Partial<InsertAuditScope>): Promise<AuditScope | undefined>;
   deleteAuditScope(id: string): Promise<boolean>;
   bulkUpdateAuditScopeSelection(auditId: string, selections: { riskId: string; isSelected: boolean }[]): Promise<AuditScope[]>;
-  
+
   // Audit Test Work Logs (Registro de Trabajo)
   createAuditTestWorkLog(workLog: InsertAuditTestWorkLog): Promise<AuditTestWorkLog>;
   getAuditTestWorkLogs(auditTestId: string): Promise<AuditTestWorkLog[]>;
@@ -884,7 +884,7 @@ export interface IStorage {
   getWorkLogsByDateRange(startDate: Date, endDate: Date, userId?: string): Promise<AuditTestWorkLog[]>;
   getTotalHoursWorked(auditTestId: string): Promise<number>;
   reviewWorkLog(id: string, reviewedBy: string, reviewComments?: string): Promise<AuditTestWorkLog | undefined>;
-  
+
   // === AUDIT TEST DEVELOPMENT METHODS ===
   // Development and Progress Tracking
   getAuditTestForDevelopment(testId: string, userId: string): Promise<AuditTestWithDetails | undefined>;
@@ -892,7 +892,7 @@ export interface IStorage {
   validateProgressUpdate(testId: string, userId: string, newProgress: number): Promise<{ isValid: boolean; message?: string }>;
   updateTestProgress(testId: string, progress: number, userId: string, notes?: string): Promise<AuditTest | undefined>;
   validateWorkLogEntry(testId: string, userId: string, workLogData: any): Promise<{ isValid: boolean; message?: string }>;
-  
+
   // User Dashboard and Summary Methods
   getMyAssignedTests(userId: string, filters?: { status?: string; priority?: string }): Promise<AuditTestWithDetails[]>;
   getUserWorkSummary(userId: string, startDate: Date, endDate: Date): Promise<{
@@ -916,7 +916,7 @@ export interface IStorage {
     testsByPriority: Record<string, number>;
     teamEfficiency: { userId: string; userName: string; testsAssigned: number; testsCompleted: number; totalHours: number }[];
   }>;
-  
+
   // Audit Code Sequences (Secuencias de Códigos)
   createAuditCodeSequence(sequence: InsertAuditCodeSequence): Promise<AuditCodeSequence>;
   getAuditCodeSequences(auditId: string): Promise<AuditCodeSequence[]>;
@@ -925,20 +925,20 @@ export interface IStorage {
   deleteAuditCodeSequence(id: string): Promise<boolean>;
   generateNextCode(auditId: string, scope: string): Promise<string>; // Generates next unique code for the scope
   initializeAuditCodeSequences(auditId: string): Promise<AuditCodeSequence[]>; // Sets up default sequences for an audit
-  
+
   // Auto Test Generation Methods
   getRisksWithControlsByProcess(processId: string): Promise<(Risk & { controls: (RiskControl & { control: Control })[] })[]>;
   getRisksWithControlsBySubproceso(subprocesoId: string): Promise<(Risk & { controls: (RiskControl & { control: Control })[] })[]>;
   generateAuditTestsFromScope(auditId: string, scopeSelections: { riskId: string; controlId?: string; isSelected: boolean }[], createdBy: string): Promise<AuditTest[]>;
   validateAuditForTestGeneration(auditId: string): Promise<{ isValid: boolean; message?: string }>;
   initializeAuditScopeFromSelection(auditId: string, entityType: 'process' | 'subproceso' | 'regulation', entityIds: string[], createdBy: string): Promise<AuditScope[]>;
-  
+
   // Risk-based Analysis for Prioritization
   calculateProcessRiskScore(processId?: string, subprocesoId?: string): Promise<number>;
   getRiskMetricsForProcess(processId?: string, subprocesoId?: string): Promise<{ riskCount: number; avgProbability: number; avgImpact: number; maxRisk: number }>;
 
   // ============== COMPLIANCE MODULE ==============
-  
+
   // Regulations
   getRegulations(): Promise<Regulation[]>;
   getRegulation(id: string): Promise<Regulation | undefined>;
@@ -946,12 +946,12 @@ export interface IStorage {
   createRegulation(regulation: InsertRegulation): Promise<Regulation>;
   updateRegulation(id: string, regulation: Partial<InsertRegulation>): Promise<Regulation | undefined>;
   deleteRegulation(id: string): Promise<boolean>;
-  
+
   // Regulation Applicability
   getRegulationApplicability(regulationId: string): Promise<RegulationApplicability[]>;
   setRegulationApplicability(regulationId: string, entities: any[]): Promise<void>;
   deleteRegulationApplicability(regulationId: string): Promise<void>;
-  
+
   // Risk-Regulation Associations
   getRiskRegulations(): Promise<RiskRegulation[]>;
   getRiskRegulation(id: string): Promise<RiskRegulation | undefined>;
@@ -960,7 +960,7 @@ export interface IStorage {
   createRiskRegulation(riskRegulation: InsertRiskRegulation): Promise<RiskRegulation>;
   updateRiskRegulation(id: string, riskRegulation: Partial<InsertRiskRegulation>): Promise<RiskRegulation | undefined>;
   deleteRiskRegulation(id: string): Promise<boolean>;
-  
+
   // Compliance Tests
   getComplianceTests(): Promise<ComplianceTest[]>;
   getComplianceTest(id: string): Promise<ComplianceTest | undefined>;
@@ -969,14 +969,14 @@ export interface IStorage {
   createComplianceTest(complianceTest: InsertComplianceTest): Promise<ComplianceTest>;
   updateComplianceTest(id: string, complianceTest: Partial<InsertComplianceTest>): Promise<ComplianceTest | undefined>;
   deleteComplianceTest(id: string): Promise<boolean>;
-  
+
   // Compliance Test Controls
   getComplianceTestControls(complianceTestId: string): Promise<ComplianceTestControlWithDetails[]>;
   getComplianceTestControl(id: string): Promise<ComplianceTestControl | undefined>;
   createComplianceTestControl(testControl: InsertComplianceTestControl): Promise<ComplianceTestControl>;
   updateComplianceTestControl(id: string, testControl: Partial<InsertComplianceTestControl>): Promise<ComplianceTestControl | undefined>;
   deleteComplianceTestControl(id: string): Promise<boolean>;
-  
+
   // Compliance Reporting
   getComplianceStatusByRegulation(regulationId: string): Promise<{
     regulation: Regulation;
@@ -996,7 +996,7 @@ export interface IStorage {
   }>;
 
   // Regulation Risk Levels
-  getRegulationRiskLevels(): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>>;
+  getRegulationRiskLevels(): Promise<Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>>;
 
   // Compliance Documents (Gestión Documental)
   getComplianceDocuments(): Promise<ComplianceDocument[]>;
@@ -1117,7 +1117,7 @@ export interface IStorage {
     auditId?: string;
     metadata?: any;
   }>>;
-  
+
   getWorkloadDistribution(supervisorId?: string): Promise<Array<{
     executorId: string;
     executorName: string;
@@ -1139,7 +1139,7 @@ export interface IStorage {
 
   // ============== AUDIT TEST ATTACHMENTS ==============
   // Sistema de adjuntos con codificación jerárquica automática (AT-###-DOC-###)
-  
+
   // Core CRUD Operations
   createAuditTestAttachment(attachment: InsertAuditTestAttachment): Promise<AuditTestAttachment>;
   getAuditTestAttachments(auditTestId: string, filters?: { category?: string; tags?: string[]; isActive?: boolean }): Promise<AuditTestAttachment[]>;
@@ -1148,20 +1148,20 @@ export interface IStorage {
   getAuditTestAttachmentWithDetails(id: string): Promise<AuditTestAttachmentWithDetails | undefined>;
   updateAuditTestAttachmentMetadata(id: string, metadata: Partial<Pick<InsertAuditTestAttachment, 'description' | 'category' | 'tags' | 'isConfidential'>>): Promise<AuditTestAttachment | undefined>;
   softDeleteAuditTestAttachment(id: string, deletedBy: string): Promise<boolean>;
-  
+
   // Hierarchical Code Generation (AT-###-DOC-###)
   generateNextAttachmentCode(auditTestId: string): Promise<string>; // Atomic increment with transaction
   getOrCreateAttachmentCodeSequence(auditTestId: string): Promise<AuditAttachmentCodeSequence>;
   updateAttachmentCodeSequence(auditTestId: string, lastDocumentNumber: number): Promise<AuditAttachmentCodeSequence | undefined>;
-  
+
   // Security and Access Control
   validateAttachmentAccess(attachmentId: string, userId: string, permission: 'read' | 'write' | 'delete'): Promise<{ isValid: boolean; message?: string }>;
   getAttachmentAccessUsers(attachmentId: string): Promise<string[]>; // Returns user IDs with access
-  
+
   // Storage Integration
   getAttachmentDownloadUrl(attachmentId: string, userId: string): Promise<{ url: string; filename: string; mimeType: string } | undefined>;
   validateFileUpload(file: { originalName: string; mimeType: string; size: number }): Promise<{ isValid: boolean; message?: string }>;
-  
+
   // Statistics and Summary
   getAttachmentsSummary(auditTestId: string): Promise<{
     totalFiles: number;
@@ -1170,27 +1170,27 @@ export interface IStorage {
     filesByType: Record<string, number>;
     confidentialFiles: number;
   }>;
-  
+
   // Audit Logging
   logAttachmentAccess(attachmentId: string, userId: string, action: 'upload' | 'download' | 'update' | 'delete', details?: any): Promise<void>;
-  
+
   // ===== WORKFLOW INTEGRATION METHODS =====
-  
+
   // Work Log Attachments Integration
   createWorkLogWithAttachments(workLogData: InsertAuditTestWorkLog, attachmentIds?: string[]): Promise<AuditTestWorkLog>;
   attachDocumentsToWorkLog(workLogId: string, attachmentIds: string[]): Promise<boolean>;
   getWorkLogAttachments(workLogId: string): Promise<AuditTestAttachmentWithDetails[]>;
-  
+
   // Progress Update Integration  
   updateProgressWithAttachments(auditTestId: string, progress: number, userId: string, notes?: string, attachmentIds?: string[]): Promise<AuditTest | undefined>;
   attachDocumentsToProgress(auditTestId: string, progressPercentage: number, attachmentIds: string[]): Promise<boolean>;
   getProgressAttachments(auditTestId: string, progressPercentage?: number): Promise<AuditTestAttachmentWithDetails[]>;
-  
+
   // Review Process Integration
   submitReviewWithAttachments(testId: string, reviewedBy: string, reviewStatus: 'approved' | 'rejected' | 'needs_revision', reviewComments: string, attachmentIds?: string[]): Promise<AuditTest | undefined>;
   attachDocumentsToReview(reviewCommentId: string, attachmentIds: string[]): Promise<boolean>;
   getReviewAttachments(reviewCommentId: string): Promise<AuditTestAttachmentWithDetails[]>;
-  
+
   // Workflow-Specific Attachment Queries
   getAuditTestAttachmentsByWorkflowStage(auditTestId: string, workflowStage: 'general' | 'work_log' | 'progress_update' | 'review' | 'milestone'): Promise<AuditTestAttachmentWithDetails[]>;
   getAuditTestAttachmentsByProgressRange(auditTestId: string, minProgress: number, maxProgress: number): Promise<AuditTestAttachmentWithDetails[]>;
@@ -1202,7 +1202,7 @@ export interface IStorage {
     milestones: number;
     totalByWorkflow: Record<string, number>;
   }>;
-  
+
   // Enhanced Attachment Creation for Workflow Integration
   createAuditTestAttachmentWithWorkflow(attachmentData: InsertAuditTestAttachment & {
     workLogId?: string;
@@ -1216,55 +1216,55 @@ export interface IStorage {
   }): Promise<AuditTestAttachment>;
 
   // ============== ADVANCED ANALYTICS AND REPORTING ==============
-  
+
   // Auditor Performance Analytics
   getAuditorPerformanceMetrics(): Promise<AuditorPerformanceMetrics[]>;
   getAuditorPerformanceMetric(id: string): Promise<AuditorPerformanceMetrics | undefined>;
   calculateAuditorPerformanceMetrics(auditorId: string, periodStart: Date, periodEnd: Date): Promise<AuditorPerformanceMetrics>;
   getAuditorPerformanceTrends(auditorId: string, months: number): Promise<AuditorPerformanceMetrics[]>;
   getAuditorPerformanceComparison(auditorIds: string[], periodStart: Date, periodEnd: Date): Promise<Array<AuditorPerformanceMetrics & { rank: number }>>;
-  
+
   // Risk Trending Analytics
   getRiskTrendingData(): Promise<RiskTrendingData[]>;
   getRiskTrendingMetric(id: string): Promise<RiskTrendingData | undefined>;
   calculateRiskTrendingData(riskId: string, periodStart: Date, periodEnd: Date): Promise<RiskTrendingData>;
   getRiskTrends(riskIds: string[], months: number): Promise<RiskTrendingData[]>;
   getRiskHeatMapData(organizationLevel: 'process' | 'department' | 'organization'): Promise<Array<{ x: string; y: string; value: number; color?: string }>>;
-  
+
   // Team Performance Analytics
   getTeamPerformanceMetrics(): Promise<TeamPerformanceMetrics[]>;
   getTeamPerformanceMetric(id: string): Promise<TeamPerformanceMetrics | undefined>;
   calculateTeamPerformanceMetrics(departmentName: string, periodStart: Date, periodEnd: Date): Promise<TeamPerformanceMetrics>;
   getTeamPerformanceComparison(departmentNames: string[], periodStart: Date, periodEnd: Date): Promise<TeamPerformanceMetrics[]>;
-  
+
   // Workflow Efficiency Analytics
   getWorkflowEfficiencyMetrics(): Promise<WorkflowEfficiencyMetrics[]>;
   getWorkflowEfficiencyMetric(id: string): Promise<WorkflowEfficiencyMetrics | undefined>;
   calculateWorkflowEfficiencyMetrics(periodStart: Date, periodEnd: Date): Promise<WorkflowEfficiencyMetrics>;
   getWorkflowEfficiencyTrends(months: number): Promise<WorkflowEfficiencyMetrics[]>;
-  
+
   // Comprehensive Analytics Queries
   getAuditorPerformanceSummary(filters: AuditorPerformanceFilters): Promise<AuditorPerformanceSummary[]>;
   getRiskTrendingSummary(filters: RiskTrendingFilters): Promise<RiskTrendingSummary[]>;
   getTeamPerformanceSummary(filters: TeamPerformanceFilters): Promise<TeamPerformanceSummary[]>;
   getWorkflowEfficiencySummary(filters: WorkflowEfficiencyFilters): Promise<WorkflowEfficiencySummary>;
-  
+
   // Chart Data Generation
   generateTimeSeriesData(type: 'auditor_performance' | 'risk_trending' | 'workflow_efficiency', filters: any): Promise<TimeSeriesData[]>;
   generateComparisonData(type: 'auditor' | 'team' | 'risk', filters: any): Promise<ComparisonData[]>;
   generateHeatMapData(type: 'risk_coverage' | 'team_performance' | 'process_efficiency', filters: any): Promise<HeatMapData[]>;
-  
+
   // Report Generation and Export
   generateReportData(reportType: ReportType, parameters: ReportParameters): Promise<any>;
   createReportGenerationLog(reportLog: InsertReportGenerationLog): Promise<ReportGenerationLog>;
   updateReportGenerationLog(id: string, updates: Partial<InsertReportGenerationLog>): Promise<ReportGenerationLog | undefined>;
   getReportGenerationLogs(userId?: string, status?: string): Promise<ReportGenerationLog[]>;
   getReportGenerationLog(id: string): Promise<ReportGenerationLog | undefined>;
-  
+
   // Analytics Cache Management
   refreshAnalyticsCache(type?: 'auditor' | 'risk' | 'team' | 'workflow'): Promise<void>;
   getLastAnalyticsUpdate(type: 'auditor' | 'risk' | 'team' | 'workflow'): Promise<Date | undefined>;
-  
+
   // Data Aggregation Services
   aggregateAuditorMetrics(periodStart: Date, periodEnd: Date): Promise<void>;
   aggregateRiskTrends(periodStart: Date, periodEnd: Date): Promise<void>;
@@ -1272,7 +1272,7 @@ export interface IStorage {
   aggregateWorkflowMetrics(periodStart: Date, periodEnd: Date): Promise<void>;
 
   // ============= AUTOMATIC AUDIT TEST GENERATION METHODS =============
-  
+
   // Template Categories
   getAuditTestTemplateCategories(): Promise<AuditTestTemplateCategory[]>;
   getAuditTestTemplateCategory(id: string): Promise<AuditTestTemplateCategory | undefined>;
@@ -1317,7 +1317,7 @@ export interface IStorage {
   getRiskControls(riskId: string): Promise<RiskControl[]>;
 
   // ============= RECOMMENDATION SYSTEM (STUB) =============
-  
+
   // Basic recommendations support
   getRecentRecommendations(limit?: number): Promise<any[]>;
   getActualOutcomes(): Promise<any[]>;
@@ -1343,7 +1343,7 @@ export interface IStorage {
   getAlternativeTemplates(templateId: string, riskCategory: string): Promise<AuditTestTemplate[]>;
 
   // ============= AI UNIFIED DOCUMENT AGGREGATION =============
-  
+
   /**
    * Get unified AI documents from all sources for risk suggestion system
    * Aggregates documents from compliance, regulations, risks, controls, audit findings, and attachments
@@ -1355,7 +1355,7 @@ export interface IStorage {
   }, includeAllSources?: boolean): Promise<AIDocument[]>;
 
   // ============= PROCESS OWNERS MANAGEMENT =============
-  
+
   // Process Owners
   getProcessOwners(): Promise<ProcessOwner[]>;
   getProcessOwner(id: string): Promise<ProcessOwner | undefined>;
@@ -1363,7 +1363,7 @@ export interface IStorage {
   createProcessOwner(owner: InsertProcessOwner): Promise<ProcessOwner>;
   updateProcessOwner(id: string, owner: Partial<InsertProcessOwner>): Promise<ProcessOwner | undefined>;
   deleteProcessOwner(id: string): Promise<boolean>;
-  
+
   // Validation Tokens
   getValidationTokens(): Promise<ValidationToken[]>;
   getValidationToken(token: string): Promise<ValidationToken | undefined>;
@@ -1373,13 +1373,13 @@ export interface IStorage {
   useValidationToken(token: string, result: string, comments?: string): Promise<ValidationToken | undefined>;
   deleteValidationToken(id: string): Promise<boolean>;
   cleanupExpiredTokens(): Promise<number>; // Returns number of deleted tokens
-  
+
   // Batch Validation Tokens
   getBatchValidationToken(token: string): Promise<BatchValidationToken | undefined>;
   createBatchValidationToken(token: InsertBatchValidationToken): Promise<BatchValidationToken>;
   updateBatchValidationToken(id: string, token: Partial<InsertBatchValidationToken>): Promise<BatchValidationToken | undefined>;
   invalidateBatchValidationToken(token: string): Promise<void>;
-  
+
   // Missing Recommendation Methods
   getRecommendationsByAuditTest(auditTestId: string): Promise<any[]>;
   getRecommendationFeedbackByRecommendation(recommendationId: string): Promise<any[]>;
@@ -1388,7 +1388,7 @@ export interface IStorage {
   getRecommendationEffectivenessByRecommendation(recommendationId: string): Promise<any>;
 
   // ============= COMPLIANCE SECTION - Crime Prevention Officers =============
-  
+
   // Crime Categories
   getCrimeCategories(): Promise<CrimeCategory[]>;
   getCrimeCategory(id: string): Promise<CrimeCategory | undefined>;
@@ -1409,7 +1409,7 @@ export interface IStorage {
   createComplianceOfficer(officer: InsertComplianceOfficer): Promise<ComplianceOfficer>;
   updateComplianceOfficer(id: string, officer: Partial<InsertComplianceOfficer>): Promise<ComplianceOfficer | undefined>;
   deleteComplianceOfficer(id: string): Promise<boolean>;
-  
+
   // Compliance Officer Fiscal Entities Junction Table
   getComplianceOfficerFiscalEntities(officerId: string): Promise<ComplianceOfficerFiscalEntity[]>;
   addComplianceOfficerFiscalEntity(relation: InsertComplianceOfficerFiscalEntity): Promise<ComplianceOfficerFiscalEntity>;
@@ -1424,7 +1424,7 @@ export interface IStorage {
   deleteComplianceOfficerAttachment(id: string): Promise<boolean>;
 
   // ============= USER SAVED VIEWS & PREFERENCES =============
-  
+
   // User Saved Views
   getUserSavedViews(userId: string, entityType?: string): Promise<UserSavedView[]>;
   getUserSavedView(id: string): Promise<UserSavedView | null>;
@@ -1432,13 +1432,13 @@ export interface IStorage {
   updateUserSavedView(id: string, view: UpdateUserSavedView): Promise<UserSavedView>;
   deleteUserSavedView(id: string): Promise<void>;
   setDefaultView(id: string, userId: string, entityType: string): Promise<void>;
-  
+
   // User Preferences
   getUserPreferences(userId: string): Promise<UserPreferences | null>;
   createOrUpdateUserPreferences(userId: string, prefs: Partial<InsertUserPreferences>): Promise<UserPreferences>;
-  
+
   // ============= PERMISSIONS & ROLES =============
-  
+
   // User Permissions
   getUserPermissions(userId: string): Promise<string[]>;
   getTenantPermissions(userId: string): Promise<string[]>;
@@ -1470,7 +1470,7 @@ export interface IStorage {
  */
 export class MemStorage implements IStorage {
   public storageKind: string = 'MemStorage';
-  
+
   private macroprocesos: Map<string, Macroproceso> = new Map();
   private processes: Map<string, Process> = new Map();
   private subprocesos: Map<string, Subproceso> = new Map();
@@ -1496,7 +1496,7 @@ export class MemStorage implements IStorage {
   private processOwners: Map<string, ProcessOwner> = new Map();
   private probabilityCriteria: Map<string, ProbabilityCriteria> = new Map();
   private impactCriteria: Map<string, ImpactCriteria> = new Map();
-  
+
   /**
    * Protected wrapper method for entity creation.
    * 
@@ -1515,12 +1515,12 @@ export class MemStorage implements IStorage {
   ): Promise<R> {
     return createFn(data);
   }
-  
+
   // ============= MAPAS PARA VALIDACIÓN CENTRADA EN PROCESOS =============
   private processValidations: Map<string, ProcessValidation> = new Map(); // Key: processId
   private processRiskValidations: Map<string, ProcessRiskValidation> = new Map(); // Key: processId-riskId
   private processControlValidations: Map<string, ProcessControlValidation> = new Map(); // Key: processId-controlId-riskId?
-  
+
   // Approval System Maps
   private approvalPolicies: Map<string, ApprovalPolicy> = new Map();
   private approvalWorkflows: Map<string, ApprovalWorkflow> = new Map();
@@ -1533,19 +1533,19 @@ export class MemStorage implements IStorage {
   private approvalAnalytics: Map<string, ApprovalAnalytics> = new Map();
   private approvalAuditTrail: Map<string, ApprovalAuditTrail> = new Map();
   private approvalPerformanceMetrics: Map<string, ApprovalPerformanceMetrics> = new Map();
-  
+
   // Compliance Maps
   private crimeCategories: Map<string, CrimeCategory> = new Map();
   private complianceOfficers: Map<string, ComplianceOfficer> = new Map();
   private complianceOfficerAttachments: Map<string, ComplianceOfficerAttachment> = new Map();
   private complianceOfficerFiscalEntities: Map<string, ComplianceOfficerFiscalEntity> = new Map();
-  
+
   // Fiscal Entities Map (for compliance officers and other entities)
   private fiscalEntities: Map<string, FiscalEntity> = new Map();
-  
+
   // Gerencias Maps
   private gerencias: Map<string, Gerencia> = new Map();
-  
+
   protected generateUniqueCode(prefix: string, existingItems: Map<string, any>): string {
     let counter = 1;
     let code: string;
@@ -1613,7 +1613,7 @@ export class MemStorage implements IStorage {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
     const process2: Process = {
       id: "proc-2",
       code: "PROC-002",
@@ -1656,7 +1656,7 @@ export class MemStorage implements IStorage {
     };
 
     const subproceso2: Subproceso = {
-      id: "sub-2", 
+      id: "sub-2",
       code: "SUB-002",
       name: "Monitoreo de amenazas",
       description: "Vigilancia continua de amenazas de seguridad informática",
@@ -1785,7 +1785,7 @@ export class MemStorage implements IStorage {
     };
 
     const risk2: Risk = {
-      id: "risk-2", 
+      id: "risk-2",
       code: "R-0002",
       macroprocesoId: null,
       processId: null,
@@ -1815,7 +1815,7 @@ export class MemStorage implements IStorage {
 
     const risk3: Risk = {
       id: "risk-3",
-      code: "R-0003", 
+      code: "R-0003",
       macroprocesoId: null,
       processId: "proc-3", // Asociado directamente a proceso (sin subprocesos definidos)
       subprocesoId: null,
@@ -1874,33 +1874,33 @@ export class MemStorage implements IStorage {
 
     // Initialize with default roles
     const defaultRoles = [
-      { 
-        name: "Administrador", 
+      {
+        name: "Administrador",
         description: "Acceso completo al sistema",
         permissions: ["view_all", "create_all", "edit_all", "delete_all", "manage_users", "manage_roles", "validate_risks"]
       },
-      { 
-        name: "Analista de Riesgo", 
+      {
+        name: "Analista de Riesgo",
         description: "Gestión completa de riesgos y controles",
         permissions: ["view_risks", "create_risks", "edit_risks", "view_controls", "create_controls", "edit_controls", "view_processes", "view_action_plans", "create_action_plans", "edit_action_plans"]
       },
-      { 
-        name: "Dueños de Proceso", 
+      {
+        name: "Dueños de Proceso",
         description: "Dueños de proceso y controles con validación completa de riesgos y controles",
         permissions: ["validate_risks", "view_controls", "edit_controls", "create_controls", "validate_controls", "view_processes", "view_risks"]
       },
-      { 
-        name: "Supervisor de Auditoría", 
+      {
+        name: "Supervisor de Auditoría",
         description: "Supervisión y gestión completa de auditorías",
         permissions: ["view_audits", "create_audits", "edit_audits", "delete_audits", "conduct_audits", "supervise_audits", "view_risks", "view_controls", "view_processes", "view_action_plans", "view_reports", "export_data"]
       },
-      { 
-        name: "Auditor", 
+      {
+        name: "Auditor",
         description: "Ejecución de auditorías y acceso de lectura",
         permissions: ["view_audits", "conduct_audits", "view_risks", "view_controls", "view_processes", "view_action_plans", "view_reports"]
       },
-      { 
-        name: "Consulta", 
+      {
+        name: "Consulta",
         description: "Acceso de solo lectura limitado",
         permissions: ["view_risks", "view_controls", "view_processes"]
       }
@@ -1932,7 +1932,7 @@ export class MemStorage implements IStorage {
         updatedAt: new Date()
       },
       {
-        id: "config-2", 
+        id: "config-2",
         configKey: 'risk_medium_max',
         configValue: '12',
         description: 'Valor máximo para nivel de riesgo Medio',
@@ -1944,7 +1944,7 @@ export class MemStorage implements IStorage {
       },
       {
         id: "config-3",
-        configKey: 'risk_high_max', 
+        configKey: 'risk_high_max',
         configValue: '19',
         description: 'Valor máximo para nivel de riesgo Alto',
         dataType: 'number',
@@ -2006,7 +2006,7 @@ export class MemStorage implements IStorage {
         updatedAt: new Date()
       },
       {
-        id: "policy-2", 
+        id: "policy-2",
         policyName: "High-Risk Escalation",
         policyDescription: "Escalate high and critical risk items to supervisors",
         policyType: "risk_based",
@@ -2028,7 +2028,7 @@ export class MemStorage implements IStorage {
       },
       {
         id: "policy-3",
-        policyName: "Financial Threshold Escalation", 
+        policyName: "Financial Threshold Escalation",
         policyDescription: "Escalate items exceeding financial thresholds to management",
         policyType: "financial",
         conditions: {
@@ -2092,7 +2092,7 @@ export class MemStorage implements IStorage {
         updatedAt: new Date()
       },
       {
-        id: "rule-2", 
+        id: "rule-2",
         ruleName: "High Risk Escalation Rule",
         ruleDescription: "Escalate items with high risk scores or policy violations",
         conditions: {
@@ -2190,7 +2190,7 @@ export class MemStorage implements IStorage {
           },
           {
             stepOrder: 2,
-            approverRole: "manager", 
+            approverRole: "manager",
             required: false,
             condition: "high_risk",
             timeoutHours: 48,
@@ -2229,7 +2229,7 @@ export class MemStorage implements IStorage {
           {
             stepOrder: 1,
             approverRole: "risk_manager",
-            required: true, 
+            required: true,
             timeoutHours: 12,
             autoEscalate: true
           }
@@ -2349,7 +2349,7 @@ export class MemStorage implements IStorage {
   async updateProcess(id: string, update: Partial<InsertProcess>): Promise<Process | undefined> {
     const existing = this.processes.get(id);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, ...update };
     this.processes.set(id, updated);
     return updated;
@@ -2384,7 +2384,7 @@ export class MemStorage implements IStorage {
 
   async getRisksWithDetails(): Promise<RiskWithProcess[]> {
     const risks = Array.from(this.risks.values());
-    
+
     // Build map of risk-process links for validation status calculation
     const riskProcessLinksMap = new Map<string, Array<{ validationStatus: string | null }>>();
     Array.from(this.riskProcessLinks.values()).forEach(rpl => {
@@ -2399,11 +2399,11 @@ export class MemStorage implements IStorage {
     // Helper to calculate aggregated validation status (matches PgStorage implementation)
     const calculateAggregatedValidationStatus = (riskProcessLinks: Array<{ validationStatus: string | null }>): string => {
       if (riskProcessLinks.length === 0) return 'pending';
-      
+
       const allValidated = riskProcessLinks.every(rpl => rpl.validationStatus === 'validated');
       const anyRejected = riskProcessLinks.some(rpl => rpl.validationStatus === 'rejected');
       const anyObserved = riskProcessLinks.some(rpl => rpl.validationStatus === 'observed');
-      
+
       if (allValidated) return 'validated';
       if (anyRejected) return 'rejected';
       if (anyObserved) return 'observed';
@@ -2481,19 +2481,19 @@ export class MemStorage implements IStorage {
   }
 
   async getRisksByProcess(processId: string): Promise<Risk[]> {
-    return Array.from(this.risks.values()).filter(risk => 
+    return Array.from(this.risks.values()).filter(risk =>
       risk.processId === processId
     );
   }
 
   async getRisksBySubproceso(subprocesoId: string): Promise<Risk[]> {
-    return Array.from(this.risks.values()).filter(risk => 
+    return Array.from(this.risks.values()).filter(risk =>
       risk.subprocesoId === subprocesoId
     );
   }
 
   async getRisksByMacroproceso(macroprocesoId: string): Promise<Risk[]> {
-    return Array.from(this.risks.values()).filter(risk => 
+    return Array.from(this.risks.values()).filter(risk =>
       risk.macroprocesoId === macroprocesoId
     );
   }
@@ -2501,11 +2501,11 @@ export class MemStorage implements IStorage {
   async createRisk(insertRisk: InsertRisk): Promise<Risk> {
     const id = randomUUID();
     const code = this.generateUniqueCode("R", this.risks);
-    
+
     // Use provided probability/inherentRisk or calculate if not provided
     let finalProbability: number;
     let finalInherentRisk: number;
-    
+
     if ((insertRisk as any).probability !== undefined && (insertRisk as any).inherentRisk !== undefined) {
       // Use pre-calculated values from route logic
       finalProbability = (insertRisk as any).probability;
@@ -2521,12 +2521,12 @@ export class MemStorage implements IStorage {
         changeVolatility: insertRisk.changeVolatility ?? 3,
         vulnerabilities: insertRisk.vulnerabilities ?? 3,
       };
-      
+
       const configuredWeights = await this.getProbabilityWeights();
       finalProbability = calculateProbability(probabilityFactors, configuredWeights);
       finalInherentRisk = finalProbability * insertRisk.impact;
     }
-    
+
     const risk: Risk = {
       ...insertRisk,
       id,
@@ -2553,7 +2553,7 @@ export class MemStorage implements IStorage {
       validationComments: null,
       createdAt: new Date(),
     };
-    
+
     this.risks.set(id, risk);
 
     // Auto-create action plan for high residual risks
@@ -2576,11 +2576,11 @@ export class MemStorage implements IStorage {
   async updateRisk(id: string, update: Partial<InsertRisk>): Promise<Risk | undefined> {
     const existing = this.risks.get(id);
     if (!existing) return undefined;
-    
+
     // Use provided probability/inherentRisk or calculate if not provided
     let finalProbability: number;
     let finalInherentRisk: number;
-    
+
     if ((update as any).probability !== undefined && (update as any).inherentRisk !== undefined) {
       // Use pre-calculated values from route logic
       finalProbability = (update as any).probability;
@@ -2596,18 +2596,18 @@ export class MemStorage implements IStorage {
         changeVolatility: update.changeVolatility ?? existing.changeVolatility,
         vulnerabilities: update.vulnerabilities ?? existing.vulnerabilities,
       };
-      
+
       const configuredWeights = await this.getProbabilityWeights();
       finalProbability = calculateProbability(probabilityFactors, configuredWeights);
       const impact = update.impact ?? existing.impact;
       finalInherentRisk = finalProbability * impact;
     }
-    
-    const updated = { 
-      ...existing, 
-      ...update, 
+
+    const updated = {
+      ...existing,
+      ...update,
       probability: finalProbability,
-      inherentRisk: finalInherentRisk 
+      inherentRisk: finalInherentRisk
     };
     this.risks.set(id, updated);
     return updated;
@@ -2620,25 +2620,25 @@ export class MemStorage implements IStorage {
         this.riskControls.delete(key);
       }
     }
-    
+
     for (const [key, action] of Array.from(this.actions.entries())) {
       if (action.riskId === id && action.origin === 'risk') {
         this.actions.delete(key);
       }
     }
-    
+
     return this.risks.delete(id);
   }
 
   // Risk Validation Methods
   async getPendingValidationRisks(): Promise<Risk[]> {
-    return Array.from(this.risks.values()).filter(risk => 
+    return Array.from(this.risks.values()).filter(risk =>
       risk.validationStatus === "pending_validation"
     );
   }
 
   async getRisksByValidationStatus(status: string): Promise<Risk[]> {
-    return Array.from(this.risks.values()).filter(risk => 
+    return Array.from(this.risks.values()).filter(risk =>
       risk.validationStatus === status
     );
   }
@@ -2709,7 +2709,7 @@ export class MemStorage implements IStorage {
   async validateRisk(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<Risk | undefined> {
     const existing = this.risks.get(id);
     if (!existing) return undefined;
-    
+
     const updated = {
       ...existing,
       validationStatus,
@@ -2717,13 +2717,13 @@ export class MemStorage implements IStorage {
       validatedAt: new Date(),
       validationComments: validationComments || null
     };
-    
+
     this.risks.set(id, updated);
     return updated;
   }
 
   // ============= MÉTODOS DE VALIDACIÓN CENTRADA EN PROCESOS =============
-  
+
   // Process Validation - Dashboard y estado general
   async getProcessValidations(): Promise<ProcessValidation[]> {
     return Array.from(this.processValidations.values());
@@ -2736,7 +2736,7 @@ export class MemStorage implements IStorage {
   async createProcessValidation(validation: InsertProcessValidation): Promise<ProcessValidation> {
     const id = randomUUID();
     const now = new Date();
-    
+
     const processValidation: ProcessValidation = {
       id,
       ...validation,
@@ -2751,7 +2751,7 @@ export class MemStorage implements IStorage {
       createdAt: now,
       updatedAt: now,
     };
-    
+
     this.processValidations.set(validation.processId, processValidation);
     return processValidation;
   }
@@ -2759,14 +2759,14 @@ export class MemStorage implements IStorage {
   async updateProcessValidation(processId: string, validation: Partial<InsertProcessValidation>): Promise<ProcessValidation | undefined> {
     const existing = this.processValidations.get(processId);
     if (!existing) return undefined;
-    
+
     const updated: ProcessValidation = {
       ...existing,
       ...validation,
       lastUpdated: new Date(),
       updatedAt: new Date(),
     };
-    
+
     this.processValidations.set(processId, updated);
     return updated;
   }
@@ -2794,7 +2794,7 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const key = `${validation.processId}-${validation.riskId}`;
     const now = new Date();
-    
+
     const processRiskValidation: ProcessRiskValidation = {
       id,
       processId: validation.processId,
@@ -2809,7 +2809,7 @@ export class MemStorage implements IStorage {
       createdAt: now,
       updatedAt: now,
     };
-    
+
     this.processRiskValidations.set(key, processRiskValidation);
     return processRiskValidation;
   }
@@ -2818,13 +2818,13 @@ export class MemStorage implements IStorage {
     const key = `${processId}-${riskId}`;
     const existing = this.processRiskValidations.get(key);
     if (!existing) return undefined;
-    
+
     const updated: ProcessRiskValidation = {
       ...existing,
       ...validation,
       updatedAt: new Date(),
     };
-    
+
     this.processRiskValidations.set(key, updated);
     return updated;
   }
@@ -2851,11 +2851,11 @@ export class MemStorage implements IStorage {
 
   async createProcessControlValidation(validation: InsertProcessControlValidation): Promise<ProcessControlValidation> {
     const id = randomUUID();
-    const key = validation.riskId 
+    const key = validation.riskId
       ? `${validation.processId}-${validation.controlId}-${validation.riskId}`
       : `${validation.processId}-${validation.controlId}`;
     const now = new Date();
-    
+
     const processControlValidation: ProcessControlValidation = {
       id,
       ...validation,
@@ -2866,7 +2866,7 @@ export class MemStorage implements IStorage {
       createdAt: now,
       updatedAt: now,
     };
-    
+
     this.processControlValidations.set(key, processControlValidation);
     return processControlValidation;
   }
@@ -2875,13 +2875,13 @@ export class MemStorage implements IStorage {
     const key = riskId ? `${processId}-${controlId}-${riskId}` : `${processId}-${controlId}`;
     const existing = this.processControlValidations.get(key);
     if (!existing) return undefined;
-    
+
     const updated: ProcessControlValidation = {
       ...existing,
       ...validation,
       updatedAt: new Date(),
     };
-    
+
     this.processControlValidations.set(key, updated);
     return updated;
   }
@@ -2899,7 +2899,7 @@ export class MemStorage implements IStorage {
     // Obtener validaciones de riesgos para este proceso
     const riskValidations = Array.from(this.processRiskValidations.values())
       .filter(validation => validation.processId === processId);
-    
+
     // Obtener validaciones de controles para este proceso
     const controlValidations = Array.from(this.processControlValidations.values())
       .filter(validation => validation.processId === processId);
@@ -2908,15 +2908,15 @@ export class MemStorage implements IStorage {
     const totalRisks = riskValidations.length;
     const validatedRisks = riskValidations.filter(v => v.validationStatus === "validated").length;
     const rejectedRisks = riskValidations.filter(v => v.validationStatus === "rejected").length;
-    
+
     const totalControls = controlValidations.length;
     const validatedControls = controlValidations.filter(v => v.validationStatus === "validated").length;
     const rejectedControls = controlValidations.filter(v => v.validationStatus === "rejected").length;
-    
+
     const totalItems = totalRisks + totalControls;
     const completedItems = validatedRisks + rejectedRisks + validatedControls + rejectedControls;
     const completionPercentage = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
-    
+
     // Determinar estado general
     let validationStatus = "pending";
     if (completionPercentage === 100) {
@@ -2960,13 +2960,13 @@ export class MemStorage implements IStorage {
 
   // Control Validation Methods
   async getPendingValidationControls(): Promise<Control[]> {
-    return Array.from(this.controls.values()).filter(control => 
+    return Array.from(this.controls.values()).filter(control =>
       control.validationStatus === "pending_validation"
     );
   }
 
   async getControlsByValidationStatus(status: string): Promise<Control[]> {
-    return Array.from(this.controls.values()).filter(control => 
+    return Array.from(this.controls.values()).filter(control =>
       control.validationStatus === status
     );
   }
@@ -2974,7 +2974,7 @@ export class MemStorage implements IStorage {
   async validateControl(id: string, validatedBy: string, validationStatus: "validated" | "rejected" | "observed", validationComments?: string): Promise<Control | undefined> {
     const existing = this.controls.get(id);
     if (!existing) return undefined;
-    
+
     const updated = {
       ...existing,
       validationStatus,
@@ -2982,7 +2982,7 @@ export class MemStorage implements IStorage {
       validatedAt: new Date(),
       validationComments: validationComments || null
     };
-    
+
     this.controls.set(id, updated);
     return updated;
   }
@@ -2994,18 +2994,18 @@ export class MemStorage implements IStorage {
 
   async getControlsWithRiskCount(): Promise<(Control & { associatedRisksCount: number; associatedRisks?: { id: string; code: string }[] })[]> {
     const allControls = Array.from(this.controls.values()).filter(c => c.status !== 'deleted');
-    
+
     return allControls.map(control => {
       const associatedRiskControls = Array.from(this.riskControls.values())
         .filter(rc => rc.controlId === control.id);
-      
+
       const associatedRisks = associatedRiskControls
         .map(rc => {
           const risk = this.risks.get(rc.riskId);
           return risk && risk.status !== 'deleted' ? { id: risk.id, code: risk.code } : null;
         })
         .filter((r): r is { id: string; code: string } => r !== null);
-      
+
       return {
         ...control,
         associatedRisksCount: associatedRisks.length,
@@ -3038,7 +3038,7 @@ export class MemStorage implements IStorage {
   async updateControl(id: string, update: Partial<InsertControl>): Promise<Control | undefined> {
     const existing = this.controls.get(id);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, ...update };
     this.controls.set(id, updated);
     return updated;
@@ -3051,7 +3051,7 @@ export class MemStorage implements IStorage {
         this.riskControls.delete(key);
       }
     }
-    
+
     return this.controls.delete(id);
   }
 
@@ -3074,7 +3074,7 @@ export class MemStorage implements IStorage {
   async getRiskControls(riskId: string): Promise<(RiskControl & { control: Control })[]> {
     const riskControls = Array.from(this.riskControls.values())
       .filter(rc => rc.riskId === riskId);
-    
+
     return riskControls.map(riskControl => {
       const control = this.controls.get(riskControl.controlId);
       return {
@@ -3089,7 +3089,7 @@ export class MemStorage implements IStorage {
     const riskIdSet = new Set(riskIds);
     const riskControls = Array.from(this.riskControls.values())
       .filter(rc => riskIdSet.has(rc.riskId));
-    
+
     return riskControls.map(riskControl => {
       const control = this.controls.get(riskControl.controlId);
       return {
@@ -3102,7 +3102,7 @@ export class MemStorage implements IStorage {
   async getControlRisks(controlId: string): Promise<(RiskControl & { risk: Risk })[]> {
     const controlRisks = Array.from(this.riskControls.values())
       .filter(rc => rc.controlId === controlId);
-    
+
     return controlRisks.map(riskControl => {
       const risk = this.risks.get(riskControl.riskId);
       return {
@@ -3125,7 +3125,7 @@ export class MemStorage implements IStorage {
   async updateRiskControl(id: string, residualRisk: string): Promise<RiskControl | undefined> {
     const existing = this.riskControls.get(id);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, residualRisk };
     this.riskControls.set(id, updated);
     return updated;
@@ -3200,9 +3200,9 @@ export class MemStorage implements IStorage {
   async updateActionPlan(id: string, update: Partial<InsertActionPlan>): Promise<ActionPlan | undefined> {
     const existing = this.actions.get(id);
     if (!existing || existing.origin !== 'risk') return undefined;
-    
-    const updated = { 
-      ...existing, 
+
+    const updated = {
+      ...existing,
       ...update,
       title: update.name || existing.title,
     };
@@ -3216,9 +3216,9 @@ export class MemStorage implements IStorage {
   async updateActionPlanStatus(id: string, status: string, additionalData?: { evidenceSubmittedBy?: string, reviewedBy?: string, reviewComments?: string }): Promise<ActionPlan | undefined> {
     const existing = this.actions.get(id);
     if (!existing || existing.origin !== 'risk') return undefined;
-    
-    const updated = { 
-      ...existing, 
+
+    const updated = {
+      ...existing,
       status,
       ...(additionalData?.evidenceSubmittedBy && { evidenceSubmittedBy: additionalData.evidenceSubmittedBy, evidenceSubmittedAt: new Date() }),
       ...(additionalData?.reviewedBy && { reviewedBy: additionalData.reviewedBy, reviewedAt: new Date() }),
@@ -3289,12 +3289,12 @@ export class MemStorage implements IStorage {
     if (!action) {
       throw new Error("Acción no encontrada");
     }
-    
+
     // Validate that action is validated before marking as implemented
     if (action.validationStatus !== 'validated') {
       throw new Error("La acción debe estar validada antes de marcarla como implementada");
     }
-    
+
     const updated = {
       ...action,
       status: 'implemented' as const,
@@ -3351,11 +3351,11 @@ export class MemStorage implements IStorage {
     if (action.responsible) {
       const processOwner = this.processOwners.get(action.responsible);
       if (processOwner) {
-        (details as any).processOwner = { 
-          id: processOwner.id, 
-          name: processOwner.name, 
+        (details as any).processOwner = {
+          id: processOwner.id,
+          name: processOwner.name,
           email: processOwner.email,
-          position: processOwner.position 
+          position: processOwner.position
         };
       }
     }
@@ -3416,12 +3416,12 @@ export class MemStorage implements IStorage {
     const existing = this.actions.get(id);
     if (!existing) return undefined;
 
-    const updated: Action = { 
-      ...existing, 
+    const updated: Action = {
+      ...existing,
       ...update,
       updatedAt: new Date()
     };
-    
+
     this.actions.set(id, updated);
     return updated;
   }
@@ -3458,7 +3458,7 @@ export class MemStorage implements IStorage {
   async updateRiskCategory(id: string, update: Partial<InsertRiskCategory>): Promise<RiskCategory | undefined> {
     const existing = this.riskCategories.get(id);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, ...update };
     this.riskCategories.set(id, updated);
     return updated;
@@ -3468,7 +3468,7 @@ export class MemStorage implements IStorage {
     // Soft delete by setting isActive to false
     const existing = this.riskCategories.get(id);
     if (!existing) return false;
-    
+
     const updated = { ...existing, isActive: false };
     this.riskCategories.set(id, updated);
     return true;
@@ -3498,7 +3498,7 @@ export class MemStorage implements IStorage {
   async updateSystemConfig(configKey: string, configValue: string, updatedBy?: string): Promise<SystemConfig | undefined> {
     const existing = this.systemConfigs.get(configKey);
     if (!existing) return undefined;
-    
+
     const updated: SystemConfig = {
       ...existing,
       configValue,
@@ -3514,10 +3514,10 @@ export class MemStorage implements IStorage {
     return config ? parseInt(config.configValue) : 100; // Default to 100% if not configured
   }
 
-  async getRiskLevelRanges(): Promise<{lowMax: number, mediumMax: number, highMax: number}> {
+  async getRiskLevelRanges(): Promise<{ lowMax: number, mediumMax: number, highMax: number }> {
     const [lowConfig, mediumConfig, highConfig] = await Promise.all([
       this.getSystemConfig('risk_low_max'),
-      this.getSystemConfig('risk_medium_max'), 
+      this.getSystemConfig('risk_medium_max'),
       this.getSystemConfig('risk_high_max')
     ]);
 
@@ -3528,7 +3528,7 @@ export class MemStorage implements IStorage {
     };
   }
 
-  async getRiskDecimalsConfig(): Promise<{enabled: boolean, precision: number}> {
+  async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
     const [enabledConfig, precisionConfig] = await Promise.all([
       this.getSystemConfig('risk_decimals_enabled'),
       this.getSystemConfig('risk_decimals_precision')
@@ -3540,7 +3540,7 @@ export class MemStorage implements IStorage {
     };
   }
 
-  async getProbabilityWeights(): Promise<{frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number}> {
+  async getProbabilityWeights(): Promise<{ frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number }> {
     const [frequencyConfig, exposureScopeConfig, complexityConfig, changeVolatilityConfig, vulnerabilitiesConfig] = await Promise.all([
       this.getSystemConfig('prob_weight_frequency'),
       this.getSystemConfig('prob_weight_exposure_scope'),
@@ -3558,7 +3558,7 @@ export class MemStorage implements IStorage {
     };
   }
 
-  async getImpactWeights(): Promise<{infrastructure: number, reputation: number, economic: number, permits: number, knowhow: number, people: number, information: number}> {
+  async getImpactWeights(): Promise<{ infrastructure: number, reputation: number, economic: number, permits: number, knowhow: number, people: number, information: number }> {
     const [infrastructureConfig, reputationConfig, economicConfig, permitsConfig, knowhowConfig, peopleConfig, informationConfig] = await Promise.all([
       this.getSystemConfig('impact_weight_infrastructure'),
       this.getSystemConfig('impact_weight_reputation'),
@@ -3585,7 +3585,7 @@ export class MemStorage implements IStorage {
     return config ? config.configValue : 'average';
   }
 
-  async getRiskAggregationWeights(): Promise<{critical: number, high: number, medium: number, low: number}> {
+  async getRiskAggregationWeights(): Promise<{ critical: number, high: number, medium: number, low: number }> {
     const [criticalConfig, highConfig, mediumConfig, lowConfig] = await Promise.all([
       this.getSystemConfig('risk_weight_critical'),
       this.getSystemConfig('risk_weight_high'),
@@ -3601,7 +3601,7 @@ export class MemStorage implements IStorage {
     };
   }
 
-  getRiskLevel(riskValue: number, ranges: {lowMax: number, mediumMax: number, highMax: number}): 'low' | 'medium' | 'high' | 'critical' {
+  getRiskLevel(riskValue: number, ranges: { lowMax: number, mediumMax: number, highMax: number }): 'low' | 'medium' | 'high' | 'critical' {
     if (riskValue <= ranges.lowMax) return 'low';
     if (riskValue <= ranges.mediumMax) return 'medium';
     if (riskValue <= ranges.highMax) return 'high';
@@ -3609,10 +3609,10 @@ export class MemStorage implements IStorage {
   }
 
   calculateWeightedRisk(
-    risks: Risk[], 
-    method: string, 
-    weights: {critical: number, high: number, medium: number, low: number}, 
-    ranges: {lowMax: number, mediumMax: number, highMax: number}
+    risks: Risk[],
+    method: string,
+    weights: { critical: number, high: number, medium: number, low: number },
+    ranges: { lowMax: number, mediumMax: number, highMax: number }
   ): number {
     if (risks.length === 0) return 0;
 
@@ -3675,9 +3675,9 @@ export class MemStorage implements IStorage {
 
   async upsertUser(userData: UpsertUser): Promise<User> {
     // For Replit Auth - create or update user
-    const existingUser = userData.id ? this.users.get(userData.id) : 
+    const existingUser = userData.id ? this.users.get(userData.id) :
       (userData.email ? await this.getUserByEmail(userData.email) : undefined);
-    
+
     if (existingUser) {
       // Update existing user
       const updatedUser: User = {
@@ -3713,9 +3713,9 @@ export class MemStorage implements IStorage {
   async updateUser(id: string, update: Partial<InsertUser>): Promise<User | undefined> {
     const existing = this.users.get(id);
     if (!existing) return undefined;
-    
-    const updated = { 
-      ...existing, 
+
+    const updated = {
+      ...existing,
       ...update,
       updatedAt: new Date()
     };
@@ -3726,19 +3726,19 @@ export class MemStorage implements IStorage {
   async deleteUser(id: string): Promise<boolean> {
     const user = this.users.get(id);
     if (!user) return false;
-    
+
     // Soft delete - mark as inactive
     user.isActive = false;
     user.updatedAt = new Date();
     this.users.set(id, user);
-    
+
     // Remove all user role assignments
     for (const [key, userRole] of this.userRoles.entries()) {
       if (userRole.userId === id) {
         this.userRoles.delete(key);
       }
     }
-    
+
     return true;
   }
 
@@ -3786,7 +3786,7 @@ export class MemStorage implements IStorage {
   async updateRole(id: string, update: Partial<InsertRole>): Promise<Role | undefined> {
     const existing = this.roles.get(id);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, ...update };
     this.roles.set(id, updated);
     return updated;
@@ -3795,18 +3795,18 @@ export class MemStorage implements IStorage {
   async deleteRole(id: string): Promise<boolean> {
     const role = this.roles.get(id);
     if (!role) return false;
-    
+
     // Soft delete - mark as inactive
     role.isActive = false;
     this.roles.set(id, role);
-    
+
     // Remove all role assignments for this role
     for (const [key, userRole] of this.userRoles.entries()) {
       if (userRole.roleId === id) {
         this.userRoles.delete(key);
       }
     }
-    
+
     return true;
   }
 
@@ -3847,7 +3847,7 @@ export class MemStorage implements IStorage {
   async getUserRoles(userId: string): Promise<(UserRole & { role: Role })[]> {
     const userRoleAssignments = Array.from(this.userRoles.values())
       .filter(ur => ur.userId === userId);
-    
+
     return userRoleAssignments.map(ur => {
       const role = this.roles.get(ur.roleId);
       return {
@@ -3897,14 +3897,14 @@ export class MemStorage implements IStorage {
       ];
 
       // Calculate organizational risk average
-      const organizationalRiskAvg = allRisks.length > 0 
+      const organizationalRiskAvg = allRisks.length > 0
         ? Math.round((allRisks.reduce((sum, risk) => sum + risk.inherentRisk, 0) / allRisks.length) * 10) / 10
         : 0;
 
       // Count entities with risks
       const processIds = [...new Set(allRisks.filter(r => r.processId != null).map(r => r.processId))];
       const processCount = processIds.length;
-      const processAvg = processCount > 0 
+      const processAvg = processCount > 0
         ? Math.round((allRisks.filter(r => r.processId != null).reduce((sum, r) => sum + r.inherentRisk, 0) / allRisks.filter(r => r.processId != null).length) * 10) / 10
         : 0;
 
@@ -3944,17 +3944,17 @@ export class MemStorage implements IStorage {
   async getUserPermissions(userId: string): Promise<string[]> {
     const userRoles = Array.from(this.userRoles.values()).filter(ur => ur.userId === userId);
     const permissions = new Set<string>();
-    
+
     for (const userRole of userRoles) {
       const role = this.roles.get(userRole.roleId);
       if (role && role.isActive) {
         role.permissions.forEach(permission => permissions.add(permission));
       }
     }
-    
+
     return Array.from(permissions);
   }
-  
+
   // Get permissions (single-tenant mode - returns global permissions)
   async getTenantPermissions(userId: string): Promise<string[]> {
     return this.getUserPermissions(userId);
@@ -3968,14 +3968,14 @@ export class MemStorage implements IStorage {
   async getUserRolesList(userId: string): Promise<Role[]> {
     const userRoles = Array.from(this.userRoles.values()).filter(ur => ur.userId === userId);
     const roles: Role[] = [];
-    
+
     for (const userRole of userRoles) {
       const role = this.roles.get(userRole.roleId);
       if (role && role.isActive) {
         roles.push(role);
       }
     }
-    
+
     return roles;
   }
 
@@ -3987,7 +3987,7 @@ export class MemStorage implements IStorage {
       ...snapshot,
       createdAt: new Date(),
     };
-    
+
     this.riskSnapshots.set(id, newSnapshot);
     return newSnapshot;
   }
@@ -4014,12 +4014,12 @@ export class MemStorage implements IStorage {
   async createCurrentRisksSnapshot(snapshotDate?: Date): Promise<RiskSnapshot[]> {
     const date = snapshotDate || new Date();
     const snapshots: RiskSnapshot[] = [];
-    
+
     for (const risk of this.risks.values()) {
       // Calculate residual risk
       const riskControls = Array.from(this.riskControls.values())
         .filter(rc => rc.riskId === risk.id);
-      
+
       let residualRisk = risk.inherentRisk;
       if (riskControls.length > 0) {
         // Use the minimum residual risk from all controls - safe NaN filtering
@@ -4036,21 +4036,21 @@ export class MemStorage implements IStorage {
         residualRisk,
         validationStatus: risk.validationStatus,
       });
-      
+
       snapshots.push(snapshot);
     }
-    
+
     return snapshots;
   }
 
   async getAvailableSnapshotDates(): Promise<Date[]> {
     const dates = new Set<string>();
-    
+
     for (const snapshot of this.riskSnapshots.values()) {
       const dateStr = snapshot.snapshotDate.toISOString().split('T')[0];
       dates.add(dateStr);
     }
-    
+
     return Array.from(dates)
       .sort()
       .map(dateStr => new Date(dateStr));
@@ -4090,7 +4090,7 @@ export class MemStorage implements IStorage {
 
     // Get all risks with their organizational entities
     const getRiskEntities = async (snapshots: RiskSnapshot[]) => {
-      const riskMap = new Map<string, { 
+      const riskMap = new Map<string, {
         snapshot: RiskSnapshot;
         macroprocesoId?: string;
         macroprocesoName?: string;
@@ -4116,7 +4116,7 @@ export class MemStorage implements IStorage {
             procesoId = proceso.id;
             procesoName = proceso.name;
             macroprocesoId = proceso.macroprocesoId || undefined;
-            
+
             if (macroprocesoId) {
               const macroproceso = this.macroprocesos.get(macroprocesoId);
               if (macroproceso) {
@@ -4160,12 +4160,12 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Gerencia
     const gerenciaMap = new Map<string, { name: string; initialRisks: RiskSnapshot[]; finalRisks: RiskSnapshot[] }>();
-    
+
     for (const [riskId, data] of startRiskEntities) {
       for (const gerenciaId of data.gerenciaIds) {
         if (!gerenciaMap.has(gerenciaId)) {
           const gerencia = this.gerencias.get(gerenciaId);
-          gerenciaMap.set(gerenciaId, { 
+          gerenciaMap.set(gerenciaId, {
             name: gerencia?.name || 'Unknown',
             initialRisks: [],
             finalRisks: [],
@@ -4179,7 +4179,7 @@ export class MemStorage implements IStorage {
       for (const gerenciaId of data.gerenciaIds) {
         if (!gerenciaMap.has(gerenciaId)) {
           const gerencia = this.gerencias.get(gerenciaId);
-          gerenciaMap.set(gerenciaId, { 
+          gerenciaMap.set(gerenciaId, {
             name: gerencia?.name || 'Unknown',
             initialRisks: [],
             finalRisks: [],
@@ -4198,7 +4198,7 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Macroproceso
     const macroprocesoMap = new Map<string, { name: string; initialRisks: RiskSnapshot[]; finalRisks: RiskSnapshot[] }>();
-    
+
     for (const [riskId, data] of startRiskEntities) {
       if (data.macroprocesoId) {
         if (!macroprocesoMap.has(data.macroprocesoId)) {
@@ -4234,7 +4234,7 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Proceso
     const procesoMap = new Map<string, { name: string; initialRisks: RiskSnapshot[]; finalRisks: RiskSnapshot[] }>();
-    
+
     for (const [riskId, data] of startRiskEntities) {
       if (data.procesoId) {
         if (!procesoMap.has(data.procesoId)) {
@@ -4301,27 +4301,27 @@ export class MemStorage implements IStorage {
       // Get controls that were associated with this risk before or on targetDate
       const applicableControls = Array.from(this.riskControls.values())
         .filter(rc => rc.riskId === risk.id);
-      
+
       // For each control, check if it existed at targetDate
       // NOTE: Since risk_controls doesn't have createdAt, we assume all current controls existed
       // This is a limitation - in the future, audit logs should track this
-      
+
       if (applicableControls.length === 0) {
         return risk.inherentRisk;
       }
-      
+
       // Use the minimum residual risk (best case scenario)
       const residualValues = applicableControls
         .map(rc => Number(rc.residualRisk))
         .filter(n => Number.isFinite(n));
-      
+
       return residualValues.length > 0 ? Math.min(...residualValues) : risk.inherentRisk;
     };
 
     // Get risks that existed at start date
     const risksAtStart = Array.from(this.risks.values())
       .filter(r => new Date(r.createdAt) <= startDate && r.status !== 'deleted');
-    
+
     // Get risks that exist at end date
     const risksAtEnd = Array.from(this.risks.values())
       .filter(r => new Date(r.createdAt) <= endDate && r.status !== 'deleted');
@@ -4346,18 +4346,18 @@ export class MemStorage implements IStorage {
       // Get proceso and macroproceso using riskProcessLinks
       const riskLinks = Array.from(this.riskProcessLinks.values())
         .filter(rpl => rpl.riskId === risk.id && !rpl.deletedAt);
-      
+
       if (riskLinks.length > 0) {
         // Use first link (primary process)
         const link = riskLinks[0];
-        
+
         if (link.procesoId) {
           const proceso = this.processes.get(link.procesoId);
           if (proceso) {
             procesoId = proceso.id;
             procesoName = proceso.name;
             macroprocesoId = proceso.macroprocesoId || undefined;
-            
+
             if (macroprocesoId) {
               const macroproceso = this.macroprocesos.get(macroprocesoId);
               if (macroproceso) {
@@ -4395,11 +4395,11 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Gerencia
     const gerenciaMap = new Map<string, { name: string; initialValues: number[]; finalValues: number[] }>();
-    
+
     risksAtStart.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, startDate);
-      
+
       context.gerenciaIds.forEach(gerenciaId => {
         if (!gerenciaMap.has(gerenciaId)) {
           const gerencia = this.gerencias.get(gerenciaId);
@@ -4416,7 +4416,7 @@ export class MemStorage implements IStorage {
     risksAtEnd.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, endDate);
-      
+
       context.gerenciaIds.forEach(gerenciaId => {
         if (!gerenciaMap.has(gerenciaId)) {
           const gerencia = this.gerencias.get(gerenciaId);
@@ -4439,11 +4439,11 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Macroproceso
     const macroprocesoMap = new Map<string, { name: string; initialValues: number[]; finalValues: number[] }>();
-    
+
     risksAtStart.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, startDate);
-      
+
       if (context.macroprocesoId) {
         if (!macroprocesoMap.has(context.macroprocesoId)) {
           macroprocesoMap.set(context.macroprocesoId, {
@@ -4459,7 +4459,7 @@ export class MemStorage implements IStorage {
     risksAtEnd.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, endDate);
-      
+
       if (context.macroprocesoId) {
         if (!macroprocesoMap.has(context.macroprocesoId)) {
           macroprocesoMap.set(context.macroprocesoId, {
@@ -4481,11 +4481,11 @@ export class MemStorage implements IStorage {
 
     // Aggregate by Proceso
     const procesoMap = new Map<string, { name: string; initialValues: number[]; finalValues: number[] }>();
-    
+
     risksAtStart.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, startDate);
-      
+
       if (context.procesoId) {
         if (!procesoMap.has(context.procesoId)) {
           procesoMap.set(context.procesoId, {
@@ -4501,7 +4501,7 @@ export class MemStorage implements IStorage {
     risksAtEnd.forEach(risk => {
       const context = getRiskContext(risk);
       const residualRisk = calculateResidualRiskAtDate(risk, endDate);
-      
+
       if (context.procesoId) {
         if (!procesoMap.has(context.procesoId)) {
           procesoMap.set(context.procesoId, {
@@ -4588,7 +4588,7 @@ export class MemStorage implements IStorage {
       ...macroproceso,
       createdAt: new Date(),
     };
-    
+
     this.macroprocesos.set(id, newMacroproceso);
     return newMacroproceso;
   }
@@ -4613,12 +4613,12 @@ export class MemStorage implements IStorage {
   async reorderMacroprocesos(updates: { id: string; order: number }[]): Promise<Macroproceso[]> {
     // snapshot and index
     const byId = new Map(Array.from(this.macroprocesos.values()).map(m => [m.id, { ...m }]));
-    
+
     // validate all IDs exist
     if (updates.some(u => !byId.has(u.id))) {
       throw new Error("Unknown macroproceso id");
     }
-    
+
     // validate uniqueness and positivity
     const orders = updates.map(u => u.order);
     if (orders.length !== new Set(orders).size) {
@@ -4627,19 +4627,19 @@ export class MemStorage implements IStorage {
     if (orders.some(o => o < 1)) {
       throw new Error("Order must be >= 1");
     }
-    
+
     // apply to cloned list
-    updates.forEach(({ id, order }) => { 
+    updates.forEach(({ id, order }) => {
       const macroproceso = byId.get(id)!;
-      macroproceso.order = order; 
+      macroproceso.order = order;
     });
-    
+
     const next = Array.from(byId.values()).sort((a, b) => a.order - b.order);
-    
+
     // commit atomically
     this.macroprocesos.clear();
     next.forEach(m => this.macroprocesos.set(m.id, m));
-    
+
     return next;
   }
 
@@ -4660,13 +4660,13 @@ export class MemStorage implements IStorage {
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
     const cacheKey = 'subprocesos-with-owners:single-tenant';
-    
+
     // Try cache first (60s TTL - catalog data changes infrequently)
     const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    
+
     const results = await db
       .select({
         subproceso: subprocesos,
@@ -4680,7 +4680,7 @@ export class MemStorage implements IStorage {
       ...result.subproceso,
       owner: result.owner,
     }));
-    
+
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);
     return result;
@@ -4740,13 +4740,13 @@ export class MemStorage implements IStorage {
     const duplicateName = await db.select().from(subprocesos)
       .where(sql`LOWER(${subprocesos.name}) = LOWER(${subproceso.name})`)
       .limit(1);
-    
+
     if (duplicateName.length > 0) {
       throw new Error(`Ya existe un subproceso con el nombre "${subproceso.name}"`);
     }
 
     const id = randomUUID();
-    
+
     // Get existing codes from database to generate unique code
     const existingSubprocesos = await db.select({ code: subprocesos.code }).from(subprocesos);
     const codes = new Set(existingSubprocesos.map(s => s.code));
@@ -4756,17 +4756,17 @@ export class MemStorage implements IStorage {
       code = `SUB-${counter.toString().padStart(3, '0')}`;
       counter++;
     } while (codes.has(code));
-    
+
     const newSubproceso: Subproceso = {
       id,
       code,
       ...subproceso,
       createdAt: new Date(),
     };
-    
+
     // Insert into database
     await db.insert(subprocesos).values(newSubproceso);
-    
+
     // Also keep in memory for consistency
     this.subprocesos.set(id, newSubproceso);
     return newSubproceso;
@@ -4784,19 +4784,19 @@ export class MemStorage implements IStorage {
           ne(subprocesos.id, id)
         ))
         .limit(1);
-      
+
       if (duplicateName.length > 0) {
         throw new Error(`Ya existe un subproceso con el nombre "${subproceso.name}"`);
       }
     }
 
     const updated: Subproceso = { ...existing, ...subproceso };
-    
+
     // Update in database
     await db.update(subprocesos)
       .set(subproceso)
       .where(eq(subprocesos.id, id));
-    
+
     // Update in memory
     this.subprocesos.set(id, updated);
     return updated;
@@ -4821,25 +4821,25 @@ export class MemStorage implements IStorage {
     // Delete from database
     await db.delete(subprocesos)
       .where(eq(subprocesos.id, id));
-    
+
     // Also delete from memory
     return this.subprocesos.delete(id);
   }
 
   // Updated Risk methods
-  
+
   // Cache for getAllRiskLevelsOptimized - 5 minute TTL
   private riskLevelsCache: Map<string, {
     data: {
-      macroprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-      processes: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-      subprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>
+      macroprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+      processes: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+      subprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>
     },
     timestamp: number
   }> = new Map();
-  
+
   private readonly CACHE_TTL_MS = 300000; // 5 minutes (increased from 30s for better performance)
-  
+
   // Helper to invalidate risk levels cache
   private invalidateRiskLevelsCache() {
     // Clear all caches
@@ -4851,16 +4851,16 @@ export class MemStorage implements IStorage {
   async getAllRiskLevelsOptimized(
     options?: { entities?: ('macroprocesos' | 'processes' | 'subprocesos')[] }
   ): Promise<{
-    macroprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-    processes: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>,
-    subprocesos: Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>
+    macroprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    processes: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    subprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>
   }> {
     // Determine which entities to calculate (default: all for backward compatibility)
     const requestedEntities = options?.entities || ['macroprocesos', 'processes', 'subprocesos'];
     const needMacroprocesos = requestedEntities.includes('macroprocesos');
     const needProcesses = requestedEntities.includes('processes');
     const needSubprocesos = requestedEntities.includes('subprocesos');
-    
+
     // Check cache for this entities combination
     const cacheKey = `risk-levels:${requestedEntities.sort().join(',')}`;
     const now = Date.now();
@@ -4868,60 +4868,88 @@ export class MemStorage implements IStorage {
     if (cachedData && (now - cachedData.timestamp < this.CACHE_TTL_MS)) {
       return cachedData.data;
     }
-    
+
     // PERFORMANCE OPTIMIZATION: Only fetch entities that are requested
+    // AND only fetch necessary columns to reduce data transfer
     const queries: Promise<any>[] = [
-      // Always need risks and risk controls for any calculation
-      db.select().from(risks).where(isNull(risks.deletedAt)),
+      // Always need risks (lightweight)
+      // PERFORMANCE: Filter by status='active' to match risk-matrix behavior and reduce volume
+      // PERFORMANCE: Filter by entities if specific ones are requested
       db.select({
-          id: riskControls.id,
-          riskId: riskControls.riskId,
-          controlId: riskControls.controlId,
-          residualRisk: riskControls.residualRisk
-        })
+        id: risks.id,
+        inherentRisk: risks.inherentRisk,
+        processId: risks.processId,
+        subprocesoId: risks.subprocesoId,
+        macroprocesoId: risks.macroprocesoId
+      }).from(risks).where(and(
+        isNull(risks.deletedAt),
+        eq(risks.status, 'active'),
+        // Optimization: If we only need subprocesos, only fetch risks linked to them
+        // Note: This assumes risks are directly linked. If using riskProcessLinks, this might need adjustment,
+        // but getAllRiskLevelsOptimized currently relies on these columns.
+        needSubprocesos && !needProcesses && !needMacroprocesos
+          ? isNotNull(risks.subprocesoId)
+          : undefined
+      )),
+
+      // Risk controls (lightweight)
+      db.select({
+        riskId: riskControls.riskId,
+        residualRisk: riskControls.residualRisk
+      })
         .from(riskControls)
         .innerJoin(risks, eq(riskControls.riskId, risks.id))
         .innerJoin(controls, eq(riskControls.controlId, controls.id))
         .where(and(
           isNull(risks.deletedAt),
-          isNull(controls.deletedAt)
+          eq(risks.status, 'active'),
+          isNull(controls.deletedAt),
+          // Optimization: Same filter as above
+          needSubprocesos && !needProcesses && !needMacroprocesos
+            ? isNotNull(risks.subprocesoId)
+            : undefined
         )),
-      // Only fetch requested entities
+
+      // Only fetch requested entities (lightweight - IDs only)
       needMacroprocesos
-        ? db.select().from(macroprocesos).where(isNull(macroprocesos.deletedAt))
+        ? db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt))
         : Promise.resolve([]),
       needProcesses || needMacroprocesos // Macroprocesos need processes for hierarchy
-        ? db.select().from(processes).where(isNull(processes.deletedAt))
+        ? db.select({ id: processes.id, macroprocesoId: processes.macroprocesoId }).from(processes).where(isNull(processes.deletedAt))
         : Promise.resolve([]),
       needSubprocesos || needProcesses || needMacroprocesos // All higher levels need subprocesos
-        ? db.select().from(subprocesos).where(isNull(subprocesos.deletedAt))
+        ? db.select({ id: subprocesos.id, procesoId: subprocesos.procesoId }).from(subprocesos).where(isNull(subprocesos.deletedAt))
         : Promise.resolve([]),
+
       // Always need configuration
       this.getRiskAggregationMethod(),
       this.getRiskAggregationWeights(),
       this.getRiskLevelRanges()
     ];
-    
+
     const [allRisks, allRiskControls, allMacroprocesos, allProcesses, allSubprocesos, method, weights, ranges] = await Promise.all(queries);
 
     // Create risk-control mapping for quick lookup
-    const riskControlMap = new Map<string, typeof allRiskControls>();
+    // Use a Map<string, number[]> to store just the residual risks
+    const riskControlMap = new Map<string, number[]>();
     for (const rc of allRiskControls) {
       if (!riskControlMap.has(rc.riskId)) {
         riskControlMap.set(rc.riskId, []);
       }
-      riskControlMap.get(rc.riskId)!.push(rc);
+      // Ensure numeric value
+      const val = Number(rc.residualRisk);
+      if (Number.isFinite(val)) {
+        riskControlMap.get(rc.riskId)!.push(val);
+      }
     }
 
     // Calculate residual risk for each risk
     const riskResidualMap = new Map<string, number>();
     for (const risk of allRisks) {
-      const controls = riskControlMap.get(risk.id) || [];
+      const controlValues = riskControlMap.get(risk.id);
       let residualRisk = risk.inherentRisk;
-      if (controls.length > 0) {
-        // Safe NaN filtering to prevent data corruption
-        const vals = controls.map(rc => Number(rc.residualRisk)).filter(n => Number.isFinite(n));
-        residualRisk = vals.length ? Math.min(...vals) : risk.inherentRisk;
+      if (controlValues && controlValues.length > 0) {
+        residualRisk = Math.min(...controlValues);
       }
       riskResidualMap.set(risk.id, residualRisk);
     }
@@ -4985,7 +5013,7 @@ export class MemStorage implements IStorage {
         subprocesoToProcessMap.set(subproceso.id, subproceso.procesoId);
       }
     }
-    
+
     const processToMacroprocesoMap = new Map<string, string>();
     for (const process of allProcesses) {
       if (process.macroprocesoId) {
@@ -4993,62 +5021,96 @@ export class MemStorage implements IStorage {
       }
     }
 
+    // Pre-group risks by direct parents for O(1) access
+    const risksBySubproceso = new Map<string, typeof allRisks>();
+    const risksByProcess = new Map<string, typeof allRisks>();
+    const risksByMacroproceso = new Map<string, typeof allRisks>();
+
+    for (const risk of allRisks) {
+      if (risk.subprocesoId) {
+        if (!risksBySubproceso.has(risk.subprocesoId)) risksBySubproceso.set(risk.subprocesoId, []);
+        risksBySubproceso.get(risk.subprocesoId)!.push(risk);
+      }
+      if (risk.processId) {
+        if (!risksByProcess.has(risk.processId)) risksByProcess.set(risk.processId, []);
+        risksByProcess.get(risk.processId)!.push(risk);
+      }
+      if (risk.macroprocesoId) {
+        if (!risksByMacroproceso.has(risk.macroprocesoId)) risksByMacroproceso.set(risk.macroprocesoId, []);
+        risksByMacroproceso.get(risk.macroprocesoId)!.push(risk);
+      }
+    }
+
     // PERFORMANCE: Only calculate for requested entities
     // Calculate for subprocesos
-    const subprocesoRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
+    const subprocesoRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
     if (needSubprocesos) {
       for (const subproceso of allSubprocesos) {
-        const subprocesoRisks = allRisks.filter(risk => risk.subprocesoId === subproceso.id);
+        const subprocesoRisks = risksBySubproceso.get(subproceso.id) || [];
         subprocesoRiskLevels.set(subproceso.id, calculateAggregatedRisk(subprocesoRisks));
       }
     }
 
     // Calculate for processes - now O(n) instead of O(n²)
-    const processRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
+    const processRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
     if (needProcesses) {
       for (const process of allProcesses) {
-        // Direct process risks + all subprocess risks
-        const processRisks = allRisks.filter(risk => risk.processId === process.id);
-        const subprocessRisks = allRisks.filter(risk => {
-          // O(1) lookup instead of O(n) .find()
-          const processId = risk.subprocesoId ? subprocesoToProcessMap.get(risk.subprocesoId) : null;
-          return processId === process.id;
-        });
-        const allProcessRisks = [...processRisks, ...subprocessRisks];
+        // Direct process risks
+        const directRisks = risksByProcess.get(process.id) || [];
+
+        // Plus all subprocess risks (found via subproceso -> process map)
+        // Optimization: Iterate over subprocesos that belong to this process
+        // We can pre-group subprocesos by processId to make this faster
+        const processSubprocesos = allSubprocesos.filter(s => s.procesoId === process.id);
+        const subprocessRisks = processSubprocesos.flatMap(s => risksBySubproceso.get(s.id) || []);
+
+        const allProcessRisks = [...directRisks, ...subprocessRisks];
         processRiskLevels.set(process.id, calculateAggregatedRisk(allProcessRisks));
       }
     }
 
     // Calculate for macroprocesos - now O(n) instead of O(n³)
-    const macroprocesoRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
+    const macroprocesoRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
     if (needMacroprocesos) {
+      // Pre-group processes by macroproceso
+      const processesByMacro = new Map<string, typeof allProcesses>();
+      for (const p of allProcesses) {
+        if (p.macroprocesoId) {
+          if (!processesByMacro.has(p.macroprocesoId)) processesByMacro.set(p.macroprocesoId, []);
+          processesByMacro.get(p.macroprocesoId)!.push(p);
+        }
+      }
+
       for (const macroproceso of allMacroprocesos) {
-        // Direct macroproceso risks + all process risks + all subprocess risks
-        const macroprocesoRisks = allRisks.filter(risk => risk.macroprocesoId === macroproceso.id);
-        const processRisks = allRisks.filter(risk => {
-          // O(1) lookup instead of O(n) .find()
-          const macroprocesoId = risk.processId ? processToMacroprocesoMap.get(risk.processId) : null;
-          return macroprocesoId === macroproceso.id;
+        // Direct macroproceso risks
+        const directRisks = risksByMacroproceso.get(macroproceso.id) || [];
+
+        // Get all processes for this macroproceso
+        const macroProcesses = processesByMacro.get(macroproceso.id) || [];
+
+        // Get all risks from these processes (direct)
+        const processRisks = macroProcesses.flatMap(p => risksByProcess.get(p.id) || []);
+
+        // Get all risks from subprocesos of these processes
+        const subprocessRisks = macroProcesses.flatMap(p => {
+          const pSubprocesos = allSubprocesos.filter(s => s.procesoId === p.id);
+          return pSubprocesos.flatMap(s => risksBySubproceso.get(s.id) || []);
         });
-        const subprocessRisks = allRisks.filter(risk => {
-          // O(1) lookups instead of O(n²) nested .find() calls
-          if (!risk.subprocesoId) return false;
-          const processId = subprocesoToProcessMap.get(risk.subprocesoId);
-          if (!processId) return false;
-          const macroprocesoId = processToMacroprocesoMap.get(processId);
-          return macroprocesoId === macroproceso.id;
-        });
-        
-        // Remove duplicates by risk ID
-        const allMacroprocesoRisks = [
-          ...macroprocesoRisks,
-          ...processRisks,
-          ...subprocessRisks
-        ].filter((risk, index, self) => 
-          index === self.findIndex(r => r.id === risk.id)
-        );
-        
-        macroprocesoRiskLevels.set(macroproceso.id, calculateAggregatedRisk(allMacroprocesoRisks));
+
+        // Combine all risks and remove duplicates by ID
+        const allRisksWithDups = [...directRisks, ...processRisks, ...subprocessRisks];
+
+        // Deduplicate efficiently using a Set of IDs
+        const seenIds = new Set<string>();
+        const uniqueRisks = [];
+        for (const r of allRisksWithDups) {
+          if (!seenIds.has(r.id)) {
+            seenIds.add(r.id);
+            uniqueRisks.push(r);
+          }
+        }
+
+        macroprocesoRiskLevels.set(macroproceso.id, calculateAggregatedRisk(uniqueRisks));
       }
     }
 
@@ -5057,21 +5119,21 @@ export class MemStorage implements IStorage {
       processes: processRiskLevels,
       subprocesos: subprocesoRiskLevels
     };
-    
+
     // Update cache for this specific tenant + entities combination
     this.riskLevelsCache.set(cacheKey, {
       data: result,
       timestamp: Date.now()
     });
-    
+
     return result;
   }
 
   // Calculate aggregated risk levels for hierarchy (legacy method, now optimized)
-  async calculateRiskLevels(entityId: string, entityType: 'macroproceso' | 'proceso' | 'subproceso'): Promise<{inherentRisk: number, residualRisk: number, riskCount: number}> {
+  async calculateRiskLevels(entityId: string, entityType: 'macroproceso' | 'proceso' | 'subproceso'): Promise<{ inherentRisk: number, residualRisk: number, riskCount: number }> {
     // For individual calls, still use optimized approach but only for specific entity
     const allData = await this.getAllRiskLevelsOptimized();
-    
+
     switch (entityType) {
       case 'macroproceso':
         return allData.macroprocesos.get(entityId) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
@@ -5086,9 +5148,9 @@ export class MemStorage implements IStorage {
 
   // Get validated risks accumulation for process map (only validated risks, hierarchical accumulation)
   async getProcessMapValidatedRisks(): Promise<{
-    macroprocesos: Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    processes: Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    subprocesos: Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>
+    macroprocesos: Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    processes: Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    subprocesos: Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>
   }> {
     // Get validated risk-process links and join with risks
     const [validatedRiskProcessLinks, allRiskControls, allMacroprocesos, allProcesses, allSubprocesos, method, weights, ranges] = await Promise.all([
@@ -5099,13 +5161,13 @@ export class MemStorage implements IStorage {
         subprocesoId: riskProcessLinks.subprocesoId,
         inherentRisk: risks.inherentRisk,
       })
-      .from(riskProcessLinks)
-      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .where(and(
-        isNull(risks.deletedAt),
-        eq(riskProcessLinks.validationStatus, 'validated'),
-        isNotNull(riskProcessLinks.validatedAt)
-      )),
+        .from(riskProcessLinks)
+        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+        .where(and(
+          isNull(risks.deletedAt),
+          eq(riskProcessLinks.validationStatus, 'validated'),
+          isNotNull(riskProcessLinks.validatedAt)
+        )),
       // Get ALL riskControls for ALL risks (not just validated ones)
       // so residual risk calculation works correctly even for non-validated risks
       db.select({
@@ -5114,9 +5176,9 @@ export class MemStorage implements IStorage {
         controlId: riskControls.controlId,
         residualRisk: riskControls.residualRisk,
       })
-      .from(riskControls)
-      .innerJoin(risks, eq(riskControls.riskId, risks.id))
-      .where(isNull(risks.deletedAt)),
+        .from(riskControls)
+        .innerJoin(risks, eq(riskControls.riskId, risks.id))
+        .where(isNull(risks.deletedAt)),
       // OPTIMIZED: Only select id (used as Map key) instead of all columns
       db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt)),
       db.select({ id: processes.id }).from(processes).where(isNull(processes.deletedAt)),
@@ -5157,7 +5219,7 @@ export class MemStorage implements IStorage {
     }
 
     // Helper function to calculate aggregated risks (both inherent and residual) using configuration
-    const calculateAggregatedRiskMetrics = (entityRisks: typeof allRisks): {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string} => {
+    const calculateAggregatedRiskMetrics = (entityRisks: typeof allRisks): { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string } => {
       if (entityRisks.length === 0) {
         return { validatedRiskCount: 0, aggregatedInherentRisk: 0, aggregatedResidualRisk: 0, riskLevel: 'Bajo' };
       }
@@ -5165,7 +5227,7 @@ export class MemStorage implements IStorage {
       // Get inherent and residual risk values for all entity risks
       const inherentRisks = entityRisks.map(risk => risk.inherentRisk);
       const residualRisks = entityRisks.map(risk => riskResidualMap.get(risk.id) || risk.inherentRisk);
-      
+
       // Calculate aggregated inherent risk using configured method
       let aggregatedInherentRisk = 0;
       if (method === 'average') {
@@ -5184,7 +5246,7 @@ export class MemStorage implements IStorage {
         }
         aggregatedInherentRisk = totalWeight > 0 ? weightedSum / totalWeight : 0;
       }
-      
+
       // Calculate aggregated residual risk using configured method
       let aggregatedResidualRisk = 0;
       if (method === 'average') {
@@ -5224,14 +5286,14 @@ export class MemStorage implements IStorage {
     };
 
     // Calculate for subprocesos (only own risks)
-    const subprocesoRiskLevels = new Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>();
+    const subprocesoRiskLevels = new Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>();
     for (const subproceso of allSubprocesos) {
       const subprocesoRisks = allRisks.filter(risk => risk.subprocesoId === subproceso.id);
       subprocesoRiskLevels.set(subproceso.id, calculateAggregatedRiskMetrics(subprocesoRisks));
     }
 
     // Calculate for processes (process + subprocesses)
-    const processRiskLevels = new Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>();
+    const processRiskLevels = new Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>();
     for (const process of allProcesses) {
       // Direct process risks + all subprocess risks
       const processRisks = allRisks.filter(risk => risk.processId === process.id);
@@ -5244,7 +5306,7 @@ export class MemStorage implements IStorage {
     }
 
     // Calculate for macroprocesos (macroproceso + processes + subprocesses)
-    const macroprocesoRiskLevels = new Map<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>();
+    const macroprocesoRiskLevels = new Map<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>();
     for (const macroproceso of allMacroprocesos) {
       // Direct macroproceso risks + all process risks + all subprocess risks
       const macroprocesoRisks = allRisks.filter(risk => risk.macroprocesoId === macroproceso.id);
@@ -5258,16 +5320,16 @@ export class MemStorage implements IStorage {
         const process = allProcesses.find(proc => proc.id === subproceso.procesoId);
         return process && process.macroprocesoId === macroproceso.id;
       });
-      
+
       // Remove duplicates by risk ID
       const allMacroprocesoRisks = [
         ...macroprocesoRisks,
         ...processRisks,
         ...subprocessRisks
-      ].filter((risk, index, self) => 
+      ].filter((risk, index, self) =>
         index === self.findIndex(r => r.id === risk.id)
       );
-      
+
       macroprocesoRiskLevels.set(macroproceso.id, calculateAggregatedRiskMetrics(allMacroprocesoRisks));
     }
 
@@ -5316,7 +5378,7 @@ export class MemStorage implements IStorage {
     return;
   }
 
-  async getControlEvaluationsByCriteria(): Promise<{criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[]}[]> {
+  async getControlEvaluationsByCriteria(): Promise<{ criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[] }[]> {
     return []; // Empty in memory
   }
 
@@ -5369,7 +5431,7 @@ export class MemStorage implements IStorage {
     return;
   }
 
-  async getRegulationRiskLevels(): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
+  async getRegulationRiskLevels(): Promise<Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>> {
     // For MemStorage, return empty map since regulations are not implemented
     return new Map();
   }
@@ -5401,7 +5463,7 @@ export class MemStorage implements IStorage {
   async createComplianceDocument(document: InsertComplianceDocument): Promise<ComplianceDocument> {
     const id = randomUUID();
     const now = new Date();
-    
+
     const newDocument: ComplianceDocument = {
       id,
       ...document,
@@ -5409,7 +5471,7 @@ export class MemStorage implements IStorage {
       updatedAt: now,
       isActive: true
     };
-    
+
     this.complianceDocuments.set(id, newDocument);
     return newDocument;
   }
@@ -5417,13 +5479,13 @@ export class MemStorage implements IStorage {
   async updateComplianceDocument(id: string, document: Partial<InsertComplianceDocument>): Promise<ComplianceDocument | undefined> {
     const existing = this.complianceDocuments.get(id);
     if (!existing || !existing.isActive) return undefined;
-    
+
     const updated: ComplianceDocument = {
       ...existing,
       ...document,
       updatedAt: new Date()
     };
-    
+
     this.complianceDocuments.set(id, updated);
     return updated;
   }
@@ -5431,14 +5493,14 @@ export class MemStorage implements IStorage {
   async deleteComplianceDocument(id: string): Promise<boolean> {
     const existing = this.complianceDocuments.get(id);
     if (!existing || !existing.isActive) return false;
-    
+
     // Soft delete - mark as inactive
     const updated: ComplianceDocument = {
       ...existing,
       isActive: false,
       updatedAt: new Date()
     };
-    
+
     this.complianceDocuments.set(id, updated);
     return true;
   }
@@ -5446,7 +5508,7 @@ export class MemStorage implements IStorage {
   async searchComplianceDocuments(query: string): Promise<ComplianceDocument[]> {
     const searchTerm = query.toLowerCase();
     return Array.from(this.complianceDocuments.values())
-      .filter(doc => 
+      .filter(doc =>
         doc.isActive && (
           doc.name.toLowerCase().includes(searchTerm) ||
           doc.description?.toLowerCase().includes(searchTerm) ||
@@ -5469,7 +5531,7 @@ export class MemStorage implements IStorage {
 
   // ============== AUDIT TEST ATTACHMENTS - PLACEHOLDER (Use Database) ==============
   // These methods are placeholders and should use the database implementation instead
-  
+
   async createAuditTestAttachment(attachment: InsertAuditTestAttachment): Promise<AuditTestAttachment> {
     throw new Error("Audit test attachments require database storage - use DatabaseStorage implementation");
   }
@@ -5541,7 +5603,7 @@ export class MemStorage implements IStorage {
   }
 
   // ===== WORKFLOW INTEGRATION STUBS =====
-  
+
   async createWorkLogWithAttachments(workLogData: InsertAuditTestWorkLog, attachmentIds?: string[]): Promise<AuditTestWorkLog> {
     throw new Error("Workflow attachments require database storage - use DatabaseStorage implementation");
   }
@@ -5617,7 +5679,7 @@ export class MemStorage implements IStorage {
   }
 
   // ============= AI UNIFIED DOCUMENT AGGREGATION =============
-  
+
   async getAIDocuments(scope?: {
     macroprocesoId?: string;
     processId?: string;
@@ -5625,7 +5687,7 @@ export class MemStorage implements IStorage {
   }, includeAllSources?: boolean): Promise<AIDocument[]> {
     // In-memory implementation - return basic data from memory maps
     const documents: AIDocument[] = [];
-    
+
     // Add compliance documents
     this.complianceDocuments.forEach(doc => {
       documents.push({
@@ -5668,36 +5730,36 @@ export class MemStorage implements IStorage {
   }
 
   // ============= STUB IMPLEMENTATIONS - REVALIDACIÓN =============
-  
+
   // Control Owners methods
   async getControlOwners(): Promise<ControlOwner[]> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async getControlOwner(id: string): Promise<ControlOwner | undefined> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async getControlOwnersByControl(controlId: string): Promise<ControlOwner[]> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async getActiveControlOwnerByControl(controlId: string): Promise<ControlOwner | undefined> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async assignControlOwner(owner: InsertControlOwner): Promise<ControlOwner> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async updateControlOwner(id: string, owner: Partial<InsertControlOwner>): Promise<ControlOwner | undefined> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async deactivateControlOwner(id: string): Promise<boolean> {
     throw new Error("MemStorage: Control Owners not implemented. Use DatabaseStorage.");
   }
-  
+
   async createControlOwner(owner: InsertControlOwner): Promise<ControlOwner> {
     return await this.assignControlOwner(owner);
   }
@@ -5705,90 +5767,90 @@ export class MemStorage implements IStorage {
   async deleteControlOwner(id: string): Promise<boolean> {
     return await this.deactivateControlOwner(id);
   }
-  
+
   // Revalidations methods
   async getRevalidations(): Promise<Revalidation[]> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   async getRevalidation(id: string): Promise<Revalidation | undefined> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   async getRevalidationsByControl(controlId: string): Promise<Revalidation[]> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   async createRevalidation(revalidation: InsertRevalidation): Promise<Revalidation> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   async updateRevalidation(id: string, revalidation: Partial<InsertRevalidation>): Promise<Revalidation | undefined> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   async getLatestRevalidationByControl(controlId: string): Promise<Revalidation | undefined> {
     throw new Error("MemStorage: Revalidations not implemented. Use DatabaseStorage.");
   }
-  
+
   // Revalidation Policies methods
   async getRevalidationPolicies(): Promise<RevalidationPolicy[]> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
-  
+
   async getRevalidationPolicy(id: string): Promise<RevalidationPolicy | undefined> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
-  
+
   async getRevalidationPolicyByRiskLevel(riskLevel: string): Promise<RevalidationPolicy | undefined> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
-  
+
   async createRevalidationPolicy(policy: InsertRevalidationPolicy): Promise<RevalidationPolicy> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
-  
+
   async updateRevalidationPolicy(id: string, policy: Partial<InsertRevalidationPolicy>): Promise<RevalidationPolicy | undefined> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
-  
+
   async deleteRevalidationPolicy(id: string): Promise<boolean> {
     throw new Error("MemStorage: Revalidation Policies not implemented. Use DatabaseStorage.");
   }
 
   // ============= PROBABILITY CRITERIA METHODS =============
-  
+
   async getProbabilityCriteria(): Promise<ProbabilityCriteria[]> {
     return Array.from(this.probabilityCriteria.values()).sort((a, b) => a.order - b.order);
   }
-  
+
   async getActiveProbabilityCriteria(): Promise<ProbabilityCriteria[]> {
     return Array.from(this.probabilityCriteria.values())
       .filter(criteria => criteria.isActive)
       .sort((a, b) => a.order - b.order);
   }
-  
+
   async getProbabilityCriterion(id: string): Promise<ProbabilityCriteria | undefined> {
     return this.probabilityCriteria.get(id);
   }
-  
+
   async createProbabilityCriterion(criterion: InsertProbabilityCriteria): Promise<ProbabilityCriteria> {
     throw new Error("MemStorage: Creating probability criteria not implemented. Use DatabaseStorage.");
   }
-  
+
   async updateProbabilityCriterion(id: string, criterion: Partial<InsertProbabilityCriteria>): Promise<ProbabilityCriteria | undefined> {
     throw new Error("MemStorage: Updating probability criteria not implemented. Use DatabaseStorage.");
   }
-  
+
   async deleteProbabilityCriterion(id: string): Promise<boolean> {
     throw new Error("MemStorage: Deleting probability criteria not implemented. Use DatabaseStorage.");
   }
-  
+
   async reorderProbabilityCriteria(criteriaIds: string[]): Promise<void> {
     throw new Error("MemStorage: Reordering probability criteria not implemented. Use DatabaseStorage.");
   }
   // ============== MISSING METHODS TO IMPLEMENT IStorage INTERFACE ==============
-  
+
   // Process methods
   async getProcessesWithOwners(): Promise<ProcessWithOwner[]> {
     const processesArray = Array.from(this.processes.values()).filter(p => !p.deletedAt);
@@ -6587,7 +6649,7 @@ export class MemStorage implements IStorage {
   }
 
   // ============== COMPLIANCE METHODS ==============
-  
+
   // Crime Categories
   async getCrimeCategories(): Promise<CrimeCategory[]> {
     return Array.from(this.crimeCategories.values());
@@ -6604,15 +6666,15 @@ export class MemStorage implements IStorage {
   async createCrimeCategory(category: InsertCrimeCategory): Promise<CrimeCategory> {
     const id = randomUUID();
     const now = new Date();
-    
+
     // Generate code automatically if empty
     const categoryToInsert = {
       ...category,
-      code: category.code && category.code.trim() !== '' 
-        ? category.code 
+      code: category.code && category.code.trim() !== ''
+        ? category.code
         : category.name.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 20)
     };
-    
+
     const newCategory: CrimeCategory = {
       id,
       ...categoryToInsert,
@@ -6660,7 +6722,7 @@ export class MemStorage implements IStorage {
       const reportsTo = officer.reportsToId ? officers.find(o => o.id === officer.reportsToId) : undefined;
       const subordinates = officers.filter(o => o.reportsToId === officer.id);
       const attachments = attachmentsArray.filter(a => a.officerId === officer.id);
-      const crimeCategData = officer.crimeCategories ? 
+      const crimeCategData = officer.crimeCategories ?
         crimeCategoriesArray.filter(c => officer.crimeCategories?.includes(c.id)) : [];
 
       return {
@@ -6706,7 +6768,7 @@ export class MemStorage implements IStorage {
     const reportsTo = officer.reportsToId ? officers.find(o => o.id === officer.reportsToId) : undefined;
     const subordinates = officers.filter(o => o.reportsToId === officer.id);
     const attachments = attachmentsArray.filter(a => a.officerId === officer.id);
-    const crimeCategData = officer.crimeCategories ? 
+    const crimeCategData = officer.crimeCategories ?
       crimeCategoriesArray.filter(c => officer.crimeCategories?.includes(c.id)) : [];
 
     return {
@@ -6747,7 +6809,7 @@ export class MemStorage implements IStorage {
   async getComplianceOfficerHierarchy(fiscalEntityId: string): Promise<ComplianceOfficerWithDetails[]> {
     const allOfficersWithDetails = await this.getComplianceOfficersWithDetails();
     const entityOfficers = allOfficersWithDetails.filter(officer => officer.fiscalEntityId === fiscalEntityId);
-    
+
     // Sort by hierarchy level and then by creation date
     return entityOfficers.sort((a, b) => {
       if (a.hierarchyLevel !== b.hierarchyLevel) {
@@ -6760,14 +6822,14 @@ export class MemStorage implements IStorage {
   async createComplianceOfficer(officer: InsertComplianceOfficer): Promise<ComplianceOfficer> {
     const id = randomUUID();
     const now = new Date();
-    
-    const assignmentStartDate = typeof officer.assignmentStartDate === 'string' 
-      ? new Date(officer.assignmentStartDate) 
+
+    const assignmentStartDate = typeof officer.assignmentStartDate === 'string'
+      ? new Date(officer.assignmentStartDate)
       : officer.assignmentStartDate;
-      
-    const assignmentEndDate = officer.assignmentEndDate 
-      ? (typeof officer.assignmentEndDate === 'string' 
-        ? new Date(officer.assignmentEndDate) 
+
+    const assignmentEndDate = officer.assignmentEndDate
+      ? (typeof officer.assignmentEndDate === 'string'
+        ? new Date(officer.assignmentEndDate)
         : officer.assignmentEndDate)
       : null;
 
@@ -6790,18 +6852,18 @@ export class MemStorage implements IStorage {
     if (!existing) return undefined;
 
     const updateData = { ...officer };
-    
+
     // Handle date conversions
     if (officer.assignmentStartDate) {
-      updateData.assignmentStartDate = typeof officer.assignmentStartDate === 'string' 
-        ? new Date(officer.assignmentStartDate) 
+      updateData.assignmentStartDate = typeof officer.assignmentStartDate === 'string'
+        ? new Date(officer.assignmentStartDate)
         : officer.assignmentStartDate;
     }
-    
+
     if (officer.assignmentEndDate !== undefined) {
-      updateData.assignmentEndDate = officer.assignmentEndDate 
-        ? (typeof officer.assignmentEndDate === 'string' 
-          ? new Date(officer.assignmentEndDate) 
+      updateData.assignmentEndDate = officer.assignmentEndDate
+        ? (typeof officer.assignmentEndDate === 'string'
+          ? new Date(officer.assignmentEndDate)
           : officer.assignmentEndDate)
         : null;
     }
@@ -6821,7 +6883,7 @@ export class MemStorage implements IStorage {
     const relationsToDelete = Array.from(this.complianceOfficerFiscalEntities.values())
       .filter(relation => relation.officerId === id);
     relationsToDelete.forEach(relation => this.complianceOfficerFiscalEntities.delete(relation.id));
-    
+
     return this.complianceOfficers.delete(id);
   }
 
@@ -6845,7 +6907,7 @@ export class MemStorage implements IStorage {
   async removeComplianceOfficerFiscalEntity(officerId: string, fiscalEntityId: string): Promise<boolean> {
     const relationToDelete = Array.from(this.complianceOfficerFiscalEntities.values())
       .find(relation => relation.officerId === officerId && relation.fiscalEntityId === fiscalEntityId);
-    
+
     if (relationToDelete) {
       return this.complianceOfficerFiscalEntities.delete(relationToDelete.id);
     }
@@ -6882,7 +6944,7 @@ export class MemStorage implements IStorage {
   async createComplianceOfficerAttachment(attachment: InsertComplianceOfficerAttachment): Promise<ComplianceOfficerAttachment> {
     const id = randomUUID();
     const now = new Date();
-    
+
     const newAttachment: ComplianceOfficerAttachment = {
       id,
       ...attachment,
@@ -6911,7 +6973,7 @@ export class MemStorage implements IStorage {
   }
 
   // ============== FISCAL ENTITIES METHODS (Basic implementation for compliance officers) ==============
-  
+
   async getFiscalEntities(): Promise<FiscalEntity[]> {
     return Array.from(this.fiscalEntities.values());
   }
@@ -6927,7 +6989,7 @@ export class MemStorage implements IStorage {
   async createFiscalEntity(entity: InsertFiscalEntity): Promise<FiscalEntity> {
     const id = randomUUID();
     const now = new Date();
-    
+
     const newEntity: FiscalEntity = {
       id,
       ...entity,
@@ -6958,7 +7020,7 @@ export class MemStorage implements IStorage {
   }
 
   // ============== PROCESS OWNERS METHODS (Basic MemStorage implementation) ==============
-  
+
   async getProcessOwners(): Promise<ProcessOwner[]> {
     return Array.from(this.processOwners.values()).filter(owner => owner.isActive);
   }
@@ -6974,7 +7036,7 @@ export class MemStorage implements IStorage {
   async createProcessOwner(owner: InsertProcessOwner): Promise<ProcessOwner> {
     const id = randomUUID();
     const now = new Date();
-    
+
     const newOwner: ProcessOwner = {
       id,
       ...owner,
@@ -7009,7 +7071,7 @@ export class MemStorage implements IStorage {
 
 // DatabaseStorage implementation for persisting data in PostgreSQL
 export class DatabaseStorage extends MemStorage {
-  
+
   constructor() {
     super();
     this.storageKind = 'DatabaseStorage';
@@ -7020,34 +7082,34 @@ export class DatabaseStorage extends MemStorage {
       throw new Error('DatabaseStorage requires DATABASE_URL to be configured. Use MemStorage instead.');
     }
   }
-  
+
   // System config uses Redis distributed cache for persistence across restarts
   private systemConfigLocalCache: Map<string, SystemConfig> = new Map();
   private localCacheInitialized: boolean = false;
   private loadingPromise: Promise<void> | null = null; // Prevents race conditions
-  
+
   // Load all system configs from Redis or DB into local memory cache
   // Uses promise lock to prevent multiple concurrent loads (race condition fix)
   private async loadSystemConfigCache(): Promise<void> {
     // Fast path: already loaded
     if (this.localCacheInitialized) return;
-    
+
     // If another request is already loading, wait for it
     if (this.loadingPromise) {
       await this.loadingPromise;
       return;
     }
-    
+
     // First request - create promise lock and load
     this.loadingPromise = this.doLoadSystemConfigCache();
-    
+
     try {
       await this.loadingPromise;
     } finally {
       this.loadingPromise = null;
     }
   }
-  
+
   // Internal loader - only called by one request at a time
   private async doLoadSystemConfigCache(): Promise<void> {
     try {
@@ -7062,17 +7124,17 @@ export class DatabaseStorage extends MemStorage {
         console.log(`📦 System config loaded from Redis cache (${this.systemConfigLocalCache.size} keys)`);
         return;
       }
-      
+
       // Cache miss - load from DB and populate Redis
       const allConfigs = await db.select().from(systemConfig).where(eq(systemConfig.isActive, true));
       const configMap: Record<string, SystemConfig> = {};
       this.systemConfigLocalCache.clear();
-      
+
       for (const config of allConfigs) {
         this.systemConfigLocalCache.set(config.configKey, config);
         configMap[config.configKey] = config;
       }
-      
+
       // Save to Redis for other instances / future requests
       await setSystemConfigCache(configMap);
       this.localCacheInitialized = true;
@@ -7082,7 +7144,7 @@ export class DatabaseStorage extends MemStorage {
       throw error; // Propagate error to callers so they don't hang on rejected promise
     }
   }
-  
+
   // Invalidate both local and Redis caches when config changes
   private async invalidateConfigCache(): Promise<void> {
     this.systemConfigLocalCache.clear();
@@ -7090,13 +7152,13 @@ export class DatabaseStorage extends MemStorage {
     this.loadingPromise = null; // Reset promise lock to allow fresh load
     await invalidateSystemConfigCache();
   }
-  
+
   // ============== FUNCIONES DE REVALIDACIÓN ==============
-  
+
   /**
    * Calcula la próxima fecha de revalidación basada en la política del nivel de riesgo del control
    */
-  private async calculateNextRevalidationDate(controlId: string, baseDate?: Date): Promise<{nextDate: Date, policy: RevalidationPolicy, frequency: number}> {
+  private async calculateNextRevalidationDate(controlId: string, baseDate?: Date): Promise<{ nextDate: Date, policy: RevalidationPolicy, frequency: number }> {
     // Determinar la fecha base correcta: última revalidación o creación del control
     let effectiveBaseDate = baseDate;
     if (!effectiveBaseDate) {
@@ -7114,9 +7176,9 @@ export class DatabaseStorage extends MemStorage {
       riskId: riskControls.riskId,
       inherentRisk: risks.inherentRisk
     })
-    .from(riskControls)
-    .innerJoin(risks, eq(riskControls.riskId, risks.id))
-    .where(eq(riskControls.controlId, controlId));
+      .from(riskControls)
+      .innerJoin(risks, eq(riskControls.riskId, risks.id))
+      .where(eq(riskControls.controlId, controlId));
 
     // Determinar el nivel de riesgo más alto asociado al control
     let maxInherentRisk = 0;
@@ -7129,7 +7191,7 @@ export class DatabaseStorage extends MemStorage {
     // Usar configuración dinámica para clasificar el riesgo
     const riskRanges = await this.getRiskLevelRanges();
     let maxRiskLevel = 'bajo'; // default
-    
+
     if (maxInherentRisk > riskRanges.mediumMax) {
       maxRiskLevel = 'alto';
     } else if (maxInherentRisk > riskRanges.lowMax) {
@@ -7163,7 +7225,7 @@ export class DatabaseStorage extends MemStorage {
     // Calcular la próxima fecha sumando los meses de la política
     const nextDate = new Date(effectiveBaseDate);
     nextDate.setMonth(nextDate.getMonth() + policy.frequencyMonths);
-    
+
     return { nextDate, policy, frequency: policy.frequencyMonths };
   }
 
@@ -7218,26 +7280,26 @@ export class DatabaseStorage extends MemStorage {
   async recalculateControlsByRiskLevel(riskLevel: string): Promise<void> {
     try {
       console.log(`🔄 Iniciando recálculo masivo para controles con nivel de riesgo: ${riskLevel}`);
-      
+
       // Obtener rangos de riesgo dinámicos para clasificar correctamente
       const riskRanges = await this.getRiskLevelRanges();
-      
+
       // Obtener todos los controles únicos que tienen riesgos asociados
       const controlsWithRisks = await db
         .selectDistinct({ controlId: riskControls.controlId })
         .from(riskControls)
         .innerJoin(risks, eq(riskControls.riskId, risks.id));
-      
+
       let recalculatedCount = 0;
-      
+
       // Para cada control, verificar si tiene algún riesgo del nivel especificado
       for (const { controlId } of controlsWithRisks) {
         const controlRisks = await db.select({
           inherentRisk: risks.inherentRisk
         })
-        .from(riskControls)
-        .innerJoin(risks, eq(riskControls.riskId, risks.id))
-        .where(eq(riskControls.controlId, controlId));
+          .from(riskControls)
+          .innerJoin(risks, eq(riskControls.riskId, risks.id))
+          .where(eq(riskControls.controlId, controlId));
 
         // Determinar el nivel de riesgo más alto del control
         let maxInherentRisk = 0;
@@ -7265,7 +7327,7 @@ export class DatabaseStorage extends MemStorage {
           }
         }
       }
-      
+
       console.log(`✅ Recálculo masivo completado: ${recalculatedCount} controles actualizados para nivel de riesgo ${riskLevel}`);
     } catch (error) {
       console.error(`❌ Error en recálculo masivo para nivel ${riskLevel}:`, error);
@@ -7296,7 +7358,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== MÉTODOS DE REVALIDACIÓN - DatabaseStorage ==============
-  
+
   // Process Validation Dashboard - Override para usar base de datos
   override async getProcessValidationDashboard(): Promise<ProcessValidation[]> {
     try {
@@ -7307,7 +7369,7 @@ export class DatabaseStorage extends MemStorage {
       return [];
     }
   }
-  
+
   // Override updateControl para persistir en base de datos
   override async updateControl(id: string, update: Partial<InsertControl>): Promise<Control | undefined> {
     try {
@@ -7321,47 +7383,47 @@ export class DatabaseStorage extends MemStorage {
       return undefined;
     }
   }
-  
+
   // Control Owners methods
   async getControlOwners(): Promise<ControlOwner[]> {
     return await db.select().from(controlOwners).orderBy(controlOwners.assignedAt);
   }
-  
+
   async getControlOwner(id: string): Promise<ControlOwner | undefined> {
     const [owner] = await db.select().from(controlOwners).where(eq(controlOwners.id, id));
     return owner;
   }
-  
+
   async getControlOwnersByControl(controlId: string): Promise<ControlOwner[]> {
     return await db.select().from(controlOwners).where(eq(controlOwners.controlId, controlId));
   }
-  
+
   async getActiveControlOwnerByControl(controlId: string): Promise<ControlOwner | undefined> {
     const [owner] = await db.select().from(controlOwners)
       .where(and(eq(controlOwners.controlId, controlId), eq(controlOwners.isActive, true)))
       .orderBy(controlOwners.assignedAt);
     return owner;
   }
-  
+
   async assignControlOwner(owner: InsertControlOwner): Promise<ControlOwner> {
     // Desactivar propietarios anteriores del mismo control
     await db.update(controlOwners)
       .set({ isActive: false })
       .where(eq(controlOwners.controlId, owner.controlId));
-      
+
     // Crear nuevo propietario
     const [newOwner] = await db.insert(controlOwners)
       .values(owner)
       .returning();
-      
+
     console.log(`✅ Propietario de control asignado: ${newOwner.userId} para control ${newOwner.controlId}`);
     return newOwner;
   }
-  
+
   async createControlOwner(owner: InsertControlOwner): Promise<ControlOwner> {
     return await this.assignControlOwner(owner);
   }
-  
+
   async updateControlOwner(id: string, owner: Partial<InsertControlOwner>): Promise<ControlOwner | undefined> {
     const [updated] = await db.update(controlOwners)
       .set(owner)
@@ -7369,52 +7431,52 @@ export class DatabaseStorage extends MemStorage {
       .returning();
     return updated;
   }
-  
+
   async deactivateControlOwner(id: string): Promise<boolean> {
     const result = await db.update(controlOwners)
       .set({ isActive: false })
       .where(eq(controlOwners.id, id));
     return result.rowCount > 0;
   }
-  
+
   async deleteControlOwner(id: string): Promise<boolean> {
     return await this.deactivateControlOwner(id);
   }
-  
+
   // Revalidations methods
   async getRevalidations(): Promise<Revalidation[]> {
     return await db.select().from(revalidations).orderBy(revalidations.revalidationDate);
   }
-  
+
   async getRevalidation(id: string): Promise<Revalidation | undefined> {
     const [revalidation] = await db.select().from(revalidations).where(eq(revalidations.id, id));
     return revalidation;
   }
-  
+
   async getRevalidationsByControl(controlId: string): Promise<Revalidation[]> {
     return await db.select().from(revalidations)
       .where(eq(revalidations.controlId, controlId))
       .orderBy(revalidations.revalidationDate);
   }
-  
+
   async createRevalidation(revalidation: InsertRevalidation): Promise<Revalidation> {
     const [newRevalidation] = await db.insert(revalidations)
       .values(revalidation)
       .returning();
-      
+
     // Actualizar fechas del control después de crear la revalidación
     await this.updateControlRevalidationDates(revalidation.controlId);
-    
+
     console.log(`✅ Revalidación creada para control ${revalidation.controlId}: ${revalidation.status}`);
     return newRevalidation;
   }
-  
+
   async updateRevalidation(id: string, revalidation: Partial<InsertRevalidation>): Promise<Revalidation | undefined> {
     const [updated] = await db.update(revalidations)
       .set(revalidation)
       .where(eq(revalidations.id, id))
       .returning();
-      
+
     if (updated) {
       // Actualizar fechas del control después de actualizar la revalidación
       try {
@@ -7424,10 +7486,10 @@ export class DatabaseStorage extends MemStorage {
         console.warn(`⚠️  No se pudieron recalcular fechas para control ${updated.controlId} tras actualizar revalidación:`, error);
       }
     }
-    
+
     return updated;
   }
-  
+
   async getLatestRevalidationByControl(controlId: string): Promise<Revalidation | undefined> {
     const [latest] = await db.select().from(revalidations)
       .where(eq(revalidations.controlId, controlId))
@@ -7435,67 +7497,67 @@ export class DatabaseStorage extends MemStorage {
       .limit(1);
     return latest;
   }
-  
+
   // Revalidation Policies methods
   async getRevalidationPolicies(): Promise<RevalidationPolicy[]> {
     return await db.select().from(revalidationPolicies).orderBy(revalidationPolicies.riskLevel);
   }
-  
+
   async getRevalidationPolicy(id: string): Promise<RevalidationPolicy | undefined> {
     const [policy] = await db.select().from(revalidationPolicies).where(eq(revalidationPolicies.id, id));
     return policy;
   }
-  
+
   async getRevalidationPolicyByRiskLevel(riskLevel: string): Promise<RevalidationPolicy | undefined> {
     const [policy] = await db.select().from(revalidationPolicies)
       .where(eq(revalidationPolicies.riskLevel, riskLevel));
     return policy;
   }
-  
+
   async createRevalidationPolicy(policy: InsertRevalidationPolicy): Promise<RevalidationPolicy> {
     const [newPolicy] = await db.insert(revalidationPolicies)
       .values(policy)
       .returning();
-      
+
     // Recalcular fechas para todos los controles afectados por esta nueva política
     await this.recalculateControlsByRiskLevel(newPolicy.riskLevel);
-    
+
     return newPolicy;
   }
-  
+
   async updateRevalidationPolicy(id: string, policy: Partial<InsertRevalidationPolicy>): Promise<RevalidationPolicy | undefined> {
     const [updated] = await db.update(revalidationPolicies)
       .set(policy)
       .where(eq(revalidationPolicies.id, id))
       .returning();
-      
+
     if (updated) {
       // Recalcular fechas para todos los controles afectados por esta política actualizada
       await this.recalculateControlsByRiskLevel(updated.riskLevel);
     }
-    
+
     return updated;
   }
-  
+
   async deleteRevalidationPolicy(id: string): Promise<boolean> {
     // Obtener el nivel de riesgo antes de eliminar para recalcular controles
     const [policy] = await db.select({ riskLevel: revalidationPolicies.riskLevel })
       .from(revalidationPolicies)
       .where(eq(revalidationPolicies.id, id));
-      
+
     const result = await db.delete(revalidationPolicies)
       .where(eq(revalidationPolicies.id, id));
-      
+
     const success = result.rowCount > 0;
-    
+
     if (success && policy) {
       // Recalcular fechas para todos los controles que usaban esta política eliminada
       await this.recalculateControlsByRiskLevel(policy.riskLevel);
     }
-    
+
     return success;
   }
-  
+
   // ============== CONTROLS - Use Database ==============
   async getControls(): Promise<Control[]> {
     return await db.select().from(controls)
@@ -7506,10 +7568,10 @@ export class DatabaseStorage extends MemStorage {
   async getControlsPaginated(filters: ControlFilters, limit: number, offset: number): Promise<{ controls: Control[]; total: number }> {
     // Build WHERE conditions
     const conditions = [];
-    
+
     // Exclude deleted controls
     conditions.push(ne(controls.status, 'deleted'));
-    
+
     // Apply filters
     if (filters.search) {
       const searchPattern = `%${filters.search.toLowerCase()}%`;
@@ -7521,40 +7583,40 @@ export class DatabaseStorage extends MemStorage {
         )!
       );
     }
-    
+
     if (filters.type) {
       conditions.push(eq(controls.type, filters.type));
     }
-    
+
     if (filters.frequency) {
       conditions.push(eq(controls.frequency, filters.frequency));
     }
-    
+
     if (filters.status) {
       conditions.push(eq(controls.status, filters.status));
     }
-    
+
     if (filters.ownerId) {
       conditions.push(eq(controls.ownerId, filters.ownerId));
     }
-    
+
     if (filters.minEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} >= ${filters.minEffectiveness}`);
     }
-    
+
     if (filters.maxEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} <= ${filters.maxEffectiveness}`);
     }
-    
+
     // Build WHERE clause
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-    
+
     // Get total count
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(controls)
       .where(whereClause);
-    
+
     // Get paginated results
     const paginatedControls = await db
       .select()
@@ -7563,7 +7625,7 @@ export class DatabaseStorage extends MemStorage {
       .limit(limit)
       .offset(offset)
       .orderBy(controls.code);
-    
+
     return {
       controls: paginatedControls,
       total: count
@@ -7573,7 +7635,7 @@ export class DatabaseStorage extends MemStorage {
   async getControlsWithRiskCount(): Promise<(Control & { associatedRisksCount: number; associatedRisks?: { id: string; code: string }[]; controlOwner?: { id: string; fullName: string; cargo: string } })[]> {
     // OPTIMIZED: Use SQL to count risks instead of loading all associations in memory
     // This reduces the query from loading potentially thousands of records to just the counts
-    
+
     // Get all controls with risk count in a single optimized query
     const controlsWithCount = await db
       .select({
@@ -7589,7 +7651,7 @@ export class DatabaseStorage extends MemStorage {
       .where(ne(controls.status, 'deleted'))
       .groupBy(controls.id)
       .orderBy(controls.code);
-    
+
     // Get associated risk details in a separate optimized query (only if needed for display)
     const riskDetails = await db
       .select({
@@ -7604,19 +7666,19 @@ export class DatabaseStorage extends MemStorage {
         ne(risks.status, 'deleted'),
         ne(controls.status, 'deleted')
       ));
-    
+
     // Build risk codes map from the query results
     const riskCodesMap = new Map<string, { id: string; code: string }[]>();
     for (const detail of riskDetails) {
       if (!riskCodesMap.has(detail.controlId)) {
         riskCodesMap.set(detail.controlId, []);
       }
-      riskCodesMap.get(detail.controlId)!.push({ 
-        id: detail.riskId, 
-        code: detail.riskCode 
+      riskCodesMap.get(detail.controlId)!.push({
+        id: detail.riskId,
+        code: detail.riskCode
       });
     }
-    
+
     // Get all active control owners in a single query
     const controlOwnersData = await db
       .select({
@@ -7628,7 +7690,7 @@ export class DatabaseStorage extends MemStorage {
       .from(controlOwners)
       .innerJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
       .where(eq(controlOwners.isActive, true));
-    
+
     // Create a map for quick lookup (only first owner per control)
     const ownerMap = new Map<string, { id: string; fullName: string; cargo: string }>();
     for (const owner of controlOwnersData) {
@@ -7640,7 +7702,7 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     // Combine all data
     const controlsWithRiskCount = controlsWithCount.map(({ control, riskCount }) => ({
       ...control,
@@ -7657,17 +7719,17 @@ export class DatabaseStorage extends MemStorage {
     limit: number,
     offset: number
   ): Promise<{
-    controls: (Control & { 
-      associatedRisksCount: number; 
-      associatedRisks?: { id: string; code: string }[]; 
-      controlOwner?: { id: string; fullName: string; cargo: string } 
+    controls: (Control & {
+      associatedRisksCount: number;
+      associatedRisks?: { id: string; code: string }[];
+      controlOwner?: { id: string; fullName: string; cargo: string }
     })[];
     total: number;
   }> {
     // Build WHERE conditions for filtering
     const conditions = [];
     conditions.push(ne(controls.status, 'deleted'));
-    
+
     if (filters.search) {
       const searchPattern = `%${filters.search.toLowerCase()}%`;
       conditions.push(
@@ -7678,31 +7740,31 @@ export class DatabaseStorage extends MemStorage {
         )!
       );
     }
-    
+
     if (filters.type) {
       conditions.push(eq(controls.type, filters.type));
     }
-    
+
     if (filters.frequency) {
       conditions.push(eq(controls.frequency, filters.frequency));
     }
-    
+
     // FIXED: Only apply status filter if explicitly provided (preserves original behavior)
     // Base query already excludes deleted, so status filter should only apply for other statuses
     if (filters.status && filters.status !== 'deleted') {
       conditions.push(eq(controls.status, filters.status));
     }
-    
+
     if (filters.minEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} >= ${filters.minEffectiveness}`);
     }
-    
+
     if (filters.maxEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} <= ${filters.maxEffectiveness}`);
     }
-    
+
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-    
+
     // FIXED: If owner filter provided, we need to join controlOwners to filter
     // Build count query - may need owner join if filtering by owner
     let countQuery;
@@ -7725,9 +7787,9 @@ export class DatabaseStorage extends MemStorage {
         .from(controls)
         .where(whereClause);
     }
-    
+
     const [{ count }] = await countQuery;
-    
+
     // FIXED: Get paginated controls with risk count
     // Move risks.status != 'deleted' to WHERE clause instead of CASE to fix count accuracy
     let mainQuery;
@@ -7775,16 +7837,16 @@ export class DatabaseStorage extends MemStorage {
         .limit(limit)
         .offset(offset);
     }
-    
+
     const controlsWithCount = await mainQuery;
-    
+
     // Extract control IDs for fetching related data
     const controlIds = controlsWithCount.map(({ control }) => control.id);
-    
+
     if (controlIds.length === 0) {
       return { controls: [], total: count };
     }
-    
+
     // Get associated risk details ONLY for paginated controls (optimized)
     const riskDetails = await db
       .select({
@@ -7798,19 +7860,19 @@ export class DatabaseStorage extends MemStorage {
         inArray(riskControls.controlId, controlIds),
         ne(risks.status, 'deleted')
       ));
-    
+
     // Build risk codes map
     const riskCodesMap = new Map<string, { id: string; code: string }[]>();
     for (const detail of riskDetails) {
       if (!riskCodesMap.has(detail.controlId)) {
         riskCodesMap.set(detail.controlId, []);
       }
-      riskCodesMap.get(detail.controlId)!.push({ 
-        id: detail.riskId, 
-        code: detail.riskCode 
+      riskCodesMap.get(detail.controlId)!.push({
+        id: detail.riskId,
+        code: detail.riskCode
       });
     }
-    
+
     // Get control owners ONLY for paginated controls (optimized)
     const controlOwnersData = await db
       .select({
@@ -7825,7 +7887,7 @@ export class DatabaseStorage extends MemStorage {
         inArray(controlOwners.controlId, controlIds),
         eq(controlOwners.isActive, true)
       ));
-    
+
     // Create owner map (only first owner per control)
     const ownerMap = new Map<string, { id: string; fullName: string; cargo: string }>();
     for (const owner of controlOwnersData) {
@@ -7837,7 +7899,7 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     // Combine all data
     const paginatedControlsWithDetails = controlsWithCount.map(({ control, riskCount }) => ({
       ...control,
@@ -7845,7 +7907,7 @@ export class DatabaseStorage extends MemStorage {
       associatedRisks: riskCodesMap.get(control.id) || [],
       controlOwner: ownerMap.get(control.id)
     }));
-    
+
     return {
       controls: paginatedControlsWithDetails,
       total: count
@@ -7866,14 +7928,14 @@ export class DatabaseStorage extends MemStorage {
     const existingCodes = existingControls
       .map(c => c.code)
       .filter(code => code.startsWith('C-'));
-    
+
     let nextNumber = 1;
     let code: string;
     do {
       code = `C-${nextNumber.toString().padStart(4, '0')}`;
       nextNumber++;
     } while (existingCodes.includes(code));
-    
+
     return code;
   }
 
@@ -7886,16 +7948,16 @@ export class DatabaseStorage extends MemStorage {
       lastReview: insertControl.lastReview || null,
       isActive: insertControl.isActive ?? true,
     };
-    
+
     const [created] = await db.insert(controls).values(controlData).returning();
-    
+
     // Actualizar fechas de revalidación automáticamente después de crear el control
     try {
       await this.updateControlRevalidationDates(created.id);
     } catch (error) {
       console.warn(`⚠️  No se pudieron calcular fechas de revalidación para control recién creado ${created.id}:`, error);
     }
-    
+
     return created;
   }
 
@@ -7907,38 +7969,38 @@ export class DatabaseStorage extends MemStorage {
 
       await db.transaction(async (trx) => {
         // Delete all associated records first (due to foreign key constraints)
-        
+
         // 1. Delete risk_controls
         await trx.delete(riskControls).where(eq(riskControls.controlId, id));
-        
+
         // 2. Delete control_evaluations
         await trx.delete(controlEvaluations).where(eq(controlEvaluations.controlId, id));
-        
+
         // 3. Delete control_owners
         await trx.delete(controlOwners).where(eq(controlOwners.controlId, id));
-        
+
         // 4. Delete control_processes
         await trx.delete(controlProcesses).where(eq(controlProcesses.controlId, id));
-        
+
         // 5. Delete control_assessment_history
         await trx.delete(controlAssessmentHistory).where(eq(controlAssessmentHistory.controlId, id));
-        
+
         // 6. Delete audit_control_evaluations
         await trx.delete(auditControlEvaluations).where(eq(auditControlEvaluations.controlId, id));
-        
+
         // 7. Delete audit_tests where controlId is referenced
         await trx.delete(auditTests).where(eq(auditTests.controlId, id));
-        
+
         // 8. Delete compliance_test_controls
         await trx.delete(complianceTestControls).where(eq(complianceTestControls.controlId, id));
-        
+
         // 10. Delete risk_events where controlId is referenced
         await trx.delete(riskEvents).where(eq(riskEvents.controlId, id));
-        
+
         // Finally, delete the control itself
         await trx.delete(controls).where(eq(controls.id, id));
       });
-      
+
       return true;
     } catch (error) {
       console.error('Error deleting control:', error);
@@ -7949,16 +8011,16 @@ export class DatabaseStorage extends MemStorage {
   // ============== MACROPROCESOS - Use Database ==============
   async getMacroprocesos(): Promise<Macroproceso[]> {
     const cacheKey = 'macroprocesos:single-tenant';
-    
+
     // Try cache first (60s TTL - catalog data changes infrequently)
     const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    
+
     const result = await db.select().from(macroprocesos)
       .where(isNull(macroprocesos.deletedAt));
-    
+
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);
     return result;
@@ -7969,7 +8031,7 @@ export class DatabaseStorage extends MemStorage {
     const duplicateName = await db.select().from(macroprocesos)
       .where(sql`LOWER(${macroprocesos.name}) = LOWER(${insertMacroproceso.name})`)
       .limit(1);
-    
+
     if (duplicateName.length > 0) {
       throw new Error(`Ya existe un macroproceso con el nombre "${insertMacroproceso.name}"`);
     }
@@ -7995,7 +8057,7 @@ export class DatabaseStorage extends MemStorage {
       ...insertMacroproceso,
       createdAt: new Date(),
     };
-    
+
     const [created] = await db.insert(macroprocesos).values(dataToInsert).returning();
     return created;
   }
@@ -8012,7 +8074,7 @@ export class DatabaseStorage extends MemStorage {
           ne(macroprocesos.id, id)
         ))
         .limit(1);
-      
+
       if (duplicateName.length > 0) {
         throw new Error(`Ya existe un macroproceso con el nombre "${update.name}"`);
       }
@@ -8078,11 +8140,11 @@ export class DatabaseStorage extends MemStorage {
     return await db.transaction(async (tx) => {
       const ids = updates.map(u => u.id);
       const rows = await tx.select().from(macroprocesos).where(inArray(macroprocesos.id, ids));
-      
+
       if (rows.length !== updates.length) {
         throw new Error("Unknown macroproceso id");
       }
-      
+
       // validate uniqueness & positivity
       const orders = updates.map(u => u.order);
       if (orders.length !== new Set(orders).size) {
@@ -8091,12 +8153,12 @@ export class DatabaseStorage extends MemStorage {
       if (orders.some(o => o < 1)) {
         throw new Error("Order must be >= 1");
       }
-      
+
       // apply updates
       for (const { id, order } of updates) {
         await tx.update(macroprocesos).set({ order }).where(eq(macroprocesos.id, id));
       }
-      
+
       // return fresh ordered list
       const all = await tx.select().from(macroprocesos).orderBy(macroprocesos.order);
       return all;
@@ -8106,16 +8168,16 @@ export class DatabaseStorage extends MemStorage {
   // ============== PROCESSES - Use Database ==============
   async getProcesses(): Promise<Process[]> {
     const cacheKey = 'processes:single-tenant';
-    
+
     // Try cache first (60s TTL - catalog data changes infrequently)
     const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    
+
     const result = await db.select().from(processes)
       .where(isNull(processes.deletedAt));
-    
+
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);
     return result;
@@ -8172,7 +8234,7 @@ export class DatabaseStorage extends MemStorage {
     const duplicateName = await db.select().from(processes)
       .where(sql`LOWER(${processes.name}) = LOWER(${insertProcess.name})`)
       .limit(1);
-    
+
     if (duplicateName.length > 0) {
       throw new Error(`Ya existe un proceso con el nombre "${insertProcess.name}"`);
     }
@@ -8210,7 +8272,7 @@ export class DatabaseStorage extends MemStorage {
           ne(processes.id, id)
         ))
         .limit(1);
-      
+
       if (duplicateName.length > 0) {
         throw new Error(`Ya existe un proceso con el nombre "${update.name}"`);
       }
@@ -8275,25 +8337,25 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Build WHERE conditions
       const conditions = [];
-      
+
       // Optional filters
       if (options?.riskId) {
         conditions.push(eq(riskControls.riskId, options.riskId));
       }
-      
+
       if (options?.controlId) {
         conditions.push(eq(riskControls.controlId, options.controlId));
       }
-      
+
       // Exclude deleted by default
       if (!options?.includeDeletedRisks) {
         conditions.push(ne(risks.status, 'deleted'));
       }
-      
+
       if (!options?.includeDeletedControls) {
         conditions.push(ne(controls.status, 'deleted'));
       }
-      
+
       // Build the query with all necessary joins
       const query = db
         .select({
@@ -8330,21 +8392,21 @@ export class DatabaseStorage extends MemStorage {
         .innerJoin(risks, eq(riskControls.riskId, risks.id))
         .innerJoin(controls, eq(riskControls.controlId, controls.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined);
-      
+
       const results = await query;
-      
+
       // Build aggregation maps for counts
       const riskCountByControl = new Map<string, number>();
       const controlCountByRisk = new Map<string, number>();
-      
+
       for (const row of results) {
         // Count risks per control
         riskCountByControl.set(row.controlId, (riskCountByControl.get(row.controlId) || 0) + 1);
-        
+
         // Count controls per risk
         controlCountByRisk.set(row.riskId, (controlCountByRisk.get(row.riskId) || 0) + 1);
       }
-      
+
       // Format the results
       const associations = results.map(row => {
         const result: any = {
@@ -8353,7 +8415,7 @@ export class DatabaseStorage extends MemStorage {
           controlId: row.controlId,
           residualRisk: row.residualRisk
         };
-        
+
         // Add risk details if requested
         if (options?.includeRiskDetails && 'riskId2' in row) {
           result.risk = {
@@ -8367,7 +8429,7 @@ export class DatabaseStorage extends MemStorage {
             status: row.riskStatus
           };
         }
-        
+
         // Add control details if requested
         if (options?.includeControlDetails && 'controlId2' in row) {
           result.control = {
@@ -8382,10 +8444,10 @@ export class DatabaseStorage extends MemStorage {
             status: row.controlStatus
           };
         }
-        
+
         return result;
       });
-      
+
       return {
         associations,
         riskCountByControl,
@@ -8412,16 +8474,16 @@ export class DatabaseStorage extends MemStorage {
     try {
       console.log('[getAllRiskControlsWithDetails] Starting query');
       const startTime = Date.now();
-      
+
       // Use the unified function with control details
       const { associations } = await this.getRiskControlAssociations({
         includeControlDetails: true,
         includeRiskDetails: false
       });
-      
+
       const duration = Date.now() - startTime;
       console.log(`[getAllRiskControlsWithDetails] Query completed in ${duration}ms, returned ${associations.length} records`);
-      
+
       // Filter to only return associations with control details
       return associations.filter(a => a.control).map(a => ({
         id: a.id,
@@ -8447,7 +8509,7 @@ export class DatabaseStorage extends MemStorage {
       includeControlDetails: true,
       includeRiskDetails: false
     });
-    
+
     // Filter to only return associations with control details
     return associations.filter(a => a.control).map(a => ({
       id: a.id,
@@ -8460,19 +8522,19 @@ export class DatabaseStorage extends MemStorage {
 
   async getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]> {
     if (riskIds.length === 0) return [];
-    
+
     // Direct query with WHERE IN for efficiency
     const results = await db.select({
       riskControl: riskControls,
       control: controls
     })
-    .from(riskControls)
-    .innerJoin(controls, eq(riskControls.controlId, controls.id))
-    .where(and(
-      inArray(riskControls.riskId, riskIds),
-      isNull(controls.deletedAt)
-    ));
-    
+      .from(riskControls)
+      .innerJoin(controls, eq(riskControls.controlId, controls.id))
+      .where(and(
+        inArray(riskControls.riskId, riskIds),
+        isNull(controls.deletedAt)
+      ));
+
     return results.map(r => ({
       id: r.riskControl.id,
       riskId: r.riskControl.riskId,
@@ -8489,7 +8551,7 @@ export class DatabaseStorage extends MemStorage {
       includeRiskDetails: true,
       includeControlDetails: false
     });
-    
+
     // Filter to only return associations with risk details
     return associations.filter(a => a.risk).map(a => ({
       id: a.id,
@@ -8505,14 +8567,14 @@ export class DatabaseStorage extends MemStorage {
       .insert(riskControls)
       .values(insertRiskControl)
       .returning();
-      
+
     // Actualizar fechas de revalidación del control asociado automáticamente
     try {
       await this.updateControlRevalidationDates(created.controlId);
     } catch (error) {
       console.warn(`⚠️  No se pudieron recalcular fechas de revalidación para control ${created.controlId} tras nueva asociación de riesgo:`, error);
     }
-    
+
     return created;
   }
 
@@ -8522,7 +8584,7 @@ export class DatabaseStorage extends MemStorage {
       .set({ residualRisk })
       .where(eq(riskControls.id, id))
       .returning();
-      
+
     if (updated) {
       // Actualizar fechas de revalidación del control asociado automáticamente
       try {
@@ -8539,13 +8601,13 @@ export class DatabaseStorage extends MemStorage {
     const [riskControl] = await db.select({ controlId: riskControls.controlId })
       .from(riskControls)
       .where(eq(riskControls.id, id));
-      
+
     const result = await db
       .delete(riskControls)
       .where(eq(riskControls.id, id));
-      
+
     const success = (result.rowCount ?? 0) > 0;
-    
+
     if (success && riskControl) {
       // Recalcular fechas del control ya que el nivel de riesgo puede haber cambiado
       try {
@@ -8555,7 +8617,7 @@ export class DatabaseStorage extends MemStorage {
         console.warn(`⚠️  No se pudieron recalcular fechas para control ${riskControl.controlId} tras eliminar asociación:`, error);
       }
     }
-    
+
     return success;
   }
 
@@ -8567,10 +8629,10 @@ export class DatabaseStorage extends MemStorage {
   async getRisksPaginated(filters: RiskFilters, limit: number, offset: number): Promise<{ risks: Risk[]; total: number }> {
     // Build WHERE conditions
     const conditions = [];
-    
+
     // Exclude deleted risks
     conditions.push(ne(risks.status, 'deleted'));
-    
+
     // Apply filters
     if (filters.search) {
       const searchPattern = `%${filters.search.toLowerCase()}%`;
@@ -8582,15 +8644,15 @@ export class DatabaseStorage extends MemStorage {
         )!
       );
     }
-    
+
     if (filters.category) {
       conditions.push(eq(risks.category, filters.category));
     }
-    
+
     if (filters.status) {
       conditions.push(eq(risks.status, filters.status));
     }
-    
+
     // Use EXISTS for process filters - semantically correct and optimized with existing composite indexes
     // (idx_rpl_risk_macroproceso, idx_rpl_risk_process, idx_rpl_risk_subproceso)
     if (filters.processId) {
@@ -8598,44 +8660,44 @@ export class DatabaseStorage extends MemStorage {
         sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.processId} = ${filters.processId})`
       );
     }
-    
+
     if (filters.subprocesoId) {
       conditions.push(
         sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.subprocesoId} = ${filters.subprocesoId})`
       );
     }
-    
+
     if (filters.macroprocesoId) {
       conditions.push(
         sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.macroprocesoId} = ${filters.macroprocesoId})`
       );
     }
-    
+
     if (filters.minProbability !== undefined) {
       conditions.push(sql`${risks.probability} >= ${filters.minProbability}`);
     }
-    
+
     if (filters.maxProbability !== undefined) {
       conditions.push(sql`${risks.probability} <= ${filters.maxProbability}`);
     }
-    
+
     if (filters.minImpact !== undefined) {
       conditions.push(sql`${risks.impact} >= ${filters.minImpact}`);
     }
-    
+
     if (filters.maxImpact !== undefined) {
       conditions.push(sql`${risks.impact} <= ${filters.maxImpact}`);
     }
-    
+
     // Build WHERE clause
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-    
+
     // Get total count
     const [{ count }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(risks)
       .where(whereClause);
-    
+
     // Get paginated results
     const paginatedRisks = await db
       .select()
@@ -8644,7 +8706,7 @@ export class DatabaseStorage extends MemStorage {
       .limit(limit)
       .offset(offset)
       .orderBy(desc(risks.createdAt));
-    
+
     return {
       risks: paginatedRisks,
       total: count
@@ -8654,7 +8716,7 @@ export class DatabaseStorage extends MemStorage {
   async getRisksWithDetails(): Promise<RiskWithProcess[]> {
     // Get all risks
     const allRisks = await db.select().from(risks);
-    
+
     // Optimize: Calculate control effectiveness aggregations in SQL
     // This replaces the O(R*C) JavaScript loop with a single SQL query
     // CRITICAL: Filter by tenant's risk IDs to avoid scanning all tenants' controls
@@ -8684,7 +8746,7 @@ export class DatabaseStorage extends MemStorage {
       )
       .groupBy(riskControls.riskId, controls.effectTarget)
       : [];
-    
+
     // Build map: riskId -> { probability: reductionFactor, impact: reductionFactor }
     const residualFactorsMap = new Map<string, { probability: number; impact: number }>();
     for (const agg of controlAggregations) {
@@ -8692,7 +8754,7 @@ export class DatabaseStorage extends MemStorage {
         residualFactorsMap.set(agg.riskId, { probability: 1.0, impact: 1.0 });
       }
       const factors = residualFactorsMap.get(agg.riskId)!;
-      
+
       if (agg.effectTarget === 'probability' || agg.effectTarget === 'both') {
         factors.probability *= agg.reductionFactor;
       }
@@ -8700,7 +8762,7 @@ export class DatabaseStorage extends MemStorage {
         factors.impact *= agg.reductionFactor;
       }
     }
-    
+
     // Get all related data
     const allProcesses = await db.select().from(processes);
     const allSubprocesos = await db.select().from(subprocesos);
@@ -8733,19 +8795,19 @@ export class DatabaseStorage extends MemStorage {
     // Get all risk-process links to calculate aggregated validation status
     // Note: riskProcessLinks table does NOT have soft-delete fields
     const tenantRiskIds = allRisks.map(r => r.id);
-    
+
     // Load all links for risks in this tenant (include all fields for process mapping)
     const allRiskProcessLinks = tenantRiskIds.length > 0
       ? await db
-          .select({
-            riskId: riskProcessLinks.riskId,
-            macroprocesoId: riskProcessLinks.macroprocesoId,
-            processId: riskProcessLinks.processId,
-            subprocesoId: riskProcessLinks.subprocesoId,
-            validationStatus: riskProcessLinks.validationStatus
-          })
-          .from(riskProcessLinks)
-          .where(inArray(riskProcessLinks.riskId, tenantRiskIds))
+        .select({
+          riskId: riskProcessLinks.riskId,
+          macroprocesoId: riskProcessLinks.macroprocesoId,
+          processId: riskProcessLinks.processId,
+          subprocesoId: riskProcessLinks.subprocesoId,
+          validationStatus: riskProcessLinks.validationStatus
+        })
+        .from(riskProcessLinks)
+        .where(inArray(riskProcessLinks.riskId, tenantRiskIds))
       : [];
 
     // Build maps for quick lookup
@@ -8788,11 +8850,11 @@ export class DatabaseStorage extends MemStorage {
     // Helper to calculate aggregated validation status
     const calculateAggregatedValidationStatus = (riskProcessLinks: Array<{ validationStatus: string | null }>): string => {
       if (riskProcessLinks.length === 0) return 'pending';
-      
+
       const allValidated = riskProcessLinks.every(rpl => rpl.validationStatus === 'validated');
       const anyRejected = riskProcessLinks.some(rpl => rpl.validationStatus === 'rejected');
       const anyObserved = riskProcessLinks.some(rpl => rpl.validationStatus === 'observed');
-      
+
       if (allValidated) return 'validated';
       if (anyRejected) return 'rejected';
       if (anyObserved) return 'observed';
@@ -8804,16 +8866,16 @@ export class DatabaseStorage extends MemStorage {
       let process = undefined;
       let subproceso = undefined;
       let macroproceso = undefined;
-      
+
       // NEW: Get process links for this risk
       const riskProcessLinks = riskProcessLinksMap.get(risk.id) || [];
-      
+
       // NEW: For filtering compatibility, populate deprecated fields from first link
       // Use riskProcessLinks as the source of truth (modern approach)
       let macroprocesoId = risk.macroprocesoId;
       let processId = risk.processId;
       let subprocesoId = risk.subprocesoId;
-      
+
       if (riskProcessLinks.length > 0) {
         // Use first link as primary association for backward compatibility
         const primaryLink = riskProcessLinks[0];
@@ -8842,20 +8904,20 @@ export class DatabaseStorage extends MemStorage {
 
       const controls = riskControlsMap.get(risk.id) || [];
       const actionPlans = actionPlansMap.get(risk.id) || [];
-      
+
       // Calculate aggregated validation status from risk-process links
       const aggregatedValidationStatus = calculateAggregatedValidationStatus(riskProcessLinks);
 
       // Calculate residual probability and impact using pre-aggregated SQL factors
       let residualProbability = Number(risk.probability);
       let residualImpact = Number(risk.impact);
-      
+
       const factors = residualFactorsMap.get(risk.id);
       if (factors) {
         residualProbability = residualProbability * factors.probability;
         residualImpact = residualImpact * factors.impact;
       }
-      
+
       // Clamp to valid range [0.1, 5] and round to tenths
       residualProbability = Math.max(0.1, Math.min(5, Math.round(residualProbability * 10) / 10));
       residualImpact = Math.max(0.1, Math.min(5, Math.round(residualImpact * 10) / 10));
@@ -8939,7 +9001,7 @@ export class DatabaseStorage extends MemStorage {
         isNull(actions.deletedAt)
       )
     );
-    
+
     const actionPlansList = actionsList.map(action => ({
       ...action,
       name: action.title,
@@ -8968,7 +9030,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // Override calculateRiskLevels to use database queries instead of memory
-  async calculateRiskLevels(entityId: string, entityType: 'macroproceso' | 'proceso' | 'subproceso'): Promise<{inherentRisk: number, residualRisk: number, riskCount: number}> {
+  async calculateRiskLevels(entityId: string, entityType: 'macroproceso' | 'proceso' | 'subproceso'): Promise<{ inherentRisk: number, residualRisk: number, riskCount: number }> {
     let risks: Risk[] = [];
 
     if (entityType === 'subproceso') {
@@ -8977,7 +9039,7 @@ export class DatabaseStorage extends MemStorage {
       // Get direct risks of the process
       const directRisks = await this.getRisksByProcess(entityId);
       risks.push(...directRisks);
-      
+
       // Get risks from all subprocesses of this process
       const subprocesos = await this.getSubprocesosByProceso(entityId);
       for (const subproceso of subprocesos) {
@@ -8988,14 +9050,14 @@ export class DatabaseStorage extends MemStorage {
       // Get direct risks of the macroproceso
       const directMacroprocesoRisks = await this.getRisksByMacroproceso(entityId);
       risks.push(...directMacroprocesoRisks);
-      
+
       // Get all processes of this macroproceso
       const processes = await this.getProcessesByMacroproceso(entityId);
       for (const process of processes) {
         // Get direct risks of each process
         const processRisks = await this.getRisksByProcess(process.id);
         risks.push(...processRisks);
-        
+
         // Get risks from all subprocesses of each process
         const subprocesos = await this.getSubprocesosByProceso(process.id);
         for (const subproceso of subprocesos) {
@@ -9003,9 +9065,9 @@ export class DatabaseStorage extends MemStorage {
           risks.push(...subprocesoRisks);
         }
       }
-      
+
       // Remove duplicates by risk ID
-      const uniqueRisks = risks.filter((risk, index, self) => 
+      const uniqueRisks = risks.filter((risk, index, self) =>
         index === self.findIndex(r => r.id === risk.id)
       );
       risks = uniqueRisks;
@@ -9028,13 +9090,13 @@ export class DatabaseStorage extends MemStorage {
     for (const risk of risks) {
       const riskControlsWithDetails = await this.getRiskControls(risk.id);
       let riskResidualRisk = risk.inherentRisk;
-      
+
       if (riskControlsWithDetails.length > 0) {
         // Safe NaN filtering to prevent data corruption
         const vals = riskControlsWithDetails.map(rc => Number(rc.residualRisk)).filter(n => Number.isFinite(n));
         riskResidualRisk = vals.length ? Math.min(...vals) : risk.inherentRisk;
       }
-      
+
       residualRisks.push(riskResidualRisk);
     }
 
@@ -9051,11 +9113,11 @@ export class DatabaseStorage extends MemStorage {
 
   async createRisk(insertRisk: InsertRisk): Promise<Risk> {
     const nextCode = await this.generateRiskCode();
-    
+
     // Check if probability and inherentRisk are pre-calculated from route logic (directProbability/probabilityOverride)
     let finalProbability: number;
     let finalInherentRisk: number;
-    
+
     if ((insertRisk as any).probability !== undefined && (insertRisk as any).inherentRisk !== undefined) {
       // Use pre-calculated values from route logic (directProbability/probabilityOverride handling)
       finalProbability = (insertRisk as any).probability;
@@ -9071,12 +9133,12 @@ export class DatabaseStorage extends MemStorage {
         changeVolatility: insertRisk.changeVolatility ?? 3,
         vulnerabilities: insertRisk.vulnerabilities ?? 3,
       };
-      
+
       const configuredWeights = await this.getProbabilityWeights();
       finalProbability = calculateProbability(probabilityFactors, configuredWeights);
       finalInherentRisk = finalProbability * insertRisk.impact;
     }
-    
+
     const dataToInsert: any = {
       id: randomUUID(),
       ...insertRisk,
@@ -9092,7 +9154,7 @@ export class DatabaseStorage extends MemStorage {
       inherentRisk: finalInherentRisk,
       createdAt: new Date(),
     };
-    
+
     // Convert empty strings to null for foreign key fields
     if (dataToInsert.macroprocesoId === '') {
       dataToInsert.macroprocesoId = null;
@@ -9103,7 +9165,7 @@ export class DatabaseStorage extends MemStorage {
     if (dataToInsert.subprocesoId === '') {
       dataToInsert.subprocesoId = null;
     }
-    
+
     const [created] = await db.insert(risks).values(dataToInsert).returning();
     return created;
   }
@@ -9113,7 +9175,7 @@ export class DatabaseStorage extends MemStorage {
     if (!existing) return undefined;
 
     let updateData: any = { ...update };
-    
+
     // Convert empty strings to null for foreign key fields
     if (updateData.macroprocesoId === '') {
       updateData.macroprocesoId = null;
@@ -9124,7 +9186,7 @@ export class DatabaseStorage extends MemStorage {
     if (updateData.subprocesoId === '') {
       updateData.subprocesoId = null;
     }
-    
+
     // CRITICAL: Only recalculate probability if routes.ts hasn't already provided it
     // This respects directProbability, probabilityOverride, and factor-based calculations done in routes.ts
     if (updateData.probability === undefined || updateData.inherentRisk === undefined) {
@@ -9139,12 +9201,12 @@ export class DatabaseStorage extends MemStorage {
           changeVolatility: update.changeVolatility ?? current.changeVolatility,
           vulnerabilities: update.vulnerabilities ?? current.vulnerabilities,
         };
-        
+
         const configuredWeights = await this.getProbabilityWeights();
         const calculatedProbability = calculateProbability(probabilityFactors, configuredWeights);
         const impact = update.impact ?? current.impact;
         const inherentRisk = calculatedProbability * impact;
-        
+
         // Only set if not already provided by routes.ts
         if (updateData.probability === undefined) {
           updateData.probability = calculatedProbability;
@@ -9169,10 +9231,10 @@ export class DatabaseStorage extends MemStorage {
 
       await db.transaction(async (trx) => {
         // Delete all associated records first (due to foreign key constraints)
-        
+
         // 1. Delete risk_controls
         await trx.delete(riskControls).where(eq(riskControls.riskId, id));
-        
+
         // 2. Soft delete risk-origin actions
         await trx.update(actions)
           .set({ deletedAt: new Date() })
@@ -9180,26 +9242,26 @@ export class DatabaseStorage extends MemStorage {
             eq(actions.riskId, id),
             eq(actions.origin, 'risk')
           ));
-        
+
         // 3. Delete risk_process_links
         await trx.delete(riskProcessLinks).where(eq(riskProcessLinks.riskId, id));
-        
+
         // 4. Delete risk_regulations
         await trx.delete(riskRegulations).where(eq(riskRegulations.riskId, id));
-        
+
         // 5. Delete audit_risk_evaluations
         await trx.delete(auditRiskEvaluations).where(eq(auditRiskEvaluations.riskId, id));
-        
+
         // 6. Delete risk_events (no risk_event_actions table exists)
         await trx.delete(riskEvents).where(eq(riskEvents.riskId, id));
-        
+
         // 7. Delete audit_tests where riskId is referenced
         await trx.delete(auditTests).where(eq(auditTests.riskId, id));
-        
+
         // Finally, delete the risk itself
         await trx.delete(risks).where(eq(risks.id, id));
       });
-      
+
       return true;
     } catch (error) {
       console.error('Error deleting risk:', error);
@@ -9210,11 +9272,11 @@ export class DatabaseStorage extends MemStorage {
   private async generateRiskCode(): Promise<string> {
     // Obtener todos los códigos existentes y encontrar el número más alto
     const existingRisks = await db.select({ code: risks.code }).from(risks);
-    
+
     if (existingRisks.length === 0) {
       return 'R-0001';
     }
-    
+
     // Extraer números de todos los códigos y encontrar el máximo
     let maxNumber = 0;
     for (const risk of existingRisks) {
@@ -9226,7 +9288,7 @@ export class DatabaseStorage extends MemStorage {
         }
       }
     }
-    
+
     // Generar el siguiente código
     const nextNumber = maxNumber + 1;
     return `R-${nextNumber.toString().padStart(4, '0')}`;
@@ -9235,22 +9297,22 @@ export class DatabaseStorage extends MemStorage {
   // ============== RISK CATEGORIES - Use Database ==============
   async getRiskCategories(): Promise<RiskCategory[]> {
     const cacheKey = 'risk-categories';
-    
+
     // Try to get from cache first
     const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    
+
     // Query database with retry for Neon cold starts
     const categories = await withRetry(async () => {
       return await db.select().from(riskCategories)
         .where(eq(riskCategories.isActive, true));
     });
-    
+
     // Store in cache for 10 minutes (600 seconds)
     await distributedCache.set(cacheKey, categories, 600);
-    
+
     return categories;
   }
 
@@ -9267,12 +9329,12 @@ export class DatabaseStorage extends MemStorage {
       color: insertCategory.color || "#6b7280",
       isActive: insertCategory.isActive ?? true,
     }).returning();
-    
+
     // Write-through cache: immediately repopulate with fresh data
     const freshCategories = await db.select().from(riskCategories)
       .where(eq(riskCategories.isActive, true));
     await distributedCache.set('risk-categories', freshCategories, 600);
-    
+
     return created;
   }
 
@@ -9281,30 +9343,30 @@ export class DatabaseStorage extends MemStorage {
       .set(category)
       .where(eq(riskCategories.id, id))
       .returning();
-    
+
     // Write-through cache: immediately repopulate with fresh data
     if (updated) {
       const freshCategories = await db.select().from(riskCategories)
         .where(eq(riskCategories.isActive, true));
       await distributedCache.set('risk-categories', freshCategories, 600);
     }
-    
+
     return updated;
   }
 
   async deleteRiskCategory(id: string): Promise<boolean> {
     const result = await db.delete(riskCategories)
       .where(eq(riskCategories.id, id));
-    
+
     const deleted = (result.rowCount ?? 0) > 0;
-    
+
     // Write-through cache: immediately repopulate with fresh data
     if (deleted) {
       const freshCategories = await db.select().from(riskCategories)
         .where(eq(riskCategories.isActive, true));
       await distributedCache.set('risk-categories', freshCategories, 600);
     }
-    
+
     return deleted;
   }
 
@@ -9331,7 +9393,7 @@ export class DatabaseStorage extends MemStorage {
     // Check if there are evaluations using this criteria
     const evaluations = await db.select().from(controlEvaluations)
       .where(eq(controlEvaluations.criteriaId, id));
-    
+
     if (evaluations.length > 0) {
       throw new Error("Cannot delete criteria with existing evaluations");
     }
@@ -9339,7 +9401,7 @@ export class DatabaseStorage extends MemStorage {
     // Check if there are options for this criteria
     const options = await db.select().from(controlEvaluationOptions)
       .where(eq(controlEvaluationOptions.criteriaId, id));
-    
+
     // Delete options first if they exist
     if (options.length > 0) {
       await db.delete(controlEvaluationOptions)
@@ -9374,7 +9436,7 @@ export class DatabaseStorage extends MemStorage {
     // Check if there are evaluations using this option
     const evaluations = await db.select().from(controlEvaluations)
       .where(eq(controlEvaluations.optionId, id));
-    
+
     if (evaluations.length > 0) {
       throw new Error("Cannot delete option with existing evaluations");
     }
@@ -9394,7 +9456,7 @@ export class DatabaseStorage extends MemStorage {
     });
   }
 
-  async getControlEvaluationsByCriteria(): Promise<{criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[]}[]> {
+  async getControlEvaluationsByCriteria(): Promise<{ criteria: ControlEvaluationCriteria; options: ControlEvaluationOptions[] }[]> {
     const criteria = await this.getControlEvaluationCriteria();
     const result = [];
 
@@ -9531,17 +9593,17 @@ export class DatabaseStorage extends MemStorage {
   async calculateControlEffectiveness(controlId: string): Promise<number> {
     // Get all criteria with their weights
     const criteria = await this.getControlEvaluationCriteria();
-    
+
     // Get evaluations for this control
     const evaluations = await db.select({
       criteriaId: controlEvaluations.criteriaId,
       score: controlEvaluationOptions.score,
       weight: controlEvaluationCriteria.weight
     })
-    .from(controlEvaluations)
-    .innerJoin(controlEvaluationOptions, eq(controlEvaluations.optionId, controlEvaluationOptions.id))
-    .innerJoin(controlEvaluationCriteria, eq(controlEvaluations.criteriaId, controlEvaluationCriteria.id))
-    .where(eq(controlEvaluations.controlId, controlId));
+      .from(controlEvaluations)
+      .innerJoin(controlEvaluationOptions, eq(controlEvaluations.optionId, controlEvaluationOptions.id))
+      .innerJoin(controlEvaluationCriteria, eq(controlEvaluations.criteriaId, controlEvaluationCriteria.id))
+      .where(eq(controlEvaluations.controlId, controlId));
 
     if (evaluations.length === 0) {
       // No evaluations completed - return current manual effectiveness if set
@@ -9571,17 +9633,17 @@ export class DatabaseStorage extends MemStorage {
   // Recalculate effectiveness for all controls (apply max limit)
   async recalculateAllControlEffectiveness(): Promise<void> {
     const maxEffectivenessLimit = await this.getMaxEffectivenessLimit();
-    
+
     // Get all controls
     const allControls = await this.getControls();
-    
+
     for (const control of allControls) {
       // Check if control has evaluations
       const evaluations = await db.select().from(controlEvaluations)
         .where(eq(controlEvaluations.controlId, control.id));
-      
+
       let newEffectiveness: number;
-      
+
       if (evaluations.length > 0) {
         // Control has evaluations - recalculate based on criteria
         newEffectiveness = await this.calculateControlEffectiveness(control.id);
@@ -9589,7 +9651,7 @@ export class DatabaseStorage extends MemStorage {
         // Control doesn't have evaluations - apply limit to current effectiveness
         newEffectiveness = Math.min(control.effectiveness, maxEffectivenessLimit);
       }
-      
+
       // Update if the effectiveness changed
       if (newEffectiveness !== control.effectiveness) {
         await this.updateControl(control.id, { effectiveness: newEffectiveness });
@@ -9602,23 +9664,23 @@ export class DatabaseStorage extends MemStorage {
     // Get all unique risks with their associated controls
     const riskIds = new Set<string>();
     const allRiskControls = await this.getAllRiskControls();
-    
+
     // Collect unique risk IDs
     for (const rc of allRiskControls) {
       riskIds.add(rc.riskId);
     }
-    
+
     // Process each risk separately
     for (const riskId of riskIds) {
       try {
         // Get the risk
         const risk = await db.select().from(risks).where(eq(risks.id, riskId)).then(r => r[0]);
         if (!risk) continue;
-        
+
         // Get all controls for this risk
         const riskControlAssociations = allRiskControls.filter(rc => rc.riskId === riskId);
         const controlsData = [];
-        
+
         for (const rc of riskControlAssociations) {
           const control = await db.select().from(controls).where(eq(controls.id, rc.controlId)).then(c => c[0]);
           if (control) {
@@ -9629,7 +9691,7 @@ export class DatabaseStorage extends MemStorage {
             });
           }
         }
-        
+
         if (controlsData.length === 0) {
           // No controls, residual risk = inherent risk
           for (const rc of riskControlAssociations) {
@@ -9637,40 +9699,40 @@ export class DatabaseStorage extends MemStorage {
           }
           continue;
         }
-        
+
         // Calculate residual probability
         const probabilityControls = controlsData.filter(c => c.effectTarget === 'probability' || c.effectTarget === 'both');
         let residualProbability = Number(risk.probability);
-        
+
         for (const control of probabilityControls) {
           const reductionFactor = 1 - (control.effectiveness / 100);
           residualProbability = residualProbability * reductionFactor;
         }
         residualProbability = Math.max(0.1, Math.min(5, Math.round(residualProbability * 10) / 10));
-        
+
         // Calculate residual impact
         const impactControls = controlsData.filter(c => c.effectTarget === 'impact' || c.effectTarget === 'both');
         let residualImpact = Number(risk.impact);
-        
+
         for (const control of impactControls) {
           const reductionFactor = 1 - (control.effectiveness / 100);
           residualImpact = residualImpact * reductionFactor;
         }
         residualImpact = Math.max(0.1, Math.min(5, Math.round(residualImpact * 10) / 10));
-        
+
         // Calculate final residual risk
         const newResidualRisk = Math.round((residualProbability * residualImpact) * 10) / 10;
-        
+
         // Guard against non-finite results
         if (!Number.isFinite(newResidualRisk)) {
           continue;
         }
-        
+
         // Update all risk-control associations for this risk with the same residual risk value
         for (const control of controlsData) {
           await this.updateRiskControl(control.associationId, newResidualRisk);
         }
-        
+
       } catch (error) {
         // Continue processing even if a single risk fails
         continue;
@@ -9683,10 +9745,10 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Get current configured weights
       const configuredWeights = await this.getProbabilityWeights();
-      
+
       // Get all risks
       const allRisks = await db.select().from(risks);
-      
+
       for (const risk of allRisks) {
         try {
           // Create probability factors from stored risk data
@@ -9699,13 +9761,13 @@ export class DatabaseStorage extends MemStorage {
             changeVolatility: Number(risk.changeVolatility),
             vulnerabilities: Number(risk.vulnerabilities)
           };
-          
+
           // Calculate new probability using configured weights
           const newProbability = calculateProbability(probabilityFactors, configuredWeights);
-          
+
           // Calculate new inherent risk
           const newInherentRisk = newProbability * Number(risk.impact);
-          
+
           // Update only if values changed (to avoid unnecessary database writes)
           if (Number(risk.probability) !== newProbability || Number(risk.inherentRisk) !== newInherentRisk) {
             await db.update(risks)
@@ -9731,10 +9793,10 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Get current configured weights
       const configuredWeights = await this.getImpactWeights();
-      
+
       // Get all risks
       const allRisks = await db.select().from(risks);
-      
+
       for (const risk of allRisks) {
         try {
           // Create impact factors from stored risk data
@@ -9747,13 +9809,13 @@ export class DatabaseStorage extends MemStorage {
             people: Number(risk.people) || 1,
             information: Number(risk.information) || 1
           };
-          
+
           // Calculate new impact using configured weights
           const newImpact = calculateImpact(impactFactors, configuredWeights);
-          
+
           // Calculate new inherent risk
           const newInherentRisk = Number(risk.probability) * newImpact;
-          
+
           // Update only if values changed (to avoid unnecessary database writes)
           if (Number(risk.impact) !== newImpact || Number(risk.inherentRisk) !== newInherentRisk) {
             await db.update(risks)
@@ -9773,9 +9835,9 @@ export class DatabaseStorage extends MemStorage {
       return;
     }
   }
-  
+
   // ============== AUDIT PLANNING & PRIORITIZATION IMPLEMENTATION ==============
-  
+
   async getAuditPlans(): Promise<AuditPlan[]> {
     return await db.select().from(auditPlans)
       .where(isNull(auditPlans.deletedAt))
@@ -9797,7 +9859,7 @@ export class DatabaseStorage extends MemStorage {
     // Retry up to 5 times in case of code conflicts
     const maxAttempts = 5;
     let lastError: Error | null = null;
-    
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         // Use a transaction to atomically get the next code number and insert
@@ -9812,7 +9874,7 @@ export class DatabaseStorage extends MemStorage {
             LIMIT 1
             FOR UPDATE
           `);
-          
+
           let maxNumber = 0;
           if (latestPlan.rows.length > 0) {
             const latestCode = latestPlan.rows[0].code as string;
@@ -9821,19 +9883,19 @@ export class DatabaseStorage extends MemStorage {
               maxNumber = parseInt(match[1], 10);
             }
           }
-          
+
           const nextNumber = (maxNumber + 1).toString().padStart(3, '0');
           const generatedCode = `PLAN-${year}-${nextNumber}`;
-          
+
           // Insert with the generated code
           const [created] = await tx.insert(auditPlans).values({
             ...plan,
             code: generatedCode
           } as any).returning();
-          
+
           return created;
         });
-        
+
         return result;
       } catch (error: any) {
         // If duplicate code error (23505 = unique_violation), retry
@@ -9847,7 +9909,7 @@ export class DatabaseStorage extends MemStorage {
         throw error;
       }
     }
-    
+
     // If we exhausted all retries, throw the last error
     throw new Error(`Failed to generate unique audit plan code after ${maxAttempts} attempts: ${lastError?.message || 'Unknown error'}`);
   }
@@ -9874,14 +9936,14 @@ export class DatabaseStorage extends MemStorage {
 
   async getAuditUniverseWithDetails(): Promise<AuditUniverseWithDetails[]> {
     const items = await db.select().from(auditUniverse).orderBy(auditUniverse.auditableEntity);
-    
+
     const result: AuditUniverseWithDetails[] = [];
-    
+
     for (const item of items) {
       let macroprocesoData = null;
       let processData = null;
       let subprocesoData = null;
-      
+
       // Get macroproceso if ID exists
       if (item.macroprocesoId) {
         const [macro] = await db.select().from(macroprocesos).where(eq(macroprocesos.id, item.macroprocesoId));
@@ -9895,7 +9957,7 @@ export class DatabaseStorage extends MemStorage {
           };
         }
       }
-      
+
       // Get process - could be from processes table OR from macroprocesos if macroproceso acts as process
       if (item.processId) {
         const [proc] = await db.select().from(processes).where(eq(processes.id, item.processId));
@@ -9922,7 +9984,7 @@ export class DatabaseStorage extends MemStorage {
           };
         }
       }
-      
+
       // Get subproceso - could be from subprocesos table OR from processes if process acts as subproceso OR from macroprocesos if macroproceso acts as both
       if (item.subprocesoId) {
         const [sub] = await db.select().from(subprocesos).where(eq(subprocesos.id, item.subprocesoId));
@@ -9957,13 +10019,13 @@ export class DatabaseStorage extends MemStorage {
           };
         }
       }
-      
+
       // Build hierarchical path
       const pathParts: string[] = [];
       if (macroprocesoData) pathParts.push(macroprocesoData.name);
       if (processData) pathParts.push(processData.name);
       if (subprocesoData) pathParts.push(subprocesoData.name);
-      
+
       result.push({
         ...item,
         hierarchicalPath: pathParts.join(' > '),
@@ -9972,7 +10034,7 @@ export class DatabaseStorage extends MemStorage {
         subproceso: subprocesoData || undefined
       });
     }
-    
+
     return result;
   }
 
@@ -9993,42 +10055,42 @@ export class DatabaseStorage extends MemStorage {
 
   async generateUniverseFromExistingProcesses(): Promise<AuditUniverse[]> {
     // Delete in order of dependencies: plan items → prioritization factors → universe
-    
+
     // Delete audit plan items for all universe items
     const allUniverseIds = await db.select({ id: auditUniverse.id })
       .from(auditUniverse);
-    
+
     if (allUniverseIds.length > 0) {
       const universeIdsList = allUniverseIds.map(u => u.id);
       await db.delete(auditPlanItems)
         .where(inArray(auditPlanItems.universeId, universeIdsList));
       console.log(`Cleared ${allUniverseIds.length} audit plan items`);
-      
+
       await db.delete(auditPrioritizationFactors)
         .where(inArray(auditPrioritizationFactors.universeId, universeIdsList));
       console.log(`Cleared prioritization factors`);
     }
-    
+
     // Delete all audit universe items
     await db.delete(auditUniverse);
     console.log(`Cleared existing audit universe`);
-    
+
     const allMacroprocesos = await this.getMacroprocesos();
     const allProcesses = await this.getProcesses();
     const allSubprocesos = await this.getSubprocesos();
-    
+
     const universeItems: InsertAuditUniverse[] = [];
-    
+
     // RULE: ALL audit entities are at subproceso level
     // - If subproceso exists → use it normally
     // - If proceso has no subprocesos → proceso acts as subproceso
     // - If macroproceso has no procesos → macroproceso acts as proceso and subproceso
-    
+
     // First, process all real subprocesos
     for (const subproceso of allSubprocesos) {
       const parentProcess = allProcesses.find(p => p.id === subproceso.procesoId);
       const macroprocesoId = parentProcess?.macroprocesoId || null;
-      
+
       universeItems.push({
         macroprocesoId: macroprocesoId,
         processId: subproceso.procesoId,
@@ -10040,11 +10102,11 @@ export class DatabaseStorage extends MemStorage {
         auditFrequency: 3
       });
     }
-    
+
     // Second, process processes without subprocesos (proceso acts as subproceso)
     for (const process of allProcesses) {
       const hasSubprocesos = allSubprocesos.some(s => s.procesoId === process.id);
-      
+
       if (!hasSubprocesos) {
         universeItems.push({
           macroprocesoId: process.macroprocesoId || null,
@@ -10058,11 +10120,11 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     // Third, process macroprocesos without procesos (macroproceso acts as subproceso only)
     for (const macroproceso of allMacroprocesos) {
       const hasProcesos = allProcesses.some(p => p.macroprocesoId === macroproceso.id);
-      
+
       if (!hasProcesos) {
         universeItems.push({
           macroprocesoId: macroproceso.id,
@@ -10076,14 +10138,14 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     // Create all universe items
     const createdItems: AuditUniverse[] = [];
     for (const item of universeItems) {
       const created = await this.createAuditUniverse(item);
       createdItems.push(created);
     }
-    
+
     console.log(`Generated ${createdItems.length} audit universe items`);
     return createdItems;
   }
@@ -10095,15 +10157,15 @@ export class DatabaseStorage extends MemStorage {
 
   async getPrioritizationFactorsWithDetails(planId: string): Promise<(AuditPrioritizationFactors & { universe: AuditUniverseWithDetails })[]> {
     let factors = await this.getAuditPrioritizationFactors(planId);
-    
+
     // If no factors exist for this plan, auto-generate them from audit universe
     if (factors.length === 0) {
       factors = await this.autoGeneratePrioritizationFactors(planId);
     }
-    
+
     const result: (AuditPrioritizationFactors & { universe: AuditUniverseWithDetails })[] = [];
     const allUniverseWithDetails = await this.getAuditUniverseWithDetails();
-    
+
     for (const factor of factors) {
       const universe = allUniverseWithDetails.find(u => u.id === factor.universeId);
       if (universe) {
@@ -10113,23 +10175,23 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     return result;
   }
 
   async autoGeneratePrioritizationFactors(planId: string): Promise<AuditPrioritizationFactors[]> {
     // Auto-generating prioritization factors for plan
-    
+
     try {
       const universe = await this.getAuditUniverse();
       // Processing universe items
-      
+
       const createdFactors: AuditPrioritizationFactors[] = [];
-      
+
       for (const universeItem of universe) {
         try {
           // Processing universe item
-          
+
           // Create prioritization factors with default values - use existing schema columns
           const factorsData = {
             universeId: universeItem.id,
@@ -10154,20 +10216,20 @@ export class DatabaseStorage extends MemStorage {
             estimatedAuditHours: 40,
             isApproved: false
           };
-          
+
           const [created] = await db.insert(auditPrioritizationFactors).values(factorsData).returning();
           createdFactors.push(created);
           // Created factors successfully
-          
+
         } catch (error) {
           console.error(`Error creating prioritization factors for universe item ${universeItem.id}:`, error);
           continue; // Continue with next item
         }
       }
-      
+
       // Successfully created prioritization factors
       return createdFactors;
-      
+
     } catch (error) {
       console.error("Error in autoGeneratePrioritizationFactors:", error);
       throw error;
@@ -10187,7 +10249,7 @@ export class DatabaseStorage extends MemStorage {
   async calculatePriorityScore(id: string): Promise<AuditPrioritizationFactors | undefined> {
     const [factors] = await db.select().from(auditPrioritizationFactors).where(eq(auditPrioritizationFactors.id, id));
     if (!factors) return undefined;
-    
+
     // Calculate total priority score based on weighted factors according to user requirements
     const weights = {
       riskScore: 0.30, // Riesgo residual (30%)
@@ -10197,13 +10259,13 @@ export class DatabaseStorage extends MemStorage {
       regulatoryRequirement: 0.10, // Requerimiento legal (10%)
       managementRequest: 0.05 // Solicitud directorio (5%)
     };
-    
+
     // Calculate score for previous audit result
-    const auditResultScore = 
+    const auditResultScore =
       factors.previousAuditResult === "mala" ? 100 :
-      factors.previousAuditResult === "regular" ? 60 :
-      factors.previousAuditResult === "buena" ? 20 : 0;
-    
+        factors.previousAuditResult === "regular" ? 60 :
+          factors.previousAuditResult === "buena" ? 20 : 0;
+
     const totalScore = Math.round(
       (factors.riskScore * weights.riskScore) +
       (auditResultScore * weights.previousAuditResult) +
@@ -10213,39 +10275,39 @@ export class DatabaseStorage extends MemStorage {
       ((factors.managementRequest ? 100 : 0) * weights.managementRequest) +
       (factors.timesSinceLastAudit * 5) // Additional points for time since last audit
     );
-    
+
     const [updated] = await db.update(auditPrioritizationFactors)
-      .set({ 
+      .set({
         totalPriorityScore: totalScore,
         calculatedAt: new Date()
       })
       .where(eq(auditPrioritizationFactors.id, id))
       .returning();
-    
+
     return updated;
   }
 
   async calculateAllPriorityScores(planId: string): Promise<AuditPrioritizationFactors[]> {
     const factors = await this.getAuditPrioritizationFactors(planId);
     const updated: AuditPrioritizationFactors[] = [];
-    
+
     for (const factor of factors) {
       const calculatedFactor = await this.calculatePriorityScore(factor.id);
       if (calculatedFactor) {
         updated.push(calculatedFactor);
       }
     }
-    
+
     // Sort by priority score and update rankings
     updated.sort((a, b) => b.totalPriorityScore - a.totalPriorityScore);
-    
+
     for (let i = 0; i < updated.length; i++) {
       await db.update(auditPrioritizationFactors)
         .set({ calculatedRanking: i + 1 })
         .where(eq(auditPrioritizationFactors.id, updated[i].id));
       updated[i].calculatedRanking = i + 1;
     }
-    
+
     return updated;
   }
 
@@ -10272,31 +10334,31 @@ export class DatabaseStorage extends MemStorage {
       })
       .from(auditPlanItems)
       .where(eq(auditPlanItems.planId, planId));
-    
+
     return items as AuditPlanItem[];
   }
 
   async getAuditPlanItemsWithDetails(planId: string): Promise<AuditPlanItemWithDetails[]> {
     const items = await this.getAuditPlanItems(planId);
     const result: AuditPlanItemWithDetails[] = [];
-    
+
     const universeDetails = await this.getAuditUniverseWithDetails();
     const plan = await this.getAuditPlan(planId);
-    
+
     if (!plan) {
       console.log(`Plan not found for planId: ${planId}`);
       return [];
     }
-    
+
     for (const item of items) {
       const universe = universeDetails.find(u => u.id === item.universeId);
       let prioritization = null;
-      
+
       if (item.prioritizationId) {
         const [p] = await db.select().from(auditPrioritizationFactors).where(eq(auditPrioritizationFactors.id, item.prioritizationId));
         prioritization = p;
       }
-      
+
       // Include item even if some data is missing, but log warnings
       if (!universe) {
         console.log(`Universe not found for item ${item.id}, universeId: ${item.universeId}`);
@@ -10304,7 +10366,7 @@ export class DatabaseStorage extends MemStorage {
       if (!prioritization && item.prioritizationId) {
         console.log(`Prioritization not found for item ${item.id}, prioritizationId: ${item.prioritizationId}`);
       }
-      
+
       // Push item with available data (some fields may be null/undefined)
       result.push({
         ...item,
@@ -10313,7 +10375,7 @@ export class DatabaseStorage extends MemStorage {
         plan
       });
     }
-    
+
     return result;
   }
 
@@ -10336,10 +10398,10 @@ export class DatabaseStorage extends MemStorage {
     // Get prioritized factors for the plan
     const prioritizedFactors = await this.calculateAllPriorityScores(planId);
     prioritizedFactors.sort((a, b) => b.totalPriorityScore - a.totalPriorityScore);
-    
+
     let totalHours = 0;
     const selectedItems: AuditPlanItem[] = [];
-    
+
     for (const factor of prioritizedFactors) {
       if (totalHours + factor.estimatedAuditHours <= maxHours) {
         // Create plan item for selected audit
@@ -10352,12 +10414,12 @@ export class DatabaseStorage extends MemStorage {
           selectionReason: `Automatically selected based on priority score: ${factor.totalPriorityScore}`,
           createdBy: factor.calculatedBy
         });
-        
+
         selectedItems.push(planItem);
         totalHours += factor.estimatedAuditHours;
       }
     }
-    
+
     return selectedItems;
   }
 
@@ -10380,10 +10442,10 @@ export class DatabaseStorage extends MemStorage {
   async calculateQuarterlyDistribution(planId: string): Promise<AuditPlanCapacity | undefined> {
     const capacity = await this.getAuditPlanCapacity(planId);
     if (!capacity) return undefined;
-    
+
     // Distribute total hours evenly across quarters
     const quarterlyHours = Math.floor(capacity.totalAvailableHours / 4);
-    
+
     const [updated] = await db.update(auditPlanCapacity)
       .set({
         q1AvailableHours: quarterlyHours,
@@ -10393,7 +10455,7 @@ export class DatabaseStorage extends MemStorage {
       })
       .where(eq(auditPlanCapacity.id, capacity.id))
       .returning();
-    
+
     return updated;
   }
 
@@ -10402,14 +10464,14 @@ export class DatabaseStorage extends MemStorage {
     // Generate sequential code like AUD-0001, AUD-0002, etc.
     const existingAudits = await db.select({ code: audits.code }).from(audits).orderBy(desc(audits.createdAt)).limit(1);
     let nextNumber = 1;
-    
+
     if (existingAudits.length > 0 && existingAudits[0].code) {
       const match = existingAudits[0].code.match(/AUD-(\d+)/);
       if (match) {
         nextNumber = parseInt(match[1], 10) + 1;
       }
     }
-    
+
     const auditData = {
       ...audit,
       code: `AUD-${String(nextNumber).padStart(4, '0')}` // Format: AUD-0001
@@ -10426,7 +10488,7 @@ export class DatabaseStorage extends MemStorage {
   async getAuditsPaginated(filters: AuditFilters, limit: number, offset: number): Promise<{ audits: Audit[]; total: number }> {
     // Build WHERE conditions
     const conditions: any[] = [];
-    
+
     if (filters.search) {
       conditions.push(
         or(
@@ -10435,27 +10497,27 @@ export class DatabaseStorage extends MemStorage {
         )
       );
     }
-    
+
     if (filters.status && filters.status !== 'all') {
       conditions.push(eq(audits.status, filters.status));
     }
-    
+
     if (filters.type && filters.type !== 'all') {
       conditions.push(eq(audits.type, filters.type));
     }
-    
+
     if (filters.assignedAuditorId) {
       conditions.push(eq(audits.leadAuditor, filters.assignedAuditorId));
     }
-    
+
     // Build WHERE clause
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-    
+
     // Get total count
     const [{ count: total }] = await db.select({ count: sql<number>`count(*)::int` })
       .from(audits)
       .where(whereClause);
-    
+
     // Get paginated results
     const paginatedAudits = await db.select()
       .from(audits)
@@ -10463,7 +10525,7 @@ export class DatabaseStorage extends MemStorage {
       .orderBy(desc(audits.createdAt))
       .limit(limit)
       .offset(offset);
-    
+
     return {
       audits: paginatedAudits,
       total
@@ -10496,7 +10558,7 @@ export class DatabaseStorage extends MemStorage {
   async setAuditScope(auditId: string, scopes: InsertAuditScope[]): Promise<void> {
     // Delete existing scope entries for this audit
     await db.delete(auditScope).where(eq(auditScope.auditId, auditId));
-    
+
     // Insert new scope entries
     if (scopes.length > 0) {
       await db.insert(auditScope).values(scopes);
@@ -10510,134 +10572,134 @@ export class DatabaseStorage extends MemStorage {
       const [audit] = await db.select().from(audits).where(eq(audits.id, auditId));
       console.log('🔍 DEBUG getRisksForAuditScope - audit found:', audit ? 'YES' : 'NO');
       console.log('🔍 DEBUG getRisksForAuditScope - scopeEntities:', audit?.scopeEntities);
-      
+
       if (!audit || !audit.scopeEntities || audit.scopeEntities.length === 0) {
         console.log('🔍 DEBUG getRisksForAuditScope - returning empty array');
         return [];
       }
-    
-    // Get all macroprocesos, processes, and subprocesos for expansion
-    const allMacroprocesos = await db.select().from(macroprocesos);
-    const allProcesses = await db.select().from(processes);
-    const allSubprocesos = await db.select().from(subprocesos);
-    
-    // Expand scope entities hierarchically (macroproceso→procesos→subprocesos)
-    const { expandedEntities } = expandScopeEntities(
-      audit.scopeEntities,
-      allMacroprocesos,
-      allProcesses,
-      allSubprocesos
-    );
-    
-    console.log('🔍 DEBUG - Expanded entities:', expandedEntities);
-    
-    // Extract process and subprocess IDs from expanded entities
-    const processIds: string[] = [];
-    const subprocesoIds: string[] = [];
-    
-    for (const entityId of expandedEntities) {
-      const firstDashIndex = entityId.indexOf('-');
-      const type = entityId.substring(0, firstDashIndex);
-      const id = entityId.substring(firstDashIndex + 1);
-      
-      if (type === 'process') {
-        processIds.push(id);
-      } else if (type === 'subproceso') {
-        subprocesoIds.push(id);
+
+      // Get all macroprocesos, processes, and subprocesos for expansion
+      const allMacroprocesos = await db.select().from(macroprocesos);
+      const allProcesses = await db.select().from(processes);
+      const allSubprocesos = await db.select().from(subprocesos);
+
+      // Expand scope entities hierarchically (macroproceso→procesos→subprocesos)
+      const { expandedEntities } = expandScopeEntities(
+        audit.scopeEntities,
+        allMacroprocesos,
+        allProcesses,
+        allSubprocesos
+      );
+
+      console.log('🔍 DEBUG - Expanded entities:', expandedEntities);
+
+      // Extract process and subprocess IDs from expanded entities
+      const processIds: string[] = [];
+      const subprocesoIds: string[] = [];
+
+      for (const entityId of expandedEntities) {
+        const firstDashIndex = entityId.indexOf('-');
+        const type = entityId.substring(0, firstDashIndex);
+        const id = entityId.substring(firstDashIndex + 1);
+
+        if (type === 'process') {
+          processIds.push(id);
+        } else if (type === 'subproceso') {
+          subprocesoIds.push(id);
+        }
       }
-    }
-    
-    console.log('🔍 DEBUG - Final processIds:', processIds);
-    console.log('🔍 DEBUG - Final subprocesoIds:', subprocesoIds);
-    
-    if (processIds.length === 0 && subprocesoIds.length === 0) {
-      return [];
-    }
-    
-    // Build list of all relevant entity IDs (processes + subprocesses)
-    const allEntityIds = [...processIds, ...subprocesoIds];
-    
-    console.log('🔍 DEBUG - Searching for risks linked to entities:', allEntityIds);
-    
-    // Get risks using riskProcessLinks (modern approach)
-    const riskLinksData = await db.select({
-      riskId: riskProcessLinks.riskId,
-      processId: riskProcessLinks.processId
-    })
-      .from(riskProcessLinks)
-      .where(inArray(riskProcessLinks.processId, allEntityIds));
-    
-    console.log('🔍 DEBUG - Found risk links:', riskLinksData.length);
-    
-    const linkedRiskIds = [...new Set(riskLinksData.map(link => link.riskId))];
-    
-    if (linkedRiskIds.length === 0) {
-      console.log('🔍 DEBUG getRisksForAuditScope - no risks found via riskProcessLinks');
-      return [];
-    }
-    
-    // Get the actual risk records
-    const result = await db.select()
-      .from(risks)
-      .where(inArray(risks.id, linkedRiskIds));
-    
-    console.log('🔍 DEBUG getRisksForAuditScope - found risks:', result.length);
-    console.log('🔍 DEBUG getRisksForAuditScope - risk codes:', result.map(r => `${r.code}: ${r.name}`));
-    
-    // Enrich risks with validation status from riskProcessLinks
-    if (result.length > 0) {
-      const riskIds = result.map(r => r.id);
-      
-      // Get all riskProcessLinks for these risks - OPTIMIZED: only select needed columns
-      const links = await db.select({
+
+      console.log('🔍 DEBUG - Final processIds:', processIds);
+      console.log('🔍 DEBUG - Final subprocesoIds:', subprocesoIds);
+
+      if (processIds.length === 0 && subprocesoIds.length === 0) {
+        return [];
+      }
+
+      // Build list of all relevant entity IDs (processes + subprocesses)
+      const allEntityIds = [...processIds, ...subprocesoIds];
+
+      console.log('🔍 DEBUG - Searching for risks linked to entities:', allEntityIds);
+
+      // Get risks using riskProcessLinks (modern approach)
+      const riskLinksData = await db.select({
         riskId: riskProcessLinks.riskId,
-        processId: riskProcessLinks.processId,
-        validationStatus: riskProcessLinks.validationStatus,
-        validatedBy: riskProcessLinks.validatedBy,
-        validatedAt: riskProcessLinks.validatedAt,
-        validationComments: riskProcessLinks.validationComments,
+        processId: riskProcessLinks.processId
       })
         .from(riskProcessLinks)
-        .where(inArray(riskProcessLinks.riskId, riskIds));
-      
-      // Group links by riskId
-      const linksByRiskId = new Map<string, typeof links>();
-      for (const link of links) {
-        if (!linksByRiskId.has(link.riskId)) {
-          linksByRiskId.set(link.riskId, []);
-        }
-        linksByRiskId.get(link.riskId)!.push(link);
+        .where(inArray(riskProcessLinks.processId, allEntityIds));
+
+      console.log('🔍 DEBUG - Found risk links:', riskLinksData.length);
+
+      const linkedRiskIds = [...new Set(riskLinksData.map(link => link.riskId))];
+
+      if (linkedRiskIds.length === 0) {
+        console.log('🔍 DEBUG getRisksForAuditScope - no risks found via riskProcessLinks');
+        return [];
       }
-      
-      // Enrich each risk with calculated validation status
-      const enrichedResults = result.map(risk => {
-        const riskLinks = linksByRiskId.get(risk.id) || [];
-        
-        // Map to ProcessValidationInfo structure expected by helper
-        const processValidationInfo = riskLinks.map(link => ({
-          validationStatus: link.validationStatus,
-          processId: link.processId,
-          macroprocesoId: link.processId, // Simplified - can be enhanced later
-          subprocesoId: null,
-          validatedBy: link.validatedBy,
-          validatedAt: link.validatedAt,
-          validationComments: link.validationComments,
-        }));
-        
-        const aggregated = calculateAggregatedValidationStatus(processValidationInfo);
-        
-        return {
-          ...risk,
-          validationStatus: aggregated.aggregatedStatus,
-          validationStatusLabel: aggregated.statusLabel,
-          validationStatusIcon: aggregated.statusIcon,
-        };
-      });
-      
-      return enrichedResults;
-    }
-    
-    return result;
+
+      // Get the actual risk records
+      const result = await db.select()
+        .from(risks)
+        .where(inArray(risks.id, linkedRiskIds));
+
+      console.log('🔍 DEBUG getRisksForAuditScope - found risks:', result.length);
+      console.log('🔍 DEBUG getRisksForAuditScope - risk codes:', result.map(r => `${r.code}: ${r.name}`));
+
+      // Enrich risks with validation status from riskProcessLinks
+      if (result.length > 0) {
+        const riskIds = result.map(r => r.id);
+
+        // Get all riskProcessLinks for these risks - OPTIMIZED: only select needed columns
+        const links = await db.select({
+          riskId: riskProcessLinks.riskId,
+          processId: riskProcessLinks.processId,
+          validationStatus: riskProcessLinks.validationStatus,
+          validatedBy: riskProcessLinks.validatedBy,
+          validatedAt: riskProcessLinks.validatedAt,
+          validationComments: riskProcessLinks.validationComments,
+        })
+          .from(riskProcessLinks)
+          .where(inArray(riskProcessLinks.riskId, riskIds));
+
+        // Group links by riskId
+        const linksByRiskId = new Map<string, typeof links>();
+        for (const link of links) {
+          if (!linksByRiskId.has(link.riskId)) {
+            linksByRiskId.set(link.riskId, []);
+          }
+          linksByRiskId.get(link.riskId)!.push(link);
+        }
+
+        // Enrich each risk with calculated validation status
+        const enrichedResults = result.map(risk => {
+          const riskLinks = linksByRiskId.get(risk.id) || [];
+
+          // Map to ProcessValidationInfo structure expected by helper
+          const processValidationInfo = riskLinks.map(link => ({
+            validationStatus: link.validationStatus,
+            processId: link.processId,
+            macroprocesoId: link.processId, // Simplified - can be enhanced later
+            subprocesoId: null,
+            validatedBy: link.validatedBy,
+            validatedAt: link.validatedAt,
+            validationComments: link.validationComments,
+          }));
+
+          const aggregated = calculateAggregatedValidationStatus(processValidationInfo);
+
+          return {
+            ...risk,
+            validationStatus: aggregated.aggregatedStatus,
+            validationStatusLabel: aggregated.statusLabel,
+            validationStatusIcon: aggregated.statusIcon,
+          };
+        });
+
+        return enrichedResults;
+      }
+
+      return result;
     } catch (error) {
       console.error('❌ ERROR in getRisksForAuditScope:', error);
       throw error;
@@ -10648,11 +10710,11 @@ export class DatabaseStorage extends MemStorage {
     // Get risks for the audit scope
     const scopeRisks = await this.getRisksForAuditScope(auditId);
     const riskIds = scopeRisks.map(r => r.id);
-    
+
     if (riskIds.length === 0) {
       return [];
     }
-    
+
     // Get controls associated with these risks
     const riskControlsData = await db.select({
       control: controls
@@ -10660,13 +10722,13 @@ export class DatabaseStorage extends MemStorage {
       .from(riskControls)
       .innerJoin(controls, eq(riskControls.controlId, controls.id))
       .where(inArray(riskControls.riskId, riskIds));
-    
+
     // Deduplicate controls
     const uniqueControls = new Map<string, Control>();
     for (const { control } of riskControlsData) {
       uniqueControls.set(control.id, control);
     }
-    
+
     return Array.from(uniqueControls.values());
   }
 
@@ -10716,7 +10778,7 @@ export class DatabaseStorage extends MemStorage {
       .returning();
     return updated;
   }
-  
+
   // Audit Criteria Implementation
   async getAuditCriteria(auditId: string): Promise<AuditCriterion[]> {
     const criteria = await db.select({
@@ -10729,15 +10791,15 @@ export class DatabaseStorage extends MemStorage {
       .leftJoin(complianceDocuments, eq(auditCriteria.documentId, complianceDocuments.id))
       .where(eq(auditCriteria.auditId, auditId))
       .orderBy(auditCriteria.createdAt);
-    
+
     // Flatten the structure and add sourceCode and sourceName properties
     return criteria.map(({ criterion, regulation, document }) => ({
       ...criterion,
       sourceCode: regulation?.code || document?.internalCode || null,
       sourceName: regulation?.name || document?.name || null,
-      sourceOrigin: criterion.sourceType === 'regulation' ? 'Normativa' : 
-                    criterion.sourceType === 'document' ? 'Gestión Documental' : 
-                    'Manual'
+      sourceOrigin: criterion.sourceType === 'regulation' ? 'Normativa' :
+        criterion.sourceType === 'document' ? 'Gestión Documental' :
+          'Manual'
     } as any));
   }
 
@@ -10761,7 +10823,7 @@ export class DatabaseStorage extends MemStorage {
     const result = await db.delete(auditCriteria).where(eq(auditCriteria.id, id));
     return (result.rowCount ?? 0) > 0;
   }
-  
+
   // Audit Findings
   async getAuditFindings(): Promise<AuditFinding[]> {
     return await db.select().from(auditFindings)
@@ -10782,7 +10844,7 @@ export class DatabaseStorage extends MemStorage {
       const auditData = finding.auditId ? await this.getAudit(finding.auditId) : undefined;
       const responsibleUser = finding.responsiblePerson ? await this.getUser(finding.responsiblePerson) : undefined;
       const identifiedByUser = await this.getUser(finding.identifiedBy);
-      
+
       result.push({
         ...finding,
         audit: auditData,
@@ -10801,7 +10863,7 @@ export class DatabaseStorage extends MemStorage {
     const auditData = finding.auditId ? await this.getAudit(finding.auditId) : undefined;
     const responsibleUser = finding.responsiblePerson ? await this.getUser(finding.responsiblePerson) : undefined;
     const identifiedByUser = await this.getUser(finding.identifiedBy);
-    
+
     return {
       ...finding,
       audit: auditData,
@@ -10891,10 +10953,10 @@ export class DatabaseStorage extends MemStorage {
       control: controls,
       risk: risks
     })
-    .from(auditControls)
-    .innerJoin(controls, eq(auditControls.controlId, controls.id))
-    .leftJoin(risks, eq(auditControls.riskId, risks.id))
-    .where(eq(auditControls.auditId, auditId));
+      .from(auditControls)
+      .innerJoin(controls, eq(auditControls.controlId, controls.id))
+      .leftJoin(risks, eq(auditControls.riskId, risks.id))
+      .where(eq(auditControls.auditId, auditId));
 
     return results.map(result => ({
       ...result.auditControl,
@@ -10931,11 +10993,11 @@ export class DatabaseStorage extends MemStorage {
       risk: risks,
       riskRegulation: riskRegulations,
     })
-    .from(riskRegulations)
-    .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
-    .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
-    .innerJoin(controls, eq(riskControls.controlId, controls.id))
-    .where(eq(riskRegulations.regulationId, regulationId));
+      .from(riskRegulations)
+      .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
+      .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
+      .innerJoin(controls, eq(riskControls.controlId, controls.id))
+      .where(eq(riskRegulations.regulationId, regulationId));
 
     // Remove duplicates by control id
     const uniqueControls = new Map();
@@ -10956,11 +11018,11 @@ export class DatabaseStorage extends MemStorage {
     const audit = await db.select().from(audits).where(eq(audits.id, test.auditId)).limit(1);
     const auditInfo = audit[0];
     const auditCode = auditInfo?.code || 'A';
-    
+
     // Get count of existing tests for this audit to generate sequential number
     const existingTests = await db.select().from(auditTests).where(eq(auditTests.auditId, test.auditId));
     const nextSequential = (existingTests.length + 1).toString().padStart(4, '0');
-    
+
     const testData = {
       ...test,
       code: `${auditCode}-TEST-${nextSequential}` // Format: A-0001-TEST-0001
@@ -10995,13 +11057,13 @@ export class DatabaseStorage extends MemStorage {
     const [executor] = test.executorId ? await db.select().from(users).where(eq(users.id, test.executorId)) : [undefined];
     const [supervisor] = test.supervisorId ? await db.select().from(users).where(eq(users.id, test.supervisorId)) : [undefined];
     const [createdByUser] = await db.select().from(users).where(eq(users.id, test.createdBy));
-    
+
     // Optional: Get reviewedBy user if exists
     let reviewedByUser = undefined;
     if (test.reviewedBy) {
       [reviewedByUser] = await db.select().from(users).where(eq(users.id, test.reviewedBy));
     }
-    
+
     // Get risk (official or ad-hoc)
     let riskData = undefined;
     let auditRiskData = undefined;
@@ -11024,7 +11086,7 @@ export class DatabaseStorage extends MemStorage {
         };
       }
     }
-    
+
     // Optional: Get control if exists
     let controlData = undefined;
     if (test.controlId) {
@@ -11037,7 +11099,7 @@ export class DatabaseStorage extends MemStorage {
         };
       }
     }
-    
+
     return {
       ...test,
       audit: audit ? {
@@ -11091,7 +11153,7 @@ export class DatabaseStorage extends MemStorage {
           eq(riskControls.controlId, updateData.controlId)
         ))
         .limit(1);
-      
+
       if (!riskControl) {
         throw new Error("The selected control is not associated with the selected risk");
       }
@@ -11109,7 +11171,7 @@ export class DatabaseStorage extends MemStorage {
             eq(riskControls.controlId, currentTest.controlId)
           ))
           .limit(1);
-        
+
         if (!riskControl) {
           // Existing control doesn't belong to new risk, clear it
           updateData.controlId = null;
@@ -11122,10 +11184,10 @@ export class DatabaseStorage extends MemStorage {
       // Check if it's an official risk (in the audit's scope) or an ad-hoc risk
       const scopeRisks = await this.getRisksForAuditScope(currentTest.auditId);
       const adHocRisks = await this.getAuditRisks(currentTest.auditId);
-      
+
       const isInScope = scopeRisks.some(r => r.id === updateData.riskId);
       const isAdHoc = adHocRisks.some(r => r.id === updateData.riskId);
-      
+
       if (!isInScope && !isAdHoc) {
         throw new Error("The selected risk is not within the audit's scope");
       }
@@ -11149,13 +11211,13 @@ export class DatabaseStorage extends MemStorage {
     const attachments = await db.select()
       .from(auditAttachments)
       .where(eq(auditAttachments.testId, id));
-    
+
     const warnings: string[] = [];
-    
+
     if (attachments.length > 0) {
       warnings.push(`Esta prueba tiene ${attachments.length} archivo(s) adjunto(s) que serán eliminados permanentemente.`);
     }
-    
+
     return {
       hasAttachments: attachments.length > 0,
       attachmentCount: attachments.length,
@@ -11167,7 +11229,7 @@ export class DatabaseStorage extends MemStorage {
   async deleteAuditTest(id: string): Promise<boolean> {
     // Delete associated attachments first (cascade delete)
     await db.delete(auditAttachments).where(eq(auditAttachments.testId, id));
-    
+
     // Delete the test
     const result = await db.delete(auditTests).where(eq(auditTests.id, id));
     return (result.rowCount ?? 0) > 0;
@@ -11283,17 +11345,17 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async bulkAssignAuditors(
-    auditId: string, 
-    assignments: { testId: string; executorId: string; supervisorId?: string }[], 
+    auditId: string,
+    assignments: { testId: string; executorId: string; supervisorId?: string }[],
     assignedBy: string
   ): Promise<AuditTest[]> {
     const results: AuditTest[] = [];
-    
+
     for (const assignment of assignments) {
       try {
         // Assign executor
         const testWithExecutor = await this.assignAuditorToTest(assignment.testId, assignment.executorId, assignedBy);
-        
+
         // Assign supervisor if provided
         if (assignment.supervisorId && testWithExecutor) {
           const finalTest = await this.assignSupervisorToTest(assignment.testId, assignment.supervisorId, assignedBy);
@@ -11311,9 +11373,9 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async reassignAuditor(
-    testId: string, 
-    newExecutorId?: string, 
-    newSupervisorId?: string, 
+    testId: string,
+    newExecutorId?: string,
+    newSupervisorId?: string,
     reassignedBy: string,
     reason?: string
   ): Promise<AuditTest | undefined> {
@@ -11327,7 +11389,7 @@ export class DatabaseStorage extends MemStorage {
       const reassignerUser = await this.getUser(reassignedBy);
       const userRoles = await this.getUserRoles(reassignedBy);
       const hasLeaderRole = userRoles.some(ur => ur.role.permissions?.includes('auditor_lider') || ur.role.name.includes('Lider'));
-      
+
       if (!hasLeaderRole) {
         throw new Error('Cannot reassign test in progress without supervisor approval');
       }
@@ -11447,7 +11509,7 @@ export class DatabaseStorage extends MemStorage {
           }
         });
       }
-      
+
       // Notify executor of status changes
       if (updated.executorId && newStatus !== currentTest.status) {
         const statusMessages = {
@@ -11458,9 +11520,9 @@ export class DatabaseStorage extends MemStorage {
           'rejected': 'Tu prueba ha sido rechazada',
           'cancelled': 'Tu prueba ha sido cancelada'
         };
-        
+
         const priority = newStatus === 'rejected' || newStatus === 'cancelled' ? 'critical' : 'normal';
-        
+
         await notificationService.createNotification({
           recipientId: updated.executorId,
           type: NotificationTypes.STATUS_CHANGED,
@@ -11549,9 +11611,9 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async reviewTest(
-    testId: string, 
-    reviewedBy: string, 
-    reviewStatus: 'approved' | 'rejected' | 'needs_revision', 
+    testId: string,
+    reviewedBy: string,
+    reviewStatus: 'approved' | 'rejected' | 'needs_revision',
     reviewComments: string
   ): Promise<AuditTest | undefined> {
     const currentTest = await this.getAuditTest(testId);
@@ -11567,8 +11629,8 @@ export class DatabaseStorage extends MemStorage {
       throw new Error('Test must be under review to process review');
     }
 
-    const newStatus = reviewStatus === 'approved' ? 'completed' : 
-                     reviewStatus === 'rejected' ? 'rejected' : 'in_progress';
+    const newStatus = reviewStatus === 'approved' ? 'completed' :
+      reviewStatus === 'rejected' ? 'rejected' : 'in_progress';
 
     const [updated] = await db.update(auditTests)
       .set({
@@ -11585,21 +11647,21 @@ export class DatabaseStorage extends MemStorage {
       // Notify executor of review result with comprehensive data
       const statusTitles = {
         approved: 'Prueba aprobada',
-        rejected: 'Prueba rechazada', 
+        rejected: 'Prueba rechazada',
         needs_revision: 'Prueba requiere revisión'
       };
-      
+
       const statusMessages = {
         approved: 'ha sido aprobada',
         rejected: 'ha sido rechazada',
         needs_revision: 'requiere revisión adicional'
       };
-      
+
       const priority = reviewStatus === 'approved' ? 'normal' : 'important';
-      const notificationType = reviewStatus === 'approved' ? NotificationTypes.TEST_APPROVED : 
-                              reviewStatus === 'rejected' ? NotificationTypes.TEST_REJECTED :
-                              NotificationTypes.REVIEW_REQUEST;
-      
+      const notificationType = reviewStatus === 'approved' ? NotificationTypes.TEST_APPROVED :
+        reviewStatus === 'rejected' ? NotificationTypes.TEST_REJECTED :
+          NotificationTypes.REVIEW_REQUEST;
+
       await notificationService.createNotification({
         recipientId: updated.executorId,
         type: notificationType,
@@ -11637,13 +11699,13 @@ export class DatabaseStorage extends MemStorage {
       .select()
       .from(users)
       .where(eq(users.isActive, true));
-    
+
     return allUsers;
   }
 
   async getAuditorsWithCompetencies(riskType?: string, processType?: string): Promise<User[]> {
     const auditors = await this.getAvailableAuditors();
-    
+
     // Filter by competencies if specified
     if (riskType || processType) {
       return auditors.filter(auditor => {
@@ -11760,8 +11822,8 @@ export class DatabaseStorage extends MemStorage {
 
       // Check if executor has appropriate roles
       const executorRoles = await this.getUserRoles(executorId);
-      const hasAuditorRole = executorRoles.some(ur => 
-        ur.role.permissions?.includes('auditor') || 
+      const hasAuditorRole = executorRoles.some(ur =>
+        ur.role.permissions?.includes('auditor') ||
         ur.role.name.toLowerCase().includes('audit')
       );
       if (!hasAuditorRole) {
@@ -11780,8 +11842,8 @@ export class DatabaseStorage extends MemStorage {
 
       // Check if supervisor has leader role
       const supervisorRoles = await this.getUserRoles(supervisorId);
-      const hasLeaderRole = supervisorRoles.some(ur => 
-        ur.role.permissions?.includes('auditor_lider') || 
+      const hasLeaderRole = supervisorRoles.some(ur =>
+        ur.role.permissions?.includes('auditor_lider') ||
         ur.role.name.toLowerCase().includes('lider') ||
         ur.role.name.toLowerCase().includes('supervisor')
       );
@@ -11839,11 +11901,11 @@ export class DatabaseStorage extends MemStorage {
   // === NOTIFICATIONS AND TRACKING ===
 
   async createAssignmentNotification(
-    testId: string, 
-    userId: string, 
-    type: string, 
-    title: string, 
-    message: string, 
+    testId: string,
+    userId: string,
+    type: string,
+    title: string,
+    message: string,
     actionUrl?: string
   ): Promise<AuditNotification> {
     const notificationData: InsertAuditNotification = {
@@ -11893,7 +11955,7 @@ export class DatabaseStorage extends MemStorage {
         .from(auditTestWorkLogs)
         .where(eq(auditTestWorkLogs.auditTestId, auditTestId))
         .orderBy(auditTestWorkLogs.entryDate);
-      
+
       return workLogs;
     } catch (error) {
       console.error("Error in getAuditTestWorkLogs:", error);
@@ -11909,7 +11971,7 @@ export class DatabaseStorage extends MemStorage {
         .from(auditTestWorkLogs)
         .where(eq(auditTestWorkLogs.id, id))
         .limit(1);
-      
+
       if (!existingLog) {
         return undefined;
       }
@@ -11958,9 +12020,9 @@ export class DatabaseStorage extends MemStorage {
         .from(auditTests)
         .where(eq(auditTests.id, testId))
         .limit(1);
-        
+
       if (baseTest.length === 0) return undefined;
-      
+
       const test = baseTest[0];
       if (test.executorId !== userId && test.supervisorId !== userId) {
         // Check if user has admin permissions
@@ -11986,9 +12048,9 @@ export class DatabaseStorage extends MemStorage {
         progress: auditTestWorkLogs.progressPercentage,
         updatedBy: auditTestWorkLogs.createdBy
       })
-      .from(auditTestWorkLogs)
-      .where(eq(auditTestWorkLogs.auditTestId, testId))
-      .orderBy(auditTestWorkLogs.entryDate);
+        .from(auditTestWorkLogs)
+        .where(eq(auditTestWorkLogs.auditTestId, testId))
+        .orderBy(auditTestWorkLogs.entryDate);
 
       return workLogs
         .filter(log => log.progress !== null)
@@ -12039,14 +12101,14 @@ export class DatabaseStorage extends MemStorage {
           .orderBy(desc(auditTestWorkLogs.entryDate))
           .limit(5);
 
-        const totalRecentHours = recentWorkLogs.reduce((sum, log) => 
+        const totalRecentHours = recentWorkLogs.reduce((sum, log) =>
           sum + parseFloat(log.hoursWorked.toString()), 0
         );
 
         if (totalRecentHours < 2 && (newProgress - currentProgress) > 25) {
-          return { 
-            isValid: false, 
-            message: "Large progress increases require documented work. Please log your work first." 
+          return {
+            isValid: false,
+            message: "Large progress increases require documented work. Please log your work first."
           };
         }
       }
@@ -12070,7 +12132,7 @@ export class DatabaseStorage extends MemStorage {
       // Determine new status based on progress
       let newStatus: string | undefined;
       const [currentTest] = await db.select().from(auditTests).where(eq(auditTests.id, testId));
-      
+
       if (currentTest) {
         if (progress === 0 && currentTest.status === 'planned') {
           newStatus = 'assigned';
@@ -12169,7 +12231,7 @@ export class DatabaseStorage extends MemStorage {
       const entryDate = new Date(workLogData.entryDate);
       const today = new Date();
       today.setHours(23, 59, 59, 999); // End of today
-      
+
       if (entryDate > today) {
         return { isValid: false, message: "Cannot log work for future dates" };
       }
@@ -12190,14 +12252,14 @@ export class DatabaseStorage extends MemStorage {
           )
         );
 
-      const totalDayHours = dayLogs.reduce((sum, log) => 
+      const totalDayHours = dayLogs.reduce((sum, log) =>
         sum + parseFloat(log.hoursWorked.toString()), 0
       );
 
       if (totalDayHours + hoursWorked > 16) {
-        return { 
-          isValid: false, 
-          message: `Cannot exceed 16 hours per day. Current day total: ${totalDayHours} hours` 
+        return {
+          isValid: false,
+          message: `Cannot exceed 16 hours per day. Current day total: ${totalDayHours} hours`
         };
       }
 
@@ -12263,7 +12325,7 @@ export class DatabaseStorage extends MemStorage {
         .orderBy(auditTestWorkLogs.entryDate);
 
       // Calculate totals
-      const totalHours = workLogs.reduce((sum, log) => 
+      const totalHours = workLogs.reduce((sum, log) =>
         sum + parseFloat(log.hoursWorked.toString()), 0
       );
 
@@ -12281,7 +12343,7 @@ export class DatabaseStorage extends MemStorage {
         const dateStr = log.entryDate.toISOString().split('T')[0];
         const existing = acc.find(item => item.date === dateStr);
         const hours = parseFloat(log.hoursWorked.toString());
-        
+
         if (existing) {
           existing.hours += hours;
         } else {
@@ -12296,12 +12358,12 @@ export class DatabaseStorage extends MemStorage {
         const [test] = await db.select()
           .from(auditTests)
           .where(eq(auditTests.id, testId));
-          
+
         if (test) {
           const testHours = workLogs
             .filter(log => log.auditTestId === testId)
             .reduce((sum, log) => sum + parseFloat(log.hoursWorked.toString()), 0);
-            
+
           progressByTest.push({
             testId,
             testName: test.name,
@@ -12312,8 +12374,8 @@ export class DatabaseStorage extends MemStorage {
       }
 
       // Calculate average progress
-      const averageProgress = testsWorked > 0 
-        ? progressByTest.reduce((sum, test) => sum + test.progress, 0) / testsWorked 
+      const averageProgress = testsWorked > 0
+        ? progressByTest.reduce((sum, test) => sum + test.progress, 0) / testsWorked
         : 0;
 
       return {
@@ -12362,15 +12424,15 @@ export class DatabaseStorage extends MemStorage {
           );
 
           // Get executor name
-          const [executor] = await db.select({ 
-            firstName: users.firstName, 
+          const [executor] = await db.select({
+            firstName: users.firstName,
             lastName: users.lastName,
             fullName: users.fullName
           })
-          .from(users)
-          .where(eq(users.id, test.executorId));
+            .from(users)
+            .where(eq(users.id, test.executorId));
 
-          const executorName = executor 
+          const executorName = executor
             ? (executor.fullName || `${executor.firstName || ''} ${executor.lastName || ''}`.trim())
             : 'Unknown';
 
@@ -12411,18 +12473,18 @@ export class DatabaseStorage extends MemStorage {
       const totalTests = tests.length;
       const completedTests = tests.filter(t => ['completed', 'approved'].includes(t.status)).length;
       const inProgressTests = tests.filter(t => t.status === 'in_progress').length;
-      
+
       // Count overdue tests
       const now = new Date();
-      const overdueTests = tests.filter(t => 
-        t.plannedEndDate && t.plannedEndDate < now && 
+      const overdueTests = tests.filter(t =>
+        t.plannedEndDate && t.plannedEndDate < now &&
         !['completed', 'approved', 'cancelled'].includes(t.status)
       ).length;
 
       const totalEstimatedHours = tests.reduce((sum, t) => sum + (t.estimatedHours || 0), 0);
       const totalActualHours = tests.reduce((sum, t) => sum + (t.actualHours || 0), 0);
-      const averageProgress = totalTests > 0 
-        ? tests.reduce((sum, t) => sum + t.progress, 0) / totalTests 
+      const averageProgress = totalTests > 0
+        ? tests.reduce((sum, t) => sum + t.progress, 0) / totalTests
         : 0;
 
       // Progress by status
@@ -12439,7 +12501,7 @@ export class DatabaseStorage extends MemStorage {
 
       // Team efficiency
       const teamStats = new Map<string, { testsAssigned: number; testsCompleted: number; totalHours: number }>();
-      
+
       tests.forEach(test => {
         const userId = test.executorId;
         if (!teamStats.has(userId)) {
@@ -12460,10 +12522,10 @@ export class DatabaseStorage extends MemStorage {
           lastName: users.lastName,
           fullName: users.fullName
         })
-        .from(users)
-        .where(eq(users.id, userId));
+          .from(users)
+          .where(eq(users.id, userId));
 
-        const userName = user 
+        const userName = user
           ? (user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim())
           : 'Unknown';
 
@@ -12593,10 +12655,10 @@ export class DatabaseStorage extends MemStorage {
 
   async resolveAuditReviewComment(id: string, resolvedBy: string): Promise<AuditReviewComment | undefined> {
     const [updated] = await db.update(auditReviewComments)
-      .set({ 
-        isResolved: true, 
-        resolvedBy, 
-        resolvedAt: new Date() 
+      .set({
+        isResolved: true,
+        resolvedBy,
+        resolvedAt: new Date()
       })
       .where(eq(auditReviewComments.id, id))
       .returning();
@@ -12630,10 +12692,10 @@ export class DatabaseStorage extends MemStorage {
 
   async completeAuditMilestone(id: string, completedBy: string): Promise<AuditMilestone | undefined> {
     const [updated] = await db.update(auditMilestones)
-      .set({ 
+      .set({
         status: 'completed',
         actualDate: new Date(),
-        completedBy 
+        completedBy
       })
       .where(eq(auditMilestones.id, id))
       .returning();
@@ -12650,7 +12712,7 @@ export class DatabaseStorage extends MemStorage {
         .from(auditRisks)
         .where(eq(auditRisks.auditId, auditRisk.auditId))
         .orderBy(auditRisks.code);
-      
+
       // Extract numbers from existing codes (RA-0001 -> 1)
       const existingNumbers = existingRisks
         .map(r => {
@@ -12658,22 +12720,22 @@ export class DatabaseStorage extends MemStorage {
           return match ? parseInt(match[1], 10) : 0;
         })
         .filter(n => n > 0);
-      
+
       // Find the next number
-      const nextNumber = existingNumbers.length > 0 
-        ? Math.max(...existingNumbers) + 1 
+      const nextNumber = existingNumbers.length > 0
+        ? Math.max(...existingNumbers) + 1
         : 1;
-      
+
       // Format as RA-0001, RA-0002, etc.
       code = `RA-${String(nextNumber).padStart(4, '0')}`;
     }
-    
+
     const riskData = {
       ...auditRisk,
       code,
       inherentRisk: auditRisk.probability * auditRisk.impact
     };
-    
+
     const [created] = await db.insert(auditRisks).values(riskData).returning();
     return created;
   }
@@ -12689,7 +12751,7 @@ export class DatabaseStorage extends MemStorage {
 
   async updateAuditRisk(id: string, auditRisk: Partial<InsertAuditRisk>): Promise<AuditRisk | undefined> {
     let updateData = { ...auditRisk };
-    
+
     // Recalculate inherent risk if probability or impact changed
     if (auditRisk.probability || auditRisk.impact) {
       const existing = await this.getAuditRisk(id);
@@ -12699,9 +12761,9 @@ export class DatabaseStorage extends MemStorage {
         updateData.inherentRisk = probability * impact;
       }
     }
-    
+
     updateData.updatedAt = new Date();
-    
+
     const [updated] = await db.update(auditRisks).set(updateData).where(eq(auditRisks.id, id)).returning();
     return updated;
   }
@@ -12722,14 +12784,14 @@ export class DatabaseStorage extends MemStorage {
     // Get probability criteria configuration
     const { calculateDynamicProbability } = await import('../shared/probability-calculation.js');
     const criteria = await db.select().from(probabilityCriteria).where(eq(probabilityCriteria.isActive, true));
-    
+
     // Get all audit risks that use factor-based evaluation
     const risksToRecalculate = await db.select()
       .from(auditRisks)
       .where(eq(auditRisks.evaluationMethod, 'factors'));
-    
+
     let recalculatedCount = 0;
-    
+
     // Recalculate each risk
     for (const risk of risksToRecalculate) {
       // Build factors object from risk data
@@ -12742,11 +12804,11 @@ export class DatabaseStorage extends MemStorage {
         change_volatility: risk.changeVolatility,
         vulnerabilities: risk.vulnerabilities,
       };
-      
+
       // Calculate new probability using current criteria
       const newProbability = calculateDynamicProbability(factors, criteria);
       const newInherentRisk = newProbability * risk.impact;
-      
+
       // Update only if values changed
       if (newProbability !== risk.probability || newInherentRisk !== risk.inherentRisk) {
         await db.update(auditRisks)
@@ -12756,25 +12818,25 @@ export class DatabaseStorage extends MemStorage {
             updatedAt: new Date()
           })
           .where(eq(auditRisks.id, risk.id));
-        
+
         recalculatedCount++;
       }
     }
-    
+
     return recalculatedCount;
   }
 
   async getWorkProgramData(auditId: string): Promise<WorkProgramItem[]> {
     // 1. Get official risks from audit scope
     const officialRisks = await this.getRisksForAuditScope(auditId);
-    
+
     // 2. Get ad-hoc risks
     const adHocRisks = await this.getAuditRisks(auditId);
-    
+
     // 3. Get controls for official risks (batch query with JOIN)
     const officialRiskIds = officialRisks.map(r => r.id);
     let riskControlsMap = new Map<string, (Control & { residualRisk: number })[]>();
-    
+
     if (officialRiskIds.length > 0) {
       const controlsData = await db.select({
         riskId: riskControls.riskId,
@@ -12782,10 +12844,10 @@ export class DatabaseStorage extends MemStorage {
         residualRisk: riskControls.residualRisk,
         control: controls
       })
-      .from(riskControls)
-      .innerJoin(controls, eq(controls.id, riskControls.controlId))
-      .where(inArray(riskControls.riskId, officialRiskIds));
-      
+        .from(riskControls)
+        .innerJoin(controls, eq(controls.id, riskControls.controlId))
+        .where(inArray(riskControls.riskId, officialRiskIds));
+
       // Build map
       for (const item of controlsData) {
         if (!riskControlsMap.has(item.riskId)) {
@@ -12797,11 +12859,11 @@ export class DatabaseStorage extends MemStorage {
         });
       }
     }
-    
+
     // 4. Get all audit tests (batch query for official risks)
     const allRiskIds = [...officialRiskIds];
     let testsMap = new Map<string, AuditTest[]>();
-    
+
     if (allRiskIds.length > 0) {
       const tests = await db.select()
         .from(auditTests)
@@ -12809,7 +12871,7 @@ export class DatabaseStorage extends MemStorage {
           eq(auditTests.auditId, auditId),
           inArray(auditTests.riskId, allRiskIds)
         ));
-      
+
       // Build map
       for (const test of tests) {
         if (test.riskId) {
@@ -12820,11 +12882,11 @@ export class DatabaseStorage extends MemStorage {
         }
       }
     }
-    
+
     // 4b. Get tests for ad-hoc risks
     const adHocRiskIds = adHocRisks.map(r => r.id);
     let adHocTestsMap = new Map<string, AuditTest[]>();
-    
+
     if (adHocRiskIds.length > 0) {
       const adHocTests = await db.select()
         .from(auditTests)
@@ -12832,7 +12894,7 @@ export class DatabaseStorage extends MemStorage {
           eq(auditTests.auditId, auditId),
           inArray(auditTests.auditRiskId, adHocRiskIds)
         ));
-      
+
       // Build map for ad-hoc tests
       for (const test of adHocTests) {
         if (test.auditRiskId) {
@@ -12843,16 +12905,16 @@ export class DatabaseStorage extends MemStorage {
         }
       }
     }
-    
+
     // 5. Get risk evaluations and create map
     const riskEvaluations = await db.select()
       .from(auditRiskEvaluations)
       .where(eq(auditRiskEvaluations.auditId, auditId));
-    
+
     // Create maps for easy lookup
     const officialRiskEvalMap = new Map<string, typeof riskEvaluations[0]>();
     const adHocRiskEvalMap = new Map<string, typeof riskEvaluations[0]>();
-    
+
     for (const evaluation of riskEvaluations) {
       if (evaluation.riskId) {
         officialRiskEvalMap.set(evaluation.riskId, evaluation);
@@ -12861,7 +12923,7 @@ export class DatabaseStorage extends MemStorage {
         adHocRiskEvalMap.set(evaluation.auditRiskId, evaluation);
       }
     }
-    
+
     // 6. Calculate coverage for each risk
     const calculateCoverage = (tests: AuditTest[]) => {
       const completed = tests.filter(t => ['completed', 'done', 'approved'].includes(t.status)).length;
@@ -12874,10 +12936,10 @@ export class DatabaseStorage extends MemStorage {
         pending
       };
     };
-    
+
     // 7. Assemble result with reevaluated risk levels
     const result: WorkProgramItem[] = [];
-    
+
     // Official risks
     for (const risk of officialRisks) {
       const evaluation = officialRiskEvalMap.get(risk.id);
@@ -12888,7 +12950,7 @@ export class DatabaseStorage extends MemStorage {
         inherentRisk: evaluation.newInherentRisk ?? risk.inherentRisk,
         isReevaluated: true
       } : risk;
-      
+
       result.push({
         risk: reevaluatedRisk,
         riskType: 'official',
@@ -12897,7 +12959,7 @@ export class DatabaseStorage extends MemStorage {
         coverage: calculateCoverage(testsMap.get(risk.id) || [])
       });
     }
-    
+
     // Ad-hoc risks (no controls, tests linked via audit_tests.audit_risk_id)
     for (const risk of adHocRisks) {
       const evaluation = adHocRiskEvalMap.get(risk.id);
@@ -12908,7 +12970,7 @@ export class DatabaseStorage extends MemStorage {
         inherentRisk: evaluation.newInherentRisk ?? risk.inherentRisk,
         isReevaluated: true
       } : risk;
-      
+
       const adHocTestsForRisk = adHocTestsMap.get(risk.id) || [];
       result.push({
         risk: reevaluatedRisk,
@@ -12918,7 +12980,7 @@ export class DatabaseStorage extends MemStorage {
         coverage: calculateCoverage(adHocTestsForRisk)
       });
     }
-    
+
     return result;
   }
 
@@ -12960,44 +13022,44 @@ export class DatabaseStorage extends MemStorage {
   async calculateProcessRiskScore(processId?: string, subprocesoId?: string): Promise<number> {
     const allRisks = await super.getRisks();
     let relevantRisks = allRisks;
-    
+
     if (subprocesoId) {
       relevantRisks = allRisks.filter(risk => risk.subprocesoId === subprocesoId);
     } else if (processId) {
       relevantRisks = allRisks.filter(risk => risk.processId === processId);
     }
-    
+
     if (relevantRisks.length === 0) return 0;
-    
+
     // Calculate weighted risk score
     const totalRiskScore = relevantRisks.reduce((sum, risk) => {
       return sum + (risk.probability * risk.impact);
     }, 0);
-    
+
     const maxPossibleScore = relevantRisks.length * 25; // Max risk per item is 5*5=25
     const normalizedScore = Math.round((totalRiskScore / maxPossibleScore) * 100);
-    
+
     return Math.min(normalizedScore, 100);
   }
 
   async getRiskMetricsForProcess(processId?: string, subprocesoId?: string): Promise<{ riskCount: number; avgProbability: number; avgImpact: number; maxRisk: number }> {
     const allRisks = await super.getRisks();
     let relevantRisks = allRisks;
-    
+
     if (subprocesoId) {
       relevantRisks = allRisks.filter(risk => risk.subprocesoId === subprocesoId);
     } else if (processId) {
       relevantRisks = allRisks.filter(risk => risk.processId === processId);
     }
-    
+
     if (relevantRisks.length === 0) {
       return { riskCount: 0, avgProbability: 0, avgImpact: 0, maxRisk: 0 };
     }
-    
+
     const avgProbability = relevantRisks.reduce((sum, risk) => sum + risk.probability, 0) / relevantRisks.length;
     const avgImpact = relevantRisks.reduce((sum, risk) => sum + risk.impact, 0) / relevantRisks.length;
     const maxRisk = Math.max(...relevantRisks.map(risk => risk.probability * risk.impact));
-    
+
     return {
       riskCount: relevantRisks.length,
       avgProbability: Math.round(avgProbability * 10) / 10,
@@ -13011,7 +13073,7 @@ export class DatabaseStorage extends MemStorage {
     // Use efficient COUNT queries instead of loading all records
     const [
       totalRisksResult,
-      criticalRisksResult, 
+      criticalRisksResult,
       activeControlsResult,
       bajoRisksResult,
       medioRisksResult,
@@ -13046,7 +13108,7 @@ export class DatabaseStorage extends MemStorage {
   async getSystemConfig(configKey: string): Promise<SystemConfig | undefined> {
     // Load cache from Redis/DB if not initialized
     await this.loadSystemConfigCache();
-    
+
     // Return from local cache (populated from Redis or DB)
     return this.systemConfigLocalCache.get(configKey);
   }
@@ -13054,7 +13116,7 @@ export class DatabaseStorage extends MemStorage {
   async getAllSystemConfigs(): Promise<SystemConfig[]> {
     // Load cache from Redis/DB if not initialized
     await this.loadSystemConfigCache();
-    
+
     // Return all configs from local cache
     return Array.from(this.systemConfigLocalCache.values()).filter(c => c.isActive);
   }
@@ -13062,7 +13124,7 @@ export class DatabaseStorage extends MemStorage {
   async setSystemConfig(config: InsertSystemConfig): Promise<SystemConfig> {
     // Try to update existing config, or insert new one
     const existing = await this.getSystemConfig(config.configKey);
-    
+
     if (existing) {
       const [updated] = await db.update(systemConfig)
         .set({
@@ -13074,7 +13136,7 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(systemConfig.configKey, config.configKey))
         .returning();
-      
+
       // Invalidate cache (will reload on next request)
       await this.invalidateConfigCache();
       return updated;
@@ -13095,12 +13157,12 @@ export class DatabaseStorage extends MemStorage {
       })
       .where(eq(systemConfig.configKey, configKey))
       .returning();
-    
+
     // Invalidate cache (will reload on next request)
     if (updated) {
       await this.invalidateConfigCache();
     }
-    
+
     return updated;
   }
 
@@ -13109,10 +13171,10 @@ export class DatabaseStorage extends MemStorage {
     return config ? parseInt(config.configValue) : 100; // Default to 100% if not configured
   }
 
-  async getRiskLevelRanges(): Promise<{lowMax: number, mediumMax: number, highMax: number}> {
+  async getRiskLevelRanges(): Promise<{ lowMax: number, mediumMax: number, highMax: number }> {
     const [lowConfig, mediumConfig, highConfig] = await Promise.all([
       this.getSystemConfig('risk_low_max'),
-      this.getSystemConfig('risk_medium_max'), 
+      this.getSystemConfig('risk_medium_max'),
       this.getSystemConfig('risk_high_max')
     ]);
 
@@ -13123,7 +13185,7 @@ export class DatabaseStorage extends MemStorage {
     };
   }
 
-  async getRiskDecimalsConfig(): Promise<{enabled: boolean, precision: number}> {
+  async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
     const [enabledConfig, precisionConfig] = await Promise.all([
       this.getSystemConfig('risk_decimals_enabled'),
       this.getSystemConfig('risk_decimals_precision')
@@ -13135,7 +13197,7 @@ export class DatabaseStorage extends MemStorage {
     };
   }
 
-  async getProbabilityWeights(): Promise<{frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number}> {
+  async getProbabilityWeights(): Promise<{ frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number }> {
     const [frequencyConfig, exposureScopeConfig, complexityConfig, changeVolatilityConfig, vulnerabilitiesConfig] = await Promise.all([
       this.getSystemConfig('prob_weight_frequency'),
       this.getSystemConfig('prob_weight_exposure_scope'),
@@ -13209,9 +13271,9 @@ export class DatabaseStorage extends MemStorage {
         subprocesoId: risks.subprocesoId
       }
     })
-    .from(riskRegulations)
-    .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
-    .where(eq(riskRegulations.regulationId, id));
+      .from(riskRegulations)
+      .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
+      .where(eq(riskRegulations.regulationId, id));
 
     // Get compliance tests
     const complianceTests = await this.getComplianceTestsByRegulation(id);
@@ -13232,19 +13294,19 @@ export class DatabaseStorage extends MemStorage {
   async createRegulation(regulation: InsertRegulation): Promise<Regulation> {
     // Generate sequential code based on sourceType: REG-0001 for external, RGI-0001 for internal
     const prefix = regulation.sourceType === 'external' ? 'REG' : 'RGI';
-    
+
     // Get existing regulations with the same prefix
     const existingRegulations = await db.select({ code: regulations.code }).from(regulations)
       .where(like(regulations.code, `${prefix}-%`));
-    
+
     const existingNumbers = existingRegulations
       .map(r => r.code.replace(`${prefix}-`, ''))
       .map(n => parseInt(n))
       .filter(n => !isNaN(n));
-    
+
     const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
     const code = `${prefix}-${nextNumber.toString().padStart(4, '0')}`;
-    
+
     const [newRegulation] = await db.insert(regulations).values({
       ...regulation,
       code
@@ -13266,20 +13328,20 @@ export class DatabaseStorage extends MemStorage {
   async migrateRegulationCodes(): Promise<{ updated: number; message: string }> {
     // Get all regulations grouped by sourceType
     const allRegulations = await db.select().from(regulations).orderBy(regulations.createdAt);
-    
+
     let regCounter = 1; // For external regulations (REG-XXXX)
     let rgiCounter = 1; // For internal regulations (RGI-XXXX)
     let updated = 0;
-    
+
     for (const regulation of allRegulations) {
       const prefix = regulation.sourceType === 'external' ? 'REG' : 'RGI';
       const counter = regulation.sourceType === 'external' ? regCounter : rgiCounter;
       const newCode = `${prefix}-${counter.toString().padStart(4, '0')}`;
-      
+
       await db.update(regulations)
         .set({ code: newCode })
         .where(eq(regulations.id, regulation.id));
-      
+
       if (regulation.sourceType === 'external') {
         regCounter++;
       } else {
@@ -13287,25 +13349,25 @@ export class DatabaseStorage extends MemStorage {
       }
       updated++;
     }
-    
+
     return { updated, message: `Successfully updated ${updated} regulation codes (${regCounter - 1} external REG-XXXX, ${rgiCounter - 1} internal RGI-XXXX)` };
   }
 
   async deleteRegulation(id: string): Promise<boolean> {
     // Check if there are associated risks using EXISTS (more efficient than COUNT)
-    const [hasAssociatedRisks] = await db.select({ 
-      exists: sql<boolean>`EXISTS(SELECT 1 FROM risk_regulations WHERE regulation_id = ${id})` 
+    const [hasAssociatedRisks] = await db.select({
+      exists: sql<boolean>`EXISTS(SELECT 1 FROM risk_regulations WHERE regulation_id = ${id})`
     }).from(sql`(SELECT 1) as dummy`);
-    
+
     // Check for compliance tests through regulationApplicability using EXISTS
-    const [hasComplianceTests] = await db.select({ 
+    const [hasComplianceTests] = await db.select({
       exists: sql<boolean>`EXISTS(
         SELECT 1 FROM compliance_tests ct 
         INNER JOIN regulation_applicability ra ON ct.regulation_applicability_id = ra.id 
         WHERE ra.regulation_id = ${id}
-      )` 
+      )`
     }).from(sql`(SELECT 1) as dummy`);
-    
+
     if (hasAssociatedRisks.exists || hasComplianceTests.exists) {
       // Soft delete - mark as inactive
       const [updated] = await db.update(regulations)
@@ -13329,10 +13391,10 @@ export class DatabaseStorage extends MemStorage {
   async setRegulationApplicability(regulationId: string, entities: any[]): Promise<void> {
     // Primero eliminar las asociaciones existentes
     await this.deleteRegulationApplicability(regulationId);
-    
+
     // Si no hay entidades, salir
     if (!entities || entities.length === 0) return;
-    
+
     // Crear las nuevas asociaciones
     const applicabilityRecords = entities.map(entity => ({
       regulationId,
@@ -13342,7 +13404,7 @@ export class DatabaseStorage extends MemStorage {
       subprocesoId: entity.type === 'subproceso' ? entity.id : undefined,
       createdBy: entity.createdBy || 'user-1'
     }));
-    
+
     await db.insert(regulationApplicability).values(applicabilityRecords);
   }
 
@@ -13380,11 +13442,11 @@ export class DatabaseStorage extends MemStorage {
       risk: risks,
       assessedByUser: users
     })
-    .from(riskRegulations)
-    .innerJoin(regulations, eq(riskRegulations.regulationId, regulations.id))
-    .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
-    .leftJoin(users, eq(riskRegulations.assessedBy, users.id))
-    .where(eq(riskRegulations.riskId, riskId));
+      .from(riskRegulations)
+      .innerJoin(regulations, eq(riskRegulations.regulationId, regulations.id))
+      .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
+      .leftJoin(users, eq(riskRegulations.assessedBy, users.id))
+      .where(eq(riskRegulations.riskId, riskId));
 
     return results.map(result => ({
       ...result,
@@ -13411,11 +13473,11 @@ export class DatabaseStorage extends MemStorage {
       risk: risks,
       assessedByUser: users
     })
-    .from(riskRegulations)
-    .innerJoin(regulations, eq(riskRegulations.regulationId, regulations.id))
-    .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
-    .leftJoin(users, eq(riskRegulations.assessedBy, users.id))
-    .where(eq(riskRegulations.regulationId, regulationId));
+      .from(riskRegulations)
+      .innerJoin(regulations, eq(riskRegulations.regulationId, regulations.id))
+      .innerJoin(risks, eq(riskRegulations.riskId, risks.id))
+      .leftJoin(users, eq(riskRegulations.assessedBy, users.id))
+      .where(eq(riskRegulations.regulationId, regulationId));
 
     return results.map(result => ({
       ...result,
@@ -13449,9 +13511,9 @@ export class DatabaseStorage extends MemStorage {
     const tests = await db.select({
       test: complianceTests
     })
-    .from(complianceTests)
-    .orderBy(complianceTests.name);
-    
+      .from(complianceTests)
+      .orderBy(complianceTests.name);
+
     return tests.map(t => t.test);
   }
 
@@ -13459,9 +13521,9 @@ export class DatabaseStorage extends MemStorage {
     const [result] = await db.select({
       test: complianceTests
     })
-    .from(complianceTests)
-    .where(eq(complianceTests.id, id));
-    
+      .from(complianceTests)
+      .where(eq(complianceTests.id, id));
+
     return result?.test;
   }
 
@@ -13502,10 +13564,10 @@ export class DatabaseStorage extends MemStorage {
     const tests = await db.select({
       test: complianceTests
     })
-    .from(complianceTests)
-    .where(eq(complianceTests.regulationId, regulationId))
-    .orderBy(complianceTests.name);
-    
+      .from(complianceTests)
+      .where(eq(complianceTests.regulationId, regulationId))
+      .orderBy(complianceTests.name);
+
     return tests.map(t => t.test);
   }
 
@@ -13532,7 +13594,7 @@ export class DatabaseStorage extends MemStorage {
   async deleteComplianceTest(id: string): Promise<boolean> {
     // Delete associated test controls first
     await db.delete(complianceTestControls).where(eq(complianceTestControls.complianceTestId, id));
-    
+
     // Delete the compliance test
     const result = await db.delete(complianceTests).where(eq(complianceTests.id, id));
     return result.rowCount > 0;
@@ -13571,13 +13633,13 @@ export class DatabaseStorage extends MemStorage {
       testedByUser: users,
       responsiblePersonDetails: users
     })
-    .from(complianceTestControls)
-    .innerJoin(complianceTests, eq(complianceTestControls.complianceTestId, complianceTests.id))
-    .innerJoin(controls, eq(complianceTestControls.controlId, controls.id))
-    .leftJoin(risks, eq(complianceTestControls.riskId, risks.id))
-    .innerJoin(users, eq(complianceTestControls.testedBy, users.id))
-    .leftJoin(users, eq(complianceTestControls.responsiblePerson, users.id))
-    .where(eq(complianceTestControls.complianceTestId, complianceTestId));
+      .from(complianceTestControls)
+      .innerJoin(complianceTests, eq(complianceTestControls.complianceTestId, complianceTests.id))
+      .innerJoin(controls, eq(complianceTestControls.controlId, controls.id))
+      .leftJoin(risks, eq(complianceTestControls.riskId, risks.id))
+      .innerJoin(users, eq(complianceTestControls.testedBy, users.id))
+      .leftJoin(users, eq(complianceTestControls.responsiblePerson, users.id))
+      .where(eq(complianceTestControls.complianceTestId, complianceTestId));
 
     return results.map(result => ({
       ...result,
@@ -13690,14 +13752,14 @@ export class DatabaseStorage extends MemStorage {
     };
   }
 
-  async getRegulationRiskLevels(): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
+  async getRegulationRiskLevels(): Promise<Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>> {
     // Temporarily disable to avoid TypeScript conflicts
     // Getting regulation risk levels
     return new Map();
   }
 
   // ============== COMPLIANCE DOCUMENTS - Use Database ==============
-  
+
   async getComplianceDocuments(): Promise<ComplianceDocument[]> {
     return await db.select().from(complianceDocuments)
       .where(eq(complianceDocuments.isActive, true))
@@ -13835,22 +13897,22 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Remove all macroproceso-fiscal entity associations
       await db.delete(macroprocesoFiscalEntities).where(eq(macroprocesoFiscalEntities.fiscalEntityId, id));
-      
+
       // Remove all process-fiscal entity associations
       await db.delete(processFiscalEntities).where(eq(processFiscalEntities.fiscalEntityId, id));
-      
+
       // Update macroprocesos that reference this entity directly to null
       await db
         .update(macroprocesos)
         .set({ fiscalEntityId: null, entityScope: 'transversal' })
         .where(eq(macroprocesos.fiscalEntityId, id));
-      
+
       // Update processes that reference this entity directly to null  
       await db
         .update(processes)
         .set({ fiscalEntityId: null, entityScope: 'transversal' })
         .where(eq(processes.fiscalEntityId, id));
-      
+
       // Delete the fiscal entity
       const result = await db.delete(fiscalEntities).where(eq(fiscalEntities.id, id));
       return (result.rowCount ?? 0) > 0;
@@ -13876,24 +13938,24 @@ export class DatabaseStorage extends MemStorage {
       .from(macroprocesoFiscalEntities)
       .innerJoin(fiscalEntities, eq(macroprocesoFiscalEntities.fiscalEntityId, fiscalEntities.id))
       .where(eq(macroprocesoFiscalEntities.macroprocesoId, macroprocesoId));
-    
+
     return result;
   }
 
   async assignMacroprocesoToFiscalEntities(macroprocesoId: string, entityIds: string[]): Promise<MacroprocesoFiscalEntity[]> {
     // First, remove existing associations
     await db.delete(macroprocesoFiscalEntities).where(eq(macroprocesoFiscalEntities.macroprocesoId, macroprocesoId));
-    
+
     // Create new associations
     if (entityIds.length === 0) {
       return [];
     }
-    
+
     const associations = entityIds.map(entityId => ({
       macroprocesoId,
       fiscalEntityId: entityId,
     }));
-    
+
     return await db.insert(macroprocesoFiscalEntities).values(associations).returning();
   }
 
@@ -13919,24 +13981,24 @@ export class DatabaseStorage extends MemStorage {
       .from(processFiscalEntities)
       .innerJoin(fiscalEntities, eq(processFiscalEntities.fiscalEntityId, fiscalEntities.id))
       .where(eq(processFiscalEntities.processId, processId));
-    
+
     return result;
   }
 
   async assignProcessToFiscalEntities(processId: string, entityIds: string[]): Promise<ProcessFiscalEntity[]> {
     // First, remove existing associations
     await db.delete(processFiscalEntities).where(eq(processFiscalEntities.processId, processId));
-    
+
     // Create new associations
     if (entityIds.length === 0) {
       return [];
     }
-    
+
     const associations = entityIds.map(entityId => ({
       processId,
       fiscalEntityId: entityId,
     }));
-    
+
     return await db.insert(processFiscalEntities).values(associations).returning();
   }
 
@@ -13946,22 +14008,22 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== GERENCIAS DATABASE IMPLEMENTATION ==============
-  
+
   async getGerencias(): Promise<Gerencia[]> {
     const cacheKey = 'gerencias:single-tenant';
-    
+
     // Try cache first (60s TTL - catalog data changes infrequently)
     const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    
+
     const result = await withRetry(async () => {
       return await db.select().from(gerencias)
         .where(isNull(gerencias.deletedAt))
         .orderBy(gerencias.level, gerencias.order);
     });
-    
+
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);
     return result;
@@ -13972,7 +14034,7 @@ export class DatabaseStorage extends MemStorage {
       const allGerencias = await db.select().from(gerencias)
         .where(isNull(gerencias.deletedAt))
         .orderBy(gerencias.level, gerencias.order);
-      
+
       return allGerencias;
     });
   }
@@ -13994,7 +14056,7 @@ export class DatabaseStorage extends MemStorage {
       const duplicateName = await db.select().from(gerencias)
         .where(sql`LOWER(${gerencias.name}) = LOWER(${insertGerencia.name})`)
         .limit(1);
-      
+
       if (duplicateName.length > 0) {
         throw new Error(`Ya existe una gerencia con el nombre "${insertGerencia.name}"`);
       }
@@ -14031,7 +14093,7 @@ export class DatabaseStorage extends MemStorage {
             ne(gerencias.id, id)
           ))
           .limit(1);
-        
+
         if (duplicateName.length > 0) {
           throw new Error(`Ya existe una gerencia con el nombre "${update.name}"`);
         }
@@ -14104,22 +14166,22 @@ export class DatabaseStorage extends MemStorage {
     });
   }
 
-  async getGerenciasRiskLevels(): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
+  async getGerenciasRiskLevels(): Promise<Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>> {
     // OPTIMIZED: Single SQL query with CTEs replaces ~20+ queries and O(n^2) loops
     // Nov 29, 2025: Refactored to prevent pool saturation under cold-cache load
     // Hybrid implementation: fast SQL for average/worst_case, accurate logic for weighted
     const startTime = Date.now();
-    
+
     return await withRetry(async () => {
       // First, determine the aggregation method
       const methodConfig = await this.getSystemConfig('risk_aggregation_method');
       const method = methodConfig?.configValue || 'average';
-      
+
       // For 'weighted' mode, use the slower but accurate per-risk calculation
       if (method === 'weighted') {
         return await this.getGerenciasRiskLevelsWeighted(startTime);
       }
-      
+
       // Fast path: Use optimized SQL for average/worst_case
       const result = await db.execute(sql`
         WITH gerencia_risk_mapping AS (
@@ -14191,14 +14253,14 @@ export class DatabaseStorage extends MemStorage {
         FROM gerencia_risk_details
         GROUP BY gerencia_id
       `);
-      
+
       // Build the result map using the configured method
-      const gerenciaRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
-      
+      const gerenciaRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
+
       for (const row of result.rows as any[]) {
         let inherentRisk: number;
         let residualRisk: number;
-        
+
         if (method === 'worst_case') {
           inherentRisk = row.inherent_risk_max;
           residualRisk = row.residual_risk_max;
@@ -14207,25 +14269,25 @@ export class DatabaseStorage extends MemStorage {
           inherentRisk = row.inherent_risk_avg;
           residualRisk = row.residual_risk_avg;
         }
-        
+
         gerenciaRiskLevels.set(row.gerencia_id, {
           inherentRisk: Number(inherentRisk) || 0,
           residualRisk: Number(residualRisk) || 0,
           riskCount: Number(row.risk_count) || 0
         });
       }
-      
+
       const duration = Date.now() - startTime;
       console.log(`[getGerenciasRiskLevels] Optimized SQL (method=${method}) completed in ${duration}ms, ${gerenciaRiskLevels.size} gerencias`);
-      
+
       return gerenciaRiskLevels;
     });
   }
 
   // Weighted aggregation path - slower but accurate per-risk calculation
-  private async getGerenciasRiskLevelsWeighted(startTime: number): Promise<Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>> {
+  private async getGerenciasRiskLevelsWeighted(startTime: number): Promise<Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>> {
     console.log('[getGerenciasRiskLevels] Using weighted calculation path');
-    
+
     // Load weight and range configs
     const [criticalWeight, highWeight, mediumWeight, lowWeight, lowMax, mediumMax, highMax] = await Promise.all([
       this.getSystemConfig('risk_weight_critical').then(cfg => parseFloat(cfg?.configValue || '10')),
@@ -14236,7 +14298,7 @@ export class DatabaseStorage extends MemStorage {
       this.getSystemConfig('risk_medium_max').then(cfg => parseFloat(cfg?.configValue || '12')),
       this.getSystemConfig('risk_high_max').then(cfg => parseFloat(cfg?.configValue || '16')),
     ]);
-    
+
     // Get individual risk data for weighted calculation
     const result = await db.execute(sql`
       WITH gerencia_risk_mapping AS (
@@ -14282,7 +14344,7 @@ export class DatabaseStorage extends MemStorage {
       FROM gerencia_risk_mapping grm
       LEFT JOIN residual_risks rr ON rr.risk_id = grm.risk_id
     `);
-    
+
     // Helper to get weight based on risk level
     const getLevelWeight = (value: number) => {
       if (value > highMax) return criticalWeight;
@@ -14290,10 +14352,10 @@ export class DatabaseStorage extends MemStorage {
       if (value > lowMax) return mediumWeight;
       return lowWeight;
     };
-    
+
     // Group risks by gerencia and calculate weighted averages
     const gerenciaData = new Map<string, { inherentValues: number[], residualValues: number[] }>();
-    
+
     for (const row of result.rows as any[]) {
       const gerenciaId = row.gerencia_id;
       if (!gerenciaData.has(gerenciaId)) {
@@ -14303,10 +14365,10 @@ export class DatabaseStorage extends MemStorage {
       if (row.inherent_risk != null) data.inherentValues.push(Number(row.inherent_risk));
       if (row.residual_risk != null) data.residualValues.push(Number(row.residual_risk));
     }
-    
+
     // Calculate weighted averages per gerencia
-    const gerenciaRiskLevels = new Map<string, {inherentRisk: number, residualRisk: number, riskCount: number}>();
-    
+    const gerenciaRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
+
     for (const [gerenciaId, data] of gerenciaData) {
       const calculateWeighted = (values: number[]): number => {
         if (values.length === 0) return 0;
@@ -14314,22 +14376,22 @@ export class DatabaseStorage extends MemStorage {
         const totalWeight = values.reduce((sum, val) => sum + getLevelWeight(val), 0);
         return totalWeight > 0 ? weightedSum / totalWeight : 0;
       };
-      
+
       gerenciaRiskLevels.set(gerenciaId, {
         inherentRisk: calculateWeighted(data.inherentValues),
         residualRisk: calculateWeighted(data.residualValues),
         riskCount: data.inherentValues.length
       });
     }
-    
+
     const duration = Date.now() - startTime;
     console.log(`[getGerenciasRiskLevels] Weighted calculation completed in ${duration}ms, ${gerenciaRiskLevels.size} gerencias`);
-    
+
     return gerenciaRiskLevels;
   }
 
   // ============== PROCESS GERENCIAS RELATIONS ==============
-  
+
   async addProcessGerencia(relation: InsertProcessGerencia): Promise<ProcessGerencia> {
     return await withRetry(async () => {
       const [created] = await db.insert(processGerencias)
@@ -14358,12 +14420,12 @@ export class DatabaseStorage extends MemStorage {
           ))
           .limit(1)
       ]);
-      
+
       if (processExists.length === 0 || gerenciaExists.length === 0) {
         console.warn(`Cannot remove process-gerencia association: process ${processId} or gerencia ${gerenciaId} not found`);
         return false;
       }
-      
+
       // Now delete the association
       const result = await db.delete(processGerencias)
         .where(and(
@@ -14399,7 +14461,7 @@ export class DatabaseStorage extends MemStorage {
           eq(processGerencias.processId, processId),
           isNull(gerencias.deletedAt)
         ));
-      
+
       return result;
     });
   }
@@ -14431,13 +14493,13 @@ export class DatabaseStorage extends MemStorage {
           eq(processGerencias.gerenciaId, gerenciaId),
           isNull(processes.deletedAt)
         ));
-      
+
       return result;
     });
   }
 
   // ============== MACROPROCESO GERENCIAS RELATIONS ==============
-  
+
   async addMacroprocesoGerencia(relation: InsertMacroprocesoGerencia): Promise<MacroprocesoGerencia> {
     return await withRetry(async () => {
       const [created] = await db.insert(macroprocesoGerencias)
@@ -14466,12 +14528,12 @@ export class DatabaseStorage extends MemStorage {
           ))
           .limit(1)
       ]);
-      
+
       if (macroprocesoExists.length === 0 || gerenciaExists.length === 0) {
         console.warn(`Cannot remove macroproceso-gerencia association: macroproceso ${macroprocesoId} or gerencia ${gerenciaId} not found`);
         return false;
       }
-      
+
       // Now delete the association
       const result = await db.delete(macroprocesoGerencias)
         .where(and(
@@ -14509,7 +14571,7 @@ export class DatabaseStorage extends MemStorage {
           eq(macroprocesoGerencias.macroprocesoId, macroprocesoId),
           isNull(gerencias.deletedAt)
         ));
-      
+
       return result;
     });
   }
@@ -14543,13 +14605,13 @@ export class DatabaseStorage extends MemStorage {
           eq(macroprocesoGerencias.gerenciaId, gerenciaId),
           isNull(macroprocesos.deletedAt)
         ));
-      
+
       return result;
     });
   }
 
   // ============== SUBPROCESO GERENCIAS RELATIONS ==============
-  
+
   async addSubprocesoGerencia(relation: InsertSubprocesoGerencia): Promise<SubprocesoGerencia> {
     return await withRetry(async () => {
       const [created] = await db.insert(subprocesoGerencias)
@@ -14578,12 +14640,12 @@ export class DatabaseStorage extends MemStorage {
           ))
           .limit(1)
       ]);
-      
+
       if (subprocesoExists.length === 0 || gerenciaExists.length === 0) {
         console.warn(`Cannot remove subproceso-gerencia association: subproceso ${subprocesoId} or gerencia ${gerenciaId} not found`);
         return false;
       }
-      
+
       // Now delete the association
       const result = await db.delete(subprocesoGerencias)
         .where(and(
@@ -14621,7 +14683,7 @@ export class DatabaseStorage extends MemStorage {
           eq(subprocesoGerencias.subprocesoId, subprocesoId),
           isNull(gerencias.deletedAt)
         ));
-      
+
       return result;
     });
   }
@@ -14651,7 +14713,7 @@ export class DatabaseStorage extends MemStorage {
           eq(subprocesoGerencias.gerenciaId, gerenciaId),
           isNull(subprocesos.deletedAt)
         ));
-      
+
       return result;
     });
   }
@@ -14715,7 +14777,7 @@ export class DatabaseStorage extends MemStorage {
     const actionsData = await db.select().from(actions)
       .where(isNull(actions.deletedAt))
       .orderBy(desc(actions.createdAt));
-    
+
     // Map actions to ActionPlan type for backward compatibility
     // Note: 'title' from actions maps to 'name' in ActionPlan
     return actionsData.map(action => ({
@@ -14733,9 +14795,9 @@ export class DatabaseStorage extends MemStorage {
         eq(actions.id, id),
         isNull(actions.deletedAt)
       ));
-    
+
     if (!action) return undefined;
-    
+
     // Map action to ActionPlan type for backward compatibility
     // Note: 'title' from actions maps to 'name' in ActionPlan
     return {
@@ -14752,7 +14814,7 @@ export class DatabaseStorage extends MemStorage {
         eq(actions.riskId, riskId),
         isNull(actions.deletedAt)
       ));
-    
+
     // Map actions to ActionPlan type for backward compatibility
     return actionsData.map(action => ({
       ...action,
@@ -14791,7 +14853,7 @@ export class DatabaseStorage extends MemStorage {
       };
 
       const [newAction] = await db.insert(actions).values(actionData).returning();
-      
+
       // Map back to ActionPlan type for backward compatibility
       return {
         ...newAction,
@@ -14816,14 +14878,14 @@ export class DatabaseStorage extends MemStorage {
     if (update.deletedBy !== undefined) actionUpdate.deletedBy = update.deletedBy;
     if (update.deletedAt !== undefined) actionUpdate.deletedAt = update.deletedAt;
     if (update.deletionReason !== undefined) actionUpdate.deletionReason = update.deletionReason;
-    
+
     const [updated] = await db.update(actions)
       .set(actionUpdate)
       .where(eq(actions.id, id))
       .returning();
-    
+
     if (!updated) return undefined;
-    
+
     // Map back to ActionPlan type for backward compatibility
     return {
       ...updated,
@@ -14855,7 +14917,7 @@ export class DatabaseStorage extends MemStorage {
       .from(actionPlanRisks)
       .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
       .where(eq(actionPlanRisks.actionId, actionPlanId)); // Query by actionId
-    
+
     return results.map(row => ({
       id: row.id,
       actionPlanId: row.actionPlanId,
@@ -14892,14 +14954,14 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async updateActionPlanRiskStatus(id: string, mitigationStatus: string, notes?: string): Promise<ActionPlanRisk | undefined> {
-    const updateData: any = { 
+    const updateData: any = {
       mitigationStatus,
       updatedAt: new Date()
     };
     if (notes !== undefined) {
       updateData.notes = notes;
     }
-    
+
     const [updated] = await db
       .update(actionPlanRisks)
       .set(updateData)
@@ -14973,18 +15035,18 @@ export class DatabaseStorage extends MemStorage {
 
   async updateUserPassword(userId: string, hashedPassword: string): Promise<void> {
     await db.update(users)
-      .set({ 
+      .set({
         password: hashedPassword,
-        updatedAt: new Date() 
+        updatedAt: new Date()
       })
       .where(eq(users.id, userId));
   }
 
   async updateUserLastLogin(userId: string): Promise<void> {
     await db.update(users)
-      .set({ 
+      .set({
         lastLogin: new Date(),
-        updatedAt: new Date() 
+        updatedAt: new Date()
       })
       .where(eq(users.id, userId));
   }
@@ -15027,7 +15089,7 @@ export class DatabaseStorage extends MemStorage {
       .select({ count: sql<number>`count(*)::int` })
       .from(userRoles)
       .where(eq(userRoles.roleId, roleId));
-    
+
     return result[0]?.count || 0;
   }
 
@@ -15127,7 +15189,7 @@ export class DatabaseStorage extends MemStorage {
       .where(and(eq(userRoles.userId, userId), eq(roles.isActive, true)));
 
     const permissions = new Set<string>();
-    
+
     for (const userRole of userRolesWithRoles) {
       if (userRole.permissions) {
         for (const permission of userRole.permissions) {
@@ -15135,10 +15197,10 @@ export class DatabaseStorage extends MemStorage {
         }
       }
     }
-    
+
     return Array.from(permissions);
   }
-  
+
   // SINGLE-TENANT MODE: Simplified permission functions
   // Get permissions for user (uses global roles only)
   async getTenantPermissions(userId: string): Promise<string[]> {
@@ -15150,20 +15212,20 @@ export class DatabaseStorage extends MemStorage {
   async migrateActionPlansToActions(): Promise<{ migrated: number; errors: string[] }> {
     const errors: string[] = [];
     let migrated = 0;
-    
+
     try {
       // Starting migration from legacy action_plans to unified actions table
-      
+
       // Wrap entire migration in a database transaction for data integrity
       const result = await db.transaction(async (tx) => {
         const transactionErrors: string[] = [];
         let transactionMigrated = 0;
-        
+
         // 1. Get all existing legacy action plans from actions table where origin = 'risk'
         // Note: The legacy data should already be in the actions table with origin='risk'
         // This migration is a no-op if data is already migrated
         const existingLegacyActions = await tx.select().from(actions).where(eq(actions.origin, 'risk'));
-        
+
         if (existingLegacyActions.length === 0) {
           // No action plans found to migrate
           return { migrated: 0, errors: [] };
@@ -15172,10 +15234,10 @@ export class DatabaseStorage extends MemStorage {
         // Found action plans to migrate
 
         // 2. Get existing actions to check for duplicates
-        const existingActions = await tx.select({ 
+        const existingActions = await tx.select({
           code: actions.code
         }).from(actions).where(eq(actions.origin, 'risk'));
-        
+
         const existingActionCodes = new Set(existingActions.map(a => a.code));
 
         // 3. Get all users to map responsible names to user IDs
@@ -15191,7 +15253,7 @@ export class DatabaseStorage extends MemStorage {
         // 4. Get default user (user-1) for createdBy
         const defaultUser = allUsers.find(u => u.id === 'user-1' || u.username === 'admin');
         const createdById = defaultUser?.id || allUsers[0]?.id;
-        
+
         if (!createdById) {
           transactionErrors.push('No users found in system - cannot set createdBy field');
           return { migrated: 0, errors: transactionErrors };
@@ -15204,30 +15266,30 @@ export class DatabaseStorage extends MemStorage {
           .filter(code => code.startsWith('ACT-'))
           .map(code => parseInt(code.substring(4)))
           .filter(num => !isNaN(num));
-        
-        let nextActionNumber = existingActionNumbers.length > 0 
-          ? Math.max(...existingActionNumbers) + 1 
+
+        let nextActionNumber = existingActionNumbers.length > 0
+          ? Math.max(...existingActionNumbers) + 1
           : 1;
 
         // 6. Validate that risk IDs exist
         const riskIds = existingActionPlans.map(ap => ap.riskId).filter(Boolean);
         console.log(`Found ${riskIds.length} risk IDs to validate:`, riskIds);
-        
+
         // Use Drizzle's inArray for proper risk ID validation
-        const existingRisks = riskIds.length > 0 
+        const existingRisks = riskIds.length > 0
           ? await tx.select({ id: risks.id }).from(risks).where(inArray(risks.id, riskIds))
           : [];
-        
+
         const validRiskIds = new Set(existingRisks.map(r => r.id));
         console.log(`Found ${validRiskIds.size} valid risk IDs:`, Array.from(validRiskIds));
 
         const now = new Date();
-        
+
         // 7. Process each action plan
         for (const actionPlan of existingActionPlans) {
           try {
             console.log(`Processing action plan: ${actionPlan.code} (ID: ${actionPlan.id}, Risk: ${actionPlan.riskId})`);
-            
+
             // Check if action plan was already migrated by looking for matching action codes
             if (existingActionCodes.has(actionPlan.code)) {
               console.log(`SKIP: Action plan ${actionPlan.code} - already migrated`);
@@ -15241,24 +15303,24 @@ export class DatabaseStorage extends MemStorage {
               transactionErrors.push(errorMsg);
               continue;
             }
-            
+
             console.log(`VALID: Action plan ${actionPlan.code} - Risk ID ${actionPlan.riskId} exists`);
 
             // Generate unique action code with retry mechanism for conflicts
             let actionCode: string;
             let codeAttempts = 0;
             const maxCodeAttempts = 50; // Prevent infinite loop
-            
+
             do {
               actionCode = `ACT-${nextActionNumber.toString().padStart(3, '0')}`;
               nextActionNumber++;
               codeAttempts++;
-              
+
               if (codeAttempts > maxCodeAttempts) {
                 throw new Error(`Failed to generate unique action code after ${maxCodeAttempts} attempts`);
               }
             } while (existingActionCodes.has(actionCode));
-            
+
             existingActionCodes.add(actionCode);
 
             // Map responsible person to user ID
@@ -15299,10 +15361,10 @@ export class DatabaseStorage extends MemStorage {
               responsible: newAction.responsible,
               status: newAction.status
             });
-            
+
             await tx.insert(actions).values(newAction);
             transactionMigrated++;
-            
+
             console.log(`SUCCESS: Migrated action plan ${actionPlan.code} -> ${actionCode}`);
 
           } catch (error) {
@@ -15313,14 +15375,14 @@ export class DatabaseStorage extends MemStorage {
         }
 
         console.log(`Migration completed: ${transactionMigrated} action plans migrated, ${transactionErrors.length} errors`);
-        
+
         return { migrated: transactionMigrated, errors: transactionErrors };
       });
-      
+
       // Return the transaction result
       migrated = result.migrated;
       errors.push(...result.errors);
-      
+
       return { migrated, errors };
 
     } catch (error) {
@@ -15334,7 +15396,7 @@ export class DatabaseStorage extends MemStorage {
   // ============== ACTIONS - Use Database ==============
   async getActions(): Promise<Action[]> {
     const allActions = await db.select().from(actions).orderBy(actions.code);
-    
+
     // For each action, get associated risk information
     const actionsWithRisks = await Promise.all(
       allActions.map(async (action) => {
@@ -15353,7 +15415,7 @@ export class DatabaseStorage extends MemStorage {
             .from(actionPlanRisks)
             .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
             .where(eq(actionPlanRisks.actionPlanId, action.id));
-          
+
           // If no risks found in action_plan_risks but risk_id exists, load from risk_id
           if (associatedRisks.length === 0 && action.riskId) {
             const [risk] = await db
@@ -15364,14 +15426,14 @@ export class DatabaseStorage extends MemStorage {
               })
               .from(risks)
               .where(eq(risks.id, action.riskId));
-            
+
             return {
               ...action,
               associatedRisks: [],
               risk: risk || null,
             };
           }
-          
+
           return {
             ...action,
             associatedRisks: associatedRisks || [],
@@ -15386,7 +15448,7 @@ export class DatabaseStorage extends MemStorage {
             })
             .from(risks)
             .where(eq(risks.id, action.riskId));
-          
+
           return {
             ...action,
             risk: risk || null,
@@ -15395,7 +15457,7 @@ export class DatabaseStorage extends MemStorage {
         return action;
       })
     );
-    
+
     return actionsWithRisks as Action[];
   }
 
@@ -15457,7 +15519,7 @@ export class DatabaseStorage extends MemStorage {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      
+
       const [created] = await db.insert(actions).values(actionData).returning();
       return created;
     });
@@ -15468,7 +15530,7 @@ export class DatabaseStorage extends MemStorage {
       ...update,
       updatedAt: new Date(),
     };
-    
+
     const [updated] = await db.update(actions)
       .set(updateData)
       .where(eq(actions.id, id))
@@ -15496,24 +15558,24 @@ export class DatabaseStorage extends MemStorage {
   async getRisksWithControlsByProcess(processId: string): Promise<(Risk & { controls: (RiskControl & { control: Control })[] })[]> {
     // Get all risks for the process
     const processRisks = await db.select().from(risks).where(eq(risks.processId, processId));
-    
+
     // Get all subprocesos for this process and their risks
     const subprocesosData = await db.select().from(subprocesos).where(eq(subprocesos.procesoId, processId));
     const subprocesoIds = subprocesosData.map(s => s.id);
-    
+
     let subprocesoRisks: Risk[] = [];
     if (subprocesoIds.length > 0) {
       subprocesoRisks = await db.select().from(risks).where(inArray(risks.subprocesoId, subprocesoIds));
     }
-    
+
     // Combine all risks
     const allRisks = [...processRisks, ...subprocesoRisks];
     const riskIds = allRisks.map(r => r.id);
-    
+
     if (riskIds.length === 0) {
       return [];
     }
-    
+
     // Get risk-control associations with control details
     const riskControlsWithDetails = await db
       .select({
@@ -15540,7 +15602,7 @@ export class DatabaseStorage extends MemStorage {
       .from(riskControls)
       .innerJoin(controls, eq(riskControls.controlId, controls.id))
       .where(inArray(riskControls.riskId, riskIds));
-    
+
     // Group controls by risk
     const riskControlMap = new Map<string, (RiskControl & { control: Control })[]>();
     for (const rc of riskControlsWithDetails) {
@@ -15555,7 +15617,7 @@ export class DatabaseStorage extends MemStorage {
         control: rc.control
       });
     }
-    
+
     // Build result
     return allRisks.map(risk => ({
       ...risk,
@@ -15567,11 +15629,11 @@ export class DatabaseStorage extends MemStorage {
     // Get risks for the subproceso
     const subprocesoRisks = await db.select().from(risks).where(eq(risks.subprocesoId, subprocesoId));
     const riskIds = subprocesoRisks.map(r => r.id);
-    
+
     if (riskIds.length === 0) {
       return [];
     }
-    
+
     // Get risk-control associations with control details
     const riskControlsWithDetails = await db
       .select({
@@ -15598,7 +15660,7 @@ export class DatabaseStorage extends MemStorage {
       .from(riskControls)
       .innerJoin(controls, eq(riskControls.controlId, controls.id))
       .where(inArray(riskControls.riskId, riskIds));
-    
+
     // Group controls by risk
     const riskControlMap = new Map<string, (RiskControl & { control: Control })[]>();
     for (const rc of riskControlsWithDetails) {
@@ -15613,7 +15675,7 @@ export class DatabaseStorage extends MemStorage {
         control: rc.control
       });
     }
-    
+
     return subprocesoRisks.map(risk => ({
       ...risk,
       controls: riskControlMap.get(risk.id) || []
@@ -15625,15 +15687,15 @@ export class DatabaseStorage extends MemStorage {
     if (!audit) {
       return { isValid: false, message: "Auditoría no encontrada" };
     }
-    
+
     // Check if audit is in planning status
     if (audit.status !== 'planning' && audit.status !== 'in_progress') {
-      return { 
-        isValid: false, 
-        message: `No se pueden generar pruebas. La auditoría debe estar en estado 'planning' o 'in_progress'. Estado actual: ${audit.status}` 
+      return {
+        isValid: false,
+        message: `No se pueden generar pruebas. La auditoría debe estar en estado 'planning' o 'in_progress'. Estado actual: ${audit.status}`
       };
     }
-    
+
     return { isValid: true };
   }
 
@@ -15658,7 +15720,7 @@ export class DatabaseStorage extends MemStorage {
         if (audit.length === 0) {
           throw new Error(`Audit with id ${auditId} not found`);
         }
-        
+
         const auditCode = audit[0].code || 'A';
         const prefix = `${auditCode}-${scope}`;
         const newSequence = {
@@ -15675,7 +15737,7 @@ export class DatabaseStorage extends MemStorage {
           createdAt: new Date(),
           updatedAt: new Date()
         };
-        
+
         await tx.insert(auditCodeSequences).values(newSequence);
         return `${prefix}-001`;
       } else {
@@ -15683,7 +15745,7 @@ export class DatabaseStorage extends MemStorage {
         const currentSeq = sequence[0];
         const nextNumber = currentSeq.nextNumber;
         const newCode = `${currentSeq.prefix}-${nextNumber.toString().padStart(3, '0')}`;
-        
+
         await tx
           .update(auditCodeSequences)
           .set({
@@ -15693,30 +15755,30 @@ export class DatabaseStorage extends MemStorage {
             updatedAt: new Date()
           })
           .where(eq(auditCodeSequences.id, currentSeq.id));
-        
+
         return newCode;
       }
     });
   }
 
   async initializeAuditScopeFromSelection(
-    auditId: string, 
-    entityType: 'process' | 'subproceso' | 'regulation', 
-    entityIds: string[], 
+    auditId: string,
+    entityType: 'process' | 'subproceso' | 'regulation',
+    entityIds: string[],
     createdBy: string
   ): Promise<AuditScope[]> {
     const scopeItems: AuditScope[] = [];
-    
+
     for (const entityId of entityIds) {
       let risksWithControls: (Risk & { controls: (RiskControl & { control: Control })[] })[] = [];
-      
+
       if (entityType === 'process') {
         risksWithControls = await this.getRisksWithControlsByProcess(entityId);
       } else if (entityType === 'subproceso') {
         risksWithControls = await this.getRisksWithControlsBySubproceso(entityId);
       }
       // TODO: Implement regulation-based scope initialization
-      
+
       for (const risk of risksWithControls) {
         // Create scope item for each risk-control combination
         if (risk.controls.length === 0) {
@@ -15750,63 +15812,63 @@ export class DatabaseStorage extends MemStorage {
         }
       }
     }
-    
+
     return scopeItems;
   }
 
   async generateAuditTestsFromScope(
-    auditId: string, 
-    scopeSelections: { riskId: string; controlId?: string; isSelected: boolean }[], 
+    auditId: string,
+    scopeSelections: { riskId: string; controlId?: string; isSelected: boolean }[],
     createdBy: string
   ): Promise<AuditTest[]> {
     const validation = await this.validateAuditForTestGeneration(auditId);
     if (!validation.isValid) {
       throw new Error(validation.message);
     }
-    
+
     // Initialize code sequences for the audit
     await this.initializeAuditCodeSequences(auditId);
-    
+
     const generatedTests: AuditTest[] = [];
     const selectedScope = scopeSelections.filter(s => s.isSelected);
-    
+
     for (const scopeItem of selectedScope) {
       try {
         // Get risk details
         const risk = await this.getRisk(scopeItem.riskId);
         if (!risk) continue;
-        
+
         // Get control details if specified
         let control: Control | undefined = undefined;
         if (scopeItem.controlId) {
           control = await this.getControl(scopeItem.controlId);
           if (!control) continue;
         }
-        
+
         // Generate unique code for this test
         const testCode = await this.generateNextCode(auditId, 'PT'); // PT = Programa de Trabajo
-        
+
         // Build test name and description
-        const testName = control 
+        const testName = control
           ? `Prueba de Control: ${control.name}`
           : `Evaluación de Riesgo: ${risk.name}`;
-          
+
         const testDescription = control
           ? `Evaluación de la efectividad del control "${control.name}" para mitigar el riesgo "${risk.name}".`
           : `Evaluación directa del riesgo "${risk.name}" y sus controles asociados.`;
-        
+
         // Build test objective
         const testObjective = control
           ? `Verificar la efectividad operativa del control "${control.name}" durante el período de auditoría.`
           : `Evaluar el nivel de riesgo inherente y residual de "${risk.name}".`;
-        
+
         // Build test procedures based on control type and evidence
         let testProcedures: string[] = [];
         if (control) {
           if (control.evidence) {
             testProcedures.push(`Revisar evidencia documentada: ${control.evidence}`);
           }
-          
+
           switch (control.type) {
             case 'preventive':
               testProcedures.push('Evaluar el diseño del control preventivo');
@@ -15823,7 +15885,7 @@ export class DatabaseStorage extends MemStorage {
             default:
               testProcedures.push('Realizar procedimientos de auditoría apropiados');
           }
-          
+
           switch (control.frequency) {
             case 'continuous':
               testProcedures.push('Verificar operación continua del control');
@@ -15847,14 +15909,14 @@ export class DatabaseStorage extends MemStorage {
             'Verificar la efectividad del ambiente de control'
           ];
         }
-        
+
         // Estimate hours based on risk level and control complexity
         let estimatedHours = 8; // Base hours
         if (risk.inherentRisk >= 15) estimatedHours += 8; // High risk
         else if (risk.inherentRisk >= 9) estimatedHours += 4; // Medium risk
-        
+
         if (control && control.type === 'continuous') estimatedHours += 4;
-        
+
         // Create the audit test
         const auditTest: InsertAuditTest = {
           code: testCode,
@@ -15872,16 +15934,16 @@ export class DatabaseStorage extends MemStorage {
           estimatedHours,
           createdBy
         };
-        
+
         const createdTest = await this.createAuditTest(auditTest);
         generatedTests.push(createdTest);
-        
+
       } catch (error) {
         console.error(`Error generating test for scope item ${scopeItem.riskId}:`, error);
         continue;
       }
     }
-    
+
     return generatedTests;
   }
 
@@ -15890,7 +15952,7 @@ export class DatabaseStorage extends MemStorage {
     if (!audit) {
       throw new Error(`Audit with id ${auditId} not found`);
     }
-    
+
     const auditCode = audit.code || 'A';
     const sequences: InsertAuditCodeSequence[] = [
       {
@@ -15930,7 +15992,7 @@ export class DatabaseStorage extends MemStorage {
         description: 'Secuencia para Papeles de Trabajo (Working Papers)'
       }
     ];
-    
+
     const createdSequences: AuditCodeSequence[] = [];
     for (const seq of sequences) {
       try {
@@ -15947,7 +16009,7 @@ export class DatabaseStorage extends MemStorage {
         console.log(`Sequence ${seq.scope} already exists for audit ${auditId}`);
       }
     }
-    
+
     return createdSequences;
   }
 
@@ -15968,7 +16030,7 @@ export class DatabaseStorage extends MemStorage {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
     const [created] = await db.insert(auditTestTemplateCategories).values(categoryData).returning();
     return created;
   }
@@ -15978,7 +16040,7 @@ export class DatabaseStorage extends MemStorage {
       ...category,
       updatedAt: new Date(),
     };
-    
+
     const [updated] = await db.update(auditTestTemplateCategories)
       .set(updateData)
       .where(eq(auditTestTemplateCategories.id, id))
@@ -16020,7 +16082,7 @@ export class DatabaseStorage extends MemStorage {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
     const [created] = await db.insert(auditTestTemplates).values(templateData).returning();
     return created;
   }
@@ -16030,7 +16092,7 @@ export class DatabaseStorage extends MemStorage {
       ...template,
       updatedAt: new Date(),
     };
-    
+
     const [updated] = await db.update(auditTestTemplates)
       .set(updateData)
       .where(eq(auditTestTemplates.id, id))
@@ -16096,44 +16158,44 @@ export class DatabaseStorage extends MemStorage {
       uploadedAt: new Date(),
       updatedAt: new Date(),
     };
-    
+
     const [created] = await db.insert(auditTestAttachments).values(attachmentData).returning();
     return created;
   }
 
   async getAuditTestAttachments(auditTestId: string, filters?: { category?: string; tags?: string[]; isActive?: boolean }): Promise<AuditTestAttachment[]> {
     let query = db.select().from(auditTestAttachments).where(eq(auditTestAttachments.auditTestId, auditTestId));
-    
+
     // Apply filters
     const conditions = [eq(auditTestAttachments.auditTestId, auditTestId)];
-    
+
     if (filters?.category) {
       conditions.push(eq(auditTestAttachments.category, filters.category));
     }
-    
+
     if (filters?.isActive !== undefined) {
       conditions.push(eq(auditTestAttachments.isActive, filters.isActive));
     }
-    
+
     if (filters?.tags && filters.tags.length > 0) {
       // Note: For array contains check, we'd need more complex SQL. For now, simplified.
       // In production, this would use array operators or separate tag table
     }
-    
+
     return await db.select().from(auditTestAttachments).where(and(...conditions)).orderBy(auditTestAttachments.uploadedAt);
   }
 
   async getAuditTestAttachmentsWithDetails(auditTestId: string, filters?: { category?: string; tags?: string[]; isActive?: boolean }): Promise<AuditTestAttachmentWithDetails[]> {
     const conditions = [eq(auditTestAttachments.auditTestId, auditTestId)];
-    
+
     if (filters?.category) {
       conditions.push(eq(auditTestAttachments.category, filters.category));
     }
-    
+
     if (filters?.isActive !== undefined) {
       conditions.push(eq(auditTestAttachments.isActive, filters.isActive));
     }
-    
+
     const results = await db
       .select({
         attachment: auditTestAttachments,
@@ -16204,13 +16266,13 @@ export class DatabaseStorage extends MemStorage {
       ...metadata,
       updatedAt: new Date(),
     };
-    
+
     const [updated] = await db
       .update(auditTestAttachments)
       .set(updateData)
       .where(eq(auditTestAttachments.id, id))
       .returning();
-    
+
     return updated;
   }
 
@@ -16218,13 +16280,13 @@ export class DatabaseStorage extends MemStorage {
     try {
       const [updated] = await db
         .update(auditTestAttachments)
-        .set({ 
-          isActive: false, 
+        .set({
+          isActive: false,
           updatedAt: new Date()
         })
         .where(eq(auditTestAttachments.id, id))
         .returning();
-      
+
       if (updated) {
         // Log the deletion
         await this.logAttachmentAccess(id, deletedBy, 'delete', { reason: 'soft_delete' });
@@ -16241,45 +16303,45 @@ export class DatabaseStorage extends MemStorage {
   async generateNextAttachmentCode(auditTestId: string): Promise<string> {
     return await db.transaction(async (tx) => {
       console.log(`[ATOMIC CODE] Starting code generation for audit test: ${auditTestId}`);
-      
+
       // Get or create the code sequence for this audit test
       const sequence = await this.getOrCreateAttachmentCodeSequence(auditTestId);
-      
+
       // CRITICAL: Lock the sequence row for update to prevent race conditions
       const [lockedSequence] = await tx
         .select()
         .from(auditAttachmentCodeSequences)
         .where(eq(auditAttachmentCodeSequences.auditTestId, auditTestId))
         .for('update'); // SELECT FOR UPDATE ensures atomic access
-      
+
       if (!lockedSequence) {
         console.error(`[ATOMIC CODE ERROR] Unable to lock sequence for audit test: ${auditTestId}`);
         throw new Error(`Unable to lock attachment code sequence for audit test: ${auditTestId}`);
       }
-      
+
       // Increment the document number atomically
       const nextDocNumber = lockedSequence.lastDocumentNumber + 1;
-      
+
       // CRITICAL: Validate limits to prevent overflow
       if (nextDocNumber > 999) {
         console.error(`[ATOMIC CODE ERROR] Document limit exceeded for test ${auditTestId}: ${nextDocNumber}`);
         throw new Error(`Maximum attachment limit reached for audit test ${auditTestId} (999 documents per test)`);
       }
-      
+
       // Update the sequence atomically within transaction
       await tx
         .update(auditAttachmentCodeSequences)
-        .set({ 
+        .set({
           lastDocumentNumber: nextDocNumber,
           updatedAt: new Date()
         })
         .where(eq(auditAttachmentCodeSequences.auditTestId, auditTestId));
-      
+
       // Generate the hierarchical code: AT-###-DOC-###
       const testNumber = lockedSequence.testSequenceNumber.toString().padStart(3, '0');
       const docNumber = nextDocNumber.toString().padStart(3, '0');
       const generatedCode = `AT-${testNumber}-DOC-${docNumber}`;
-      
+
       console.log(`[ATOMIC CODE SUCCESS] Generated: ${generatedCode} for test ${auditTestId}`);
       return generatedCode;
     });
@@ -16291,25 +16353,25 @@ export class DatabaseStorage extends MemStorage {
       .select()
       .from(auditAttachmentCodeSequences)
       .where(eq(auditAttachmentCodeSequences.auditTestId, auditTestId));
-    
+
     if (existing) {
       return existing;
     }
-    
+
     // Create new sequence - get next test sequence number
     const allSequences = await db
       .select()
       .from(auditAttachmentCodeSequences)
       .orderBy(auditAttachmentCodeSequences.testSequenceNumber);
-    
+
     const usedNumbers = allSequences.map(seq => seq.testSequenceNumber);
     let nextTestNumber = 1;
-    
+
     // Find next available test sequence number
     while (usedNumbers.includes(nextTestNumber)) {
       nextTestNumber++;
     }
-    
+
     const newSequenceData: InsertAuditAttachmentCodeSequence = {
       auditTestId,
       testSequenceNumber: nextTestNumber,
@@ -16319,25 +16381,25 @@ export class DatabaseStorage extends MemStorage {
       description: `Secuencia de adjuntos para audit test ${auditTestId}`,
       isActive: true,
     };
-    
+
     const [created] = await db
       .insert(auditAttachmentCodeSequences)
       .values(newSequenceData)
       .returning();
-    
+
     return created;
   }
 
   async updateAttachmentCodeSequence(auditTestId: string, lastDocumentNumber: number): Promise<AuditAttachmentCodeSequence | undefined> {
     const [updated] = await db
       .update(auditAttachmentCodeSequences)
-      .set({ 
+      .set({
         lastDocumentNumber,
         updatedAt: new Date()
       })
       .where(eq(auditAttachmentCodeSequences.auditTestId, auditTestId))
       .returning();
-    
+
     return updated;
   }
 
@@ -16349,33 +16411,33 @@ export class DatabaseStorage extends MemStorage {
       if (!attachment) {
         return { isValid: false, message: 'Attachment not found' };
       }
-      
+
       // Check if attachment is active
       if (!attachment.isActive) {
         return { isValid: false, message: 'Attachment has been deleted' };
       }
-      
+
       // Get user permissions
       const userPermissions = await this.getUserPermissions(userId);
-      
+
       // Check general permissions
       if (userPermissions.includes('view_all') && permission === 'read') {
         return { isValid: true };
       }
-      
+
       if (userPermissions.includes('edit_all') && ['read', 'write'].includes(permission)) {
         return { isValid: true };
       }
-      
+
       if (userPermissions.includes('delete_all') && permission === 'delete') {
         return { isValid: true };
       }
-      
+
       // Check if user is the uploader
       if (attachment.uploadedBy === userId) {
         return { isValid: true };
       }
-      
+
       // Check if user is executor or supervisor of the audit test
       if (attachment.auditTest) {
         const auditTest = await this.getAuditTest(attachment.auditTest.id);
@@ -16383,7 +16445,7 @@ export class DatabaseStorage extends MemStorage {
           return { isValid: true };
         }
       }
-      
+
       // Check confidentiality restrictions
       if (attachment.isConfidential && permission === 'read') {
         // Only allow access to confidential files by authorized users
@@ -16391,7 +16453,7 @@ export class DatabaseStorage extends MemStorage {
           return { isValid: false, message: 'Insufficient permissions for confidential attachment' };
         }
       }
-      
+
       return { isValid: false, message: 'Insufficient permissions' };
     } catch (error) {
       console.error('Error validating attachment access:', error);
@@ -16403,12 +16465,12 @@ export class DatabaseStorage extends MemStorage {
     try {
       const attachment = await this.getAuditTestAttachmentWithDetails(attachmentId);
       if (!attachment) return [];
-      
+
       const accessUsers = new Set<string>();
-      
+
       // Always include uploader
       accessUsers.add(attachment.uploadedBy);
-      
+
       // Include audit test team
       if (attachment.auditTest) {
         const auditTest = await this.getAuditTest(attachment.auditTest.id);
@@ -16422,7 +16484,7 @@ export class DatabaseStorage extends MemStorage {
           }
         }
       }
-      
+
       // Include users with admin permissions
       const allUsers = await this.getUsers();
       for (const user of allUsers) {
@@ -16431,7 +16493,7 @@ export class DatabaseStorage extends MemStorage {
           accessUsers.add(user.id);
         }
       }
-      
+
       return Array.from(accessUsers);
     } catch (error) {
       console.error('Error getting attachment access users:', error);
@@ -16447,15 +16509,15 @@ export class DatabaseStorage extends MemStorage {
       if (!accessCheck.isValid) {
         throw new Error(accessCheck.message || 'Access denied');
       }
-      
+
       const attachment = await this.getAuditTestAttachment(attachmentId);
       if (!attachment) {
         return undefined;
       }
-      
+
       // Log access for audit trail
       await this.logAttachmentAccess(attachmentId, userId, 'download');
-      
+
       return {
         url: attachment.storageUrl,
         filename: attachment.fileName,
@@ -16482,34 +16544,34 @@ export class DatabaseStorage extends MemStorage {
       'text/plain',
       'text/csv'
     ];
-    
+
     const maxFileSize = 50 * 1024 * 1024; // 50MB
-    
+
     if (!allowedMimeTypes.includes(file.mimeType)) {
-      return { 
-        isValid: false, 
-        message: `File type ${file.mimeType} is not allowed. Allowed types: PDF, Word, Excel, PowerPoint, Images, Text, CSV` 
+      return {
+        isValid: false,
+        message: `File type ${file.mimeType} is not allowed. Allowed types: PDF, Word, Excel, PowerPoint, Images, Text, CSV`
       };
     }
-    
+
     if (file.size > maxFileSize) {
-      return { 
-        isValid: false, 
-        message: `File size ${(file.size / 1024 / 1024).toFixed(2)}MB exceeds maximum allowed size of 50MB` 
+      return {
+        isValid: false,
+        message: `File size ${(file.size / 1024 / 1024).toFixed(2)}MB exceeds maximum allowed size of 50MB`
       };
     }
-    
+
     // Check for potentially dangerous file extensions
     const extension = file.originalName.split('.').pop()?.toLowerCase();
     const dangerousExtensions = ['exe', 'bat', 'cmd', 'scr', 'pif', 'com', 'jar'];
-    
+
     if (extension && dangerousExtensions.includes(extension)) {
-      return { 
-        isValid: false, 
-        message: `File extension .${extension} is not allowed for security reasons` 
+      return {
+        isValid: false,
+        message: `File extension .${extension} is not allowed for security reasons`
       };
     }
-    
+
     return { isValid: true };
   }
 
@@ -16523,7 +16585,7 @@ export class DatabaseStorage extends MemStorage {
   }> {
     try {
       const attachments = await this.getAuditTestAttachments(auditTestId, { isActive: true });
-      
+
       const summary = {
         totalFiles: attachments.length,
         totalSize: attachments.reduce((sum, att) => sum + att.fileSize, 0),
@@ -16531,16 +16593,16 @@ export class DatabaseStorage extends MemStorage {
         filesByType: {} as Record<string, number>,
         confidentialFiles: attachments.filter(att => att.isConfidential).length
       };
-      
+
       // Group by category
       for (const attachment of attachments) {
         summary.filesByCategory[attachment.category] = (summary.filesByCategory[attachment.category] || 0) + 1;
-        
+
         // Get file type from mime type
         const fileType = attachment.mimeType.split('/')[1] || 'unknown';
         summary.filesByType[fileType] = (summary.filesByType[fileType] || 0) + 1;
       }
-      
+
       return summary;
     } catch (error) {
       console.error('Error getting attachments summary:', error);
@@ -16567,9 +16629,9 @@ export class DatabaseStorage extends MemStorage {
         details: details || {},
         userAgent: 'system' // In real implementation, get from request
       };
-      
+
       console.log(`[AUDIT_LOG] Attachment Access:`, JSON.stringify(logEntry));
-      
+
       // TODO: Implement proper audit logging to database table
       // await db.insert(auditAccessLogs).values(logEntry);
     } catch (error) {
@@ -16578,7 +16640,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ===== WORKFLOW INTEGRATION METHODS IMPLEMENTATION =====
-  
+
   // Work Log Attachments Integration
   async createWorkLogWithAttachments(workLogData: InsertAuditTestWorkLog, attachmentIds?: string[]): Promise<AuditTestWorkLog> {
     return await db.transaction(async (tx) => {
@@ -16884,7 +16946,7 @@ export class DatabaseStorage extends MemStorage {
 
       for (const attachment of attachments) {
         const stage = attachment.workflowStage || 'general';
-        
+
         // Count by specific categories
         switch (stage) {
           case 'general':
@@ -16936,7 +16998,7 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Generate unique attachment code
       const attachmentCode = await this.generateNextAttachmentCode(attachmentData.auditTestId);
-      
+
       // Prepare the full attachment data with workflow fields
       const fullAttachmentData = {
         id: randomUUID(),
@@ -16947,7 +17009,7 @@ export class DatabaseStorage extends MemStorage {
       };
 
       const [created] = await db.insert(auditTestAttachments).values(fullAttachmentData).returning();
-      
+
       // Log the attachment creation
       await this.logAttachmentAccess(created.id, attachmentData.uploadedBy, 'upload', {
         workflowStage: attachmentData.workflowStage,
@@ -16962,7 +17024,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== DASHBOARD METRICS IMPLEMENTATIONS ==============
-  
+
   async getExecutorDashboardMetrics(userId: string) {
     try {
       // Get all tests assigned to this executor
@@ -16973,20 +17035,20 @@ export class DatabaseStorage extends MemStorage {
       const assignedTestsCount = assignedTests.length;
       const inProgressTests = assignedTests.filter(t => t.status === 'in_progress').length;
       const completedTests = assignedTests.filter(t => ['completed', 'approved'].includes(t.status)).length;
-      
+
       // Calculate overdue tests
       const now = new Date();
-      const overdueTests = assignedTests.filter(t => 
-        t.plannedEndDate && t.plannedEndDate < now && 
+      const overdueTests = assignedTests.filter(t =>
+        t.plannedEndDate && t.plannedEndDate < now &&
         !['completed', 'approved', 'cancelled'].includes(t.status)
       ).length;
 
       // Get upcoming deadlines (next 7 days)
       const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       const upcomingDeadlines = assignedTests
-        .filter(t => 
-          t.plannedEndDate && 
-          t.plannedEndDate >= now && 
+        .filter(t =>
+          t.plannedEndDate &&
+          t.plannedEndDate >= now &&
           t.plannedEndDate <= nextWeek &&
           !['completed', 'approved', 'cancelled'].includes(t.status)
         )
@@ -17023,7 +17085,7 @@ export class DatabaseStorage extends MemStorage {
 
       // Calculate time worked (weekly and monthly)
       const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      
+
       const weeklyLogs = await db.select()
         .from(auditTestWorkLogs)
         .where(
@@ -17042,11 +17104,11 @@ export class DatabaseStorage extends MemStorage {
           )
         );
 
-      const weeklyHours = weeklyLogs.reduce((sum, log) => 
+      const weeklyHours = weeklyLogs.reduce((sum, log) =>
         sum + parseFloat(log.hoursWorked.toString()), 0
       );
 
-      const monthlyHours = monthlyLogs.reduce((sum, log) => 
+      const monthlyHours = monthlyLogs.reduce((sum, log) =>
         sum + parseFloat(log.hoursWorked.toString()), 0
       );
 
@@ -17059,25 +17121,25 @@ export class DatabaseStorage extends MemStorage {
             const workLogs = await db.select()
               .from(auditTestWorkLogs)
               .where(eq(auditTestWorkLogs.auditTestId, test.id));
-            const totalHours = workLogs.reduce((sum, log) => 
+            const totalHours = workLogs.reduce((sum, log) =>
               sum + parseFloat(log.hoursWorked.toString()), 0
             );
             return totalHours;
           })
       );
 
-      const averageCompletionTime = completedTestsWithLogs.length > 0 
-        ? completedTestsWithLogs.reduce((sum, hours) => sum + hours, 0) / completedTestsWithLogs.length 
+      const averageCompletionTime = completedTestsWithLogs.length > 0
+        ? completedTestsWithLogs.reduce((sum, hours) => sum + hours, 0) / completedTestsWithLogs.length
         : 0;
 
       // Calculate on-time completion rate
-      const completedWithDeadlines = assignedTests.filter(t => 
-        ['completed', 'approved'].includes(t.status) && 
-        t.plannedEndDate && 
+      const completedWithDeadlines = assignedTests.filter(t =>
+        ['completed', 'approved'].includes(t.status) &&
+        t.plannedEndDate &&
         t.actualEndDate
       );
 
-      const onTimeCompletions = completedWithDeadlines.filter(t => 
+      const onTimeCompletions = completedWithDeadlines.filter(t =>
         t.actualEndDate! <= t.plannedEndDate!
       ).length;
 
@@ -17085,8 +17147,8 @@ export class DatabaseStorage extends MemStorage {
         ? assignedTests.reduce((sum, test) => sum + (test.progress || 0), 0) / assignedTests.length
         : 0;
 
-      const onTimeRate = completedWithDeadlines.length > 0 
-        ? (onTimeCompletions / completedWithDeadlines.length) * 100 
+      const onTimeRate = completedWithDeadlines.length > 0
+        ? (onTimeCompletions / completedWithDeadlines.length) * 100
         : 0;
 
       // Structure data to match frontend ExecutorDashboardMetrics interface
@@ -17148,13 +17210,13 @@ export class DatabaseStorage extends MemStorage {
     try {
       // Check if user is admin or has view_all permission
       const isAdmin = await this.hasPermission(userId, 'view_all');
-      
+
       // Get all tests supervised by this user, or all tests if admin
-      const supervisedTests = isAdmin 
+      const supervisedTests = isAdmin
         ? await db.select().from(auditTests)
         : await db.select()
-            .from(auditTests)
-            .where(eq(auditTests.supervisorId, userId));
+          .from(auditTests)
+          .where(eq(auditTests.supervisorId, userId));
 
       const totalTests = supervisedTests.length;
       const inProgressTests = supervisedTests.filter(t => t.status === 'in_progress').length;
@@ -17163,8 +17225,8 @@ export class DatabaseStorage extends MemStorage {
 
       // Calculate overdue tests
       const now = new Date();
-      const overdueTests = supervisedTests.filter(t => 
-        t.plannedEndDate && t.plannedEndDate < now && 
+      const overdueTests = supervisedTests.filter(t =>
+        t.plannedEndDate && t.plannedEndDate < now &&
         !['completed', 'approved', 'cancelled'].includes(t.status)
       ).length;
 
@@ -17188,10 +17250,10 @@ export class DatabaseStorage extends MemStorage {
               lastName: users.lastName,
               fullName: users.fullName
             })
-            .from(users)
-            .where(eq(users.id, test.executorId));
+              .from(users)
+              .where(eq(users.id, test.executorId));
 
-            const executorName = executor 
+            const executorName = executor
               ? (executor.fullName || `${executor.firstName || ''} ${executor.lastName || ''}`.trim())
               : 'Unknown';
 
@@ -17212,33 +17274,33 @@ export class DatabaseStorage extends MemStorage {
         uniqueExecutors.map(async executorId => {
           const executorTests = supervisedTests.filter(t => t.executorId === executorId);
           const completedExecutorTests = executorTests.filter(t => ['completed', 'approved'].includes(t.status));
-          
+
           const [executor] = await db.select({
             firstName: users.firstName,
             lastName: users.lastName,
             fullName: users.fullName
           })
-          .from(users)
-          .where(eq(users.id, executorId));
+            .from(users)
+            .where(eq(users.id, executorId));
 
-          const executorName = executor 
+          const executorName = executor
             ? (executor.fullName || `${executor.firstName || ''} ${executor.lastName || ''}`.trim())
             : 'Unknown';
 
           // Get hours worked by this executor
           const testIds = executorTests.map(t => t.id);
-          const workLogs = testIds.length > 0 
+          const workLogs = testIds.length > 0
             ? await db.select()
-                .from(auditTestWorkLogs)
-                .where(
-                  and(
-                    eq(auditTestWorkLogs.createdBy, executorId),
-                    inArray(auditTestWorkLogs.auditTestId, testIds)
-                  )
+              .from(auditTestWorkLogs)
+              .where(
+                and(
+                  eq(auditTestWorkLogs.createdBy, executorId),
+                  inArray(auditTestWorkLogs.auditTestId, testIds)
                 )
+              )
             : []; // Return empty array if no tests to query
 
-          const hoursWorked = workLogs.reduce((sum, log) => 
+          const hoursWorked = workLogs.reduce((sum, log) =>
             sum + parseFloat(log.hoursWorked.toString()), 0
           );
 
@@ -17247,12 +17309,12 @@ export class DatabaseStorage extends MemStorage {
             : 0;
 
           // Calculate on-time rate
-          const onTimeTests = completedExecutorTests.filter(t => 
+          const onTimeTests = completedExecutorTests.filter(t =>
             t.plannedEndDate && t.actualEndDate && t.actualEndDate <= t.plannedEndDate
           ).length;
 
-          const onTimeRate = completedExecutorTests.length > 0 
-            ? (onTimeTests / completedExecutorTests.length) * 100 
+          const onTimeRate = completedExecutorTests.length > 0
+            ? (onTimeTests / completedExecutorTests.length) * 100
             : 0;
 
           return {
@@ -17273,7 +17335,7 @@ export class DatabaseStorage extends MemStorage {
         executorName: member.executorName,
         currentLoad: member.assignedTests - member.completedTests,
         capacity: 10, // Assume standard capacity of 10 tests
-        utilizationRate: member.assignedTests > 0 
+        utilizationRate: member.assignedTests > 0
           ? Math.min((member.assignedTests / 10) * 100, 100)
           : 0
       }));
@@ -17286,7 +17348,7 @@ export class DatabaseStorage extends MemStorage {
         .limit(50);
 
       const averageReviewTime = 2; // Placeholder - would need more complex calculation
-      const approvalRate = reviewComments.length > 0 
+      const approvalRate = reviewComments.length > 0
         ? (reviewComments.filter(c => c.commentType === 'approval').length / reviewComments.length) * 100
         : 0;
 
@@ -17298,10 +17360,10 @@ export class DatabaseStorage extends MemStorage {
       const testIds = supervisedTests.map(t => t.id);
       const recentWorkLogs = testIds.length > 0
         ? await db.select()
-            .from(auditTestWorkLogs)
-            .where(inArray(auditTestWorkLogs.auditTestId, testIds))
-            .orderBy(desc(auditTestWorkLogs.createdAt))
-            .limit(20)
+          .from(auditTestWorkLogs)
+          .where(inArray(auditTestWorkLogs.auditTestId, testIds))
+          .orderBy(desc(auditTestWorkLogs.createdAt))
+          .limit(20)
         : [];
 
       const recentActivity = recentWorkLogs.map(log => ({
@@ -17403,59 +17465,59 @@ export class DatabaseStorage extends MemStorage {
         allRisksData
       ] = await Promise.all([
         db.select({ count: sql<number>`cast(count(*) as integer)` }).from(auditTests),
-        
+
         // SINGLE-TENANT MODE: Count all users
         db.select({ count: sql<number>`cast(count(*) as integer)` }).from(users),
-        
+
         db.select({ count: sql<number>`cast(count(*) as integer)` }).from(audits),
-        
+
         db.select({ count: sql<number>`cast(count(*) as integer)` })
           .from(auditTests)
           .where(sql`status IN ('completed', 'approved')`),
-        
+
         db.select().from(macroprocesos),
-        
+
         db.select().from(roles).where(sql`name ILIKE '%executor%' OR name ILIKE '%auditor%'`).limit(1),
-        
+
         db.select().from(roles).where(sql`name ILIKE '%supervisor%' OR name ILIKE '%lead%'`).limit(1),
-        
+
         db.select({ count: sql<number>`cast(count(*) as integer)` })
           .from(auditFindings)
           .where(sql`severity = 'critical'`),
-        
+
         db.select({ count: sql<number>`cast(count(*) as integer)` })
           .from(actions)
           .where(sql`status != 'completed'`),
-        
+
         db.select({ count: sql<number>`cast(count(*) as integer)` }).from(risks),
-        
+
         db.select({ count: sql<number>`cast(count(DISTINCT risk_id) as integer)` })
           .from(auditTests)
           .where(sql`risk_id IS NOT NULL`),
-        
+
         this.getRiskAggregationMethod(),
         this.getRiskAggregationWeights(),
         this.getRiskLevelRanges(),
-        
+
         db.select({
           macroprocesoId: risks.macroprocesoId,
           totalTests: sql<number>`cast(count(*) as integer)`,
           completedTests: sql<number>`cast(count(*) FILTER (WHERE audit_tests.status IN ('completed', 'approved')) as integer)`
         })
-        .from(auditTests)
-        .innerJoin(risks, and(
-          eq(auditTests.riskId, risks.id),
-          sql`${risks.macroprocesoId} IS NOT NULL`
-        ))
-        .groupBy(risks.macroprocesoId),
-        
+          .from(auditTests)
+          .innerJoin(risks, and(
+            eq(auditTests.riskId, risks.id),
+            sql`${risks.macroprocesoId} IS NOT NULL`
+          ))
+          .groupBy(risks.macroprocesoId),
+
         db.select()
           .from(risks)
           .where(sql`${risks.macroprocesoId} IS NOT NULL`)
       ]);
 
-      const organizationalCompletionRate = totalTests[0].count > 0 
-        ? (completedTests[0].count / totalTests[0].count) * 100 
+      const organizationalCompletionRate = totalTests[0].count > 0
+        ? (completedTests[0].count / totalTests[0].count) * 100
         : 0;
 
       // Create lookup map for O(1) access
@@ -17481,12 +17543,12 @@ export class DatabaseStorage extends MemStorage {
         const deptRisks = risksByMacroproceso.get(macroproceso.id) || [];
 
         // Use pre-loaded config instead of calling methods inside loop
-        const averageRiskLevel = deptRisks.length > 0 
+        const averageRiskLevel = deptRisks.length > 0
           ? this.calculateWeightedRisk(deptRisks, riskMethod, riskWeights, riskRanges)
           : 0;
 
-        const completionRate = testData.total > 0 
-          ? (testData.completed / testData.total) * 100 
+        const completionRate = testData.total > 0
+          ? (testData.completed / testData.total) * 100
           : 0;
 
         return {
@@ -17499,18 +17561,18 @@ export class DatabaseStorage extends MemStorage {
 
       // Resource utilization - roles already loaded above in parallel
       const [totalExecutors, totalSupervisors, activeUsers] = await Promise.all([
-        executorRole.length > 0 
+        executorRole.length > 0
           ? db.select({ count: sql<number>`cast(count(*) as integer)` })
-              .from(userRoles)
-              .where(eq(userRoles.roleId, executorRole[0].id))
+            .from(userRoles)
+            .where(eq(userRoles.roleId, executorRole[0].id))
           : Promise.resolve([{ count: 0 }]),
-        
-        supervisorRole.length > 0 
+
+        supervisorRole.length > 0
           ? db.select({ count: sql<number>`cast(count(*) as integer)` })
-              .from(userRoles)
-              .where(eq(userRoles.roleId, supervisorRole[0].id))
+            .from(userRoles)
+            .where(eq(userRoles.roleId, supervisorRole[0].id))
           : Promise.resolve([{ count: 0 }]),
-        
+
         // SINGLE-TENANT MODE: Count all active users
         db.select({ count: sql<number>`cast(count(*) as integer)` })
           .from(users)
@@ -17518,8 +17580,8 @@ export class DatabaseStorage extends MemStorage {
       ]);
 
       // Compliance status - data already loaded above
-      const riskCoverage = totalRisks[0].count > 0 
-        ? (coveredRisks[0].count / totalRisks[0].count) * 100 
+      const riskCoverage = totalRisks[0].count > 0
+        ? (coveredRisks[0].count / totalRisks[0].count) * 100
         : 0;
 
       // Trends (last 6 months, simplified)
@@ -17622,7 +17684,7 @@ export class DatabaseStorage extends MemStorage {
   async getUserActivityFeed(userId: string, limit = 20, days = 7) {
     try {
       const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      
+
       const workLogs = await db.select({
         id: auditTestWorkLogs.id,
         type: sql<string>`'work_log'`,
@@ -17632,15 +17694,15 @@ export class DatabaseStorage extends MemStorage {
         auditId: sql<string>`NULL`,
         metadata: sql<any>`NULL`
       })
-      .from(auditTestWorkLogs)
-      .where(
-        and(
-          eq(auditTestWorkLogs.createdBy, userId),
-          sql`${auditTestWorkLogs.createdAt} >= ${cutoffDate}`
+        .from(auditTestWorkLogs)
+        .where(
+          and(
+            eq(auditTestWorkLogs.createdBy, userId),
+            sql`${auditTestWorkLogs.createdAt} >= ${cutoffDate}`
+          )
         )
-      )
-      .orderBy(desc(auditTestWorkLogs.createdAt))
-      .limit(limit);
+        .orderBy(desc(auditTestWorkLogs.createdAt))
+        .limit(limit);
 
       return workLogs.map(log => ({
         id: log.id,
@@ -17683,10 +17745,10 @@ export class DatabaseStorage extends MemStorage {
             lastName: users.lastName,
             fullName: users.fullName
           })
-          .from(users)
-          .where(eq(users.id, test.executorId));
+            .from(users)
+            .where(eq(users.id, test.executorId));
 
-          const executorName = executor 
+          const executorName = executor
             ? (executor.fullName || `${executor.firstName || ''} ${executor.lastName || ''}`.trim())
             : 'Unknown';
 
@@ -17749,9 +17811,9 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== ANALYTICS METHODS IMPLEMENTATION ==============
-  
+
   // Missing methods that need to be implemented for IStorage interface
-  
+
   async createAuditScope(scope: any): Promise<any> {
     throw new Error("createAuditScope not yet implemented");
   }
@@ -18124,7 +18186,7 @@ export class DatabaseStorage extends MemStorage {
   async getProcedurePerformanceByContext(context: any): Promise<any[]> {
     try {
       console.log('Getting procedure performance by context:', context.riskCategory);
-      
+
       // Return realistic sample performance data based on context
       const samplePerformanceData = [
         {
@@ -18141,7 +18203,7 @@ export class DatabaseStorage extends MemStorage {
           improvementSuggestions: ['Streamline verification steps']
         },
         {
-          procedureId: 'proc-002', 
+          procedureId: 'proc-002',
           riskCategory: context.riskCategory || 'operational',
           complexityLevel: context.complexityLevel || 'high',
           effectivenessScore: 78,
@@ -18187,7 +18249,7 @@ export class DatabaseStorage extends MemStorage {
   async getUsersByRole(role: string): Promise<User[]> {
     try {
       console.log(`Getting users by role: ${role}`);
-      
+
       // Get users from database with the specified role
       const userRoleData = await db
         .select({
@@ -18220,7 +18282,7 @@ export class DatabaseStorage extends MemStorage {
       }));
 
       console.log(`Found ${usersWithRole.length} users with role ${role}`);
-      
+
       // If no database users found, return sample data for demonstration
       if (usersWithRole.length === 0 && role === 'auditor') {
         return [
@@ -18229,7 +18291,7 @@ export class DatabaseStorage extends MemStorage {
             email: 'jane.smith@company.com',
             username: 'jane.smith',
             firstName: 'Jane',
-            lastName: 'Smith', 
+            lastName: 'Smith',
             isActive: true,
             performanceRating: 88,
             expertise: ['financial_analysis', 'risk_assessment', 'compliance_testing'],
@@ -18267,7 +18329,7 @@ export class DatabaseStorage extends MemStorage {
 
     } catch (error) {
       console.error(`Error getting users by role ${role}:`, error);
-      
+
       // Return sample auditor data as fallback
       if (role === 'auditor') {
         return [
@@ -18281,7 +18343,7 @@ export class DatabaseStorage extends MemStorage {
           }
         ];
       }
-      
+
       return [];
     }
   }
@@ -18289,7 +18351,7 @@ export class DatabaseStorage extends MemStorage {
   async getTimelinePerformanceByContext(context: any): Promise<any[]> {
     try {
       console.log('Getting timeline performance by context:', context.complexityLevel);
-      
+
       // Return realistic sample timeline performance data
       const sampleTimelineData = [
         {
@@ -18375,10 +18437,10 @@ export class DatabaseStorage extends MemStorage {
   async getAlternativeTemplates(templateId: string, riskCategory: string): Promise<any[]> {
     try {
       console.log(`Getting alternative templates for ${templateId} in ${riskCategory} category`);
-      
+
       // Return alternative templates for the same risk category
       const allTemplates = await this.getAuditTestTemplates();
-      return allTemplates.filter(template => 
+      return allTemplates.filter(template =>
         template.riskCategory === riskCategory && template.id !== templateId
       );
     } catch (error) {
@@ -18390,7 +18452,7 @@ export class DatabaseStorage extends MemStorage {
   async getAuditorExpertiseProfile(auditorId: string): Promise<any> {
     try {
       console.log(`Getting auditor expertise profile for: ${auditorId}`);
-      
+
       // Return realistic expertise profile with CORRECT property structure expected by business logic
       const expertiseProfiles = {
         'auditor-sample-1': {
@@ -18457,7 +18519,7 @@ export class DatabaseStorage extends MemStorage {
   async getAuditorPerformanceHistory(auditorId: string, months: number = 12): Promise<any[]> {
     try {
       console.log(`Getting auditor performance history for: ${auditorId} (${months} months)`);
-      
+
       // Return realistic performance history
       const performanceData = [
         {
@@ -18511,7 +18573,7 @@ export class DatabaseStorage extends MemStorage {
   async getActiveAuditorAssignments(auditorId: string): Promise<any[]> {
     try {
       console.log(`Getting active assignments for auditor: ${auditorId}`);
-      
+
       // Return current active assignments
       return [
         {
@@ -18552,7 +18614,7 @@ export class DatabaseStorage extends MemStorage {
   async createAuditorExpertiseProfile(profile: any): Promise<any> {
     try {
       console.log('Creating auditor expertise profile:', profile.auditorId);
-      
+
       // In a real implementation, this would save to database
       // For now, just return the created profile
       return {
@@ -18570,7 +18632,7 @@ export class DatabaseStorage extends MemStorage {
   async createProcedurePerformanceHistory(data: any): Promise<void> {
     try {
       console.log('Creating procedure performance history:', data.procedureId);
-      
+
       // In a real implementation, this would save to database
       // For now, just log the operation
       console.log('Procedure performance data saved successfully');
@@ -18583,7 +18645,7 @@ export class DatabaseStorage extends MemStorage {
   async createTimelinePerformanceAnalysis(data: any): Promise<void> {
     try {
       console.log('Creating timeline performance analysis:', data.auditId);
-      
+
       // In a real implementation, this would save to database
       // For now, just log the operation
       console.log('Timeline performance analysis saved successfully');
@@ -18601,11 +18663,11 @@ export class DatabaseStorage extends MemStorage {
       'data_analytics', 'fraud_detection', 'regulatory_compliance',
       'it_auditing', 'documentation_review', 'stakeholder_management'
     ];
-    
+
     // Generate 2-4 random expertise areas per auditor
     const numExpertise = Math.floor(Math.random() * 3) + 2;
     const selectedExpertise = [];
-    
+
     for (let i = 0; i < numExpertise; i++) {
       const randomIndex = Math.floor(Math.random() * expertiseOptions.length);
       const expertise = expertiseOptions[randomIndex];
@@ -18613,7 +18675,7 @@ export class DatabaseStorage extends MemStorage {
         selectedExpertise.push(expertise);
       }
     }
-    
+
     return selectedExpertise;
   }
 
@@ -18651,7 +18713,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= AI UNIFIED DOCUMENT AGGREGATION =============
-  
+
   async getAIDocuments(scope?: {
     macroprocesoId?: string;
     processId?: string;
@@ -18660,7 +18722,7 @@ export class DatabaseStorage extends MemStorage {
     const documents: AIDocument[] = [];
     const scopeIds = scope ? [
       scope.macroprocesoId,
-      scope.processId, 
+      scope.processId,
       scope.subprocesoId
     ].filter(Boolean) : [];
 
@@ -18674,10 +18736,10 @@ export class DatabaseStorage extends MemStorage {
       const complianceDocuments = await this.getComplianceDocuments();
       complianceDocuments.forEach(doc => {
         const docAny = doc as any;
-        const isScopeMatch = !scope || 
+        const isScopeMatch = !scope ||
           docAny.appliesToAllMacroprocesos ||
           scopeIds.some(id => [docAny.macroprocesoId, docAny.processId, docAny.subprocesoId].includes(id));
-        
+
         if (includeAllSources || isScopeMatch) {
           documents.push({
             id: doc.id,
@@ -18727,9 +18789,9 @@ export class DatabaseStorage extends MemStorage {
         console.log('⚠️ Aggregating risks as knowledge sources...');
         const risks = await this.getRisks();
         risks.forEach(risk => {
-          const isScopeMatch = !scope || 
+          const isScopeMatch = !scope ||
             scopeIds.some(id => [risk.macroprocesoId, risk.processId, risk.subprocesoId].includes(id));
-          
+
           if (includeAllSources || isScopeMatch) {
             documents.push({
               id: risk.id,
@@ -18887,7 +18949,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= PROCESS OWNERS MANAGEMENT =============
-  
+
   async getProcessOwners(): Promise<ProcessOwner[]> {
     return withRetry(async () => {
       return await db.select().from(processOwners)
@@ -18923,14 +18985,14 @@ export class DatabaseStorage extends MemStorage {
       const duplicateName = await db.select().from(processOwners)
         .where(sql`LOWER(${processOwners.name}) = LOWER(${owner.name})`)
         .limit(1);
-      
+
       if (duplicateName.length > 0) {
         throw new Error(`Ya existe un cargo con el nombre "${owner.name}"`);
       }
 
       const id = randomUUID();
       const now = new Date();
-      
+
       const newOwner: ProcessOwner = {
         id,
         ...owner,
@@ -18956,7 +19018,7 @@ export class DatabaseStorage extends MemStorage {
             ne(processOwners.id, id)
           ))
           .limit(1);
-        
+
         if (duplicateName.length > 0) {
           throw new Error(`Ya existe un cargo con el nombre "${owner.name}"`);
         }
@@ -18995,7 +19057,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= VALIDATION TOKENS MANAGEMENT =============
-  
+
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
   }
@@ -19034,10 +19096,10 @@ export class DatabaseStorage extends MemStorage {
     try {
       const id = randomUUID();
       const now = new Date();
-      
+
       // Hash the token before storing
       const hashedToken = this.hashToken(token.token);
-      
+
       const newToken: ValidationToken = {
         id,
         ...token,
@@ -19046,7 +19108,7 @@ export class DatabaseStorage extends MemStorage {
       };
 
       await db.insert(validationTokens).values(newToken);
-      
+
       // Return the original unhashed token for API response
       return {
         ...newToken,
@@ -19129,13 +19191,13 @@ export class DatabaseStorage extends MemStorage {
       console.log("🔍 [STORAGE] getBatchValidationToken - searching for token");
       console.log("   Original token (first 20 chars):", token.substring(0, 20));
       console.log("   Hashed token (first 20 chars):", hashedToken.substring(0, 20));
-      
+
       const result = await db.select()
         .from(batchValidationTokens)
         .where(eq(batchValidationTokens.token, hashedToken));
-      
+
       console.log("   Found:", result.length, "matching token(s)");
-      
+
       return result[0];
     } catch (error) {
       console.error('Error fetching batch validation token:', error);
@@ -19147,16 +19209,16 @@ export class DatabaseStorage extends MemStorage {
     try {
       const id = randomUUID();
       const now = new Date();
-      
+
       // Hash the token before storing
       const hashedToken = this.hashToken(token.token);
-      
+
       console.log("✅ [STORAGE] createBatchValidationToken - creating new token");
       console.log("   Original token (first 20 chars):", token.token.substring(0, 20));
       console.log("   Hashed token (first 20 chars):", hashedToken.substring(0, 20));
       console.log("   type:", token.type);
       console.log("   entityIds:", token.entityIds);
-      
+
       const newToken: BatchValidationToken = {
         id,
         ...token,
@@ -19165,9 +19227,9 @@ export class DatabaseStorage extends MemStorage {
       };
 
       await db.insert(batchValidationTokens).values(newToken);
-      
+
       console.log("   ✅ Token saved to DB with ID:", id);
-      
+
       // Return the original unhashed token for API response
       return {
         ...newToken,
@@ -19197,7 +19259,7 @@ export class DatabaseStorage extends MemStorage {
     try {
       const hashedToken = this.hashToken(token);
       const now = new Date();
-      
+
       await db.update(batchValidationTokens)
         .set({
           isUsed: true,
@@ -19218,7 +19280,7 @@ export class DatabaseStorage extends MemStorage {
           eq(validationTokens.type, entityType),
           eq(validationTokens.entityId, entityId)
         ));
-      
+
       return result;
     } catch (error) {
       console.error('Error fetching tokens by entity:', error);
@@ -19230,29 +19292,29 @@ export class DatabaseStorage extends MemStorage {
     try {
       const hashedToken = this.hashToken(token);
       const now = new Date();
-      
+
       const tokenData = await db.select()
         .from(validationTokens)
         .where(eq(validationTokens.token, hashedToken));
-      
+
       if (tokenData.length === 0) {
         return { valid: false, error: 'Token no encontrado' };
       }
-      
+
       const tokenRecord = tokenData[0];
-      
+
       if (tokenRecord.isUsed) {
         return { valid: false, error: 'Este token ya ha sido utilizado' };
       }
-      
+
       if (new Date(tokenRecord.expiresAt) < now) {
         return { valid: false, error: 'Este token ha expirado' };
       }
-      
+
       if (tokenRecord.type !== 'action_plan') {
         return { valid: false, error: 'Tipo de token inválido' };
       }
-      
+
       return { valid: true, token: tokenRecord };
     } catch (error) {
       console.error('Error validating action plan token:', error);
@@ -19264,7 +19326,7 @@ export class DatabaseStorage extends MemStorage {
     try {
       const hashedToken = this.hashToken(token);
       const now = new Date();
-      
+
       const result = await db.update(validationTokens)
         .set({
           isUsed: true,
@@ -19274,7 +19336,7 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(validationTokens.token, hashedToken))
         .returning();
-      
+
       return result[0];
     } catch (error) {
       console.error('Error marking token as used:', error);
@@ -19283,7 +19345,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== CONTROL VALIDATION METHODS ==============
-  
+
   async getPendingValidationControls(): Promise<any[]> {
     try {
       console.log('🔍 DatabaseStorage: Fetching pending validation controls with owners...');
@@ -19298,13 +19360,13 @@ export class DatabaseStorage extends MemStorage {
           eq(controls.validationStatus, "pending_validation"),
           ne(controls.status, 'deleted')
         ));
-      
+
       // Flatten the result to include processOwner directly in control object
       const flattenedResult = result.map(row => ({
         ...row.control,
         processOwner: row.processOwner
       }));
-      
+
       console.log(`📊 DatabaseStorage: Found ${flattenedResult.length} pending validation controls`);
       return flattenedResult;
     } catch (error) {
@@ -19326,13 +19388,13 @@ export class DatabaseStorage extends MemStorage {
           eq(controls.validationStatus, status),
           ne(controls.status, 'deleted')
         ));
-      
+
       // Flatten the result to include processOwner directly in control object
       const flattenedResult = result.map(row => ({
         ...row.control,
         processOwner: row.processOwner
       }));
-      
+
       return flattenedResult;
     } catch (error) {
       console.error('Error fetching controls by validation status:', error);
@@ -19360,7 +19422,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== RISK VALIDATION METHODS - Override MemStorage ==============
-  
+
   async getPendingValidationRisks(): Promise<Risk[]> {
     return await db.select().from(risks).where(eq(risks.validationStatus, "pending_validation"));
   }
@@ -19382,12 +19444,12 @@ export class DatabaseStorage extends MemStorage {
         const subproceso = await db.select({
           procesoId: subprocesos.procesoId
         }).from(subprocesos).where(eq(subprocesos.id, riskData.subprocesoId)).limit(1);
-        
+
         if (subproceso.length) {
           const proceso = await db.select({
             macroprocesoId: processes.macroprocesoId
           }).from(processes).where(eq(processes.id, subproceso[0].procesoId)).limit(1);
-          
+
           if (proceso.length && proceso[0].macroprocesoId) {
             return proceso[0].macroprocesoId;
           }
@@ -19396,7 +19458,7 @@ export class DatabaseStorage extends MemStorage {
         const proceso = await db.select({
           macroprocesoId: processes.macroprocesoId
         }).from(processes).where(eq(processes.id, riskData.processId)).limit(1);
-        
+
         if (proceso.length && proceso[0].macroprocesoId) {
           return proceso[0].macroprocesoId;
         }
@@ -19479,7 +19541,7 @@ export class DatabaseStorage extends MemStorage {
       // Use transaction to update both risks and risk_process_links atomically
       const result = await db.transaction(async (tx) => {
         const validatedAt = new Date();
-        
+
         // Update the risk table
         const [updatedRisk] = await tx.update(risks)
           .set({
@@ -19516,7 +19578,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== RISK EVENTS METHODS ==============
-  
+
   async getRiskEvents(): Promise<RiskEvent[]> {
     return await db.select().from(riskEvents)
       .where(isNull(riskEvents.deletedAt))
@@ -19561,21 +19623,21 @@ export class DatabaseStorage extends MemStorage {
     }).returning();
     return created;
   }
-  
+
   private async generateRiskEventCode(): Promise<string> {
     const existingEvents = await db.select({ code: riskEvents.code })
       .from(riskEvents)
       .where(sql`${riskEvents.code} LIKE 'E-%'`);
-    
+
     const existingCodes = existingEvents.map(e => e.code);
-    
+
     let nextNumber = 1;
     let code: string;
     do {
       code = `E-${nextNumber.toString().padStart(4, '0')}`;
       nextNumber++;
     } while (existingCodes.includes(code));
-    
+
     return code;
   }
 
@@ -19588,7 +19650,7 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(riskEvents.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating risk event:', error);
@@ -19624,7 +19686,7 @@ export class DatabaseStorage extends MemStorage {
         // Parse and insert new relationships
         for (const entity of entities) {
           const [type, id] = entity.split(':');
-          
+
           if (type === 'macro') {
             await trx.insert(riskEventMacroprocesos).values({
               riskEventId,
@@ -19650,23 +19712,23 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= PROBABILITY CRITERIA METHODS =============
-  
+
   async getProbabilityCriteria(): Promise<ProbabilityCriteria[]> {
     return await db.select().from(probabilityCriteria).orderBy(probabilityCriteria.order);
   }
-  
+
   async getActiveProbabilityCriteria(): Promise<ProbabilityCriteria[]> {
     return await db.select().from(probabilityCriteria)
       .where(eq(probabilityCriteria.isActive, true))
       .orderBy(probabilityCriteria.order);
   }
-  
+
   async getProbabilityCriterion(id: string): Promise<ProbabilityCriteria | undefined> {
     const [result] = await db.select().from(probabilityCriteria)
       .where(eq(probabilityCriteria.id, id));
     return result;
   }
-  
+
   async createProbabilityCriterion(criterion: InsertProbabilityCriteria): Promise<ProbabilityCriteria> {
     const [created] = await db.insert(probabilityCriteria).values({
       ...criterion,
@@ -19675,7 +19737,7 @@ export class DatabaseStorage extends MemStorage {
     }).returning();
     return created;
   }
-  
+
   async updateProbabilityCriterion(id: string, criterion: Partial<InsertProbabilityCriteria>): Promise<ProbabilityCriteria | undefined> {
     try {
       const [updated] = await db.update(probabilityCriteria)
@@ -19685,14 +19747,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(probabilityCriteria.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating probability criterion:', error);
       return undefined;
     }
   }
-  
+
   async deleteProbabilityCriterion(id: string): Promise<boolean> {
     try {
       await db.delete(probabilityCriteria).where(eq(probabilityCriteria.id, id));
@@ -19702,14 +19764,14 @@ export class DatabaseStorage extends MemStorage {
       return false;
     }
   }
-  
+
   async reorderProbabilityCriteria(criteriaIds: string[]): Promise<void> {
     try {
       // Use transaction to ensure atomic updates
       await db.transaction(async (trx) => {
         for (let i = 0; i < criteriaIds.length; i++) {
           await trx.update(probabilityCriteria)
-            .set({ 
+            .set({
               order: i + 1,
               updatedAt: new Date()
             })
@@ -19723,23 +19785,23 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= IMPACT CRITERIA METHODS =============
-  
+
   async getImpactCriteria(): Promise<ImpactCriteria[]> {
     return await db.select().from(impactCriteria).orderBy(impactCriteria.order);
   }
-  
+
   async getActiveImpactCriteria(): Promise<ImpactCriteria[]> {
     return await db.select().from(impactCriteria)
       .where(eq(impactCriteria.isActive, true))
       .orderBy(impactCriteria.order);
   }
-  
+
   async getImpactCriterion(id: string): Promise<ImpactCriteria | undefined> {
     const [result] = await db.select().from(impactCriteria)
       .where(eq(impactCriteria.id, id));
     return result;
   }
-  
+
   async createImpactCriterion(criterion: InsertImpactCriteria): Promise<ImpactCriteria> {
     const [created] = await db.insert(impactCriteria).values({
       ...criterion,
@@ -19748,7 +19810,7 @@ export class DatabaseStorage extends MemStorage {
     }).returning();
     return created;
   }
-  
+
   async updateImpactCriterion(id: string, criterion: Partial<InsertImpactCriteria>): Promise<ImpactCriteria | undefined> {
     try {
       const [updated] = await db.update(impactCriteria)
@@ -19758,14 +19820,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(impactCriteria.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating impact criterion:', error);
       return undefined;
     }
   }
-  
+
   async deleteImpactCriterion(id: string): Promise<boolean> {
     try {
       await db.delete(impactCriteria).where(eq(impactCriteria.id, id));
@@ -19775,14 +19837,14 @@ export class DatabaseStorage extends MemStorage {
       return false;
     }
   }
-  
+
   async reorderImpactCriteria(criteriaIds: string[]): Promise<void> {
     try {
       // Use transaction to ensure atomic updates
       await db.transaction(async (trx) => {
         for (let i = 0; i < criteriaIds.length; i++) {
           await trx.update(impactCriteria)
-            .set({ 
+            .set({
               order: i + 1,
               updatedAt: new Date()
             })
@@ -19796,7 +19858,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= LEGACY RISK VALIDATION DEPRECATION =============
-  
+
   /**
    * DEPRECATED: Risk validation fields (validationStatus, validatedBy, validatedAt) 
    * in the risks table are deprecated. Use the new many-to-many process association
@@ -19811,18 +19873,18 @@ export class DatabaseStorage extends MemStorage {
     validatedAt?: Date;
   } | null> {
     console.warn(`DEPRECATED: Risk validation fields are deprecated. Use getRiskProcessesByRisk() instead for risk ${riskId}`);
-    
+
     // Return aggregated validation status from junction table instead of legacy fields
     const riskProcesses = await this.getRiskProcessesByRisk(riskId);
-    
+
     if (riskProcesses.length === 0) {
       return { status: 'no_associations' };
     }
-    
+
     // Aggregate validation statuses across all process associations
     const allValidated = riskProcesses.every(rp => rp.validationStatus === 'validated');
     const anyRejected = riskProcesses.some(rp => rp.validationStatus === 'rejected');
-    
+
     if (allValidated) {
       return { status: 'validated' };
     } else if (anyRejected) {
@@ -19833,14 +19895,14 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= RISK PROCESS LINKS METHODS =============
-  
+
   async getRiskProcessLinks(): Promise<RiskProcessLink[]> {
     return await db.select({ riskProcessLink: riskProcessLinks })
       .from(riskProcessLinks)
       .orderBy(riskProcessLinks.createdAt)
       .then(results => results.map(r => r.riskProcessLink));
   }
-  
+
   async getRiskProcessLinksWithDetails(): Promise<RiskProcessLinkWithDetails[]> {
     const results = await db.select({
       riskProcessLink: riskProcessLinks,
@@ -19855,15 +19917,15 @@ export class DatabaseStorage extends MemStorage {
       },
       validatedByUser: users
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .orderBy(riskProcessLinks.createdAt);
+
     return results.map(result => ({
       ...result.riskProcessLink,
       risk: result.risk!,
@@ -19874,10 +19936,10 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
   }
-  
+
   async getRiskProcessLinksByRiskIds(riskIds: string[]): Promise<RiskProcessLinkWithDetails[]> {
     if (riskIds.length === 0) return [];
-    
+
     const results = await db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
@@ -19891,16 +19953,16 @@ export class DatabaseStorage extends MemStorage {
       },
       validatedByUser: users
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(inArray(riskProcessLinks.riskId, riskIds))
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(inArray(riskProcessLinks.riskId, riskIds))
+      .orderBy(riskProcessLinks.createdAt);
+
     return results.map(result => ({
       ...result.riskProcessLink,
       risk: result.risk!,
@@ -19926,16 +19988,16 @@ export class DatabaseStorage extends MemStorage {
       },
       validatedByUser: users
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(eq(riskProcessLinks.riskId, riskId))
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(eq(riskProcessLinks.riskId, riskId))
+      .orderBy(riskProcessLinks.createdAt);
+
     return results.map(result => ({
       ...result.riskProcessLink,
       risk: result.risk!,
@@ -19946,10 +20008,10 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
   }
-  
+
   async getRiskProcessLinksByProcess(macroprocesoId?: string, processId?: string, subprocesoId?: string): Promise<RiskProcessLinkWithDetails[]> {
     let processCondition;
-    
+
     if (subprocesoId) {
       processCondition = eq(riskProcessLinks.subprocesoId, subprocesoId);
     } else if (processId) {
@@ -19959,7 +20021,7 @@ export class DatabaseStorage extends MemStorage {
     } else {
       return []; // No process specified
     }
-    
+
     const results = await db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
@@ -19973,16 +20035,16 @@ export class DatabaseStorage extends MemStorage {
       },
       validatedByUser: users
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(processCondition)
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(processCondition)
+      .orderBy(riskProcessLinks.createdAt);
+
     return results.map(result => ({
       ...result.riskProcessLink,
       risk: result.risk!,
@@ -19993,12 +20055,12 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
   }
-  
+
   async getRiskProcessLink(id: string): Promise<RiskProcessLink | undefined> {
     const [result] = await db.select().from(riskProcessLinks).where(eq(riskProcessLinks.id, id));
     return result;
   }
-  
+
   async getRiskProcessLinkWithDetails(id: string): Promise<RiskProcessLinkWithDetails | undefined> {
     const [result] = await db.select({
       riskProcessLink: riskProcessLinks,
@@ -20013,17 +20075,17 @@ export class DatabaseStorage extends MemStorage {
       },
       validatedByUser: users
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(eq(riskProcessLinks.id, id));
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(processOwners, eq(riskProcessLinks.responsibleOverrideId, processOwners.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(eq(riskProcessLinks.id, id));
+
     if (!result) return undefined;
-    
+
     return {
       ...result.riskProcessLink,
       risk: result.risk!,
@@ -20034,16 +20096,16 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     };
   }
-  
+
   async createRiskProcessLink(riskProcessLink: InsertRiskProcessLink): Promise<RiskProcessLink> {
     // Auto-populate macroproceso_id from process when process_id is provided
     let enrichedLink = { ...riskProcessLink };
-    
+
     if (riskProcessLink.processId && !riskProcessLink.macroprocesoId) {
       try {
         // Use existing getProcess method
         const process = await this.getProcess(riskProcessLink.processId);
-        
+
         if (process?.macroprocesoId) {
           enrichedLink.macroprocesoId = process.macroprocesoId;
           console.log(`[createRiskProcessLink] Auto-populated macroproceso_id: ${process.macroprocesoId} from process: ${riskProcessLink.processId}`);
@@ -20053,7 +20115,7 @@ export class DatabaseStorage extends MemStorage {
         // Continue with original data if lookup fails
       }
     }
-    
+
     const [created] = await db.insert(riskProcessLinks).values({
       ...enrichedLink,
       createdAt: new Date(),
@@ -20061,7 +20123,7 @@ export class DatabaseStorage extends MemStorage {
     }).returning();
     return created;
   }
-  
+
   async updateRiskProcessLink(id: string, riskProcessLink: Partial<InsertRiskProcessLink>): Promise<RiskProcessLink | undefined> {
     try {
       const [updated] = await db.update(riskProcessLinks)
@@ -20071,14 +20133,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(riskProcessLinks.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating risk process link:', error);
       return undefined;
     }
   }
-  
+
   async deleteRiskProcessLink(id: string): Promise<boolean> {
     try {
       const result = await db.delete(riskProcessLinks).where(eq(riskProcessLinks.id, id));
@@ -20088,7 +20150,7 @@ export class DatabaseStorage extends MemStorage {
       return false;
     }
   }
-  
+
   // RiskProcessLink validation methods
   async validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined> {
     try {
@@ -20101,14 +20163,14 @@ export class DatabaseStorage extends MemStorage {
         .from(riskProcessLinks)
         .where(eq(riskProcessLinks.id, id))
         .limit(1);
-      
+
       if (currentLink.length === 0) {
         console.error('Risk process link not found:', id);
         return undefined;
       }
-      
+
       const previousStatus = currentLink[0].validationStatus;
-      
+
       // Actualizar el riskProcessLink
       const [updated] = await db.update(riskProcessLinks)
         .set({
@@ -20120,7 +20182,7 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(riskProcessLinks.id, id))
         .returning();
-      
+
       // Guardar automáticamente en el historial
       try {
         await this.createValidationHistoryEntry({
@@ -20138,14 +20200,14 @@ export class DatabaseStorage extends MemStorage {
         console.error('Error saving validation history (non-blocking):', historyError);
         // No fallar la validación si falla el historial
       }
-      
+
       return updated;
     } catch (error) {
       console.error('Error validating risk process link:', error);
       return undefined;
     }
   }
-  
+
   async getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]> {
     // First get the base data with process hierarchy
     const baseResults = await db.select({
@@ -20165,34 +20227,34 @@ export class DatabaseStorage extends MemStorage {
         )
       `.as('responsible_owner_id')
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(eq(riskProcessLinks.validationStatus, 'pending_validation'))
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(eq(riskProcessLinks.validationStatus, 'pending_validation'))
+      .orderBy(riskProcessLinks.createdAt);
+
     // Then fetch process owners for each result
     const results = await Promise.all(baseResults.map(async (result) => {
       let responsibleUser = undefined;
-      
+
       if (result.responsibleOwnerId) {
         const owner = await db.select({
           id: processOwners.id,
           fullName: processOwners.name,
           email: processOwners.email
         })
-        .from(processOwners)
-        .where(eq(processOwners.id, result.responsibleOwnerId))
-        .limit(1);
-        
+          .from(processOwners)
+          .where(eq(processOwners.id, result.responsibleOwnerId))
+          .limit(1);
+
         if (owner.length > 0) {
           responsibleUser = owner[0];
         }
       }
-      
+
       return {
         ...result.riskProcessLink,
         risk: result.risk!,
@@ -20203,10 +20265,10 @@ export class DatabaseStorage extends MemStorage {
         validatedByUser: result.validatedByUser || undefined,
       };
     }));
-    
+
     return results;
   }
-  
+
   async getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]> {
     // First get the base data with process hierarchy
     const baseResults = await db.select({
@@ -20226,28 +20288,28 @@ export class DatabaseStorage extends MemStorage {
         )
       `.as('responsible_owner_id')
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(eq(riskProcessLinks.validationStatus, status))
-    .orderBy(riskProcessLinks.createdAt);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(eq(riskProcessLinks.validationStatus, status))
+      .orderBy(riskProcessLinks.createdAt);
+
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
-    const owners = ownerIds.length > 0 
+    const owners = ownerIds.length > 0
       ? await db.select({
-          id: processOwners.id,
-          fullName: processOwners.name,
-          email: processOwners.email
-        })
+        id: processOwners.id,
+        fullName: processOwners.name,
+        email: processOwners.email
+      })
         .from(processOwners)
         .where(inArray(processOwners.id, ownerIds))
       : [];
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-    
+
     // Map results with owner lookups
     const results = baseResults.map((result) => ({
       ...result.riskProcessLink,
@@ -20258,22 +20320,22 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
       validatedByUser: result.validatedByUser || undefined,
     }));
-    
+
     return results;
   }
-  
+
   async getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]> {
     // DEPRECATED: Use getRiskProcessLinksByNotificationStatusPaginated instead for better performance
     return this.getRiskProcessLinksByNotificationStatusPaginated(notified, 50, 0).then(r => r.data);
   }
-  
+
   /**
    * Paginated version with LIMIT/OFFSET at DB level for performance
    * Uses new index: idx_risk_process_links_validation_notification
    */
   async getRiskProcessLinksByNotificationStatusPaginated(
-    notified: boolean, 
-    limit: number = 50, 
+    notified: boolean,
+    limit: number = 50,
     offset: number = 0
   ): Promise<{ data: RiskProcessLinkWithDetails[], total: number }> {
     // First, get total count (fast with index)
@@ -20284,12 +20346,12 @@ export class DatabaseStorage extends MemStorage {
         eq(riskProcessLinks.notificationSent, notified)
       ));
     const total = countResult[0]?.count || 0;
-    
+
     // If no results, return early
     if (total === 0) {
       return { data: [], total: 0 };
     }
-    
+
     // Get paginated results with LIMIT/OFFSET at DB level
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
@@ -20307,33 +20369,33 @@ export class DatabaseStorage extends MemStorage {
         )
       `.as('responsible_owner_id')
     })
-    .from(riskProcessLinks)
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-    .where(and(
-      eq(riskProcessLinks.validationStatus, 'pending_validation'),
-      eq(riskProcessLinks.notificationSent, notified)
-    ))
-    .orderBy(riskProcessLinks.createdAt)
-    .limit(limit)
-    .offset(offset);
-    
+      .from(riskProcessLinks)
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+      .where(and(
+        eq(riskProcessLinks.validationStatus, 'pending_validation'),
+        eq(riskProcessLinks.notificationSent, notified)
+      ))
+      .orderBy(riskProcessLinks.createdAt)
+      .limit(limit)
+      .offset(offset);
+
     // Batch-fetch process owners for this page only
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
-    const owners = ownerIds.length > 0 
+    const owners = ownerIds.length > 0
       ? await db.select({
-          id: processOwners.id,
-          fullName: processOwners.name,
-          email: processOwners.email
-        })
+        id: processOwners.id,
+        fullName: processOwners.name,
+        email: processOwners.email
+      })
         .from(processOwners)
         .where(inArray(processOwners.id, ownerIds))
       : [];
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-    
+
     // Map results
     const data = baseResults.map((result) => ({
       ...result.riskProcessLink,
@@ -20344,12 +20406,12 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
       validatedByUser: result.validatedByUser || undefined,
     }));
-    
+
     return { data, total };
   }
-  
+
   // ============= RISK PROCESS LINK VALIDATION HISTORY METHODS =============
-  
+
   /**
    * Crea una entrada en el historial de validaciones de riskProcessLinks
    */
@@ -20359,7 +20421,7 @@ export class DatabaseStorage extends MemStorage {
       .returning();
     return created;
   }
-  
+
   /**
    * Obtiene el historial completo de validaciones de un riskProcessLink específico
    * Incluye información del validador y detalles del riesgo/proceso
@@ -20378,16 +20440,16 @@ export class DatabaseStorage extends MemStorage {
       process: processes,
       subproceso: subprocesos,
     })
-    .from(riskProcessLinkValidationHistory)
-    .innerJoin(users, eq(riskProcessLinkValidationHistory.validatedBy, users.id))
-    .leftJoin(riskProcessLinks, eq(riskProcessLinkValidationHistory.riskProcessLinkId, riskProcessLinks.id))
-    .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-    .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-    .where(eq(riskProcessLinkValidationHistory.riskProcessLinkId, riskProcessLinkId))
-    .orderBy(desc(riskProcessLinkValidationHistory.validatedAt));
-    
+      .from(riskProcessLinkValidationHistory)
+      .innerJoin(users, eq(riskProcessLinkValidationHistory.validatedBy, users.id))
+      .leftJoin(riskProcessLinks, eq(riskProcessLinkValidationHistory.riskProcessLinkId, riskProcessLinks.id))
+      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
+      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .where(eq(riskProcessLinkValidationHistory.riskProcessLinkId, riskProcessLinkId))
+      .orderBy(desc(riskProcessLinkValidationHistory.validatedAt));
+
     return results.map(result => ({
       ...result.history,
       validatedByUser: result.validatedByUser,
@@ -20413,17 +20475,17 @@ export class DatabaseStorage extends MemStorage {
       } : undefined,
     }));
   }
-  
+
   /**
    * Verifica qué riesgos de un proceso ya están validados (estado != pending_validation)
    * Útil para mostrar advertencia antes de enviar proceso completo a validación
    */
-  async checkAlreadyValidatedRisks(processId: string): Promise<{ 
-    riskProcessLinkId: string; 
-    riskCode: string; 
-    riskName: string; 
-    validationStatus: string; 
-    validatedAt: Date | null; 
+  async checkAlreadyValidatedRisks(processId: string): Promise<{
+    riskProcessLinkId: string;
+    riskCode: string;
+    riskName: string;
+    validationStatus: string;
+    validatedAt: Date | null;
     validatedBy: string | null;
   }[]> {
     const results = await db.select({
@@ -20434,31 +20496,31 @@ export class DatabaseStorage extends MemStorage {
       validatedAt: riskProcessLinks.validatedAt,
       validatedBy: riskProcessLinks.validatedBy,
     })
-    .from(riskProcessLinks)
-    .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-    .where(
-      and(
-        eq(riskProcessLinks.processId, processId),
-        ne(riskProcessLinks.validationStatus, 'pending_validation')
+      .from(riskProcessLinks)
+      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .where(
+        and(
+          eq(riskProcessLinks.processId, processId),
+          ne(riskProcessLinks.validationStatus, 'pending_validation')
+        )
       )
-    )
-    .orderBy(risks.code);
-    
+      .orderBy(risks.code);
+
     return results;
   }
-  
+
   // ============= EFFICIENT AGGREGATION METHODS (SQL GROUP BY) =============
-  
-  async getRisksGroupedByProcess(): Promise<{ 
-    entityId: string; 
-    entityName: string; 
+
+  async getRisksGroupedByProcess(): Promise<{
+    entityId: string;
+    entityName: string;
     entityCode: string;
     entityType: 'macroproceso' | 'process' | 'subproceso';
     macroprocesoId: string | null;
     macroprocesoName: string | null;
     processId: string | null;
     processName: string | null;
-    riskCount: number; 
+    riskCount: number;
     riskIds: string[];
   }[]> {
     // Use UNION to combine all three levels: macroprocesos, processes, subprocesos
@@ -20540,15 +20602,15 @@ export class DatabaseStorage extends MemStorage {
                macroproceso_id, macroproceso_name, process_id, process_name
       ORDER BY entity_code
     `);
-    
+
     return results.rows as any[];
   }
-  
-  async getRisksGroupedByOwner(): Promise<{ 
-    ownerId: string; 
-    ownerName: string; 
+
+  async getRisksGroupedByOwner(): Promise<{
+    ownerId: string;
+    ownerName: string;
     ownerEmail: string;
-    riskCount: number; 
+    riskCount: number;
     riskIds: string[];
   }[]> {
     // Use raw SQL with GROUP BY for efficiency
@@ -20574,12 +20636,12 @@ export class DatabaseStorage extends MemStorage {
       GROUP BY po.id, po.name, po.email
       ORDER BY po.name
     `);
-    
+
     return results.rows as any[];
   }
-  
+
   // ============= MIGRATION METHODS FOR RISK PROCESS LINKS =============
-  
+
   /**
    * Migra datos legacy de la tabla risks hacia riskProcessLinks
    * Transfiere los campos legacy processOwner, validationStatus, etc. hacia enlaces independientes
@@ -20587,7 +20649,7 @@ export class DatabaseStorage extends MemStorage {
   async migrateRisksToRiskProcessLinks(): Promise<{ success: boolean; migratedCount: number; errors: string[] }> {
     const errors: string[] = [];
     let migratedCount = 0;
-    
+
     try {
       // Obtener todos los riesgos que tienen campos legacy
       const risksWithLegacyData = await db.select({
@@ -20596,25 +20658,25 @@ export class DatabaseStorage extends MemStorage {
         process: processes,
         subproceso: subprocesos,
       })
-      .from(risks)
-      .leftJoin(macroprocesos, eq(risks.macroprocesoId, macroprocesos.id))
-      .leftJoin(processes, eq(risks.processId, processes.id))
-      .leftJoin(subprocesos, eq(risks.subprocesoId, subprocesos.id))
-      .where(
-        // Solo riesgos que tienen algún proceso asociado y datos de validación legacy
-        or(
-          and(risks.macroprocesoId, sql`${risks.macroprocesoId} IS NOT NULL`),
-          and(risks.processId, sql`${risks.processId} IS NOT NULL`),
-          and(risks.subprocesoId, sql`${risks.subprocesoId} IS NOT NULL`)
-        )
-      );
+        .from(risks)
+        .leftJoin(macroprocesos, eq(risks.macroprocesoId, macroprocesos.id))
+        .leftJoin(processes, eq(risks.processId, processes.id))
+        .leftJoin(subprocesos, eq(risks.subprocesoId, subprocesos.id))
+        .where(
+          // Solo riesgos que tienen algún proceso asociado y datos de validación legacy
+          or(
+            and(risks.macroprocesoId, sql`${risks.macroprocesoId} IS NOT NULL`),
+            and(risks.processId, sql`${risks.processId} IS NOT NULL`),
+            and(risks.subprocesoId, sql`${risks.subprocesoId} IS NOT NULL`)
+          )
+        );
 
       console.log(`Found ${risksWithLegacyData.length} risks with legacy data to migrate`);
 
       for (const item of risksWithLegacyData) {
         try {
           const risk = item.risk;
-          
+
           // Verificar si ya existe un enlace para este riesgo y proceso
           const existingLink = await db.select()
             .from(riskProcessLinks)
@@ -20649,7 +20711,7 @@ export class DatabaseStorage extends MemStorage {
                   )
                 )
                 .limit(1);
-              
+
               if (processOwner.length > 0) {
                 responsibleOverrideId = processOwner[0].id;
               } else {
@@ -20664,7 +20726,7 @@ export class DatabaseStorage extends MemStorage {
           const linkData: InsertRiskProcessLink = {
             riskId: risk.id,
             macroprocesoId: risk.macroprocesoId || undefined,
-            processId: risk.processId || undefined,  
+            processId: risk.processId || undefined,
             subprocesoId: risk.subprocesoId || undefined,
             responsibleOverrideId,
             validationStatus: risk.validationStatus || "pending_validation",
@@ -20682,12 +20744,12 @@ export class DatabaseStorage extends MemStorage {
                 updatedAt: new Date()
               })
               .onConflictDoNothing();
-            
+
             migratedCount++;
           } catch (conflictError) {
             console.log(`Conflict detected for risk ${risk.id}, likely already migrated`);
           }
-          
+
         } catch (error) {
           const errorMsg = `Error migrating risk ${item.risk.id}: ${error}`;
           console.error(errorMsg);
@@ -20697,7 +20759,7 @@ export class DatabaseStorage extends MemStorage {
 
       console.log(`Migration completed: ${migratedCount} links created, ${errors.length} errors`);
       return { success: errors.length === 0, migratedCount, errors };
-      
+
     } catch (error) {
       const errorMsg = `Migration failed: ${error}`;
       console.error(errorMsg);
@@ -20711,19 +20773,19 @@ export class DatabaseStorage extends MemStorage {
    */
   async cleanupLegacyRiskFields(): Promise<{ success: boolean; updatedCount: number; errors: string[] }> {
     const errors: string[] = [];
-    
+
     try {
       // Solo limpiar si hay enlaces existentes para verificar que la migración fue exitosa
       // Usar EXISTS es más eficiente que COUNT para verificar existencia
-      const [hasLinks] = await db.select({ 
-        exists: sql<boolean>`EXISTS(SELECT 1 FROM risk_process_links)` 
+      const [hasLinks] = await db.select({
+        exists: sql<boolean>`EXISTS(SELECT 1 FROM risk_process_links)`
       }).from(sql`(SELECT 1) as dummy`);
-      
+
       if (!hasLinks.exists) {
-        return { 
-          success: false, 
-          updatedCount: 0, 
-          errors: ["No risk process links found. Run migration first."] 
+        return {
+          success: false,
+          updatedCount: 0,
+          errors: ["No risk process links found. Run migration first."]
         };
       }
 
@@ -20740,7 +20802,7 @@ export class DatabaseStorage extends MemStorage {
 
       console.log(`Cleaned up legacy fields for ${result.length} risks`);
       return { success: true, updatedCount: result.length, errors };
-      
+
     } catch (error) {
       const errorMsg = `Cleanup failed: ${error}`;
       console.error(errorMsg);
@@ -20749,11 +20811,11 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============= CONTROL PROCESS ASSOCIATION METHODS =============
-  
+
   async getControlProcesses(): Promise<ControlProcess[]> {
     return await db.select().from(controlProcesses).orderBy(controlProcesses.createdAt);
   }
-  
+
   async getControlProcessesWithDetails(): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -20768,15 +20830,15 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -20787,7 +20849,7 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getControlProcessesByControl(controlId: string): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -20802,16 +20864,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.controlId, controlId))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.controlId, controlId))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -20822,10 +20884,10 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getControlProcessesByProcess(macroprocesoId?: string, processId?: string, subprocesoId?: string): Promise<ControlProcessWithDetails[]> {
     let whereCondition;
-    
+
     if (subprocesoId) {
       whereCondition = eq(controlProcesses.subprocesoId, subprocesoId);
     } else if (processId) {
@@ -20835,7 +20897,7 @@ export class DatabaseStorage extends MemStorage {
     } else {
       return []; // No process specified
     }
-    
+
     const results = await db.select({
       controlProcess: controlProcesses,
       control: controls,
@@ -20849,16 +20911,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(whereCondition)
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(whereCondition)
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -20869,12 +20931,12 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getControlProcess(id: string): Promise<ControlProcess | undefined> {
     const [result] = await db.select().from(controlProcesses).where(eq(controlProcesses.id, id));
     return result;
   }
-  
+
   async getControlProcessWithDetails(id: string): Promise<ControlProcessWithDetails | undefined> {
     const [result] = await db.select({
       controlProcess: controlProcesses,
@@ -20889,17 +20951,17 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.id, id));
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.id, id));
+
     if (!result) return undefined;
-    
+
     return {
       ...result.controlProcess,
       control: result.control!,
@@ -20910,7 +20972,7 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     };
   }
-  
+
   async createControlProcess(controlProcess: InsertControlProcess): Promise<ControlProcess> {
     const [created] = await db.insert(controlProcesses).values({
       ...controlProcess,
@@ -20919,7 +20981,7 @@ export class DatabaseStorage extends MemStorage {
     }).returning();
     return created;
   }
-  
+
   async updateControlProcess(id: string, controlProcess: Partial<InsertControlProcess>): Promise<ControlProcess | undefined> {
     try {
       const [updated] = await db.update(controlProcesses)
@@ -20929,14 +20991,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(controlProcesses.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating control process:', error);
       return undefined;
     }
   }
-  
+
   async deleteControlProcess(id: string): Promise<boolean> {
     try {
       const result = await db.delete(controlProcesses).where(eq(controlProcesses.id, id));
@@ -20946,7 +21008,7 @@ export class DatabaseStorage extends MemStorage {
       return false;
     }
   }
-  
+
   // ControlProcess validation methods
   async validateControlProcess(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<ControlProcess | undefined> {
     try {
@@ -20960,14 +21022,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(controlProcesses.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error validating control process:', error);
       return undefined;
     }
   }
-  
+
   async getPendingValidationControlProcesses(): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -20982,16 +21044,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.validationStatus, 'pending_validation'))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.validationStatus, 'pending_validation'))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -21002,7 +21064,7 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getControlProcessesByValidationStatus(status: string): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -21017,16 +21079,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.validationStatus, status))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.validationStatus, status))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -21037,8 +21099,8 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
-  
+
+
   // ControlProcess self-evaluation methods
   async updateControlProcessSelfEvaluation(id: string, selfEvaluationData: {
     selfEvaluatedBy: string;
@@ -21056,14 +21118,14 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(controlProcesses.id, id))
         .returning();
-      
+
       return updated;
     } catch (error) {
       console.error('Error updating control process self-evaluation:', error);
       return undefined;
     }
   }
-  
+
   async getPendingSelfEvaluationControlProcesses(): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -21078,16 +21140,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.selfEvaluationStatus, 'pending'))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.selfEvaluationStatus, 'pending'))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -21098,7 +21160,7 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getOverdueSelfEvaluationControlProcesses(): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -21113,21 +21175,21 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(
-      and(
-        eq(controlProcesses.selfEvaluationStatus, 'pending'),
-        sql`${controlProcesses.nextEvaluationDate} < NOW()`
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(
+        and(
+          eq(controlProcesses.selfEvaluationStatus, 'pending'),
+          sql`${controlProcesses.nextEvaluationDate} < NOW()`
+        )
       )
-    )
-    .orderBy(controlProcesses.nextEvaluationDate);
-    
+      .orderBy(controlProcesses.nextEvaluationDate);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -21138,7 +21200,7 @@ export class DatabaseStorage extends MemStorage {
       selfEvaluatedByUser: (result.selfEvaluatedByUser as any) || undefined,
     }));
   }
-  
+
   async getControlProcessesBySelfEvaluationStatus(status: string): Promise<ControlProcessWithDetails[]> {
     const results = await db.select({
       controlProcess: controlProcesses,
@@ -21153,16 +21215,16 @@ export class DatabaseStorage extends MemStorage {
         email: sql`self_eval_user.email`
       }
     })
-    .from(controlProcesses)
-    .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
-    .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
-    .leftJoin(processes, eq(controlProcesses.processId, processes.id))
-    .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
-    .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
-    .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
-    .where(eq(controlProcesses.selfEvaluationStatus, status))
-    .orderBy(controlProcesses.createdAt);
-    
+      .from(controlProcesses)
+      .leftJoin(controls, eq(controlProcesses.controlId, controls.id))
+      .leftJoin(macroprocesos, eq(controlProcesses.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(controlProcesses.processId, processes.id))
+      .leftJoin(subprocesos, eq(controlProcesses.subprocesoId, subprocesos.id))
+      .leftJoin(users, eq(controlProcesses.validatedBy, users.id))
+      .leftJoin(sql`users AS self_eval_user`, eq(controlProcesses.selfEvaluatedBy, sql`self_eval_user.id`))
+      .where(eq(controlProcesses.selfEvaluationStatus, status))
+      .orderBy(controlProcesses.createdAt);
+
     return results.map(result => ({
       ...result.controlProcess,
       control: result.control!,
@@ -21175,16 +21237,16 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== COMPLIANCE POSTGRES IMPLEMENTATIONS ==============
-  
+
   // Crime Categories - PostgreSQL implementations
   async getCrimeCategories(): Promise<CrimeCategory[]> {
-    return await withRetry(() => 
+    return await withRetry(() =>
       db.select().from(crimeCategories).orderBy(crimeCategories.name)
     );
   }
 
   async getCrimeCategory(id: string): Promise<CrimeCategory | undefined> {
-    const results = await withRetry(() => 
+    const results = await withRetry(() =>
       db.select().from(crimeCategories).where(eq(crimeCategories.id, id))
     );
     return results[0];
@@ -21202,11 +21264,11 @@ export class DatabaseStorage extends MemStorage {
     // Generate code automatically if empty
     const categoryToInsert = {
       ...category,
-      code: category.code && category.code.trim() !== '' 
-        ? category.code 
+      code: category.code && category.code.trim() !== ''
+        ? category.code
         : category.name.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 20)
     };
-    
+
     const [created] = await withRetry(() =>
       db.insert(crimeCategories).values(categoryToInsert).returning()
     );
@@ -21242,10 +21304,10 @@ export class DatabaseStorage extends MemStorage {
           fiscalEntity: fiscalEntities,
           user: users
         })
-        .from(complianceOfficers)
-        .leftJoin(fiscalEntities, eq(complianceOfficers.fiscalEntityId, fiscalEntities.id))
-        .leftJoin(users, eq(complianceOfficers.userId, users.id))
-        .orderBy(complianceOfficers.fullName)
+          .from(complianceOfficers)
+          .leftJoin(fiscalEntities, eq(complianceOfficers.fiscalEntityId, fiscalEntities.id))
+          .leftJoin(users, eq(complianceOfficers.userId, users.id))
+          .orderBy(complianceOfficers.fullName)
       );
 
       console.log('Raw query results:', results.length, 'officers found');
@@ -21282,10 +21344,10 @@ export class DatabaseStorage extends MemStorage {
         fiscalEntity: fiscalEntities,
         user: users
       })
-      .from(complianceOfficers)
-      .leftJoin(fiscalEntities, eq(complianceOfficers.fiscalEntityId, fiscalEntities.id))
-      .leftJoin(users, eq(complianceOfficers.userId, users.id))
-      .where(eq(complianceOfficers.id, id))
+        .from(complianceOfficers)
+        .leftJoin(fiscalEntities, eq(complianceOfficers.fiscalEntityId, fiscalEntities.id))
+        .leftJoin(users, eq(complianceOfficers.userId, users.id))
+        .where(eq(complianceOfficers.id, id))
     );
 
     if (!results[0]) return undefined;
@@ -21335,7 +21397,7 @@ export class DatabaseStorage extends MemStorage {
   async getComplianceOfficerHierarchy(fiscalEntityId: string): Promise<ComplianceOfficerWithDetails[]> {
     const allOfficersWithDetails = await this.getComplianceOfficersWithDetails();
     const entityOfficers = allOfficersWithDetails.filter(officer => officer.fiscalEntityId === fiscalEntityId);
-    
+
     return entityOfficers.sort((a, b) => {
       if (a.hierarchyLevel !== b.hierarchyLevel) {
         return a.hierarchyLevel - b.hierarchyLevel;
@@ -21348,14 +21410,14 @@ export class DatabaseStorage extends MemStorage {
     // Convert date strings to Date objects if needed
     const officerToInsert = {
       ...officer,
-      assignmentStartDate: typeof officer.assignmentStartDate === 'string' 
-        ? new Date(officer.assignmentStartDate) 
+      assignmentStartDate: typeof officer.assignmentStartDate === 'string'
+        ? new Date(officer.assignmentStartDate)
         : officer.assignmentStartDate,
       assignmentEndDate: officer.assignmentEndDate && typeof officer.assignmentEndDate === 'string'
         ? new Date(officer.assignmentEndDate)
         : officer.assignmentEndDate
     };
-    
+
     const [created] = await withRetry(() =>
       db.insert(complianceOfficers).values(officerToInsert).returning()
     );
@@ -21367,8 +21429,8 @@ export class DatabaseStorage extends MemStorage {
     const officerToUpdate = {
       ...officer,
       ...(officer.assignmentStartDate && {
-        assignmentStartDate: typeof officer.assignmentStartDate === 'string' 
-          ? new Date(officer.assignmentStartDate) 
+        assignmentStartDate: typeof officer.assignmentStartDate === 'string'
+          ? new Date(officer.assignmentStartDate)
           : officer.assignmentStartDate
       }),
       ...(officer.assignmentEndDate && {
@@ -21377,7 +21439,7 @@ export class DatabaseStorage extends MemStorage {
           : officer.assignmentEndDate
       })
     };
-    
+
     const [updated] = await withRetry(() =>
       db.update(complianceOfficers).set(officerToUpdate).where(eq(complianceOfficers.id, id)).returning()
     );
@@ -21389,7 +21451,7 @@ export class DatabaseStorage extends MemStorage {
     await withRetry(() =>
       db.delete(complianceOfficerFiscalEntities).where(eq(complianceOfficerFiscalEntities.officerId, id))
     );
-    
+
     const results = await withRetry(() =>
       db.delete(complianceOfficers).where(eq(complianceOfficers.id, id)).returning()
     );
@@ -21472,7 +21534,7 @@ export class DatabaseStorage extends MemStorage {
 
   async getUserSavedViews(userId: string, entityType?: string): Promise<UserSavedView[]> {
     const conditions = [eq(userSavedViews.userId, userId)];
-    
+
     if (entityType) {
       conditions.push(eq(userSavedViews.entityType, entityType));
     }
@@ -21661,7 +21723,7 @@ export class DatabaseStorage extends MemStorage {
     })
       .from(actionEvidence)
       .innerJoin(actions, eq(actionEvidence.actionId, actions.id));
-    
+
     return await withRetry(() =>
       query
         .where(eq(actionEvidence.actionId, actionId))
@@ -21739,7 +21801,7 @@ export class DatabaseStorage extends MemStorage {
 
   override async validateAndUseToken(token: string, ipAddress?: string, userId?: string): Promise<{ valid: boolean; actionPlanId?: string; actionId?: string; }> {
     const tokenData = await this.getActionPlanAccessToken(token);
-    
+
     if (!tokenData) {
       return { valid: false };
     }
@@ -21774,21 +21836,21 @@ export class DatabaseStorage extends MemStorage {
   }
 
   override async updateActionPlanStatus(id: string, status: string, additionalData?: { evidenceSubmittedBy?: string, reviewedBy?: string, reviewComments?: string }): Promise<ActionPlan | undefined> {
-    const updateData: any = { 
+    const updateData: any = {
       status,
       updatedAt: new Date(),
     };
-    
+
     if (additionalData?.evidenceSubmittedBy) {
       updateData.evidenceSubmittedBy = additionalData.evidenceSubmittedBy;
       updateData.evidenceSubmittedAt = new Date();
     }
-    
+
     if (additionalData?.reviewedBy) {
       updateData.reviewedBy = additionalData.reviewedBy;
       updateData.reviewedAt = new Date();
     }
-    
+
     if (additionalData?.reviewComments) {
       updateData.reviewComments = additionalData.reviewComments;
     }
@@ -21802,9 +21864,9 @@ export class DatabaseStorage extends MemStorage {
         ))
         .returning()
     );
-    
+
     if (!updated) return undefined;
-    
+
     return {
       ...updated,
       name: updated.title,
@@ -21817,13 +21879,13 @@ export class DatabaseStorage extends MemStorage {
 function createStorage(): IStorage {
   // Priority: RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
   const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
-  
+
   if (!databaseUrl) {
     console.warn('⚠️ No database URL configured - using in-memory storage');
     console.warn('⚠️ Data will be lost on restart. Configure RENDER_DATABASE_URL or DATABASE_URL for persistence.');
     return new MemStorage();
   }
-  
+
   try {
     return new DatabaseStorage();
   } catch (error) {
