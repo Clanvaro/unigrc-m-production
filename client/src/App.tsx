@@ -20,6 +20,15 @@ import AIAssistantLazy from "@/components/ai-assistant-lazy";
 import { AuthBoundary } from "@/components/AuthBoundary";
 import { useAuth } from "@/hooks/useAuth";
 
+// Silence html2canvas Web Worker errors (safe, non-critical errors)
+if (typeof window !== "undefined") {
+  const originalErrorHandler = window.addEventListener("unhandledrejection", (event) => {
+    if (event.reason?.message?.includes("message port closed") && event.reason?.message?.includes("response")) {
+      event.preventDefault();
+    }
+  });
+}
+
 // Lazy load all pages for better performance
 const DashboardRouter = lazy(() => import("@/pages/DashboardRouter"));
 const ExecutorDashboard = lazy(() => import("@/pages/ExecutorDashboard"));
