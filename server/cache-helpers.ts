@@ -44,6 +44,7 @@ export async function invalidateRiskProcessLinkCaches() {
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
     ]);
     console.log(`[GRANULAR] Risk-process link caches invalidated in ${Date.now() - startTime}ms`);
@@ -69,6 +70,7 @@ export async function invalidateRiskDataCaches() {
       distributedCache.invalidate(`risks-basic:single-tenant`),
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
@@ -99,6 +101,7 @@ export async function invalidateControlDataCaches() {
       distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
     ]);
     await invalidateRiskMatrixCache();
@@ -121,6 +124,7 @@ export async function invalidateRiskControlAssociationCaches() {
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
     ]);
     await invalidateRiskMatrixCache();
