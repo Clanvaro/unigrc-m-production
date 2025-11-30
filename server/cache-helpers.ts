@@ -53,9 +53,10 @@ export async function invalidateRiskProcessLinkCaches() {
 }
 
 /**
- * FAST: Invalidates only risk data caches (NOT catalogs)
+ * FAST: Invalidates risk data caches AND dependent aggregates
  * Use when: Creating, updating, or deleting risks
- * Duration: ~10-20ms
+ * Duration: ~15-25ms
+ * Note: Also invalidates risk-processes caches since risk CRUD affects associations
  */
 export async function invalidateRiskDataCaches() {
   const startTime = Date.now();
@@ -69,6 +70,9 @@ export async function invalidateRiskDataCaches() {
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
     ]);
     await invalidateRiskMatrixCache();
     console.log(`[GRANULAR] Risk data caches invalidated in ${Date.now() - startTime}ms`);
@@ -78,9 +82,11 @@ export async function invalidateRiskDataCaches() {
 }
 
 /**
- * FAST: Invalidates only control data caches
+ * FAST: Invalidates control data caches AND dependent risk aggregates
  * Use when: Creating, updating, or deleting controls
- * Duration: ~10-15ms
+ * Duration: ~15-25ms
+ * Note: Also invalidates risks-with-details and risks-page-data since control
+ *       effectiveness and residual risk info is embedded in those caches
  */
 export async function invalidateControlDataCaches() {
   const startTime = Date.now();
@@ -89,7 +95,13 @@ export async function invalidateControlDataCaches() {
       distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidatePattern(`controls:${TENANT_KEY}:*`),
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
     ]);
+    await invalidateRiskMatrixCache();
     console.log(`[GRANULAR] Control data caches invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {
     console.error(`Error invalidating control data caches:`, error);

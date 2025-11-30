@@ -2895,8 +2895,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Failed to log audit for risk creation:', auditError);
       }
       
-      // Invalidate all risk-related caches after creating risk
-      await invalidateRiskControlCaches();
+      // OPTIMIZED: Use granular cache invalidation for risk creation
+      await invalidateRiskDataCaches();
       
       res.status(201).json(risk);
     } catch (error) {
@@ -3183,9 +3183,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Failed to log audit changes:', auditError);
       }
       
-      // Invalidate all risk-related caches after updating risk
+      // OPTIMIZED: Use granular cache invalidation for risk update
       if (tenantId) {
-        await invalidateRiskControlCaches();
+        await invalidateRiskDataCaches();
       }
       
       res.json(risk);
@@ -3229,8 +3229,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Risk not found" });
       }
       
-      // Invalidate all risk-control related caches (soft-deleting risk affects associations)
-      await invalidateRiskControlCaches();
+      // OPTIMIZED: Use granular cache invalidation for risk deletion
+      await invalidateRiskDataCaches();
       
       res.status(204).send();
     } catch (error) {
@@ -6953,8 +6953,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userAgent: req.headers['user-agent'] || 'unknown'
       });
       
-      // Invalidate all risk-control related caches (control updates may affect associations)
-      await invalidateRiskControlCaches();
+      // OPTIMIZED: Use granular cache invalidation for control updates
+      await invalidateControlDataCaches();
       
       res.json(control);
     } catch (error) {
@@ -6986,8 +6986,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Control not found" });
       }
       
-      // Invalidate all risk-control related caches (deleting control removes associations in cascade)
-      await invalidateRiskControlCaches();
+      // OPTIMIZED: Use granular cache invalidation for control deletion
+      await invalidateControlDataCaches();
       
       res.status(204).send();
     } catch (error) {
