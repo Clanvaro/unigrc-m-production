@@ -4873,13 +4873,24 @@ export class MemStorage implements IStorage {
     // AND only fetch necessary columns to reduce data transfer
     const queries: Promise<any>[] = [
       // Always need risks (lightweight)
+      // PERFORMANCE: Filter by status='active' to match risk-matrix behavior and reduce volume
+      // PERFORMANCE: Filter by entities if specific ones are requested
       db.select({
         id: risks.id,
         inherentRisk: risks.inherentRisk,
         processId: risks.processId,
         subprocesoId: risks.subprocesoId,
         macroprocesoId: risks.macroprocesoId
-      }).from(risks).where(isNull(risks.deletedAt)),
+      }).from(risks).where(and(
+        isNull(risks.deletedAt),
+        eq(risks.status, 'active'),
+        // Optimization: If we only need subprocesos, only fetch risks linked to them
+        // Note: This assumes risks are directly linked. If using riskProcessLinks, this might need adjustment,
+        // but getAllRiskLevelsOptimized currently relies on these columns.
+        needSubprocesos && !needProcesses && !needMacroprocesos
+          ? isNotNull(risks.subprocesoId)
+          : undefined
+      )),
 
       // Risk controls (lightweight)
       db.select({
@@ -4891,7 +4902,12 @@ export class MemStorage implements IStorage {
         .innerJoin(controls, eq(riskControls.controlId, controls.id))
         .where(and(
           isNull(risks.deletedAt),
-          isNull(controls.deletedAt)
+          eq(risks.status, 'active'),
+          isNull(controls.deletedAt),
+          // Optimization: Same filter as above
+          needSubprocesos && !needProcesses && !needMacroprocesos
+            ? isNotNull(risks.subprocesoId)
+            : undefined
         )),
 
       // Only fetch requested entities (lightweight - IDs only)
