@@ -20,10 +20,22 @@ The backend uses Express.js with TypeScript and Zod for validation. Data is stor
 
 The system operates in a single-tenant architecture. It incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment. A two-level distributed caching architecture (endpoint and storage function) is implemented for maximum performance.
 
-## Performance Optimizations (Nov 29, 2025)
+## Performance Optimizations (Nov 30, 2025)
 
+### Aggressive Caching Strategy (Single-Tenant)
+-   **15-Minute TTL**: All risk module endpoints now use 900s cache TTL: `/api/risks-overview`, `/api/controls`, `/api/risk-events/page-data`, `/api/risk-controls-with-details`
+-   **Granular Cache Invalidation**: Replaced nuclear `invalidateRiskControlCaches()` with surgical functions:
+    - `invalidateRiskDataCaches()` - Risk mutations only
+    - `invalidateControlDataCaches()` - Control mutations only
+    - `invalidateRiskControlAssociationCaches()` - Risk-control links only
+    - `invalidateRiskEventsPageDataCache()` - Risk event mutations (includes risks-overview)
+    - `invalidateValidationCaches()` - Validation workflow changes
+-   **Instant UI Updates**: Optimistic updates (onMutate + setQueryData) for controls/risks, refetchType: 'all' for risk-events
+
+### Endpoint Optimizations
 -   **Risk Matrix Endpoint**: `/api/risk-matrix/optimized` uses CTE-based SQL approach for ~87ms response (production-compatible).
--   **Validation Lite Endpoint**: `/api/risk-processes/validation/lite` consolidates 4+ queries into single SQL using CTEs, returns counts + first 50 items per status, cached for 30s (~200-300ms).
+-   **Risks Overview Endpoint**: `/api/risks-overview` returns lightweight ~50KB payload vs 700KB from bootstrap, with pre-aggregated counts.
+-   **Validation Lite Endpoint**: `/api/risk-processes/validation/lite` consolidates 4+ queries into single SQL using CTEs, returns counts + first 50 items per status.
 -   **Catalog Endpoints**: Separated individual cached endpoints for macroprocesos, processes, subprocesos with 5-10 minute TTL.
 -   **Database Indexing (Deployed to Render)**: 15+ production indexes created for query optimization:
     - `idx_risk_process_links_validation_notification` - Validation status queries
