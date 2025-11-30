@@ -321,7 +321,8 @@ export default function RiskEvents() {
       return oldData.filter((e) => e.id !== eventId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
       toast({ title: "Evento eliminado", description: "El evento de riesgo ha sido eliminado exitosamente." });
       setDeletingEventId(null);
@@ -334,8 +335,8 @@ export default function RiskEvents() {
 
   const handleEditSuccess = () => {
     setEditingEvent(null);
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
     queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
     toast({ title: "Evento actualizado", description: "El evento de riesgo ha sido actualizado exitosamente." });
   };
