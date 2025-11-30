@@ -6303,7 +6303,10 @@ export const riskEventMacroprocesos = pgTable("risk_event_macroprocesos", {
   riskEventId: varchar("risk_event_id").notNull().references(() => riskEvents.id),
   macroprocesoId: varchar("macroproceso_id").notNull().references(() => macroprocesos.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_rem_risk_event_id").on(table.riskEventId),
+  index("idx_rem_macroproceso_id").on(table.macroprocesoId),
+]);
 
 // Relaciones muchos-a-muchos para eventos de riesgo con procesos
 export const riskEventProcesses = pgTable("risk_event_processes", {
@@ -6311,7 +6314,10 @@ export const riskEventProcesses = pgTable("risk_event_processes", {
   riskEventId: varchar("risk_event_id").notNull().references(() => riskEvents.id),
   processId: varchar("process_id").notNull().references(() => processes.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_rep_risk_event_id").on(table.riskEventId),
+  index("idx_rep_process_id").on(table.processId),
+]);
 
 // Relaciones muchos-a-muchos para eventos de riesgo con subprocesos
 export const riskEventSubprocesos = pgTable("risk_event_subprocesos", {
@@ -6319,7 +6325,10 @@ export const riskEventSubprocesos = pgTable("risk_event_subprocesos", {
   riskEventId: varchar("risk_event_id").notNull().references(() => riskEvents.id),
   subprocesoId: varchar("subproceso_id").notNull().references(() => subprocesos.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_res_risk_event_id").on(table.riskEventId),
+  index("idx_res_subproceso_id").on(table.subprocesoId),
+]);
 
 // Relaciones muchos-a-muchos para eventos de riesgo con riesgos asociados
 export const riskEventRisks = pgTable("risk_event_risks", {
@@ -6327,7 +6336,10 @@ export const riskEventRisks = pgTable("risk_event_risks", {
   riskEventId: varchar("risk_event_id").notNull().references(() => riskEvents.id),
   riskId: varchar("risk_id").notNull().references(() => risks.id),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("idx_rer_risk_event_id").on(table.riskEventId),
+  index("idx_rer_risk_id").on(table.riskId),
+]);
 
 // Insert schemas para Risk Events
 export const insertRiskEventSchema = createInsertSchema(riskEvents).omit({

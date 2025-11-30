@@ -14,14 +14,19 @@ let db: ReturnType<typeof drizzle> | null = null;
 const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
 
 // Detect if using Render PostgreSQL (non-Neon)
-const isRenderDb = databaseUrl?.includes('render.com') || databaseUrl?.includes('oregon-postgres.render.com') || false;
+// Improved detection: Check for 'render.com' in hostname OR specific Render env vars
+const isRenderDb =
+  databaseUrl?.includes('render.com') ||
+  databaseUrl?.includes('oregon-postgres.render.com') ||
+  process.env.RENDER === 'true' || // Generic Render environment flag
+  false;
 
 // Detect pooler based on actual connection string content (not env var name)
 const isPooled = !isRenderDb && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
 
 // Log which database is being used
 if (isRenderDb) {
-  console.log(`[DB Config] Using: Render PostgreSQL, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
+  console.log(`[DB Config] Using: Render PostgreSQL (Detected via ${process.env.RENDER === 'true' ? 'Env Var' : 'URL'}), host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 } else {
   console.log(`[DB Config] Using: ${isPooled ? 'Neon Pooled connection' : 'Neon Direct connection'}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 }
@@ -37,29 +42,29 @@ if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL && !isRenderDb) 
 
 if (databaseUrl) {
   const isProduction = process.env.NODE_ENV === 'production';
-  
+
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
   // Increase timeout to handle occasional slow SSL negotiations
   const connectionTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
   // CRITICAL: Reduced from 45s to 10s to fail fast on slow queries (Nov 29, 2025)
   // This prevents 138s hangs when N+1 queries saturate the pool
   const statementTimeout = isRenderDb ? 10000 : (isProduction ? 15000 : 10000);
-  
+
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
-  const sslConfig = isRenderDb 
+  const sslConfig = isRenderDb
     ? { rejectUnauthorized: false }  // Render requires SSL
     : (isProduction ? { rejectUnauthorized: false } : false);
-  
+
   // Optimized pool settings for Render PostgreSQL Basic-1gb (1 GB RAM, 0.5 CPU)
   // - Higher max connections to leverage upgraded DB capacity
   // - Min connections for warm pool readiness
   // - Shorter idle timeout to recycle connections before Render closes them
   // - Aggressive keep-alive to maintain connection health
-  pool = new Pool({ 
+  pool = new Pool({
     connectionString: databaseUrl,
-    max: isRenderDb ? 10 : (isPooled ? 8 : 6),  // Increased for Basic-1gb plan (was 4 for 0.1 CPU)
-    min: isRenderDb ? 3 : 2,  // Keep 3 warm connections for faster response
+    max: isRenderDb ? 20 : (isPooled ? 10 : 6),  // Increased to 20 for Render Basic-1gb (can handle ~50-100)
+    min: isRenderDb ? 5 : 2,  // Keep 5 warm connections for faster response
     idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
@@ -69,11 +74,11 @@ if (databaseUrl) {
     allowExitOnIdle: false,
   });
   db = drizzle(pool, { schema, logger: true });
-  
-  const poolMax = isRenderDb ? 10 : (isPooled ? 8 : 6);
-  const poolMin = isRenderDb ? 3 : 2;
+
+  const poolMax = isRenderDb ? 20 : (isPooled ? 10 : 6);
+  const poolMin = isRenderDb ? 5 : 2;
   console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
-  
+
   if (isRenderDb) {
     console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');
   } else if (isPooled) {
@@ -91,7 +96,7 @@ async function initializeDatabase() {
     console.log('⚠️ Skipping database initialization - no DATABASE_URL configured');
     return;
   }
-  
+
   try {
     // Add scope_entities column if it doesn't exist - safe and idempotent
     await pool.query(`
@@ -122,10 +127,10 @@ if (pool) {
   // Log slow queries for debugging (Nov 23, 2025)
   // Updated Nov 29, 2025: Reduced threshold to 5s and added more detail
   const originalQuery = pool.query.bind(pool);
-  (pool as any).query = function(queryText: any, values?: any, callback?: any): any {
+  (pool as any).query = function (queryText: any, values?: any, callback?: any): any {
     const startTime = Date.now();
     const SLOW_QUERY_THRESHOLD = 5000; // 5 seconds
-    
+
     const logSlowQuery = (duration: number) => {
       if (duration > SLOW_QUERY_THRESHOLD) {
         const queryStr = typeof queryText === 'string' ? queryText : queryText?.text || '';
@@ -137,7 +142,7 @@ if (pool) {
         }
       }
     };
-    
+
     // Handle callback-based queries
     if (callback) {
       return originalQuery(queryText, values, (err: any, result: any) => {
@@ -145,7 +150,7 @@ if (pool) {
         callback(err, result);
       });
     }
-    
+
     // Handle promise-based queries
     const result = originalQuery(queryText, values);
     if (result && typeof (result as any).then === 'function') {
@@ -154,7 +159,7 @@ if (pool) {
         return res;
       });
     }
-    
+
     return result;
   };
 }
@@ -198,17 +203,17 @@ export async function withRetry<T>(
   if (!db || !pool) {
     throw new Error('Database not configured - cannot perform operation');
   }
-  
+
   let lastError: Error;
-  
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error: any) {
       lastError = error;
-      
+
       // Check if it's a recoverable connection/network error
-      const isRecoverable = 
+      const isRecoverable =
         // PostgreSQL error codes
         error.code === '57P01' || // admin shutdown
         error.code === '08006' || // connection failure
@@ -233,17 +238,17 @@ export async function withRetry<T>(
         error.message?.includes('socket hang up') ||
         error.message?.includes('SSL') ||
         error.message?.includes('ECONNRESET');
-      
+
       if (!isRecoverable || attempt === maxRetries) {
         console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
         throw error;
       }
-      
+
       // Use delay from array based on attempt number
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
-      
+
       console.warn(`⚠️ Database retry (${attempt}/${maxRetries}) after ${delay}ms - ${error.code || 'ERROR'}: ${error.message?.substring(0, 100)}`);
-      
+
       // On connection errors, try to warm the pool before retry
       if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET')) {
         console.log('🔄 Warming pool before retry...');
@@ -253,11 +258,11 @@ export async function withRetry<T>(
           // Ignore warming errors, proceed with retry
         }
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  
+
   throw lastError!;
 }
 
@@ -266,7 +271,7 @@ export async function checkDatabaseHealth(): Promise<boolean> {
   if (!pool) {
     return false;
   }
-  
+
   try {
     await pool.query('SELECT 1');
     return true;
@@ -283,9 +288,9 @@ export async function withTransaction<T>(
   if (!pool) {
     throw new Error('Database not configured - cannot perform transaction');
   }
-  
+
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
     const result = await callback(client);
@@ -307,7 +312,7 @@ export async function withDrizzleTransaction<T>(
   if (!db) {
     throw new Error('Database not configured - cannot perform transaction');
   }
-  
+
   return db.transaction(async (tx) => {
     try {
       return await callback(tx);
@@ -354,7 +359,7 @@ export async function measureDatabaseLatency(): Promise<{
 }> {
   const poolBefore = getPoolMetrics();
   const totalStart = Date.now();
-  
+
   if (!pool) {
     return {
       connect: 0,
@@ -430,7 +435,7 @@ function startPoolMonitoring() {
     const utilizationPct = Math.round((metrics.totalCount / metrics.maxConnections) * 100);
     const activeConnections = metrics.totalCount - metrics.idleCount;
     const activeUtilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
-    
+
     console.log(
       `📊 Pool Metrics: total=${metrics.totalCount}/${metrics.maxConnections} (${utilizationPct}%), ` +
       `idle=${metrics.idleCount}, active=${activeConnections}, waiting=${metrics.waitingCount}`
@@ -485,7 +490,7 @@ export async function warmPool(minConnections: number = 1): Promise<{ success: b
   const startTime = Date.now();
   const clients: any[] = [];
   let successCount = 0;
-  
+
   try {
     // Request multiple connections to warm up the pool
     // Each connection is handled independently with its own try-finally
@@ -504,18 +509,18 @@ export async function warmPool(minConnections: number = 1): Promise<{ success: b
         return false;
       }
     });
-    
+
     await Promise.allSettled(connectionPromises);
-    
+
     const duration = Date.now() - startTime;
-    
+
     // Only log warming success every 5 minutes to reduce noise
     const now = Date.now();
     if (successCount > 0 && (now - lastWarmLogTime > WARM_LOG_COOLDOWN || lastWarmLogTime === 0)) {
       console.log(`🔥 Pool warmed: ${successCount}/${minConnections} connections ready in ${duration}ms`);
       lastWarmLogTime = now;
     }
-    
+
     return { success: successCount > 0, connections: successCount, duration };
   } catch (error) {
     console.error('❌ Pool warming failed:', error);
@@ -554,11 +559,11 @@ function startPoolWarming() {
   // Detect database type for appropriate ping interval
   const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
   const PING_INTERVAL = isRender ? 15000 : 20000; // 15s for Render, 20s for Neon
-  
+
   poolWarmingInterval = setInterval(async () => {
     try {
       const currentlyQuiet = isQuietHours();
-      
+
       // Detect transition from quiet hours to active hours (7:00 AM)
       if (wasInQuietHours && !currentlyQuiet) {
         console.log('🌅 Quiet hours ended - aggressive pool warming');
@@ -567,18 +572,18 @@ function startPoolWarming() {
         wasInQuietHours = false;
         return;
       }
-      
+
       wasInQuietHours = currentlyQuiet;
-      
+
       // Skip pings during quiet hours (00:00-07:00 Chile time)
       if (currentlyQuiet) {
         return;
       }
-      
+
       const metrics = getPoolMetrics();
       // Match pool min config: Render=2, others=2 (don't over-warm as Render closes idle connections)
       const minWarm = 2;
-      
+
       // Warm more aggressively if pool is below minimum
       // Only log if pool is empty (reduce log noise from normal connection recycling)
       if (metrics && metrics.totalCount < minWarm) {
@@ -591,7 +596,7 @@ function startPoolWarming() {
         const pingStart = Date.now();
         await pool!.query('SELECT 1');
         const pingDuration = Date.now() - pingStart;
-        
+
         // Log slow pings (indicates connection issues)
         if (pingDuration > 500) {
           console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue`);
@@ -614,7 +619,7 @@ function startPoolWarming() {
     }
   }, PING_INTERVAL);
 
-  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL/1000}s (paused 00:00-07:00 Chile time)`);
+  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL / 1000}s (paused 00:00-07:00 Chile time)`);
 }
 
 function stopPoolWarming() {
@@ -636,14 +641,14 @@ export async function getHealthStatus(): Promise<{
   const dbHealthy = await checkDatabaseHealth();
   const poolMetrics = getPoolMetrics();
   const uptime = process.uptime();
-  
+
   let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
   if (!dbHealthy) {
     status = 'unhealthy';
   } else if (poolMetrics && poolMetrics.waitingCount > 3) {
     status = 'degraded';
   }
-  
+
   return {
     status,
     database: dbHealthy,
