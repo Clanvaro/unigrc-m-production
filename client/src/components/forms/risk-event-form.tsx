@@ -210,7 +210,8 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
       return [optimisticEvent, ...oldData];
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
       onSuccess();
       toast({
@@ -273,8 +274,8 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
       );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
       onSuccess();
       toast({
