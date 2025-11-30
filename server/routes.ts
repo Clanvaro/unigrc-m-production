@@ -26,6 +26,8 @@ import {
   invalidateControlDataCaches,
   invalidateRiskControlAssociationCaches,
   invalidateValidationCaches,
+  invalidateCatalogBasicCaches,
+  invalidateMacroprocesoHierarchy,
   CACHE_VERSION 
 } from './cache-helpers';
 import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
@@ -1381,8 +1383,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const process = await storage.createProcess(dataWithAudit);
 
-      // Invalidate all process-related caches (includes risks-page-data-lite, processes, org-structure)
-      await invalidateRiskControlCaches();
+      // Invalidate process-related caches immediately
+      await Promise.all([
+        invalidateCatalogBasicCaches(['macroprocesos', 'processes']),
+        invalidateMacroprocesoHierarchy(),
+        invalidateRiskControlCaches()
+      ]);
 
       res.status(201).json(process);
     } catch (error) {
