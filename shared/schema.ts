@@ -274,6 +274,9 @@ export const riskProcessLinks = pgTable("risk_process_links", {
   // Performance optimization: Indexes for JOINs in batch queries
   index("idx_rpl_responsible_override").on(table.responsibleOverrideId),
   index("idx_rpl_validated_by").on(table.validatedBy),
+  // Performance optimization: Composite index for validation center count queries
+  // Covers: WHERE validation_status = X AND notification_sent = Y
+  index("idx_rpl_validation_notification").on(table.validationStatus, table.notificationSent),
 ]);
 
 // Historial de validaciones de riskProcessLinks para auditoría completa

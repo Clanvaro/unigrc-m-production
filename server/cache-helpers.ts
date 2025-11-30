@@ -311,15 +311,16 @@ interface CatalogCacheEntry<T> {
 const catalogCache = new Map<string, CatalogCacheEntry<any>>();
 
 // Cache TTLs in milliseconds
+// Aggressive caching for static catalogs to reduce DB load on Render Basic (0.5 CPU)
 const CATALOG_TTL = {
-  macroprocesos: 10 * 60 * 1000,      // 10 min - rarely changes
-  processes: 10 * 60 * 1000,          // 10 min - rarely changes
-  subprocesos: 10 * 60 * 1000,        // 10 min - rarely changes
-  gerencias: 10 * 60 * 1000,          // 10 min - rarely changes
-  controls: 5 * 60 * 1000,            // 5 min - changes more often
-  processOwners: 5 * 60 * 1000,       // 5 min - changes more often
-  riskCategories: 10 * 60 * 1000,     // 10 min - rarely changes
-  fiscalEntities: 10 * 60 * 1000,     // 10 min - rarely changes
+  macroprocesos: 30 * 60 * 1000,      // 30 min - organizational structure rarely changes
+  processes: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
+  subprocesos: 30 * 60 * 1000,        // 30 min - organizational structure rarely changes
+  gerencias: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
+  controls: 15 * 60 * 1000,           // 15 min - control definitions change infrequently
+  processOwners: 15 * 60 * 1000,      // 15 min - ownership changes infrequently
+  riskCategories: 30 * 60 * 1000,     // 30 min - static configuration
+  fiscalEntities: 30 * 60 * 1000,     // 30 min - organizational structure rarely changes
 };
 
 type CatalogKey = keyof typeof CATALOG_TTL;
