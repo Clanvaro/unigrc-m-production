@@ -13,6 +13,7 @@ import { normalizePaginationParams, createPaginatedResponse } from "./pagination
 import { analyzeCriticalQuery, analyzeAllCriticalQueries, CRITICAL_QUERIES, type CriticalQueryKey } from './performance/query-analyzer';
 // New performance services
 import { distributedCache } from './services/redis';
+import { twoTierCache, getCacheStatsForEndpoint } from './services/two-tier-cache';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
 import { invalidateRiskMatrixCache, invalidateRiskControlCaches, invalidateProcessRelationsCaches, invalidateRiskEventsPageDataCache, CACHE_VERSION } from './cache-helpers';
@@ -1214,9 +1215,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Processes - Basic endpoint for fast initial loading - with 60s distributed cache
   app.get("/api/processes/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
-      // Try distributed cache first (60s TTL)
+      // Try two-tier cache first (L1: <1ms, L2: <100ms with timeout)
       const cacheKey = `processes-basic:single-tenant`;
-      const cached = await distributedCache.get(cacheKey);
+      const cached = await twoTierCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
       }
@@ -1244,8 +1245,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, basicProcesses, 60);
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await twoTierCache.set(cacheKey, basicProcesses, 60);
 
       res.json(basicProcesses);
     } catch (error) {
@@ -14092,8 +14093,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const cacheKey = `macroprocesos:single-tenant`;
 
-      // Try to get from cache first
-      const cached = await distributedCache.get(cacheKey);
+      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      const cached = await twoTierCache.get(cacheKey);
       if (cached) {
         return res.json(cached);
       }
@@ -14125,8 +14126,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, macroprocesoswithRisks, 60);
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
 
       res.json(macroprocesoswithRisks);
     } catch (error) {
@@ -14652,8 +14653,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const cacheKey = `subprocesos:single-tenant`;
 
-      // Try to get from cache first
-      const cached = await timed('cache:get', () => distributedCache.get(cacheKey));
+      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      const cached = await timed('cache:get', () => twoTierCache.get(cacheKey));
       if (cached) {
         if (profile) {
           console.log('[PROFILE] /api/subprocesos CACHE HIT', { timings, pool: getPoolMetrics() });
@@ -14685,8 +14686,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       if (profile) timings['map'] = Date.now() - mapStart;
 
-      // Cache for 60 seconds
-      await timed('cache:set', () => distributedCache.set(cacheKey, subprocesosWithRisks, 60));
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await timed('cache:set', () => twoTierCache.set(cacheKey, subprocesosWithRisks, 60));
 
       if (profile) {
         timings['total'] = Date.now() - startTime;
