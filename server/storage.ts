@@ -10059,15 +10059,15 @@ export class DatabaseStorage extends MemStorage {
       }
     }
     
-    // Third, process macroprocesos without procesos (macroproceso acts as proceso and subproceso)
+    // Third, process macroprocesos without procesos (macroproceso acts as subproceso only)
     for (const macroproceso of allMacroprocesos) {
       const hasProcesos = allProcesses.some(p => p.macroprocesoId === macroproceso.id);
       
       if (!hasProcesos) {
         universeItems.push({
           macroprocesoId: macroproceso.id,
-          processId: macroproceso.id, // Macroproceso acts as proceso
-          subprocesoId: macroproceso.id, // Macroproceso acts as subproceso
+          processId: null, // Macroproceso has no process (foreign key constraint)
+          subprocesoId: null, // Macroproceso has no subproceso
           auditableEntity: macroproceso.name,
           entityType: 'macroproceso',
           isActive: true,
