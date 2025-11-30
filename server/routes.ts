@@ -2382,7 +2382,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/macroprocesos", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:macroprocesos:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getMacroprocesos();
@@ -2394,7 +2394,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             gerenciaId: m.gerenciaId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2405,7 +2405,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/processes", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:processes:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getProcesses();
@@ -2416,7 +2416,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             macroprocesoId: p.macroprocesoId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2427,7 +2427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/subprocesos", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:subprocesos:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getSubprocesos();
@@ -2438,7 +2438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             procesoId: s.procesoId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -2449,7 +2449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/gerencias", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:gerencias:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getGerencias();
@@ -2461,7 +2461,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             parentId: g.parentId
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes in Redis
       );
       res.json(cached);
     } catch (error) {
@@ -14832,6 +14832,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============== GERENCIAS ROUTES - with 60s distributed cache ==============
+
+  // BASIC endpoint: Fast listing without risk calculations (< 100ms)
+  app.get("/api/gerencias/basic", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `gerencias:basic:single-tenant`;
+      const cached = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const gerencias = await storage.getGerencias();
+          return gerencias
+            .filter(g => !g.deletedAt)
+            .map(g => ({
+              id: g.id,
+              code: g.code,
+              name: g.name,
+              level: g.level,
+              parentId: g.parentId,
+              createdAt: g.createdAt,
+              updatedAt: g.updatedAt
+            }));
+        },
+        300 // 5 minutes in Redis
+      );
+      res.json(cached);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch gerencias" });
+    }
+  });
+
+  // RISK SUMMARY endpoint: Fast risk aggregation by gerencia for dashboards (~200ms)
+  app.get("/api/gerencias/risk-summary", isAuthenticated, async (req, res) => {
+    try {
+      const cacheKey = `gerencias:risk-summary:single-tenant`;
+      const cached = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          // Direct SQL aggregation for performance (similar to risk-matrix/lite)
+          const result = await requireDb().execute(sql`
+            WITH gerencia_risks AS (
+              SELECT 
+                g.id as gerencia_id,
+                g.code,
+                g.name,
+                g.level,
+                g.parent_id,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.id IS NOT NULL) as risk_count,
+                ROUND(AVG(r.inherent_risk), 1) as avg_inherent_risk,
+                ROUND(AVG(
+                  CASE 
+                    WHEN rc.residual_risk IS NOT NULL THEN rc.residual_risk
+                    ELSE r.inherent_risk
+                  END
+                ), 1) as avg_residual_risk,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk >= 15 THEN r.id END) as critical_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk BETWEEN 10 AND 14 THEN r.id END) as high_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk BETWEEN 5 AND 9 THEN r.id END) as medium_risks,
+                COUNT(DISTINCT CASE WHEN r.inherent_risk < 5 THEN r.id END) as low_risks
+              FROM gerencias g
+              LEFT JOIN macroproceso_gerencias mg ON g.id = mg.gerencia_id
+              LEFT JOIN macroprocesos m ON mg.macroproceso_id = m.id AND m.deleted_at IS NULL
+              LEFT JOIN risks r ON r.macroproceso_id = m.id 
+                AND r.status = 'active' 
+                AND r.deleted_at IS NULL
+              LEFT JOIN (
+                SELECT 
+                  rc.risk_id,
+                  MIN(rc.residual_risk) as residual_risk
+                FROM risk_controls rc
+                JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+                GROUP BY rc.risk_id
+              ) rc ON r.id = rc.risk_id
+              WHERE g.deleted_at IS NULL
+              GROUP BY g.id, g.code, g.name, g.level, g.parent_id
+            )
+            SELECT 
+              gerencia_id as id,
+              code,
+              name,
+              level,
+              parent_id,
+              risk_count,
+              COALESCE(avg_inherent_risk, 0) as avg_inherent_risk,
+              COALESCE(avg_residual_risk, 0) as avg_residual_risk,
+              critical_risks,
+              high_risks,
+              medium_risks,
+              low_risks
+            FROM gerencia_risks
+            ORDER BY avg_residual_risk DESC NULLS LAST, name
+          `);
+
+          return result.rows;
+        },
+        60 // 1 minute cache
+      );
+      res.json(cached);
+    } catch (error) {
+      console.error("Error fetching gerencias risk summary:", error);
+      res.status(500).json({ message: "Failed to fetch gerencias risk summary" });
+    }
+  });
 
   app.get("/api/gerencias", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
