@@ -7896,7 +7896,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
-      // Use distributed cache to prevent slow queries (60s TTL)
+      // Use distributed cache with longer TTL (5 min) - control associations don't change frequently
       const cacheKey = `risk-controls-with-details:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
 
@@ -7908,8 +7908,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (storage.getAllRiskControlsWithDetails) {
         const riskControls = await storage.getAllRiskControlsWithDetails();
 
-        // Cache for 60 seconds
-        await distributedCache.set(cacheKey, riskControls, 60);
+        // Cache for 5 minutes - invalidated on control/risk-control mutations
+        await distributedCache.set(cacheKey, riskControls, 300);
 
         res.json(riskControls);
       } else {
