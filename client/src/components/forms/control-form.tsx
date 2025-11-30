@@ -224,19 +224,17 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
     mutationFn: async (data: ControlFormData) => {
       let controlResult: any;
       
-      // Add required fields with defaults
-      const controlData = {
+      // Add required fields with defaults - only for creation
+      // For updates, preserve original values and send only changed fields
+      const controlData = control ? {
+        // For updates: send only the fields that were edited
         ...data,
-        type: control?.type || "preventive", // Default to preventive if not specified
-        frequency: control?.frequency || "daily", // Default to daily if not specified
-        isActive: control?.isActive ?? true, // Default to active if not specified
-        // Preserve validation fields from original control (these should only come from validation section)
-        validationStatus: control?.validationStatus,
-        validatedBy: control?.validatedBy,
-        validatedAt: control?.validatedAt,
-        validationComments: control?.validationComments,
-        // Remove ownerId from control data as it's handled separately
-        ownerId: undefined,
+      } : {
+        // For creation: add defaults for required fields
+        ...data,
+        type: "preventive",
+        frequency: data.frequency || "daily",
+        isActive: true,
       };
       
       if (control) {

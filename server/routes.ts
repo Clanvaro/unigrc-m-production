@@ -7116,7 +7116,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(control);
     } catch (error) {
-      res.status(400).json({ message: "Invalid control data" });
+      const errorMsg = error instanceof Error ? error.message : JSON.stringify(error);
+      console.error("[PUT /api/controls/:id] Validation error:", errorMsg);
+      console.error("[PUT /api/controls/:id] Request body:", req.body);
+      res.status(400).json({ 
+        message: "Invalid control data",
+        details: errorMsg
+      });
     }
   });
 
