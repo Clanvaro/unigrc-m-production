@@ -1871,9 +1871,11 @@ export default function Risks() {
       width: '250px',
       minWidth: '250px',
       cell: (risk) => {
+        const controlCount = getControlCount(risk);
         const riskControls = getRiskControls(risk.id).filter((rc: any) => rc && rc.control);
+        const hasDetailedData = riskControls.length > 0;
         
-        if (riskControls.length === 0) {
+        if (controlCount === 0) {
           return (
             <div className="flex justify-center">
               <span className="text-xs text-muted-foreground italic">Sin controles</span>
@@ -1881,7 +1883,7 @@ export default function Risks() {
           );
         }
         
-        if (riskControls.length <= 2) {
+        if (hasDetailedData && riskControls.length <= 2) {
           return (
             <div className="flex flex-wrap gap-1 justify-center items-center">
               {(riskControls as any[]).filter(rc => rc && rc.control && rc.control.code).map((rc: any) => (
@@ -1909,7 +1911,7 @@ export default function Risks() {
               className="cursor-pointer hover:bg-accent transition-colors text-xs"
               onClick={() => setControlsDialogRisk(risk)}
             >
-              +{riskControls.length} controles
+              {controlCount} {controlCount === 1 ? 'control' : 'controles'}
             </Badge>
           </div>
         );
