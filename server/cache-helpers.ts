@@ -253,14 +253,19 @@ export async function invalidateRisksPageDataCache() {
  * Invalidates consolidated risk events page data cache
  * Call this after any mutation that affects data in the risk events page:
  * - risk events, risks, processes
+ * Updated to support 15-minute TTL caching strategy
  */
 export async function invalidateRiskEventsPageDataCache() {
   try {
-    // Invalidate all paginated caches (pattern matching)
-    await distributedCache.invalidatePattern(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}:*`);
-    // Also invalidate legacy key
-    await distributedCache.invalidate(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}`);
-    console.log(`✅ Invalidated risk events page data cache`);
+    await Promise.all([
+      // Invalidate all paginated caches (pattern matching)
+      distributedCache.invalidatePattern(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}:*`),
+      // Also invalidate legacy key
+      distributedCache.invalidate(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      // Invalidate risks-overview (contains risk event counts)
+      distributedCache.invalidate(`risks-overview:${TENANT_KEY}`)
+    ]);
+    console.log(`✅ Invalidated risk events page data cache (15-min TTL caches cleared)`);
   } catch (error) {
     console.error(`Error invalidating risk events page data cache:`, error);
   }
