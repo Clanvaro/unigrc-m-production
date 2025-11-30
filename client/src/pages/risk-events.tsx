@@ -22,6 +22,7 @@ import { useSavedViews } from "@/hooks/useSavedViews";
 import { Star } from "lucide-react";
 import BowTieDiagram from "@/components/BowTieDiagram";
 import type { Control } from "@shared/schema";
+import { RiskEventsPageSkeleton } from "@/components/skeletons/risk-events-page-skeleton";
 
 // Type for enriched risk events with client-side resolved catalog data
 interface CatalogItem {
@@ -871,7 +872,7 @@ export default function RiskEvents() {
   ];
 
   if (isLoading) {
-    return <div className="p-6">Cargando eventos de riesgo...</div>;
+    return <RiskEventsPageSkeleton />;
   }
 
   return (

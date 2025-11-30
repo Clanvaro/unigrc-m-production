@@ -11,6 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { VirtualizedTable, type VirtualizedTableColumn } from "@/components/virtualized-table";
+import { ControlsPageSkeleton } from "@/components/skeletons/controls-page-skeleton";
 
 type SortField = 'code' | 'effectiveness' | 'control' | 'responsible' | 'validatedAt';
 type SortDirection = 'asc' | 'desc';
@@ -1223,6 +1224,10 @@ export default function Controls() {
       align: 'center',
     },
   ].filter(col => visibleColumns[col.id]), [sortField, sortDirection, editingControl, riskDialogControl, displayData, visibleColumns]);
+
+  if (isLoading) {
+    return <ControlsPageSkeleton />;
+  }
 
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="controls-content" role="region" aria-label="Gestión de Controles">
