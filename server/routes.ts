@@ -7934,13 +7934,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       const riskControl = await storage.createRiskControl(validatedData);
 
-      // Invalidate all risk-control related caches for real-time UI updates
+      // Invalidate only risk-control association caches (granular, fast: ~5-25ms)
+      // This prevents cache stampede by NOT invalidating unrelated caches like macroprocesos
       const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const startInvalidation = Date.now();
       await Promise.all([
-        invalidateRiskControlCaches(),
+        invalidateRiskControlAssociationCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
         distributedCache.invalidatePattern(`risk-control-summary:${req.params.riskId}*`)
       ]);
+      console.log(`[PERF] Control association cache invalidation: ${Date.now() - startInvalidation}ms`);
 
       res.status(201).json(riskControl);
     } catch (error: any) {
@@ -7971,10 +7974,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Risk control not found" });
       }
 
-      // Invalidate all risk-control related caches for real-time UI updates
+      // Invalidate only risk-control association caches (granular, fast: ~5-25ms)
+      // This prevents cache stampede by NOT invalidating unrelated caches like macroprocesos
       const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const startInvalidation = Date.now();
       const invalidations = [
-        invalidateRiskControlCaches(),
+        invalidateRiskControlAssociationCaches(),
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
       ];
 
@@ -7984,6 +7989,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await Promise.all(invalidations);
+      console.log(`[PERF] Control disassociation cache invalidation: ${Date.now() - startInvalidation}ms`);
 
       res.status(204).send();
     } catch (error) {
@@ -8494,10 +8500,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Invalidate risk caches (action plan associations may affect risk views)
+      // Invalidate only action plan and related risk caches (granular, fast)
+      // Using granular invalidation to prevent cache stampede
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await invalidateRiskControlCaches();
-      await invalidateActionPlanCaches(tenantId);
+      await Promise.all([
+        invalidateRiskControlAssociationCaches(),
+        invalidateActionPlanCaches(tenantId)
+      ]);
 
       res.status(201).json(newRelation);
     } catch (error) {
@@ -8534,10 +8543,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Risk association not found" });
       }
 
-      // Invalidate risk caches (action plan association removed)
+      // Invalidate only action plan and related risk caches (granular, fast)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await invalidateRiskControlCaches();
-      await invalidateActionPlanCaches(tenantId);
+      await Promise.all([
+        invalidateRiskControlAssociationCaches(),
+        invalidateActionPlanCaches(tenantId)
+      ]);
 
       res.status(204).send();
     } catch (error) {
@@ -8562,10 +8573,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Risk association not found" });
       }
 
-      // Invalidate risk caches (action plan status may affect risk views)
+      // Invalidate only action plan and related risk caches (granular, fast)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await invalidateRiskControlCaches();
-      await invalidateActionPlanCaches(tenantId);
+      await Promise.all([
+        invalidateRiskControlAssociationCaches(),
+        invalidateActionPlanCaches(tenantId)
+      ]);
 
       res.json(updated);
     } catch (error) {
