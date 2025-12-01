@@ -141,7 +141,7 @@ export default function ActionPlans() {
 
   // Query unificado para todos los planes de acción
   const { data: allActions = [], isLoading } = useQuery<Action[]>({
-    queryKey: ["/api/actions"],
+    queryKey: ["/api/action-plans"],
   });
 
   // Check URL params to auto-open create dialog with pre-selected risk or view plan detail
@@ -176,11 +176,6 @@ export default function ActionPlans() {
       window.history.replaceState({}, '', '/action-plans');
     }
   }, [allActions]);
-
-  // Query legacy para métricas y reportes (todavía usa action_plans)
-  const { data: actionPlans = [] } = useQuery<Action[]>({
-    queryKey: ["/api/action-plans"],
-  });
 
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
@@ -437,10 +432,10 @@ export default function ActionPlans() {
   };
 
   const handleSelectAll = () => {
-    if (selectedPlans.length === actionPlans.length) {
+    if (selectedPlans.length === allActions.length) {
       setSelectedPlans([]);
     } else {
-      setSelectedPlans(actionPlans.map(plan => plan.id));
+      setSelectedPlans(allActions.map(plan => plan.id));
     }
   };
 
@@ -484,7 +479,7 @@ export default function ActionPlans() {
     const recipients = new Map<string, string>();
     
     selectedPlans.forEach(planId => {
-      const plan = actionPlans.find(p => p.id === planId);
+      const plan = allActions.find(p => p.id === planId);
       if (plan?.responsible) {
         const name = getResponsibleName(plan.responsible);
         recipients.set(plan.responsible, name);
@@ -528,7 +523,7 @@ export default function ActionPlans() {
 
     window.addEventListener('exportActionPlansToExcel', handleExportToExcel);
     return () => window.removeEventListener('exportActionPlansToExcel', handleExportToExcel);
-  }, [actionPlans]);
+  }, [allActions]);
 
   // Listen for filters changed event from header
   useEffect(() => {
@@ -570,7 +565,7 @@ export default function ActionPlans() {
     };
     worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
 
-    actionPlans.forEach((plan: Action) => {
+    allActions.forEach((plan: Action) => {
       const risk = risks.find((r: Risk) => r.id === plan.riskId);
       const priorityText = plan.priority === 'critical' ? 'Crítica' :
                            plan.priority === 'high' ? 'Alta' :
@@ -618,7 +613,7 @@ export default function ActionPlans() {
 
     toast({
       title: "Exportación exitosa",
-      description: `Se exportaron ${actionPlans.length} planes de acción a Excel.`,
+      description: `Se exportaron ${allActions.length} planes de acción a Excel.`,
     });
   };
 
