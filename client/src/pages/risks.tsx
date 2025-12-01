@@ -714,34 +714,26 @@ export default function Risks() {
 
       return { previousControls, riskId, previousBootstrapData };
     },
-    onSuccess: async (_data, variables, context) => {
-      // Invalidate controls-summary endpoint cache for this risk FIRST (matches query key format)
+    onSuccess: async (_data, _variables, context) => {
+      // OPTIMIZED: Surgical cache invalidation - only invalidate what changed
+      // The optimistic update already shows the change, so we just need to sync with server
       if (context?.riskId) {
-        await queryClient.invalidateQueries({ 
+        // Invalidate only the specific risk's controls summary (most important)
+        queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.riskId, "controls/summary"],
           exact: false 
         });
-      }
-      
-      // Force refetch bootstrap to get accurate control counts from server
-      // Wait for it to complete to ensure UI shows fresh data
-      await queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      await queryClient.refetchQueries({ 
-        queryKey: ["/api/risks/bootstrap"],
-        type: 'active'
-      });
-      
-      if (context?.riskId) {
-        await queryClient.refetchQueries({ 
+        // Invalidate the specific risk's controls list
+        queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.riskId, "controls"],
-          type: 'active'
-        });
-        // Also refetch the general risk-controls data used in the table
-        await queryClient.refetchQueries({ 
-          queryKey: ["/api/risk-controls-with-details"],
-          type: 'active'
+          exact: false 
         });
       }
+      // Invalidate risk-controls-with-details (used in table) - single endpoint
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
+      // Invalidate bootstrap only for control counts (already optimistically updated)
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
     onError: (_error, _variables, context) => {
@@ -821,33 +813,25 @@ export default function Risks() {
       return { previousControls, currentRisk, previousBootstrapData };
     },
     onSuccess: async (_data, _variables, context) => {
-      // Invalidate controls-summary endpoint cache for this risk FIRST (matches query key format)
+      // OPTIMIZED: Surgical cache invalidation - only invalidate what changed
+      // The optimistic update already shows the change, so we just need to sync with server
       if (context?.currentRisk) {
-        await queryClient.invalidateQueries({ 
+        // Invalidate only the specific risk's controls summary (most important)
+        queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.currentRisk.id, "controls/summary"],
           exact: false 
         });
-      }
-      
-      // Force refetch bootstrap to get accurate control counts from server
-      // Wait for it to complete to ensure UI shows fresh data
-      await queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      await queryClient.refetchQueries({ 
-        queryKey: ["/api/risks/bootstrap"],
-        type: 'active'
-      });
-      
-      if (context?.currentRisk) {
-        await queryClient.refetchQueries({ 
+        // Invalidate the specific risk's controls list
+        queryClient.invalidateQueries({ 
           queryKey: ["/api/risks", context.currentRisk.id, "controls"],
-          type: 'active'
-        });
-        // Also refetch the general risk-controls data used in the table
-        await queryClient.refetchQueries({ 
-          queryKey: ["/api/risk-controls-with-details"],
-          type: 'active'
+          exact: false 
         });
       }
+      // Invalidate risk-controls-with-details (used in table) - single endpoint
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
+      // Invalidate bootstrap only for control counts (already optimistically updated)
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
     onError: (_error, _variables, context) => {
@@ -1871,9 +1855,11 @@ export default function Risks() {
       width: '250px',
       minWidth: '250px',
       cell: (risk) => {
+        const controlCount = getControlCount(risk);
         const riskControls = getRiskControls(risk.id).filter((rc: any) => rc && rc.control);
+        const hasDetailedData = riskControls.length > 0;
         
-        if (riskControls.length === 0) {
+        if (controlCount === 0) {
           return (
             <div className="flex justify-center">
               <span className="text-xs text-muted-foreground italic">Sin controles</span>
@@ -1881,7 +1867,7 @@ export default function Risks() {
           );
         }
         
-        if (riskControls.length <= 2) {
+        if (hasDetailedData && riskControls.length <= 2) {
           return (
             <div className="flex flex-wrap gap-1 justify-center items-center">
               {(riskControls as any[]).filter(rc => rc && rc.control && rc.control.code).map((rc: any) => (
@@ -1909,7 +1895,7 @@ export default function Risks() {
               className="cursor-pointer hover:bg-accent transition-colors text-xs"
               onClick={() => setControlsDialogRisk(risk)}
             >
-              +{riskControls.length} controles
+              {controlCount} {controlCount === 1 ? 'control' : 'controles'}
             </Badge>
           </div>
         );

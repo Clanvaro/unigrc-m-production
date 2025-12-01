@@ -153,8 +153,9 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'all' });
       toast({
         title: process ? "Proceso actualizado" : "Proceso creado",
         description: `El proceso ha sido ${process ? "actualizado" : "creado"} exitosamente.`,

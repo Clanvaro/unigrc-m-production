@@ -22,6 +22,7 @@ import { useSavedViews } from "@/hooks/useSavedViews";
 import { Star } from "lucide-react";
 import BowTieDiagram from "@/components/BowTieDiagram";
 import type { Control } from "@shared/schema";
+import { RiskEventsPageSkeleton } from "@/components/skeletons/risk-events-page-skeleton";
 
 // Type for enriched risk events with client-side resolved catalog data
 interface CatalogItem {
@@ -321,7 +322,8 @@ export default function RiskEvents() {
       return oldData.filter((e) => e.id !== eventId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
       toast({ title: "Evento eliminado", description: "El evento de riesgo ha sido eliminado exitosamente." });
       setDeletingEventId(null);
@@ -334,8 +336,8 @@ export default function RiskEvents() {
 
   const handleEditSuccess = () => {
     setEditingEvent(null);
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false });
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
     queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
     toast({ title: "Evento actualizado", description: "El evento de riesgo ha sido actualizado exitosamente." });
   };
@@ -870,7 +872,7 @@ export default function RiskEvents() {
   ];
 
   if (isLoading) {
-    return <div className="p-6">Cargando eventos de riesgo...</div>;
+    return <RiskEventsPageSkeleton />;
   }
 
   return (

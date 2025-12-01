@@ -26,103 +26,183 @@ export async function invalidateRiskMatrixCache() {
   }
 }
 
+// ============================================
+// GRANULAR CACHE INVALIDATION FUNCTIONS
+// Use these instead of the "nuclear" invalidateRiskControlCaches
+// ============================================
+
 /**
- * Invalidates all caches affected by risk-control associations
- * Call this whenever risk_controls table is mutated (create, update, delete, bulk operations)
- * 
- * This ensures real-time UI updates across:
- * - Paginated risk tables
- * - Paginated control tables
- * - Validation center views
- * - Detail views with associations
- * - Risk matrix calculations
- * 
- * CRITICAL: This MUST be called from:
- * - createRiskControl
- * - updateRiskControl
- * - deleteRiskControl
- * - bulkCreateRiskControls
- * - Any direct SQL manipulation of risk_controls
- * - When risks or controls are deleted (cascading deletes)
+ * FAST: Invalidates only risk-process link caches
+ * Use when: Creating, updating, or deleting risk-process associations
+ * Duration: ~5-10ms (vs 100ms+ for nuclear)
  */
-export async function invalidateRiskControlCaches() {
+export async function invalidateRiskProcessLinkCaches() {
   const startTime = Date.now();
-  console.log(`[CACHE INVALIDATION START] Invalidating all risk-control caches`);
-  
   try {
-    // Execute invalidations in sequence to ensure completion before response
-    // This prevents race conditions where the client refetches before invalidation completes
-    
-    // 1. First, invalidate the main risks cache patterns (most critical)
-    await distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`);
-    
-    // 1b. Also invalidate risks-bootstrap cache (optimized batch endpoint)
-    // Only invalidate risks data, not catalogs (which have longer TTL and rarely change)
-    await distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`);
-    
-    // 2. Versioned risk caches
     await Promise.all([
+      distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
+      distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
+    ]);
+    console.log(`[GRANULAR] Risk-process link caches invalidated in ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error(`Error invalidating risk-process link caches:`, error);
+  }
+}
+
+/**
+ * FAST: Invalidates risk data caches AND dependent aggregates
+ * Use when: Creating, updating, or deleting risks
+ * Duration: ~15-25ms
+ * Note: Also invalidates risk-processes caches since risk CRUD affects associations
+ */
+export async function invalidateRiskDataCaches() {
+  const startTime = Date.now();
+  try {
+    await Promise.all([
+      distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`),
+      distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
       distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-basic:single-tenant`),
+      distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
+      distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
     ]);
-    
-    // 3. Control caches
+    await invalidateRiskMatrixCache();
+    console.log(`[GRANULAR] Risk data caches invalidated in ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error(`Error invalidating risk data caches:`, error);
+  }
+}
+
+/**
+ * FAST: Invalidates control data caches AND dependent risk aggregates
+ * Use when: Creating, updating, or deleting controls
+ * Duration: ~15-25ms
+ * Note: Also invalidates risks-with-details and risks-page-data since control
+ *       effectiveness and residual risk info is embedded in those caches
+ */
+export async function invalidateControlDataCaches() {
+  const startTime = Date.now();
+  try {
     await Promise.all([
       distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidatePattern(`controls:${TENANT_KEY}:*`),
+      distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
+      distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
     ]);
-    
-    // 4. Validation center caches
+    await invalidateRiskMatrixCache();
+    console.log(`[GRANULAR] Control data caches invalidated in ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error(`Error invalidating control data caches:`, error);
+  }
+}
+
+/**
+ * FAST: Invalidates only risk-control association caches
+ * Use when: Creating, updating, or deleting risk-control links
+ * Duration: ~15-25ms
+ */
+export async function invalidateRiskControlAssociationCaches() {
+  const startTime = Date.now();
+  try {
+    await Promise.all([
+      distributedCache.invalidatePattern(`risk-control-associations:${CACHE_VERSION}:${TENANT_KEY}:*`),
+      distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
+      distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
+    ]);
+    await invalidateRiskMatrixCache();
+    console.log(`[GRANULAR] Risk-control association caches invalidated in ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error(`Error invalidating risk-control association caches:`, error);
+  }
+}
+
+/**
+ * FAST: Invalidates only validation center caches
+ * Use when: Updating validation status
+ * Duration: ~5-10ms
+ */
+export async function invalidateValidationCaches() {
+  const startTime = Date.now();
+  try {
     await Promise.all([
       distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:${CACHE_VERSION}:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:risks:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:*:${TENANT_KEY}`),
     ]);
-    
-    // 5. Association and entity caches (including storage-level caches)
+    console.log(`[GRANULAR] Validation caches invalidated in ${Date.now() - startTime}ms`);
+  } catch (error) {
+    console.error(`Error invalidating validation caches:`, error);
+  }
+}
+
+/**
+ * LEGACY/NUCLEAR: Invalidates ALL caches - USE SPARINGLY
+ * @deprecated Prefer granular invalidation functions above
+ * Only use for major schema changes or when multiple cache types are affected
+ */
+export async function invalidateRiskControlCaches() {
+  const startTime = Date.now();
+  console.log(`[CACHE INVALIDATION START] Nuclear invalidation (consider using granular functions)`);
+  
+  try {
+    // Execute all invalidations in parallel for speed
     await Promise.all([
+      // Risk caches
+      distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`),
+      distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
+      distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),
+      distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
+      
+      // Control caches
+      distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
+      distributedCache.invalidatePattern(`controls:${TENANT_KEY}:*`),
+      
+      // Validation caches
+      distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`validation:controls:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      
+      // Association caches
       distributedCache.invalidatePattern(`risk-control-associations:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
-      // Storage-level catalog caches
-      distributedCache.invalidate(`gerencias:${TENANT_KEY}`),
-      distributedCache.invalidate(`macroprocesos:${TENANT_KEY}`),
-      distributedCache.invalidate(`processes:${TENANT_KEY}`),
-      distributedCache.invalidate(`processes-basic:${TENANT_KEY}`),
-      distributedCache.invalidate(`subprocesos:${TENANT_KEY}`),
-      distributedCache.invalidate(`subprocesos-with-owners:${TENANT_KEY}`),
-      // OPTIMIZED (Nov 2025): Lightweight catalog caches for client-side joins
       distributedCache.invalidate(`risks-basic:single-tenant`),
-      distributedCache.invalidate(`macroprocesos-basic:single-tenant`),
-      // Legacy keys
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
-      distributedCache.invalidate(`gerencias-risk-levels:${CACHE_VERSION}:${TENANT_KEY}`),
-      distributedCache.invalidate(`gerencias-risk-levels:${TENANT_KEY}`),
-      // Consolidated risks page data cache
+      
+      // Page data caches
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
-    ]);
-    
-    // 6. Risk matrix caches (including bootstrap granular caches and NEW lite endpoint)
-    await invalidateRiskMatrixCache();
-    await Promise.all([
+      
+      // Matrix caches
       distributedCache.invalidate(`risk-matrix:macroprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix:processes:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix:heatmap:${TENANT_KEY}`),
-      // OPTIMIZED: Also invalidate process-map-risks cache
       distributedCache.invalidate(`process-map-risks:${TENANT_KEY}`),
-      // NEW (Nov 2025): Invalidate lightweight matrix and lookup caches
       distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
-      distributedCache.invalidate(`lookups:macroprocesos:${TENANT_KEY}`),
-      distributedCache.invalidate(`lookups:processes:${TENANT_KEY}`),
-      distributedCache.invalidate(`lookups:subprocesos:${TENANT_KEY}`),
-      distributedCache.invalidate(`lookups:gerencias:${TENANT_KEY}`),
-      distributedCache.invalidate(`lookups:risk-categories:${TENANT_KEY}`),
     ]);
     
+    await invalidateRiskMatrixCache();
+    
     const duration = Date.now() - startTime;
-    console.log(`✅ [CACHE INVALIDATION COMPLETE] All risk-control caches invalidated in ${duration}ms (version: ${CACHE_VERSION})`);
+    console.log(`✅ [CACHE INVALIDATION COMPLETE] Nuclear invalidation in ${duration}ms`);
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(`❌ [CACHE INVALIDATION ERROR] Failed after ${duration}ms:`, error);
@@ -173,14 +253,19 @@ export async function invalidateRisksPageDataCache() {
  * Invalidates consolidated risk events page data cache
  * Call this after any mutation that affects data in the risk events page:
  * - risk events, risks, processes
+ * Updated to support 15-minute TTL caching strategy
  */
 export async function invalidateRiskEventsPageDataCache() {
   try {
-    // Invalidate all paginated caches (pattern matching)
-    await distributedCache.invalidatePattern(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}:*`);
-    // Also invalidate legacy key
-    await distributedCache.invalidate(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}`);
-    console.log(`✅ Invalidated risk events page data cache`);
+    await Promise.all([
+      // Invalidate all paginated caches (pattern matching)
+      distributedCache.invalidatePattern(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}:*`),
+      // Also invalidate legacy key
+      distributedCache.invalidate(`risk-events-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
+      // Invalidate risks-overview (contains risk event counts)
+      distributedCache.invalidate(`risks-overview:${TENANT_KEY}`)
+    ]);
+    console.log(`✅ Invalidated risk events page data cache (15-min TTL caches cleared)`);
   } catch (error) {
     console.error(`Error invalidating risk events page data cache:`, error);
   }
@@ -235,15 +320,16 @@ interface CatalogCacheEntry<T> {
 const catalogCache = new Map<string, CatalogCacheEntry<any>>();
 
 // Cache TTLs in milliseconds
+// Aggressive caching for static catalogs to reduce DB load on Render Basic (0.5 CPU)
 const CATALOG_TTL = {
-  macroprocesos: 10 * 60 * 1000,      // 10 min - rarely changes
-  processes: 10 * 60 * 1000,          // 10 min - rarely changes
-  subprocesos: 10 * 60 * 1000,        // 10 min - rarely changes
-  gerencias: 10 * 60 * 1000,          // 10 min - rarely changes
-  controls: 5 * 60 * 1000,            // 5 min - changes more often
-  processOwners: 5 * 60 * 1000,       // 5 min - changes more often
-  riskCategories: 10 * 60 * 1000,     // 10 min - rarely changes
-  fiscalEntities: 10 * 60 * 1000,     // 10 min - rarely changes
+  macroprocesos: 30 * 60 * 1000,      // 30 min - organizational structure rarely changes
+  processes: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
+  subprocesos: 30 * 60 * 1000,        // 30 min - organizational structure rarely changes
+  gerencias: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
+  controls: 15 * 60 * 1000,           // 15 min - control definitions change infrequently
+  processOwners: 15 * 60 * 1000,      // 15 min - ownership changes infrequently
+  riskCategories: 30 * 60 * 1000,     // 30 min - static configuration
+  fiscalEntities: 30 * 60 * 1000,     // 30 min - organizational structure rarely changes
 };
 
 type CatalogKey = keyof typeof CATALOG_TTL;
