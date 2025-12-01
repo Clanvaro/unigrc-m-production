@@ -6,12 +6,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { 
-  CheckCircle, 
-  Clock, 
-  AlertTriangle, 
-  TrendingUp, 
-  Users, 
+import {
+  CheckCircle,
+  Clock,
+  AlertTriangle,
+  TrendingUp,
+  Users,
   FileText,
   BarChart3,
   Settings,
@@ -41,25 +41,25 @@ export default function ApprovalDashboard() {
   // Fetch dashboard data
   const { data: dashboardData, isLoading: dashboardLoading, error: dashboardError } = useQuery({
     queryKey: ['/api/approval/dashboard'],
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 300000, // Optimized: 5 minutes
   });
 
   // Fetch pending approvals
   const { data: pendingApprovals, isLoading: pendingLoading } = useQuery({
     queryKey: ['/api/approval/pending'],
-    refetchInterval: 15000, // Refresh every 15 seconds
+    refetchInterval: 300000, // Optimized: 5 minutes
   });
 
   // Fetch current metrics
   const { data: metricsData, isLoading: metricsLoading } = useQuery({
     queryKey: ['/api/approval/metrics'],
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 300000, // Optimized: 5 minutes
   });
 
   // Fetch active escalations
   const { data: escalationsData, isLoading: escalationsLoading } = useQuery({
     queryKey: ['/api/approval/escalations', { status: 'active' }],
-    refetchInterval: 30000,
+    refetchInterval: 300000, // Optimized: 5 minutes
   });
 
   useEffect(() => {
@@ -202,9 +202,9 @@ export default function ApprovalDashboard() {
             <div className="text-2xl font-bold" data-testid="text-auto-approval-rate">
               {(summary.automaticApprovalRate || 0).toFixed(1)}%
             </div>
-            <Progress 
-              value={summary.automaticApprovalRate || 0} 
-              className="mt-2" 
+            <Progress
+              value={summary.automaticApprovalRate || 0}
+              className="mt-2"
               data-testid="progress-auto-approval-rate"
             />
           </CardContent>
@@ -313,11 +313,11 @@ export default function ApprovalDashboard() {
                   {Object.entries(breakdown.byRiskLevel || {}).map(([level, count]) => (
                     <div key={level} className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <Badge 
+                        <Badge
                           variant={
                             level === 'critical' ? 'destructive' :
-                            level === 'high' ? 'secondary' :
-                            level === 'medium' ? 'outline' : 'default'
+                              level === 'high' ? 'secondary' :
+                                level === 'medium' ? 'outline' : 'default'
                           }
                           className="w-16 justify-center"
                         >
@@ -326,7 +326,7 @@ export default function ApprovalDashboard() {
                         <span className="text-sm font-medium">{String(count)}</span>
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        {summary.todayApprovals > 0 
+                        {summary.todayApprovals > 0
                           ? ((Number(count) / summary.todayApprovals) * 100).toFixed(1)
                           : 0}%
                       </div>
@@ -412,10 +412,10 @@ export default function ApprovalDashboard() {
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <Badge 
+                        <Badge
                           variant={
                             approval.riskLevel === 'critical' ? 'destructive' :
-                            approval.riskLevel === 'high' ? 'secondary' : 'outline'
+                              approval.riskLevel === 'high' ? 'secondary' : 'outline'
                           }
                         >
                           {approval.riskLevel}
@@ -516,7 +516,7 @@ export default function ApprovalDashboard() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Avg Daily</span>
                     <span className="font-bold">
-                      {trends.daily && trends.daily.length > 0 
+                      {trends.daily && trends.daily.length > 0
                         ? Math.round((trends.daily || []).reduce((sum: number, day: any) => sum + (day.totalApprovals || 0), 0) / trends.daily.length)
                         : 0}
                     </span>

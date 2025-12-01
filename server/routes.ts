@@ -16,11 +16,11 @@ import { distributedCache } from './services/redis';
 import { twoTierCache, getCacheStatsForEndpoint } from './services/two-tier-cache';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
-import { 
-  invalidateRiskMatrixCache, 
-  invalidateRiskControlCaches, 
-  invalidateProcessRelationsCaches, 
-  invalidateRiskEventsPageDataCache, 
+import {
+  invalidateRiskMatrixCache,
+  invalidateRiskControlCaches,
+  invalidateProcessRelationsCaches,
+  invalidateRiskEventsPageDataCache,
   invalidateRiskProcessLinkCaches,
   invalidateRiskDataCaches,
   invalidateControlDataCaches,
@@ -28,7 +28,7 @@ import {
   invalidateValidationCaches,
   invalidateCatalogBasicCaches,
   invalidateMacroprocesoHierarchy,
-  CACHE_VERSION 
+  CACHE_VERSION
 } from './cache-helpers';
 import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
 import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
@@ -7114,7 +7114,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const errorMsg = error instanceof Error ? error.message : JSON.stringify(error);
       console.error("[PUT /api/controls/:id] Validation error:", errorMsg);
       console.error("[PUT /api/controls/:id] Request body:", req.body);
-      res.status(400).json({ 
+      res.status(400).json({
         message: "Invalid control data",
         details: errorMsg
       });
@@ -8113,8 +8113,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       if (!riskId || !Array.isArray(controls)) {
-        return res.status(400).json({ 
-          message: "Se requiere riskId y un array de controls" 
+        return res.status(400).json({
+          message: "Se requiere riskId y un array de controls"
         });
       }
 
@@ -8133,7 +8133,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(result);
     } catch (error: any) {
       console.error("[ERROR] Batch create risk-controls failed:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error al crear asociaciones en batch",
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
@@ -8149,8 +8149,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       if (!riskId || !Array.isArray(controlIds)) {
-        return res.status(400).json({ 
-          message: "Se requiere riskId y un array de controlIds" 
+        return res.status(400).json({
+          message: "Se requiere riskId y un array de controlIds"
         });
       }
 
@@ -8169,7 +8169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(200).json(result);
     } catch (error: any) {
       console.error("[ERROR] Batch delete risk-controls failed:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error al eliminar asociaciones en batch",
         error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
@@ -8197,23 +8197,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Endpoint para recalcular todos los riesgos residuales con nueva metodología
   app.post("/api/risk-controls/recalculate-all", isAuthenticated, async (req, res) => {
     try {
-      const recalculateResult = await storage.recalculateAllResidualRisks();
-
-      // Invalidate all risk-control related caches after bulk recalculation
+      // Resolve tenant ID first to use in background task
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
-        invalidateRiskControlCaches(),
-        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
-      ]);
+
+      // Run recalculation in background
+      storage.recalculateAllResidualRisks().then(async (recalculateResult) => {
+        console.log('Background recalculation completed', recalculateResult);
+        // Invalidate all risk-control related caches after bulk recalculation
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+        ]);
+      }).catch(err => {
+        console.error('Error in background risk recalculation:', err);
+      });
 
       res.json({
-        message: "Recálculo completado exitosamente",
-        updated: recalculateResult?.updated || 0,
-        total: recalculateResult?.total || 0
+        message: "Recálculo iniciado en segundo plano",
+        status: "started"
       });
     } catch (error) {
       console.error("Error recalculando riesgos residuales:", error);
-      res.status(500).json({ message: "Error al recalcular riesgos residuales" });
+      res.status(500).json({ message: "Error al iniciar recálculo de riesgos residuales" });
     }
   });
 
@@ -13032,18 +13037,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/risk-controls/recalculate-all-residual-risks", requirePermission("admin:calculate"), async (req, res) => {
     try {
-      await storage.recalculateAllResidualRisks();
-
-      // Invalidate all risk-control related caches after bulk recalculation
+      // Resolve tenant ID first to use in background task
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
-        invalidateRiskControlCaches(),
-        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
-      ]);
 
-      res.json({ message: "All residual risks recalculated successfully" });
+      // Run recalculation in background
+      storage.recalculateAllResidualRisks().then(async () => {
+        console.log('Background recalculation completed');
+        // Invalidate all risk-control related caches after bulk recalculation
+        await Promise.all([
+          invalidateRiskControlCaches(),
+          distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0)
+        ]);
+      }).catch(err => {
+        console.error('Error in background risk recalculation:', err);
+      });
+
+      res.json({ message: "All residual risks recalculation started in background" });
     } catch (error) {
-      res.status(500).json({ message: "Failed to recalculate residual risks" });
+      res.status(500).json({ message: "Failed to start recalculation" });
     }
   });
 

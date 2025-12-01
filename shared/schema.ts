@@ -189,16 +189,16 @@ export const risks = pgTable("risks", {
 
   probability: integer("probability").notNull(), // 1-5 (calculado automáticamente)
   impact: integer("impact").notNull(), // 1-5 (calculado automáticamente desde dimensiones)
-  
+
   // Dimensiones de impacto configurables - almacenadas como JSON
   // Ejemplo: {"infrastructure": 1, "reputation": 2, "economic": 3, ...}
   impactDimensions: jsonb("impact_dimensions").notNull().default(sql`'{}'::jsonb`),
-  
+
   inherentRisk: integer("inherent_risk").notNull(), // probability * impact
-  
+
   // Método de evaluación del riesgo inherente
   evaluationMethod: text("evaluation_method").notNull().default("factors"), // "factors" o "direct"
-  
+
   status: text("status").notNull().default("active"), // active, inactive, deleted
   // DEPRECATED: Estos campos se calculan agregadamente desde riskProcessLinks
   processOwner: text("process_owner"), // DEPRECATED - calculado desde riskProcessLinks
@@ -283,19 +283,19 @@ export const riskProcessLinks = pgTable("risk_process_links", {
 export const riskProcessLinkValidationHistory = pgTable("risk_process_link_validation_history", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   riskProcessLinkId: varchar("risk_process_link_id").notNull().references(() => riskProcessLinks.id, { onDelete: 'cascade' }),
-  
+
   // Estado de la validación
   previousStatus: text("previous_status"), // Estado anterior antes de esta validación
   validationStatus: text("validation_status").notNull(), // pending_validation, validated, observed, rejected
   validatedBy: varchar("validated_by").notNull().references(() => users.id),
   validatedAt: timestamp("validated_at").notNull().defaultNow(),
   validationComments: text("validation_comments"),
-  
+
   // Contexto de cómo se realizó la validación
   processContext: text("process_context"), // "individual" | "bulk_process" | "bulk_multiple" - indica si fue validación individual o masiva
   processId: varchar("process_id").references(() => processes.id), // Si fue validación por proceso completo
   processName: text("process_name"), // Nombre del proceso al momento de validación
-  
+
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("idx_rplvh_risk_process_link_id").on(table.riskProcessLinkId),
@@ -449,7 +449,7 @@ export const users = pgTable("users", {
   password: text("password"), // Hash de la contraseña - optional for OAuth users
   cargo: text("cargo"), // Cargo del usuario en la empresa
   phoneNumber: text("phone_number"), // Número de teléfono para notificaciones SMS
-  
+
   // Replit Auth fields
   firstName: text("first_name"),
   lastName: text("last_name"),
@@ -457,7 +457,7 @@ export const users = pgTable("users", {
   isActive: boolean("is_active").notNull().default(true),
   isAdmin: boolean("is_admin").notNull().default(false), // Admin del sistema con permisos totales
   lastLogin: timestamp("last_login"),
-  
+
   // Security & Password Policy (Phase 3)
   passwordHistory: text("password_history").array().default([]), // Array de hashes previos (últimas 5 contraseñas)
   passwordChangedAt: timestamp("password_changed_at"), // Fecha del último cambio de contraseña
@@ -466,7 +466,7 @@ export const users = pgTable("users", {
   passwordResetToken: text("password_reset_token"), // Token para recuperación de contraseña
   passwordResetExpires: timestamp("password_reset_expires"), // Expiración del token de reset
   lastPasswordResetAt: timestamp("last_password_reset_at"), // Última vez que se reseteo la contraseña
-  
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -565,16 +565,16 @@ export const actionPlanRisks = pgTable("action_plan_risks", {
   actionPlanId: varchar("action_plan_id"), // DEPRECATED: Solo para compatibilidad con datos legacy (no tiene FK)
   actionId: varchar("action_id").references(() => actions.id, { onDelete: 'cascade' }), // Referencia a la tabla unificada actions
   riskId: varchar("risk_id").notNull().references(() => risks.id, { onDelete: 'cascade' }),
-  
+
   // Marca el riesgo principal (el primero asociado)
   isPrimary: boolean("is_primary").notNull().default(false),
-  
+
   // Estado de mitigación específico para este riesgo
   mitigationStatus: text("mitigation_status").default("pending"), // pending, in_progress, mitigated, not_mitigated
-  
+
   // Notas específicas sobre cómo este plan mitiga este riesgo en particular
   notes: text("notes"),
-  
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -608,7 +608,7 @@ export const actions = pgTable("actions", {
   priority: text("priority").notNull(), // low, medium, high, critical
   status: text("status").notNull().default("pending"), // pending, in_progress, evidence_submitted, under_review, completed, implemented, audited, overdue, closed, deleted
   progress: integer("progress").notNull().default(0), // 0-100 percentage
-  
+
   // Campos para estado de implementación
   implementedAt: timestamp("implemented_at"), // Fecha cuando se marcó como implementado
   implementedBy: varchar("implemented_by").references(() => users.id), // Usuario que marcó como implementado
@@ -666,7 +666,7 @@ export const actionPlanAttachments = pgTable("action_plan_attachments", {
 export const actionEvidence = pgTable("action_evidence", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   actionId: varchar("action_id").notNull().references(() => actions.id, { onDelete: 'cascade' }),
-  
+
   // Información del archivo
   fileName: text("file_name").notNull(),
   originalFileName: text("original_file_name").notNull(),
@@ -674,15 +674,15 @@ export const actionEvidence = pgTable("action_evidence", {
   mimeType: text("mime_type").notNull(), // MIME type (application/pdf, application/vnd.ms-excel, etc.)
   storageUrl: text("storage_url").notNull(), // URL de almacenamiento en object storage
   objectPath: text("object_path").notNull(), // Ruta completa en object storage
-  
+
   // Clasificación y descripción
   description: text("description"), // Descripción opcional de la evidencia
   category: text("category").notNull().default("implementation_evidence"), // Categoría del documento
-  
+
   // Metadatos de carga
   uploadedBy: varchar("uploaded_by").notNull().references(() => users.id),
   uploadedAt: timestamp("uploaded_at").defaultNow(),
-  
+
   // Auditoría
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -1436,14 +1436,14 @@ export const auditCriteria = pgTable("audit_criteria", {
   auditId: varchar("audit_id").notNull().references(() => audits.id, { onDelete: 'cascade' }),
   objectiveId: varchar("objective_id"), // Enlace opcional a objetivos específicos (puede ser ID de un objetivo en el array)
   scopeItemId: varchar("scope_item_id"), // Enlace opcional a elementos del alcance (proceso/subproceso/macroproceso)
-  
+
   // Tipo de origen del criterio
   sourceType: text("source_type").notNull().default("manual"), // "regulation" | "document" | "manual"
-  
+
   // Referencias opcionales (solo se usa una según sourceType)
   regulationId: varchar("regulation_id").references(() => regulations.id, { onDelete: 'set null' }), // Referencia a normativa
   documentId: varchar("document_id").references(() => complianceDocuments.id, { onDelete: 'set null' }), // Referencia a documento de gestión
-  
+
   title: text("title").notNull(), // Título del criterio
   description: text("description"), // Descripción detallada
   criterionType: text("criterion_type").notNull().default("interno"), // "interno" | "externo"
@@ -1715,9 +1715,9 @@ export const regulationApplicability = pgTable("regulation_applicability", {
   subprocesoIdx: index("regulation_applicability_subproceso_idx").on(table.subprocesoId),
 
   // Evitar duplicados para la misma entidad
-  uniqueApplicability: { 
-    columns: [table.regulationId, table.entityType, table.macroprocesoId, table.processId, table.subprocesoId], 
-    name: "unique_regulation_applicability" 
+  uniqueApplicability: {
+    columns: [table.regulationId, table.entityType, table.macroprocesoId, table.processId, table.subprocesoId],
+    name: "unique_regulation_applicability"
   }
 }));
 
@@ -1960,8 +1960,8 @@ export const auditAttachmentCodeSequences = pgTable("audit_attachment_code_seque
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   // Un audit test solo puede tener una secuencia activa
-  uniqueActiveAuditTestSequence: { 
-    columns: [table.auditTestId], 
+  uniqueActiveAuditTestSequence: {
+    columns: [table.auditTestId],
     name: "unique_active_audit_test_sequence",
     where: sql`${table.isActive} = true`
   },
@@ -2026,7 +2026,7 @@ export const auditRisks = pgTable("audit_risks", {
 
   // Factores para cálculo de probabilidad (1-5 cada uno) - usa configuración global
   frequencyOccurrence: integer("frequency_occurrence").notNull().default(3),
-  exposureVolume: integer("exposure_volume").notNull().default(3), 
+  exposureVolume: integer("exposure_volume").notNull().default(3),
   exposureMassivity: integer("exposure_massivity").notNull().default(3),
   exposureCriticalPath: integer("exposure_critical_path").notNull().default(3),
   complexity: integer("complexity").notNull().default(3),
@@ -2735,8 +2735,8 @@ export type ComplianceTestWithDetails = ComplianceTest & {
   regulation: Regulation;
   leadAuditorDetails?: User;
   auditTeamDetails: User[];
-  testedControls: (ComplianceTestControl & { 
-    control: Control; 
+  testedControls: (ComplianceTestControl & {
+    control: Control;
     risk?: Risk;
     testedByUser: User;
     responsiblePersonDetails?: User;
@@ -3000,7 +3000,13 @@ export const auditUniverse = pgTable("audit_universe", {
   nextScheduledAudit: timestamp("next_scheduled_audit"), // Próxima auditoría programada
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  // Performance optimization: Indexes for foreign keys and common filters
+  index("idx_audit_universe_macroproceso").on(table.macroprocesoId),
+  index("idx_audit_universe_process").on(table.processId),
+  index("idx_audit_universe_subproceso").on(table.subprocesoId),
+  index("idx_audit_universe_entity_type").on(table.entityType),
+]);
 
 // Factores de Priorización para cada entidad del universo de auditoría
 export const auditPrioritizationFactors = pgTable("audit_prioritization_factors", {
@@ -3038,7 +3044,13 @@ export const auditPrioritizationFactors = pgTable("audit_prioritization_factors"
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  // Performance optimization: Indexes for foreign keys
+  index("idx_apf_universe_id").on(table.universeId),
+  index("idx_apf_plan_id").on(table.planId),
+  // Index for sorting by priority score
+  index("idx_apf_total_score").on(table.totalPriorityScore),
+]);
 
 // Items del Plan de Auditoría con priorización
 export const auditPlanItems = pgTable("audit_plan_items", {
@@ -3067,7 +3079,13 @@ export const auditPlanItems = pgTable("audit_plan_items", {
   createdBy: varchar("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => [
+  // Performance optimization: Indexes for foreign keys
+  index("idx_api_plan_id").on(table.planId),
+  index("idx_api_universe_id").on(table.universeId),
+  index("idx_api_prioritization_id").on(table.prioritizationId),
+  index("idx_api_status").on(table.status),
+]);
 
 // Configuración de capacidad del equipo para el plan
 export const auditPlanCapacity = pgTable("audit_plan_capacity", {
@@ -3471,8 +3489,8 @@ export const riskAnalysisProfiles = pgTable("risk_analysis_profiles", {
   profilesControlEnvIdx: index("profiles_control_env_idx").on(table.controlEnvironment),
   profilesActiveIdx: index("profiles_active_idx").on(table.isActive),
   profilesConfidenceIdx: index("profiles_confidence_idx").on(table.confidenceScore),
-  uniqueActiveRiskProfile: { 
-    columns: [table.riskId], 
+  uniqueActiveRiskProfile: {
+    columns: [table.riskId],
     name: "unique_active_risk_profile",
     where: sql`${table.isActive} = true`
   },
@@ -3970,7 +3988,7 @@ export type NotificationType = typeof NotificationTypes[keyof typeof Notificatio
 
 export const NotificationPriorities = {
   CRITICAL: 'critical',
-  IMPORTANT: 'important', 
+  IMPORTANT: 'important',
   NORMAL: 'normal',
   LOW: 'low'
 } as const;
@@ -4103,12 +4121,12 @@ export interface WorkflowEfficiencyFilters extends AnalyticsDateRange {
 }
 
 // Report Generation Types
-export type ReportType = 
-  | 'auditor_performance' 
-  | 'team_comparison' 
-  | 'risk_trending' 
-  | 'workflow_efficiency' 
-  | 'executive_summary' 
+export type ReportType =
+  | 'auditor_performance'
+  | 'team_comparison'
+  | 'risk_trending'
+  | 'workflow_efficiency'
+  | 'executive_summary'
   | 'compliance_report'
   | 'custom_report';
 
@@ -6520,10 +6538,10 @@ export type ControlProcessWithDetails = ControlProcess & {
 export const updateRiskProcessSchema = z.object({
   riskId: z.string().min(1).optional(),
   macroprocesoId: z.string().min(1).optional(),
-  processId: z.string().min(1).optional(), 
+  processId: z.string().min(1).optional(),
   subprocesoId: z.string().min(1).optional(),
   notes: z.string().optional(),
-}).refine(data => 
+}).refine(data =>
   Object.values(data).some(value => value !== undefined),
   { message: "Al menos un campo debe ser actualizado" }
 );
@@ -6535,7 +6553,7 @@ export const updateControlProcessSchema = z.object({
   subprocesoId: z.string().min(1).optional(),
   notes: z.string().optional(),
   evaluationFrequencyMonths: z.number().min(1).max(60).optional(), // Entre 1 y 60 meses
-}).refine(data => 
+}).refine(data =>
   Object.values(data).some(value => value !== undefined),
   { message: "Al menos un campo debe ser actualizado" }
 );
@@ -6585,7 +6603,7 @@ export const controlProcessSelfEvaluationSchema = z.object({
   selfEvaluationComments: z.string().max(2000).optional(), // Límite de caracteres
   selfEvaluationScore: z.number().min(0).max(100).optional(), // Porcentaje 0-100
   nextEvaluationDate: z.string().datetime().optional(), // ISO datetime string
-}).refine(data => 
+}).refine(data =>
   Object.values(data).some(value => value !== undefined),
   { message: "Al menos un campo de autoevaluación debe ser actualizado" }
 );

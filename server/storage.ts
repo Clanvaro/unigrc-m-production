@@ -188,7 +188,7 @@ import {
 import { expandScopeEntities } from "@shared/scope-expansion";
 import { randomUUID, createHash } from "crypto";
 import { db as dbNullable, pool as poolNullable, withRetry } from "./db";
-import { eq, ne, and, or, desc, sql, inArray, like, isNull, isNotNull } from "drizzle-orm";
+import { eq, ne, and, or, desc, sql, inArray, like, isNull, isNotNull, aliasedTable } from "drizzle-orm";
 
 // Non-null aliases for use within DatabaseStorage (guarded by constructor check)
 // This preserves type safety while allowing the server to start without DATABASE_URL
@@ -10626,8 +10626,15 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getAuditPlanItemsWithDetails(planId: string): Promise<AuditPlanItemWithDetails[]> {
-    const items = await this.getAuditPlanItems(planId);
-    const result: AuditPlanItemWithDetails[] = [];
+    // Optimized: Fetch items and prioritization in one query
+    const rows = await db
+      .select({
+        item: auditPlanItems,
+        prioritization: auditPrioritizationFactors
+      })
+      .from(auditPlanItems)
+      .leftJoin(auditPrioritizationFactors, eq(auditPlanItems.prioritizationId, auditPrioritizationFactors.id))
+      .where(eq(auditPlanItems.planId, planId));
 
     const universeDetails = await this.getAuditUniverseWithDetails();
     const plan = await this.getAuditPlan(planId);
@@ -10637,14 +10644,10 @@ export class DatabaseStorage extends MemStorage {
       return [];
     }
 
-    for (const item of items) {
-      const universe = universeDetails.find(u => u.id === item.universeId);
-      let prioritization = null;
+    const result: AuditPlanItemWithDetails[] = [];
 
-      if (item.prioritizationId) {
-        const [p] = await db.select().from(auditPrioritizationFactors).where(eq(auditPrioritizationFactors.id, item.prioritizationId));
-        prioritization = p;
-      }
+    for (const { item, prioritization } of rows) {
+      const universe = universeDetails.find(u => u.id === item.universeId);
 
       // Include item even if some data is missing, but log warnings
       if (!universe) {
@@ -10654,7 +10657,6 @@ export class DatabaseStorage extends MemStorage {
         console.log(`Prioritization not found for item ${item.id}, prioritizationId: ${item.prioritizationId}`);
       }
 
-      // Push item with available data (some fields may be null/undefined)
       result.push({
         ...item,
         universe: universe as any,
@@ -11124,23 +11126,28 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getAuditFindingsWithDetails(): Promise<AuditFindingWithDetails[]> {
-    const findings = await this.getAuditFindings();
-    const result: AuditFindingWithDetails[] = [];
+    // Optimized: Single query with joins instead of N+1 queries
+    const responsibleUsers = aliasedTable(users, "responsible_users");
+    const identifiedByUsers = aliasedTable(users, "identified_by_users");
 
-    for (const finding of findings) {
-      const auditData = finding.auditId ? await this.getAudit(finding.auditId) : undefined;
-      const responsibleUser = finding.responsiblePerson ? await this.getUser(finding.responsiblePerson) : undefined;
-      const identifiedByUser = await this.getUser(finding.identifiedBy);
+    const rows = await db
+      .select({
+        finding: auditFindings,
+        audit: audits,
+        responsible: responsibleUsers,
+        identifiedBy: identifiedByUsers
+      })
+      .from(auditFindings)
+      .leftJoin(audits, eq(auditFindings.auditId, audits.id))
+      .leftJoin(responsibleUsers, eq(auditFindings.responsiblePerson, responsibleUsers.id))
+      .leftJoin(identifiedByUsers, eq(auditFindings.identifiedBy, identifiedByUsers.id));
 
-      result.push({
-        ...finding,
-        audit: auditData,
-        responsibleUser,
-        identifiedByUser
-      });
-    }
-
-    return result;
+    return rows.map(({ finding, audit, responsible, identifiedBy }) => ({
+      ...finding,
+      audit: audit || undefined,
+      responsibleUser: responsible || undefined,
+      identifiedByUser: identifiedBy || undefined
+    }));
   }
 
   async getAuditFindingWithDetails(id: string): Promise<AuditFindingWithDetails | undefined> {

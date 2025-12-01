@@ -10,11 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
-  AlertTriangle, 
+import {
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertTriangle,
   FileText,
   Filter,
   Search,
@@ -50,7 +50,7 @@ export default function ApprovalManagement() {
   // Fetch pending approvals
   const { data: pendingApprovals, isLoading: pendingLoading, refetch: refetchPending } = useQuery({
     queryKey: ['/api/approval/pending'],
-    refetchInterval: 15000,
+    refetchInterval: 300000, // Optimized: 5 minutes to reduce server load
   });
 
   // Fetch approval records
@@ -81,10 +81,10 @@ export default function ApprovalManagement() {
       queryClient.invalidateQueries({ queryKey: ['/api/approval/records'] });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "Failed to approve item.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "Failed to approve item.",
+        variant: "destructive"
       });
     }
   });
@@ -106,10 +106,10 @@ export default function ApprovalManagement() {
       queryClient.invalidateQueries({ queryKey: ['/api/approval/records'] });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "Failed to reject item.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reject item.",
+        variant: "destructive"
       });
     }
   });
@@ -133,10 +133,10 @@ export default function ApprovalManagement() {
       queryClient.invalidateQueries({ queryKey: ['/api/approval/escalations'] });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "Failed to escalate item.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "Failed to escalate item.",
+        variant: "destructive"
       });
     }
   });
@@ -159,10 +159,10 @@ export default function ApprovalManagement() {
       refetchPending();
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "Failed to bulk approve items.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "Failed to bulk approve items.",
+        variant: "destructive"
       });
     }
   });
@@ -171,10 +171,10 @@ export default function ApprovalManagement() {
   const filteredApprovals = (pendingApprovals?.data?.approvals || []).filter((approval: any) => {
     const matchesStatus = filterStatus === 'all' || approval.approvalStatus === filterStatus;
     const matchesRisk = filterRiskLevel === 'all' || approval.riskLevel === filterRiskLevel;
-    const matchesSearch = !searchTerm || 
+    const matchesSearch = !searchTerm ||
       approval.approvalItemType.toLowerCase().includes(searchTerm.toLowerCase()) ||
       approval.approvalItemId.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     return matchesStatus && matchesRisk && matchesSearch;
   });
 
@@ -186,10 +186,10 @@ export default function ApprovalManagement() {
 
   const handleReject = (id: string) => {
     if (!rejectionReasoning.trim()) {
-      toast({ 
-        title: "Error", 
-        description: "Please provide a reason for rejection.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: "Please provide a reason for rejection.",
+        variant: "destructive"
       });
       return;
     }
@@ -204,10 +204,10 @@ export default function ApprovalManagement() {
 
   const handleBulkApprove = () => {
     if (selectedApprovals.length === 0) {
-      toast({ 
-        title: "Error", 
-        description: "Please select items to approve.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: "Please select items to approve.",
+        variant: "destructive"
       });
       return;
     }
@@ -215,8 +215,8 @@ export default function ApprovalManagement() {
   };
 
   const toggleSelection = (id: string) => {
-    setSelectedApprovals(prev => 
-      prev.includes(id) 
+    setSelectedApprovals(prev =>
+      prev.includes(id)
         ? prev.filter(item => item !== id)
         : [...prev, id]
     );
@@ -241,8 +241,8 @@ export default function ApprovalManagement() {
           </p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             size="sm"
             onClick={() => refetchPending()}
             data-testid="button-refresh"
@@ -250,8 +250,8 @@ export default function ApprovalManagement() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             size="sm"
             data-testid="button-export"
           >
@@ -329,8 +329,8 @@ export default function ApprovalManagement() {
                   </Select>
                 </div>
                 <div className="flex items-end space-x-2">
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     size="sm"
                     onClick={selectAll}
                     disabled={filteredApprovals.length === 0}
@@ -338,8 +338,8 @@ export default function ApprovalManagement() {
                   >
                     Select All
                   </Button>
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     size="sm"
                     onClick={clearSelection}
                     disabled={selectedApprovals.length === 0}
@@ -361,7 +361,7 @@ export default function ApprovalManagement() {
                     {selectedApprovals.length} item{selectedApprovals.length !== 1 ? 's' : ''} selected
                   </div>
                   <div className="flex items-center space-x-2">
-                    <Button 
+                    <Button
                       size="sm"
                       onClick={handleBulkApprove}
                       disabled={bulkApproveMutation.isPending}
@@ -370,8 +370,8 @@ export default function ApprovalManagement() {
                       <CheckCircle className="mr-2 h-4 w-4" />
                       Bulk Approve
                     </Button>
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       size="sm"
                       data-testid="button-bulk-escalate"
                     >
@@ -410,7 +410,7 @@ export default function ApprovalManagement() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">
-                        <Checkbox 
+                        <Checkbox
                           checked={selectedApprovals.length === filteredApprovals.length && filteredApprovals.length > 0}
                           onCheckedChange={(checked) => {
                             if (checked) {
@@ -434,7 +434,7 @@ export default function ApprovalManagement() {
                     {filteredApprovals.map((approval: any) => (
                       <TableRow key={approval.id} data-testid={`row-approval-${approval.id}`}>
                         <TableCell>
-                          <Checkbox 
+                          <Checkbox
                             checked={selectedApprovals.includes(approval.id)}
                             onCheckedChange={() => toggleSelection(approval.id)}
                             data-testid={`checkbox-approval-${approval.id}`}
@@ -452,11 +452,11 @@ export default function ApprovalManagement() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge 
+                          <Badge
                             variant={
                               approval.riskLevel === 'critical' ? 'destructive' :
-                              approval.riskLevel === 'high' ? 'secondary' :
-                              approval.riskLevel === 'medium' ? 'outline' : 'default'
+                                approval.riskLevel === 'high' ? 'secondary' :
+                                  approval.riskLevel === 'medium' ? 'outline' : 'default'
                             }
                           >
                             {approval.riskLevel}
@@ -471,7 +471,7 @@ export default function ApprovalManagement() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge 
+                          <Badge
                             variant={approval.approvalStatus === 'escalated' ? 'secondary' : 'outline'}
                           >
                             {approval.approvalStatus}
@@ -479,15 +479,15 @@ export default function ApprovalManagement() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-1">
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               variant="outline"
                               onClick={() => setSelectedApproval(approval)}
                               data-testid={`button-view-${approval.id}`}
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <Button 
+                            <Button
                               size="sm"
                               onClick={() => handleApprove(approval.id)}
                               disabled={approveMutation.isPending}
@@ -495,8 +495,8 @@ export default function ApprovalManagement() {
                             >
                               <CheckCircle className="h-4 w-4" />
                             </Button>
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               variant="outline"
                               onClick={() => {
                                 setSelectedApproval(approval);
@@ -514,7 +514,7 @@ export default function ApprovalManagement() {
                   </TableBody>
                 </Table>
               )}
-              
+
               {filteredApprovals.length === 0 && !pendingLoading && (
                 <div className="text-center py-8 text-muted-foreground">
                   No pending approvals found matching your criteria.
@@ -622,10 +622,10 @@ export default function ApprovalManagement() {
                 </div>
                 <div>
                   <Label>Risk Level</Label>
-                  <Badge 
+                  <Badge
                     variant={
                       selectedApproval.riskLevel === 'critical' ? 'destructive' :
-                      selectedApproval.riskLevel === 'high' ? 'secondary' : 'outline'
+                        selectedApproval.riskLevel === 'high' ? 'secondary' : 'outline'
                     }
                   >
                     {selectedApproval.riskLevel}
@@ -667,7 +667,7 @@ export default function ApprovalManagement() {
               </div>
 
               <div className="flex items-center space-x-2 pt-4">
-                <Button 
+                <Button
                   onClick={() => handleApprove(selectedApproval.id)}
                   disabled={approveMutation.isPending}
                   data-testid="button-approve-modal"
@@ -675,7 +675,7 @@ export default function ApprovalManagement() {
                   <CheckCircle className="mr-2 h-4 w-4" />
                   Approve
                 </Button>
-                <Button 
+                <Button
                   variant="outline"
                   onClick={() => handleReject(selectedApproval.id)}
                   disabled={rejectMutation.isPending || !rejectionReasoning.trim()}
@@ -684,7 +684,7 @@ export default function ApprovalManagement() {
                   <XCircle className="mr-2 h-4 w-4" />
                   Reject
                 </Button>
-                <Button 
+                <Button
                   variant="outline"
                   onClick={() => handleEscalate(selectedApproval.id, 'manager', 'Escalated for review')}
                   disabled={escalateMutation.isPending}
@@ -693,7 +693,7 @@ export default function ApprovalManagement() {
                   <ArrowUpCircle className="mr-2 h-4 w-4" />
                   Escalate
                 </Button>
-                <Button 
+                <Button
                   variant="ghost"
                   onClick={() => setSelectedApproval(null)}
                   data-testid="button-close-modal"
