@@ -2706,22 +2706,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
-      // Get all active risks for this tenant
+      // Get all active risks (single-tenant system - no tenantId filter needed)
       const allRisks = await requireDb().select().from(risks).where(
-        and(
-          eq(risks.status, 'active'),
-          eq(risks.tenantId, tenantId)
-        )
+        eq(risks.status, 'active')
       );
 
-      // MULTI-TENANT FIX: Get risk-process links filtered by tenant
-      // Join with risks table to ensure tenant ownership
+      // Get all risk-process links (single-tenant system)
       const allRiskProcessLinks = await requireDb().select({
         riskId: riskProcessLinks.riskId
       })
         .from(riskProcessLinks)
-        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-        .where(eq(risks.tenantId, tenantId));
+        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id));
 
       const linkedRiskIds = new Set(allRiskProcessLinks.map(link => link.riskId));
 
@@ -8307,18 +8302,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const macroprocesoIds = [...new Set(riskProcessLinksData.map(l => l.macroprocesoId).filter((id): id is string => !!id))];
 
       // PHASE 2: Fetch processes, subprocesos, and associated risks in parallel
+      // Note: These tables don't have tenantId - single-tenant system
       const actionIds = allActions.map(a => a.id);
       const [processesData, subprocesosData, processesFromMacro, allAssociatedRisks] = await Promise.all([
         processIds.length > 0
-          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, processIds)))
+          ? requireDb().select().from(processes).where(inArray(processes.id, processIds))
           : Promise.resolve([]),
 
         subprocesoIds.length > 0
-          ? requireDb().select().from(subprocesos).where(and(eq(subprocesos.tenantId, tenantId), inArray(subprocesos.id, subprocesoIds)))
+          ? requireDb().select().from(subprocesos).where(inArray(subprocesos.id, subprocesoIds))
           : Promise.resolve([]),
 
         macroprocesoIds.length > 0
-          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.macroprocesoId, macroprocesoIds)))
+          ? requireDb().select().from(processes).where(inArray(processes.macroprocesoId, macroprocesoIds))
           : Promise.resolve([]),
 
         // Associated risks query
@@ -8333,12 +8329,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
           .from(actionPlanRisks)
           .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
-          .where(and(
-            eq(risks.tenantId, tenantId),
-            or(
-              inArray(actionPlanRisks.actionPlanId, planIds),
-              actionIds.length > 0 ? inArray(actionPlanRisks.actionId, actionIds) : undefined
-            )
+          .where(or(
+            inArray(actionPlanRisks.actionPlanId, planIds),
+            actionIds.length > 0 ? inArray(actionPlanRisks.actionId, actionIds) : undefined
           ))
       ]);
 
@@ -8352,7 +8345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const [additionalProcesses, processGerenciasData] = await Promise.all([
         additionalProcessIds.length > 0
-          ? requireDb().select().from(processes).where(and(eq(processes.tenantId, tenantId), inArray(processes.id, additionalProcessIds)))
+          ? requireDb().select().from(processes).where(inArray(processes.id, additionalProcessIds))
           : Promise.resolve([]),
 
         allProcessesMap.size > 0
