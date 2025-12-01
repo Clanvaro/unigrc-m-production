@@ -8257,10 +8257,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // PHASE 1: Execute independent queries in parallel
       const [allActions, auditLogsData, riskProcessLinksData] = await Promise.all([
         // Get all actions to find corresponding action_id for each plan
+        // Note: actions table doesn't have tenantId - single-tenant system
         requireDb()
           .select({ id: actions.id, code: actions.code })
           .from(actions)
-          .where(and(eq(actions.tenantId, tenantId), inArray(actions.code, actionCodes))),
+          .where(inArray(actions.code, actionCodes)),
 
         // Audit logs for reschedule counting
         requireDb()
