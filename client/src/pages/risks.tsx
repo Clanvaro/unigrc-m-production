@@ -63,10 +63,10 @@ export default function Risks() {
   const [editingRisk, setEditingRisk] = useState<Risk | null>(null);
   const [viewingRisk, setViewingRisk] = useState<Risk | null>(null);
   const [controlsDialogRisk, setControlsDialogRisk] = useState<Risk | null>(null);
-  
+
   // Consolidated filter state
   const [filters, setFilters] = useState<Record<string, any>>({});
-  
+
   // Legacy individual filters for backward compatibility with event listeners
   const macroprocesoFilter = filters.macroproceso || "all";
   const processFilter = filters.process || "all";
@@ -84,15 +84,15 @@ export default function Risks() {
   const [configureColumnsOpen, setConfigureColumnsOpen] = useState(false);
   const [testMode50k, setTestMode50k] = useState(false);
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
-  
+
   // Active tab state - for lazy mounting of tab content
   // "basica" = fast load using optimized endpoint, "detalle" = full data with batch-relations
   const [activeTab, setActiveTab] = useState<"basica" | "detalle">("basica");
-  
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  
+
   // Column visibility configuration
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const saved = localStorage.getItem('risksTableColumns');
@@ -222,10 +222,10 @@ export default function Risks() {
       duration: number;
     };
   }
-  
+
   const { data: bootstrapData, isLoading: isBootstrapLoading, refetch: refetchRisks } = useQuery<BootstrapResponse>({
-    queryKey: ["/api/risks/bootstrap", { 
-      limit: pageSize, 
+    queryKey: ["/api/risks/bootstrap", {
+      limit: pageSize,
       offset: (currentPage - 1) * pageSize,
       ...filters
     }],
@@ -234,7 +234,7 @@ export default function Risks() {
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
       });
-      
+
       // Add filters to query params
       if (filters.status && filters.status !== 'all') params.append('status', filters.status);
       if (filters.gerencia && filters.gerencia !== 'all') params.append('gerenciaId', filters.gerencia);
@@ -245,7 +245,7 @@ export default function Risks() {
       if (filters.inherentRiskLevel && filters.inherentRiskLevel !== 'all') params.append('inherentRiskLevel', filters.inherentRiskLevel);
       if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') params.append('residualRiskLevel', filters.residualRiskLevel);
       if (filters.owner && filters.owner !== 'all') params.append('ownerId', filters.owner);
-      
+
       const response = await fetch(`/api/risks/bootstrap?${params}`);
       if (!response.ok) throw new Error("Failed to fetch bootstrap data");
       return response.json();
@@ -254,11 +254,11 @@ export default function Risks() {
     gcTime: 1000 * 60 * 15, // 15 minutes cache retention
     refetchOnWindowFocus: false,
   });
-  
+
   // Extract data from bootstrap response
   const risks = bootstrapData?.risks?.data || [];
   const totalPages = bootstrapData?.risks?.pagination ? Math.ceil(bootstrapData.risks.pagination.total / pageSize) : 0;
-  
+
   // Catalogs from bootstrap (cached for 5 min on server, use local staleTime too)
   const gerencias = bootstrapData?.catalogs?.gerencias || [];
   const macroprocesos = bootstrapData?.catalogs?.macroprocesos || [];
@@ -267,26 +267,26 @@ export default function Risks() {
   const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
   const riskCategories: any[] = []; // Not included in bootstrap, loaded on demand if needed
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
-  
+
   // Process owners from bootstrap (for basic display)
   const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
-  
+
   // Legacy compatibility - these were separate queries before
   const isPageDataLoading = isBootstrapLoading;
   const isRisksLoading = isBootstrapLoading;
-  
+
   // ============== BATCH LOAD RELATIONS (LAZY - only for detail views) ==============
   // Load processLinks and controls only when user accesses detail dialogs
   const riskIds = risks.map((r: any) => r.id);
-  
+
   // State to track if we need detailed data (for viewing risk details, validation, etc.)
   const [needsDetailedData, setNeedsDetailedData] = useState(false);
-  
+
   interface BatchRelationsData {
     riskProcessLinks: any[];
     riskControls: any[];
   }
-  
+
   // Only load batch relations when needed (viewing details, editing, etc.)
   const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
     queryKey: ["/api/risks/batch-relations", riskIds],
@@ -306,14 +306,14 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
-    enabled: needsDetailedData && riskIds.length > 0, // Only fetch when detailed data is needed
+    enabled: (needsDetailedData || visibleColumns.process || visibleColumns.responsible) && riskIds.length > 0, // Fetch if details needed OR columns are visible
     staleTime: 1000 * 15, // 15 seconds
   });
-  
+
   // Extract relations from batch response (empty when not loaded)
   const allRiskProcessLinks = batchRelations?.riskProcessLinks || [];
   const allRiskControls = batchRelations?.riskControls || [];
-  
+
   // Process owners - use bootstrap data first, lazy load full data only when viewing details
   const { data: processOwnersData, isLoading: isProcessOwnersLoading } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
@@ -323,10 +323,10 @@ export default function Risks() {
   });
   // Use bootstrap processOwners first, fallback to full API data when loaded
   const processOwners = bootstrapProcessOwners.length > 0 ? bootstrapProcessOwners : (processOwnersData || []);
-  
+
   // Main loading state - no longer waits for batch relations
   const isLoading = isPageDataLoading || isRisksLoading;
-  
+
   // Detailed loading state - only when user requests details
   const isDetailedLoading = needsDetailedData && (isRelationsLoading || isProcessOwnersLoading);
 
@@ -338,7 +338,7 @@ export default function Risks() {
   }, [activeTab]);
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
-  
+
   // Debounced search term for controls to avoid excessive API calls
   const [debouncedControlSearch, setDebouncedControlSearch] = useState("");
   useEffect(() => {
@@ -348,12 +348,12 @@ export default function Risks() {
     }, 300);
     return () => clearTimeout(timer);
   }, [controlSearchTerm]);
-  
+
   // Optimized controls summary - paginated with pre-calculated residual projections
   const { data: controlsSummary, isLoading: isControlsSummaryLoading, refetch: refetchControlsSummary } = useQuery<{
-    data: Array<{id: string, code: string, name: string, description: string, type: string, effectiveness: number, projectedResidualRisk: number}>,
-    associated: Array<{id: string, controlId: string, residualRisk: number, control: any}>,
-    pagination: {page: number, limit: number, total: number, totalPages: number},
+    data: Array<{ id: string, code: string, name: string, description: string, type: string, effectiveness: number, projectedResidualRisk: number }>,
+    associated: Array<{ id: string, controlId: string, residualRisk: number, control: any }>,
+    pagination: { page: number, limit: number, total: number, totalPages: number },
     inherentRisk: number
   }>({
     queryKey: ['/api/risks', controlsDialogRisk?.id, 'controls/summary', controlsPage, debouncedControlSearch],
@@ -372,12 +372,12 @@ export default function Risks() {
     staleTime: 0,
     gcTime: 0,
   });
-  
+
   // Extract data from the optimized endpoint
   const dialogRiskControls = controlsSummary?.associated || [];
   const availableControlsData = controlsSummary?.data || [];
   const controlsPagination = controlsSummary?.pagination;
-  
+
   // Legacy refetch function for mutations
   const refetchRiskControls = refetchControlsSummary;
 
@@ -396,21 +396,21 @@ export default function Risks() {
   // Helper function to get all responsible owners for a risk from riskProcessLinks (MUST BE BEFORE getAggregatedValidationStatus)
   const getRiskProcessResponsibles = (risk: Risk): ResponsibleWithValidation[] => {
     const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-    
+
     if (riskLinks.length === 0) {
       // Fallback to legacy method if no riskProcessLinks exist
       const legacyResponsible = getProcessOwnerDetailsLegacy(risk);
       return legacyResponsible ? [legacyResponsible] : [];
     }
-    
+
     const responsiblesMap = new Map<string, ResponsibleWithValidation>();
-    
+
     riskLinks.forEach((link: any) => {
       let responsibleId = 'unassigned';
       let responsibleName = 'Sin asignar';
       let responsiblePosition = 'Sin cargo definido';
       let processName = '';
-      
+
       // Try responsible override first
       if (link.responsibleOverrideId) {
         const owner = processOwners.find((po: any) => po.id === link.responsibleOverrideId);
@@ -422,7 +422,7 @@ export default function Risks() {
       } else {
         // Inherit from process hierarchy
         let ownerId: string | null = null;
-        
+
         if (link.subprocesoId) {
           const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
           processName = subproceso ? `S: ${subproceso.name}` : '';
@@ -457,7 +457,7 @@ export default function Risks() {
             ownerId = macroproceso.ownerId;
           }
         }
-        
+
         if (ownerId) {
           const owner = processOwners.find((po: any) => po.id === ownerId);
           if (owner) {
@@ -467,9 +467,9 @@ export default function Risks() {
           }
         }
       }
-      
+
       const currentValidationStatus = link.validationStatus || 'pending_validation';
-      
+
       // Check if this responsible already exists
       if (responsiblesMap.has(responsibleId)) {
         const existing = responsiblesMap.get(responsibleId)!;
@@ -492,7 +492,7 @@ export default function Risks() {
         });
       }
     });
-    
+
     // Convert map to array
     return Array.from(responsiblesMap.values());
   };
@@ -503,7 +503,7 @@ export default function Risks() {
     if (risk.processOwner && risk.processOwner.trim() !== '') {
       // Extract just the name (before " - " if it exists)
       const cleanName = risk.processOwner.split(' - ')[0].trim();
-      
+
       // Find process owner by name
       const owner = processOwners.find((po: any) => po.name === cleanName);
       if (owner) {
@@ -513,7 +513,7 @@ export default function Risks() {
           validationStatus: 'pending_validation'
         };
       }
-      
+
       // If not found in process owners table, use the clean name
       return {
         name: cleanName,
@@ -521,10 +521,10 @@ export default function Risks() {
         validationStatus: 'pending_validation'
       };
     }
-    
+
     // If no direct processOwner, inherit from process hierarchy
     let ownerId: string | null = null;
-    
+
     // Try to get owner from subproceso first
     if (risk.subprocesoId) {
       const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
@@ -564,7 +564,7 @@ export default function Risks() {
         ownerId = macroproceso.ownerId;
       }
     }
-    
+
     // If we found an ownerId, get the process owner details
     if (ownerId) {
       const owner = processOwners.find((po: any) => po.id === ownerId);
@@ -576,32 +576,32 @@ export default function Risks() {
         };
       }
     }
-    
+
     return null;
   };
 
   // Helper function to get aggregated validation status for a risk
   const getAggregatedValidationStatus = (risk: Risk) => {
     const responsibles = getRiskProcessResponsibles(risk);
-    
+
     if (responsibles.length === 0) {
       // Fallback to legacy validation status
       return risk.validationStatus || 'pending_validation';
     }
-    
+
     // CRITICAL: Filter out undefined entries before accessing properties
     const statuses = responsibles.filter(r => r && r.validationStatus !== undefined).map((r: ResponsibleWithValidation) => r.validationStatus);
-    
+
     // If any are rejected, overall status is rejected
     if (statuses.includes('rejected')) {
       return 'rejected';
     }
-    
+
     // If all are validated, overall status is validated
     if (statuses.every(status => status === 'validated')) {
       return 'validated';
     }
-    
+
     // Otherwise, pending validation
     return 'pending_validation';
   };
@@ -639,7 +639,7 @@ export default function Risks() {
     mutationFn: ({ riskId, controlId, effectiveness }: { riskId: string; controlId: string; effectiveness: number }) => {
       const risk = risks.find((r: Risk) => r.id === riskId);
       if (!risk) throw new Error("Riesgo no encontrado");
-      
+
       const residualRisk = calculateResidualRisk(risk.inherentRisk, effectiveness);
       return apiRequest(`/api/risks/${riskId}/controls`, "POST", {
         controlId,
@@ -654,11 +654,11 @@ export default function Risks() {
       const controlEffectiveness = control?.effectiveness ?? effectiveness;
 
       // Cancel any outgoing refetches - MUST match query key format
-      await queryClient.cancelQueries({ 
-        queryKey: ["/api/risks", riskId, "controls"] 
+      await queryClient.cancelQueries({
+        queryKey: ["/api/risks", riskId, "controls"]
       });
       // Also cancel bootstrap queries to prevent race conditions
-      await queryClient.cancelQueries({ 
+      await queryClient.cancelQueries({
         queryKey: ["/api/risks/bootstrap"],
         exact: false
       });
@@ -671,9 +671,9 @@ export default function Risks() {
       const tempId = `temp-${Date.now()}`;
       queryClient.setQueryData(
         ["/api/risks", riskId, "controls"],
-        (old: any[] = []) => [...old, { 
+        (old: any[] = []) => [...old, {
           id: tempId,
-          riskId: risk.id, 
+          riskId: risk.id,
           controlId: controlId,
           residualRisk,
           controlCode: control?.code || '',
@@ -684,14 +684,14 @@ export default function Risks() {
 
       // OPTIMISTIC UPDATE: Also update control count in bootstrap cache
       // This ensures the table shows the updated count immediately
-      const bootstrapCaches = queryClient.getQueriesData({ 
+      const bootstrapCaches = queryClient.getQueriesData({
         queryKey: ["/api/risks/bootstrap"],
         exact: false
       });
-      
+
       // Store previous bootstrap data for rollback
       const previousBootstrapData: Array<[readonly unknown[], unknown]> = [];
-      
+
       bootstrapCaches.forEach(([queryKey, data]: [readonly unknown[], unknown]) => {
         if (data && typeof data === 'object') {
           previousBootstrapData.push([queryKey, data]);
@@ -701,8 +701,8 @@ export default function Risks() {
               ...oldData,
               risks: {
                 ...oldData.risks,
-                data: oldData.risks.data.map((r: any) => 
-                  r.id === riskId 
+                data: oldData.risks.data.map((r: any) =>
+                  r.id === riskId
                     ? { ...r, controlCount: (r.controlCount || 0) + 1 }
                     : r
                 )
@@ -719,21 +719,21 @@ export default function Risks() {
       // The optimistic update already shows the change, so we just need to sync with server
       if (context?.riskId) {
         // Invalidate only the specific risk's controls summary (most important)
-        queryClient.invalidateQueries({ 
+        queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.riskId, "controls/summary"],
-          exact: false 
+          exact: false
         });
         // Invalidate the specific risk's controls list
-        queryClient.invalidateQueries({ 
+        queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.riskId, "controls"],
-          exact: false 
+          exact: false
         });
       }
       // Invalidate risk-controls-with-details (used in table) - single endpoint
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      
+
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
     onError: (_error, _variables, context) => {
@@ -762,11 +762,11 @@ export default function Risks() {
       if (!currentRisk) return;
 
       // Cancel any outgoing refetches - MUST match query key format
-      await queryClient.cancelQueries({ 
-        queryKey: ["/api/risks", currentRisk.id, "controls"] 
+      await queryClient.cancelQueries({
+        queryKey: ["/api/risks", currentRisk.id, "controls"]
       });
       // Also cancel bootstrap queries to prevent race conditions
-      await queryClient.cancelQueries({ 
+      await queryClient.cancelQueries({
         queryKey: ["/api/risks/bootstrap"],
         exact: false
       });
@@ -782,14 +782,14 @@ export default function Risks() {
 
       // OPTIMISTIC UPDATE: Also update control count in bootstrap cache
       // This ensures the table shows the updated count immediately
-      const bootstrapCaches = queryClient.getQueriesData({ 
+      const bootstrapCaches = queryClient.getQueriesData({
         queryKey: ["/api/risks/bootstrap"],
         exact: false
       });
-      
+
       // Store previous bootstrap data for rollback
       const previousBootstrapData: Array<[readonly unknown[], unknown]> = [];
-      
+
       bootstrapCaches.forEach(([queryKey, data]: [readonly unknown[], unknown]) => {
         if (data && typeof data === 'object') {
           previousBootstrapData.push([queryKey, data]);
@@ -799,8 +799,8 @@ export default function Risks() {
               ...oldData,
               risks: {
                 ...oldData.risks,
-                data: oldData.risks.data.map((r: any) => 
-                  r.id === currentRisk.id 
+                data: oldData.risks.data.map((r: any) =>
+                  r.id === currentRisk.id
                     ? { ...r, controlCount: Math.max(0, (r.controlCount || 0) - 1) }
                     : r
                 )
@@ -817,21 +817,21 @@ export default function Risks() {
       // The optimistic update already shows the change, so we just need to sync with server
       if (context?.currentRisk) {
         // Invalidate only the specific risk's controls summary (most important)
-        queryClient.invalidateQueries({ 
+        queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.currentRisk.id, "controls/summary"],
-          exact: false 
+          exact: false
         });
         // Invalidate the specific risk's controls list
-        queryClient.invalidateQueries({ 
+        queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.currentRisk.id, "controls"],
-          exact: false 
+          exact: false
         });
       }
       // Invalidate risk-controls-with-details (used in table) - single endpoint
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-      
+
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
     onError: (_error, _variables, context) => {
@@ -875,22 +875,22 @@ export default function Risks() {
     // Filter by search term
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
-      const matchesSearch = 
+      const matchesSearch =
         risk.name.toLowerCase().includes(searchLower) ||
         risk.code.toLowerCase().includes(searchLower) ||
         (risk.description && risk.description.toLowerCase().includes(searchLower)) ||
         (risk.processOwner && risk.processOwner.toLowerCase().includes(searchLower));
-      
+
       if (!matchesSearch) return false;
     }
 
     // Filter by macroproceso
     if (macroprocesoFilter !== "all") {
       let matchesMacroproceso = false;
-      
+
       // First, check riskProcessLinks for associations
       const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      
+
       if (riskLinks.length > 0) {
         // Check if any link is associated with the selected macroproceso
         matchesMacroproceso = riskLinks.some((link: any) => {
@@ -898,7 +898,7 @@ export default function Risks() {
           if (link.macroprocesoId === macroprocesoFilter) {
             return true;
           }
-          
+
           // Process link - check if process belongs to macroproceso
           if (link.processId) {
             const process = processes.find((p: any) => p.id === link.processId);
@@ -906,7 +906,7 @@ export default function Risks() {
               return true;
             }
           }
-          
+
           // Subproceso link - check if subproceso's process belongs to macroproceso
           if (link.subprocesoId) {
             const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
@@ -917,7 +917,7 @@ export default function Risks() {
               }
             }
           }
-          
+
           return false;
         });
       } else {
@@ -925,14 +925,14 @@ export default function Risks() {
         if (risk.macroprocesoId === macroprocesoFilter) {
           matchesMacroproceso = true;
         }
-        
+
         if (risk.processId && !matchesMacroproceso) {
           const process = processes.find((p: any) => p.id === risk.processId);
           if (process && process.macroprocesoId === macroprocesoFilter) {
             matchesMacroproceso = true;
           }
         }
-        
+
         if (risk.subprocesoId && !matchesMacroproceso) {
           const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
           if (subproceso) {
@@ -943,17 +943,17 @@ export default function Risks() {
           }
         }
       }
-      
+
       if (!matchesMacroproceso) return false;
     }
-    
+
     // Filter by process
     if (processFilter !== "all") {
       let matchesProcess = false;
-      
+
       // First, check riskProcessLinks for associations
       const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      
+
       if (riskLinks.length > 0) {
         // Check if any link is associated with the selected process
         matchesProcess = riskLinks.some((link: any) => {
@@ -961,7 +961,7 @@ export default function Risks() {
           if (link.processId === processFilter) {
             return true;
           }
-          
+
           // Subproceso link - check if subproceso belongs to process
           if (link.subprocesoId) {
             const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
@@ -969,7 +969,7 @@ export default function Risks() {
               return true;
             }
           }
-          
+
           return false;
         });
       } else {
@@ -977,7 +977,7 @@ export default function Risks() {
         if (risk.processId === processFilter) {
           matchesProcess = true;
         }
-        
+
         if (risk.subprocesoId && !matchesProcess) {
           const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
           if (subproceso && subproceso.procesoId === processFilter) {
@@ -985,17 +985,17 @@ export default function Risks() {
           }
         }
       }
-      
+
       if (!matchesProcess) return false;
     }
-    
+
     // Filter by subproceso
     if (subprocesoFilter !== "all") {
       let matchesSubproceso = false;
-      
+
       // First, check riskProcessLinks for associations
       const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      
+
       if (riskLinks.length > 0) {
         // Check if any link is associated with the selected subproceso
         matchesSubproceso = riskLinks.some((link: any) => link.subprocesoId === subprocesoFilter);
@@ -1003,19 +1003,19 @@ export default function Risks() {
         // Fallback to legacy field if no riskProcessLinks exist
         matchesSubproceso = risk.subprocesoId === subprocesoFilter;
       }
-      
+
       if (!matchesSubproceso) return false;
     }
-    
+
     // Filter by validation status - use aggregated status instead of legacy
     if (validationFilter !== "all" && getAggregatedValidationStatus(risk) !== validationFilter) return false;
-    
+
     // Filter by inherent risk level
     if (inherentRiskLevelFilter !== "all") {
       const level = getRiskLevelText(risk.inherentRisk).toLowerCase();
       if (level !== inherentRiskLevelFilter) return false;
     }
-    
+
     // Filter by residual risk level
     if (residualRiskLevelFilter !== "all") {
       const riskControls = allRiskControls.filter((rc: any) => rc.riskId === risk.id);
@@ -1027,18 +1027,18 @@ export default function Risks() {
       const level = getRiskLevelText(residualRisk).toLowerCase();
       if (level !== residualRiskLevelFilter) return false;
     }
-    
+
     // Filter by responsible owner
     if (ownerFilter !== "all") {
       const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      
+
       // Check if any of the risk's process links has this owner as responsible
       const hasOwner = riskLinks.some((link: any) => {
         // Check responsible override first
         if (link.responsibleOverrideId === ownerFilter) {
           return true;
         }
-        
+
         // Check inherited ownership from process hierarchy
         if (link.subprocesoId) {
           const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
@@ -1056,17 +1056,17 @@ export default function Risks() {
           const macroproceso = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
           if (macroproceso?.ownerId === ownerFilter) return true;
         }
-        
+
         return false;
       });
-      
+
       if (!hasOwner) return false;
     }
-    
+
     // Filter by gerencia
     if (gerenciaFilter !== "all") {
       const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
-      
+
       // Check if any of the risk's process links is associated with this gerencia
       const hasGerencia = riskLinks.some((link: any) => {
         // Check macroproceso-gerencia relationship
@@ -1075,12 +1075,12 @@ export default function Risks() {
             (mg: any) => mg.macroprocesoId === link.macroprocesoId && mg.gerenciaId === gerenciaFilter
           );
           if (macroprocesoGerenciaLink) return true;
-          
+
           // Also check if the macroproceso itself has a gerenciaId field
           const macroproceso = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
           if (macroproceso?.gerenciaId === gerenciaFilter) return true;
         }
-        
+
         // Check process-gerencia relationship
         if (link.processId) {
           const processGerenciaLink = processGerencias.find(
@@ -1088,7 +1088,7 @@ export default function Risks() {
           );
           if (processGerenciaLink) return true;
         }
-        
+
         // Check through subproceso -> process chain
         if (link.subprocesoId) {
           const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
@@ -1100,7 +1100,7 @@ export default function Risks() {
                 (pg: any) => pg.processId === process.id && pg.gerenciaId === gerenciaFilter
               );
               if (processGerenciaLink) return true;
-              
+
               // Check macroproceso-gerencia relationship
               const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
               if (macroproceso) {
@@ -1108,26 +1108,26 @@ export default function Risks() {
                   (mg: any) => mg.macroprocesoId === macroproceso.id && mg.gerenciaId === gerenciaFilter
                 );
                 if (macroprocesoGerenciaLink) return true;
-                
+
                 // Also check if the macroproceso itself has a gerenciaId field
                 if (macroproceso.gerenciaId === gerenciaFilter) return true;
               }
             }
           }
         }
-        
+
         return false;
       });
-      
+
       if (!hasGerencia) return false;
     }
-    
+
     return true;
   }).sort((a: Risk, b: Risk) => {
     if (sortOrder === "none") return 0;
-    
+
     let aValue: number, bValue: number;
-    
+
     switch (sortColumn) {
       case "code":
         // Extract numeric part from code (e.g., "R-001" -> 1, "R-012" -> 12)
@@ -1138,22 +1138,22 @@ export default function Risks() {
         aValue = getCodeNumber(a.code);
         bValue = getCodeNumber(b.code);
         break;
-      
+
       case "probability":
         aValue = a.probability || 0;
         bValue = b.probability || 0;
         break;
-      
+
       case "impact":
         aValue = a.impact || 0;
         bValue = b.impact || 0;
         break;
-      
+
       case "inherent":
         aValue = a.inherentRisk || 0;
         bValue = b.inherentRisk || 0;
         break;
-        
+
       case "residual":
         // Calcular riesgo residual basado en controles - safe NaN filtering
         const aRiskControls = allRiskControls.filter((rc: any) => rc.riskId === a.id);
@@ -1163,11 +1163,11 @@ export default function Risks() {
         aValue = aVals.length > 0 ? Math.min(...aVals) : a.inherentRisk || 0;
         bValue = bVals.length > 0 ? Math.min(...bVals) : b.inherentRisk || 0;
         break;
-        
+
       default:
         return 0;
     }
-    
+
     if (sortOrder === "asc") {
       return aValue - bValue;
     } else {
@@ -1183,10 +1183,10 @@ export default function Risks() {
   const confirmDelete = () => {
     if (deleteConfirmRisk) {
       if (!deletionReason.trim()) {
-        toast({ 
-          title: "Motivo requerido", 
-          description: "Por favor ingrese el motivo de la eliminación.", 
-          variant: "destructive" 
+        toast({
+          title: "Motivo requerido",
+          description: "Por favor ingrese el motivo de la eliminación.",
+          variant: "destructive"
         });
         return;
       }
@@ -1205,9 +1205,9 @@ export default function Risks() {
     // CRITICAL: Invalidate ALL risk-related queries for immediate updates across all views
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-    queryClient.invalidateQueries({ 
+    queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
-      exact: false 
+      exact: false
     });
     queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
     queryClient.invalidateQueries({ queryKey: ["/api/risks/heatmap-data"] });
@@ -1225,9 +1225,9 @@ export default function Risks() {
     // CRITICAL: Invalidate ALL risk queries including paginated ones for immediate UI refresh
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-    queryClient.invalidateQueries({ 
+    queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
-      exact: false 
+      exact: false
     });
     queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
     queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
@@ -1269,7 +1269,7 @@ export default function Risks() {
     }));
     return calculateResidualRiskFromControls(risk.probability, risk.impact, controls);
   };
-  
+
   // Get control count - uses pre-calculated from endpoint or from batch-relations
   const getControlCount = (risk: Risk) => {
     if ((risk as any).controlCount !== undefined) {
@@ -1318,7 +1318,7 @@ export default function Risks() {
     {
       id: 'code',
       header: (
-        <div 
+        <div
           className="flex items-center gap-1 cursor-pointer hover:bg-muted/80 select-none"
           onClick={() => handleSort("code")}
         >
@@ -1329,8 +1329,8 @@ export default function Risks() {
       ),
       width: '120px',
       cell: (risk) => (
-        <Badge 
-          variant="outline" 
+        <Badge
+          variant="outline"
           className="cursor-pointer hover:bg-accent transition-colors text-xs"
           onClick={() => setViewingRisk(risk)}
         >
@@ -1364,12 +1364,12 @@ export default function Risks() {
           {Array.isArray(risk.category) ? risk.category.slice(0, 2).map((categoryName: string) => {
             const categoryData = riskCategories?.find((cat: any) => cat.name === categoryName);
             return (
-              <Badge 
-                key={categoryName} 
+              <Badge
+                key={categoryName}
                 className="text-xs whitespace-nowrap"
-                style={{ 
-                  backgroundColor: categoryData?.color || "#6b7280", 
-                  color: "white" 
+                style={{
+                  backgroundColor: categoryData?.color || "#6b7280",
+                  color: "white"
                 }}
               >
                 {categoryName}
@@ -1395,7 +1395,7 @@ export default function Risks() {
       cell: (risk) => {
         const method = (risk as any).evaluationMethod || 'factors';
         return (
-          <Badge 
+          <Badge
             variant={method === 'direct' ? 'default' : 'secondary'}
             className="text-xs whitespace-nowrap"
           >
@@ -1409,7 +1409,7 @@ export default function Risks() {
     {
       id: 'probability',
       header: (
-        <div 
+        <div
           className="flex items-center gap-1 justify-center cursor-pointer hover:bg-muted/80 select-none"
           onClick={() => handleSort("probability")}
         >
@@ -1432,7 +1432,7 @@ export default function Risks() {
     {
       id: 'impact',
       header: (
-        <div 
+        <div
           className="flex items-center gap-1 justify-center cursor-pointer hover:bg-muted/80 select-none"
           onClick={() => handleSort("impact")}
         >
@@ -1455,7 +1455,7 @@ export default function Risks() {
     {
       id: 'inherent',
       header: (
-        <div 
+        <div
           className="flex items-center gap-1 justify-center cursor-pointer hover:bg-muted/80 select-none"
           onClick={() => handleSort("inherent")}
         >
@@ -1468,7 +1468,7 @@ export default function Risks() {
       cell: (risk) => {
         const probabilityValue = risk.probability || 0;
         const impactValue = risk.impact || 0;
-        
+
         return (
           <div className="flex items-center justify-center gap-1">
             <div className="text-center">
@@ -1506,14 +1506,14 @@ export default function Risks() {
               relatedEntities={
                 risk.processId || risk.macroprocesoId || risk.subprocesoId
                   ? [
-                      { 
-                        type: 'Proceso', 
-                        id: risk.processId || risk.macroprocesoId || risk.subprocesoId || '', 
-                        name: processes.find((p: any) => p.id === risk.processId)?.name || 
-                               macroprocesos.find((m: any) => m.id === risk.macroprocesoId)?.name ||
-                               subprocesos.find((s: any) => s.id === risk.subprocesoId)?.name || 'N/A'
-                      }
-                    ]
+                    {
+                      type: 'Proceso',
+                      id: risk.processId || risk.macroprocesoId || risk.subprocesoId || '',
+                      name: processes.find((p: any) => p.id === risk.processId)?.name ||
+                        macroprocesos.find((m: any) => m.id === risk.macroprocesoId)?.name ||
+                        subprocesos.find((s: any) => s.id === risk.subprocesoId)?.name || 'N/A'
+                    }
+                  ]
                   : undefined
               }
             />
@@ -1526,7 +1526,7 @@ export default function Risks() {
     {
       id: 'residual',
       header: (
-        <div 
+        <div
           className="flex items-center gap-1 justify-center cursor-pointer hover:bg-muted/80 select-none"
           onClick={() => handleSort("residual")}
         >
@@ -1542,13 +1542,13 @@ export default function Risks() {
         const hasControls = controlCount > 0;
         // Only use detailed controls if batch-relations are loaded
         const riskControls = needsDetailedData ? allRiskControls.filter((rc: any) => rc.riskId === risk.id) : [];
-        
+
         const controlsSteps = riskControls.map((rc: any) => ({
           label: `Control: ${rc.control?.code || 'N/A'}`,
           formula: `Efectividad ${rc.control?.effectiveness || 0}%`,
           value: `Residual: ${typeof rc.residualRisk === 'number' ? rc.residualRisk.toFixed(1) : 'N/A'}`
         }));
-        
+
         return (
           <div className="flex items-center justify-center gap-1">
             <div className="text-center">
@@ -1561,11 +1561,11 @@ export default function Risks() {
             </div>
             <ExplanationPopover
               title="Cálculo de Riesgo Residual"
-              description={hasControls 
-                ? "El riesgo residual es el menor valor después de aplicar los controles" 
+              description={hasControls
+                ? "El riesgo residual es el menor valor después de aplicar los controles"
                 : "Sin controles, el riesgo residual es igual al inherente"}
-              formula={hasControls 
-                ? "Riesgo Residual = MIN(Riesgos Residuales de todos los controles)" 
+              formula={hasControls
+                ? "Riesgo Residual = MIN(Riesgos Residuales de todos los controles)"
                 : "Riesgo Residual = Riesgo Inherente"}
               calculationSteps={hasControls ? [
                 {
@@ -1590,7 +1590,7 @@ export default function Risks() {
               ]}
               dataSource={{
                 table: hasControls ? 'risk_controls, controls' : 'risks',
-                query: hasControls 
+                query: hasControls
                   ? `SELECT MIN(residual_risk) FROM risk_controls WHERE risk_id = '${risk.id}'`
                   : `SELECT inherent_risk FROM risks WHERE id = '${risk.id}'`,
                 timestamp: risk.updatedAt ? new Date(risk.updatedAt).toLocaleString() : 'N/A'
@@ -1616,7 +1616,7 @@ export default function Risks() {
         let process: any = null;
         let subproceso: any = null;
         let macroproceso: any = null;
-        
+
         if (risk.subprocesoId) {
           subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
           if (subproceso) {
@@ -1633,7 +1633,7 @@ export default function Risks() {
         } else if (risk.macroprocesoId) {
           macroproceso = macroprocesos.find((m: any) => m.id === risk.macroprocesoId);
         }
-        
+
         return (
           <div className="space-y-1 min-w-0">
             {(() => {
@@ -1661,37 +1661,37 @@ export default function Risks() {
                 }
                 return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
               }
-              
+
               const processHierarchies: { macro?: string; proc?: string; sub?: string }[] = [];
               riskLinks.forEach((link: any) => {
                 const hierarchy: { macro?: string; proc?: string; sub?: string } = {};
-                
+
                 // Build full hierarchy for this link (macroproceso → proceso → subproceso)
                 if (link.macroprocesoId) {
                   const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
                   if (macro) hierarchy.macro = macro.name;
                 }
-                
+
                 if (link.processId) {
                   const proc = processes.find((p: any) => p.id === link.processId);
                   if (proc) hierarchy.proc = proc.name;
                 }
-                
+
                 if (link.subprocesoId) {
                   const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
                   if (sub) hierarchy.sub = sub.name;
                 }
-                
+
                 // Only add if we found at least one level
                 if (hierarchy.macro || hierarchy.proc || hierarchy.sub) {
                   processHierarchies.push(hierarchy);
                 }
               });
-              
+
               if (processHierarchies.length === 0) {
                 return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
               }
-              
+
               return (
                 <div className="space-y-0.5">
                   {processHierarchies.filter(h => h && (h.macro || h.proc || h.sub)).slice(0, 2).map((hierarchy, idx) => {
@@ -1700,7 +1700,7 @@ export default function Risks() {
                     if (hierarchy.proc) parts.push(`P: ${hierarchy.proc}`);
                     if (hierarchy.sub) parts.push(`S: ${hierarchy.sub}`);
                     const fullPath = parts.join(' → ');
-                    
+
                     return (
                       <div key={idx} className="text-xs line-clamp-2" title={fullPath}>
                         {parts.filter(p => p).map((part, i) => (
@@ -1729,11 +1729,11 @@ export default function Risks() {
       width: '200px',
       cell: (risk) => {
         const responsibles = getRiskProcessResponsibles(risk);
-        
+
         if (responsibles.length === 0) {
           return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
         }
-        
+
         if (responsibles.length === 1) {
           const responsible = responsibles[0];
           if (!responsible) return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
@@ -1746,7 +1746,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         return (
           <div className="space-y-1 min-w-0">
             <div className="flex items-center gap-1">
@@ -1769,11 +1769,11 @@ export default function Risks() {
       width: '180px',
       cell: (risk) => {
         const responsibles = getRiskProcessResponsibles(risk);
-        
+
         if (responsibles.length === 0) {
           return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
         }
-        
+
         if (responsibles.length === 1) {
           const responsible = responsibles[0];
           if (!responsible) return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
@@ -1785,7 +1785,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         return (
           <div className="space-y-0.5 min-w-0">
             {responsibles.filter(r => r && r.position !== undefined).slice(0, 2).map((r: ResponsibleWithValidation, idx: number) => (
@@ -1808,7 +1808,7 @@ export default function Risks() {
       width: '140px',
       cell: (risk) => {
         const responsibles = getRiskProcessResponsibles(risk);
-        
+
         if (responsibles.length === 0) {
           return (
             <div className="flex justify-center">
@@ -1816,7 +1816,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         if (responsibles.length === 1) {
           const responsible = responsibles[0];
           if (!responsible) {
@@ -1832,7 +1832,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         return (
           <div className="flex flex-col gap-1 items-center">
             {responsibles.filter(r => r && r.validationStatus !== undefined).slice(0, 2).map((r: ResponsibleWithValidation, idx: number) => (
@@ -1858,7 +1858,7 @@ export default function Risks() {
         const controlCount = getControlCount(risk);
         const riskControls = getRiskControls(risk.id).filter((rc: any) => rc && rc.control);
         const hasDetailedData = riskControls.length > 0;
-        
+
         if (controlCount === 0) {
           return (
             <div className="flex justify-center">
@@ -1866,13 +1866,13 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         if (hasDetailedData && riskControls.length <= 2) {
           return (
             <div className="flex flex-wrap gap-1 justify-center items-center">
               {(riskControls as any[]).filter(rc => rc && rc.control && rc.control.code).map((rc: any) => (
                 <div key={rc.id} className="flex items-center gap-1">
-                  <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-accent transition-colors" 
+                  <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-accent transition-colors"
                     onClick={() => setControlsDialogRisk(risk)}
                     title={rc.control?.name}>
                     {rc.control?.code}
@@ -1887,7 +1887,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         return (
           <div className="flex justify-center">
             <Badge
@@ -1910,7 +1910,7 @@ export default function Risks() {
       minWidth: '150px',
       cell: (risk) => {
         const actionPlans = getRiskActionPlans(risk.id);
-        
+
         if (actionPlans.length === 0) {
           return (
             <div className="flex justify-center">
@@ -1918,7 +1918,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         if (actionPlans.length <= 2) {
           return (
             <div className="flex flex-wrap gap-1 justify-center">
@@ -1935,7 +1935,7 @@ export default function Risks() {
             </div>
           );
         }
-        
+
         return (
           <div className="flex justify-center">
             <Badge
@@ -1960,8 +1960,8 @@ export default function Risks() {
         <div className="flex justify-center">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 size="sm"
                 className="h-8 w-8 p-0"
                 data-testid={`button-actions-${risk.id}`}
@@ -1992,7 +1992,7 @@ export default function Risks() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DeleteGuard itemType="risk">
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   onClick={() => handleDelete(risk)}
                   className="text-destructive"
                 >
@@ -2002,7 +2002,7 @@ export default function Risks() {
               </DeleteGuard>
             </DropdownMenuContent>
           </DropdownMenu>
-          
+
           {/* Dialogs remain outside the dropdown */}
           <Dialog open={editingRisk?.id === risk.id} onOpenChange={(open) => {
             if (!open) {
@@ -2016,21 +2016,21 @@ export default function Risks() {
                   Actualizar la información y evaluación de este riesgo.
                 </DialogDescription>
               </DialogHeader>
-              
+
               {editingRisk && (
                 <Tabs defaultValue="edit" className="w-full">
                   <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="edit">Editar Información</TabsTrigger>
                     <TabsTrigger value="validation">Estado de Validación</TabsTrigger>
                   </TabsList>
-                  
+
                   <TabsContent value="edit">
-                    <RiskForm 
-                      risk={editingRisk} 
-                      onSuccess={handleEditSuccess} 
+                    <RiskForm
+                      risk={editingRisk}
+                      onSuccess={handleEditSuccess}
                     />
                   </TabsContent>
-                  
+
                   <TabsContent value="validation">
                     <RiskValidationStatus riskId={editingRisk.id} />
                   </TabsContent>
@@ -2038,7 +2038,7 @@ export default function Risks() {
               )}
             </DialogContent>
           </Dialog>
-          
+
           <Dialog open={controlsDialogRisk?.id === risk.id} onOpenChange={(open) => {
             if (!open) {
               setControlsDialogRisk(null);
@@ -2053,7 +2053,7 @@ export default function Risks() {
                   Asociar y gestionar controles para mitigar este riesgo.
                 </DialogDescription>
               </DialogHeader>
-              
+
               <div className="space-y-6">
                 {/* Current Controls */}
                 <div>
@@ -2074,8 +2074,8 @@ export default function Risks() {
                               </Badge>
                             </div>
                           </div>
-                          <Button 
-                            variant="ghost" 
+                          <Button
+                            variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveControl(riskControl.id)}
                             disabled={removeControlMutation.isPending}
@@ -2104,7 +2104,7 @@ export default function Risks() {
                       </span>
                     )}
                   </div>
-                  
+
                   <div className="relative mb-4">
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                     <Input
@@ -2115,7 +2115,7 @@ export default function Risks() {
                       className="pl-10"
                     />
                   </div>
-                  
+
                   {isControlsSummaryLoading ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -2145,7 +2145,7 @@ export default function Risks() {
                               </Badge>
                             </div>
                           </div>
-                          <Button 
+                          <Button
                             onClick={() => handleAddControl(control.id, control.effectiveness)}
                             disabled={addControlMutation.isPending}
                             size="sm"
@@ -2164,7 +2164,7 @@ export default function Risks() {
                           </Button>
                         </div>
                       ))}
-                      
+
                       {/* Pagination controls */}
                       {controlsPagination && controlsPagination.totalPages > 1 && (
                         <div className="flex items-center justify-between pt-4 border-t mt-4">
@@ -2196,7 +2196,7 @@ export default function Risks() {
                     </div>
                   ) : (
                     <p className="text-muted-foreground">
-                      {controlSearchTerm 
+                      {controlSearchTerm
                         ? "No se encontraron controles que coincidan con la búsqueda"
                         : "Todos los controles disponibles ya están asociados"}
                     </p>
@@ -2214,17 +2214,17 @@ export default function Risks() {
 
   // Columnas para vista básica - excluye proceso, responsable, cargo y validación
   // (esos datos requieren APIs adicionales que no se cargan en vista básica)
-  const columnsBasic = columns.filter(col => 
+  const columnsBasic = columns.filter(col =>
     !['process', 'responsible', 'cargo', 'validation'].includes(col.id)
   );
 
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
-      
+
       {/* Tabs for different risk views - lazy mounted */}
-      <Tabs 
-        value={activeTab} 
+      <Tabs
+        value={activeTab}
         onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
         className="flex-1 flex flex-col h-full"
       >
@@ -2233,7 +2233,7 @@ export default function Risks() {
             <TabsTrigger value="basica" data-testid="tab-basica">Básica</TabsTrigger>
             <TabsTrigger value="detalle" data-testid="tab-detalle">Detalle</TabsTrigger>
           </TabsList>
-          
+
           <div className="flex-1 flex justify-end">
             {activeTab === "basica" && searchTerm && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2264,94 +2264,94 @@ export default function Risks() {
             <Card className="flex-1 flex flex-col overflow-hidden">
               <CardContent className="h-full flex flex-col p-0">
                 <div className="flex-1 min-h-0">
-                    <VirtualizedTable
-                      data={displayData}
-                      columns={columnsBasic}
-                      estimatedRowHeight={65}
-                      overscan={5}
-                      getRowKey={(risk) => risk.id}
-                      isLoading={isLoading}
-                      ariaLabel="Tabla de riesgos"
-                      ariaDescribedBy="risks-table-description"
-                    />
-                    <div id="risks-table-description" className="sr-only">
-                      Tabla con {displayData.length} riesgos. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
-                    </div>
+                  <VirtualizedTable
+                    data={displayData}
+                    columns={columnsBasic}
+                    estimatedRowHeight={65}
+                    overscan={5}
+                    getRowKey={(risk) => risk.id}
+                    isLoading={isLoading}
+                    ariaLabel="Tabla de riesgos"
+                    ariaDescribedBy="risks-table-description"
+                  />
+                  <div id="risks-table-description" className="sr-only">
+                    Tabla con {displayData.length} riesgos. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
                   </div>
+                </div>
 
-                  {/* Pagination controls */}
-                  {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
-                    <div className="border-t px-4 py-2 flex items-center justify-between text-[15px]">
-                      <div className="text-sm text-muted-foreground">
-                        Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                          disabled={currentPage === 1}
-                        >
-                          Anterior
-                        </Button>
-                        <span className="text-sm">
-                          Página {currentPage} de {totalPages}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                          disabled={currentPage === totalPages}
-                        >
-                          Siguiente
-                        </Button>
-                      </div>
-                      <Select
-                        value={pageSize.toString()}
-                        onValueChange={(value) => {
-                          setPageSize(Number(value));
-                          setCurrentPage(1);
-                        }}
+                {/* Pagination controls */}
+                {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
+                  <div className="border-t px-4 py-2 flex items-center justify-between text-[15px]">
+                    <div className="text-sm text-muted-foreground">
+                      Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1}
                       >
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="10">10 por página</SelectItem>
-                          <SelectItem value="25">25 por página</SelectItem>
-                          <SelectItem value="50">50 por página</SelectItem>
-                          <SelectItem value="100">100 por página</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        Anterior
+                      </Button>
+                      <span className="text-sm">
+                        Página {currentPage} de {totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage === totalPages}
+                      >
+                        Siguiente
+                      </Button>
                     </div>
-                  )}
+                    <Select
+                      value={pageSize.toString()}
+                      onValueChange={(value) => {
+                        setPageSize(Number(value));
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10 por página</SelectItem>
+                        <SelectItem value="25">25 por página</SelectItem>
+                        <SelectItem value="50">50 por página</SelectItem>
+                        <SelectItem value="100">100 por página</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-                  {displayData.length === 0 && !testMode50k && (
-                    <div className="text-center py-12">
-                      <p className="text-muted-foreground mb-4">No se encontraron riesgos</p>
-                      <CreateGuard itemType="risk" showFallback={false}>
-                        <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogOpen}>
-                          <DialogTrigger asChild>
-                            <Button data-testid="button-create-first-risk">
-                              <Plus className="mr-2 h-4 w-4" />
-                              Crear Primer Riesgo
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-                            <DialogHeader>
-                              <DialogTitle>Nuevo Riesgo</DialogTitle>
-                              <DialogDescription>
-                                Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
-                              </DialogDescription>
-                            </DialogHeader>
-                            <RiskForm onSuccess={handleCreateSuccess} />
-                          </DialogContent>
-                        </Dialog>
-                      </CreateGuard>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                {displayData.length === 0 && !testMode50k && (
+                  <div className="text-center py-12">
+                    <p className="text-muted-foreground mb-4">No se encontraron riesgos</p>
+                    <CreateGuard itemType="risk" showFallback={false}>
+                      <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogOpen}>
+                        <DialogTrigger asChild>
+                          <Button data-testid="button-create-first-risk">
+                            <Plus className="mr-2 h-4 w-4" />
+                            Crear Primer Riesgo
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                          <DialogHeader>
+                            <DialogTitle>Nuevo Riesgo</DialogTitle>
+                            <DialogDescription>
+                              Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <RiskForm onSuccess={handleCreateSuccess} />
+                        </DialogContent>
+                      </Dialog>
+                    </CreateGuard>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 
@@ -2447,7 +2447,7 @@ export default function Risks() {
             // Calculate risk values outside of JSX
             const inherentRisk = viewingRisk.inherentRisk || (viewingRisk.probability * viewingRisk.impact);
             const riskControls = getRiskControls(viewingRisk.id);
-            const residualRisk = riskControls.length > 0 
+            const residualRisk = riskControls.length > 0
               ? Math.min(...riskControls.map((rc: any) => rc.residualRisk || inherentRisk))
               : inherentRisk;
 
@@ -2458,365 +2458,365 @@ export default function Risks() {
                   <TabsTrigger value="validations">Historial de Validaciones</TabsTrigger>
                   <TabsTrigger value="history">Historial de Cambios</TabsTrigger>
                 </TabsList>
-                
+
                 <TabsContent value="details" className="flex-1 overflow-y-auto mt-4">
                   <div className="space-y-6">
                     {/* Información básica */}
                     <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Código</Label>
-                    <p className="text-sm mt-1">{viewingRisk.code}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Categoría</Label>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {Array.isArray(viewingRisk.category) ? viewingRisk.category.map((categoryName: string) => {
-                        const categoryData = riskCategories.find((cat: any) => cat.name === categoryName);
-                        return (
-                          <Badge 
-                            key={categoryName} 
-                            className="text-xs"
-                            style={{ 
-                              backgroundColor: categoryData?.color || "#6b7280", 
-                              color: "white" 
-                            }}
-                          >
-                            {categoryName}
-                          </Badge>
-                        );
-                      }) : (
-                        <Badge variant="secondary" className="text-xs">
-                          {viewingRisk.category}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                  <div className="col-span-2">
-                    <Label className="text-sm font-medium text-muted-foreground">Nombre del Riesgo</Label>
-                    <p className="text-sm mt-1">{viewingRisk.name}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <Label className="text-sm font-medium text-muted-foreground">Descripción</Label>
-                    <p className="text-sm mt-1">{viewingRisk.description}</p>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Evaluación del riesgo - 3 bloques horizontales */}
-                <div>
-                  <h3 className="text-sm font-semibold mb-4">Evaluación del Riesgo</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* Bloque 1: Riesgo Inherente */}
-                    <Card className="border-blue-200 dark:border-blue-800">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm">Riesgo Inherente</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                      {/* Método de evaluación */}
                       <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Método de Evaluación</Label>
-                        <div className="mt-1">
-                          {(() => {
-                            const hasFactors = viewingRisk.frequencyOccurrence !== undefined || 
-                                             viewingRisk.exposureVolume !== undefined ||
-                                             viewingRisk.exposureMassivity !== undefined ||
-                                             viewingRisk.exposureCriticalPath !== undefined ||
-                                             viewingRisk.complexity !== undefined ||
-                                             viewingRisk.changeVolatility !== undefined ||
-                                             viewingRisk.vulnerabilities !== undefined;
-                            
-                            const evaluatedByFactors = hasFactors && (
-                              (viewingRisk.frequencyOccurrence && viewingRisk.frequencyOccurrence !== 3) ||
-                              (viewingRisk.exposureVolume && viewingRisk.exposureVolume !== 3) ||
-                              (viewingRisk.exposureMassivity && viewingRisk.exposureMassivity !== 3) ||
-                              (viewingRisk.exposureCriticalPath && viewingRisk.exposureCriticalPath !== 3) ||
-                              (viewingRisk.complexity && viewingRisk.complexity !== 3) ||
-                              (viewingRisk.changeVolatility && viewingRisk.changeVolatility !== 3) ||
-                              (viewingRisk.vulnerabilities && viewingRisk.vulnerabilities !== 3)
-                            );
-
+                        <Label className="text-sm font-medium text-muted-foreground">Código</Label>
+                        <p className="text-sm mt-1">{viewingRisk.code}</p>
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium text-muted-foreground">Categoría</Label>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {Array.isArray(viewingRisk.category) ? viewingRisk.category.map((categoryName: string) => {
+                            const categoryData = riskCategories.find((cat: any) => cat.name === categoryName);
                             return (
-                              <Badge variant={evaluatedByFactors ? "default" : "secondary"} className="text-xs">
-                                {evaluatedByFactors ? "📊 Evaluación por Factores" : "✏️ Evaluación Directa"}
+                              <Badge
+                                key={categoryName}
+                                className="text-xs"
+                                style={{
+                                  backgroundColor: categoryData?.color || "#6b7280",
+                                  color: "white"
+                                }}
+                              >
+                                {categoryName}
                               </Badge>
                             );
-                          })()}
+                          }) : (
+                            <Badge variant="secondary" className="text-xs">
+                              {viewingRisk.category}
+                            </Badge>
+                          )}
                         </div>
                       </div>
+                      <div className="col-span-2">
+                        <Label className="text-sm font-medium text-muted-foreground">Nombre del Riesgo</Label>
+                        <p className="text-sm mt-1">{viewingRisk.name}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-sm font-medium text-muted-foreground">Descripción</Label>
+                        <p className="text-sm mt-1">{viewingRisk.description}</p>
+                      </div>
+                    </div>
 
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Probabilidad</Label>
-                        <p className="text-2xl font-bold mt-1">{viewingRisk.probability}</p>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Impacto</Label>
-                        <p className="text-2xl font-bold mt-1">{viewingRisk.impact}</p>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Riesgo Inherente</Label>
-                        <div className="mt-1">
-                          <Badge className={`${getRiskColor(inherentRisk)} text-lg px-4 py-2`}>
-                            {inherentRisk}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Nivel</Label>
-                        <div className="mt-1">
-                          <Badge className={`${getRiskColor(inherentRisk)} text-xs`}>
-                            {getRiskLevelText(inherentRisk)}
-                          </Badge>
-                        </div>
-                      </div>
-                      </CardContent>
-                    </Card>
+                    <Separator />
 
-                    {/* Bloque 2: Riesgo Residual */}
-                    <Card className="border-green-200 dark:border-green-800">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm">Riesgo Residual</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Riesgo Residual</Label>
-                        <div className="mt-1">
-                          <Badge className={`${getRiskColor(residualRisk)} text-lg px-4 py-2`}>
-                            {residualRisk.toFixed(1)}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Reducción del Riesgo</Label>
-                        <p className="text-xl font-semibold text-green-600 mt-1">
-                          {((inherentRisk - residualRisk) / inherentRisk * 100).toFixed(0)}%
-                        </p>
-                      </div>
-                      <div>
-                        <Label className="text-sm font-medium text-muted-foreground">Controles Activos</Label>
-                        <p className="text-xl font-semibold mt-1">
-                          {riskControls.length}
-                        </p>
-                      </div>
-                      <div className="pt-2 border-t">
-                        <Label className="text-xs font-medium text-muted-foreground block mb-1">Cálculo:</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Residual = Inherente × (1 - Efectividad/100)
-                        </p>
-                      </div>
-                      </CardContent>
-                    </Card>
+                    {/* Evaluación del riesgo - 3 bloques horizontales */}
+                    <div>
+                      <h3 className="text-sm font-semibold mb-4">Evaluación del Riesgo</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* Bloque 1: Riesgo Inherente */}
+                        <Card className="border-blue-200 dark:border-blue-800">
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-sm">Riesgo Inherente</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            {/* Método de evaluación */}
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Método de Evaluación</Label>
+                              <div className="mt-1">
+                                {(() => {
+                                  const hasFactors = viewingRisk.frequencyOccurrence !== undefined ||
+                                    viewingRisk.exposureVolume !== undefined ||
+                                    viewingRisk.exposureMassivity !== undefined ||
+                                    viewingRisk.exposureCriticalPath !== undefined ||
+                                    viewingRisk.complexity !== undefined ||
+                                    viewingRisk.changeVolatility !== undefined ||
+                                    viewingRisk.vulnerabilities !== undefined;
 
-                    {/* Bloque 3: Matriz Visual */}
-                    <Card className="border-purple-200 dark:border-purple-800">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm">Matriz de Riesgo</CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex flex-col items-center">
-                      <div className="inline-block border rounded-lg overflow-hidden">
-                        <div className="grid grid-cols-5 gap-0">
-                          {(() => {
-                            // Encontrar la celda más cercana al riesgo residual
-                            let closestCell = { prob: 1, imp: 1, diff: Infinity };
-                            for (let p = 1; p <= 5; p++) {
-                              for (let i = 1; i <= 5; i++) {
-                                const diff = Math.abs(p * i - residualRisk);
-                                if (diff < closestCell.diff) {
-                                  closestCell = { prob: p, imp: i, diff };
-                                }
-                              }
-                            }
-                            
-                            return [5, 4, 3, 2, 1].flatMap((prob) => (
-                              [1, 2, 3, 4, 5].map((imp) => {
-                                const cellValue = prob * imp;
-                                const isInherent = viewingRisk.probability === prob && viewingRisk.impact === imp;
-                                const isResidual = closestCell.prob === prob && closestCell.imp === imp;
-                                
-                                return (
-                                  <div
-                                    key={`${prob}-${imp}`}
-                                    className={`
+                                  const evaluatedByFactors = hasFactors && (
+                                    (viewingRisk.frequencyOccurrence && viewingRisk.frequencyOccurrence !== 3) ||
+                                    (viewingRisk.exposureVolume && viewingRisk.exposureVolume !== 3) ||
+                                    (viewingRisk.exposureMassivity && viewingRisk.exposureMassivity !== 3) ||
+                                    (viewingRisk.exposureCriticalPath && viewingRisk.exposureCriticalPath !== 3) ||
+                                    (viewingRisk.complexity && viewingRisk.complexity !== 3) ||
+                                    (viewingRisk.changeVolatility && viewingRisk.changeVolatility !== 3) ||
+                                    (viewingRisk.vulnerabilities && viewingRisk.vulnerabilities !== 3)
+                                  );
+
+                                  return (
+                                    <Badge variant={evaluatedByFactors ? "default" : "secondary"} className="text-xs">
+                                      {evaluatedByFactors ? "📊 Evaluación por Factores" : "✏️ Evaluación Directa"}
+                                    </Badge>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Probabilidad</Label>
+                              <p className="text-2xl font-bold mt-1">{viewingRisk.probability}</p>
+                            </div>
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Impacto</Label>
+                              <p className="text-2xl font-bold mt-1">{viewingRisk.impact}</p>
+                            </div>
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Riesgo Inherente</Label>
+                              <div className="mt-1">
+                                <Badge className={`${getRiskColor(inherentRisk)} text-lg px-4 py-2`}>
+                                  {inherentRisk}
+                                </Badge>
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Nivel</Label>
+                              <div className="mt-1">
+                                <Badge className={`${getRiskColor(inherentRisk)} text-xs`}>
+                                  {getRiskLevelText(inherentRisk)}
+                                </Badge>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Bloque 2: Riesgo Residual */}
+                        <Card className="border-green-200 dark:border-green-800">
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-sm">Riesgo Residual</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Riesgo Residual</Label>
+                              <div className="mt-1">
+                                <Badge className={`${getRiskColor(residualRisk)} text-lg px-4 py-2`}>
+                                  {residualRisk.toFixed(1)}
+                                </Badge>
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Reducción del Riesgo</Label>
+                              <p className="text-xl font-semibold text-green-600 mt-1">
+                                {((inherentRisk - residualRisk) / inherentRisk * 100).toFixed(0)}%
+                              </p>
+                            </div>
+                            <div>
+                              <Label className="text-sm font-medium text-muted-foreground">Controles Activos</Label>
+                              <p className="text-xl font-semibold mt-1">
+                                {riskControls.length}
+                              </p>
+                            </div>
+                            <div className="pt-2 border-t">
+                              <Label className="text-xs font-medium text-muted-foreground block mb-1">Cálculo:</Label>
+                              <p className="text-xs text-muted-foreground">
+                                Residual = Inherente × (1 - Efectividad/100)
+                              </p>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Bloque 3: Matriz Visual */}
+                        <Card className="border-purple-200 dark:border-purple-800">
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-sm">Matriz de Riesgo</CardTitle>
+                          </CardHeader>
+                          <CardContent className="flex flex-col items-center">
+                            <div className="inline-block border rounded-lg overflow-hidden">
+                              <div className="grid grid-cols-5 gap-0">
+                                {(() => {
+                                  // Encontrar la celda más cercana al riesgo residual
+                                  let closestCell = { prob: 1, imp: 1, diff: Infinity };
+                                  for (let p = 1; p <= 5; p++) {
+                                    for (let i = 1; i <= 5; i++) {
+                                      const diff = Math.abs(p * i - residualRisk);
+                                      if (diff < closestCell.diff) {
+                                        closestCell = { prob: p, imp: i, diff };
+                                      }
+                                    }
+                                  }
+
+                                  return [5, 4, 3, 2, 1].flatMap((prob) => (
+                                    [1, 2, 3, 4, 5].map((imp) => {
+                                      const cellValue = prob * imp;
+                                      const isInherent = viewingRisk.probability === prob && viewingRisk.impact === imp;
+                                      const isResidual = closestCell.prob === prob && closestCell.imp === imp;
+
+                                      return (
+                                        <div
+                                          key={`${prob}-${imp}`}
+                                          className={`
                                       w-10 h-10 flex items-center justify-center text-xs font-medium border-r border-b border-muted-foreground/20
-                                      ${cellValue <= 6 ? 'bg-green-500/30' : 
-                                        cellValue <= 12 ? 'bg-yellow-500/30' : 
-                                        cellValue <= 16 ? 'bg-orange-500/30' : 
-                                        'bg-red-500/30'}
+                                      ${cellValue <= 6 ? 'bg-green-500/30' :
+                                              cellValue <= 12 ? 'bg-yellow-500/30' :
+                                                cellValue <= 16 ? 'bg-orange-500/30' :
+                                                  'bg-red-500/30'}
                                     `}
-                                    title={`P${prob} × I${imp} = ${cellValue}`}
-                                  >
-                                    <div className="flex gap-0.5">
-                                      {isInherent && <span className="text-blue-600 font-bold text-base leading-none">●</span>}
-                                      {isResidual && <span className="text-green-600 font-bold text-base leading-none">●</span>}
-                                    </div>
+                                          title={`P${prob} × I${imp} = ${cellValue}`}
+                                        >
+                                          <div className="flex gap-0.5">
+                                            {isInherent && <span className="text-blue-600 font-bold text-base leading-none">●</span>}
+                                            {isResidual && <span className="text-green-600 font-bold text-base leading-none">●</span>}
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  ));
+                                })()}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 mt-2 text-xs">
+                              <div className="flex items-center gap-1">
+                                <span className="text-blue-600 font-bold text-sm">●</span>
+                                <span className="text-muted-foreground">Inherente</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-green-600 font-bold text-sm">●</span>
+                                <span className="text-muted-foreground">Residual</span>
+                              </div>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground flex gap-2 flex-wrap justify-center">
+                              <div className="flex items-center gap-1">
+                                <div className="w-2.5 h-2.5 rounded bg-green-500/30"></div>
+                                <span>Bajo</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <div className="w-2.5 h-2.5 rounded bg-yellow-500/30"></div>
+                                <span>Medio</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <div className="w-2.5 h-2.5 rounded bg-orange-500/30"></div>
+                                <span>Alto</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <div className="w-2.5 h-2.5 rounded bg-red-500/30"></div>
+                                <span>Crítico</span>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    {/* Factores de Evaluación - Solo si fue evaluado por factores */}
+                    {(() => {
+                      const hasFactors = viewingRisk.frequencyOccurrence !== undefined ||
+                        viewingRisk.exposureVolume !== undefined ||
+                        viewingRisk.exposureMassivity !== undefined ||
+                        viewingRisk.exposureCriticalPath !== undefined ||
+                        viewingRisk.complexity !== undefined ||
+                        viewingRisk.changeVolatility !== undefined ||
+                        viewingRisk.vulnerabilities !== undefined;
+
+                      const evaluatedByFactors = hasFactors && (
+                        (viewingRisk.frequencyOccurrence && viewingRisk.frequencyOccurrence !== 3) ||
+                        (viewingRisk.exposureVolume && viewingRisk.exposureVolume !== 3) ||
+                        (viewingRisk.exposureMassivity && viewingRisk.exposureMassivity !== 3) ||
+                        (viewingRisk.exposureCriticalPath && viewingRisk.exposureCriticalPath !== 3) ||
+                        (viewingRisk.complexity && viewingRisk.complexity !== 3) ||
+                        (viewingRisk.changeVolatility && viewingRisk.changeVolatility !== 3) ||
+                        (viewingRisk.vulnerabilities && viewingRisk.vulnerabilities !== 3)
+                      );
+
+                      if (!evaluatedByFactors) return null;
+
+                      return (
+                        <>
+                          <div>
+                            <h3 className="text-sm font-semibold mb-3">Factores de Evaluación</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Frecuencia de Ocurrencia</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.frequencyOccurrence || 3}
+                                    </Badge>
                                   </div>
-                                );
-                              })
-                            ));
-                          })()}
-                        </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Volumen de Exposición</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.exposureVolume || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Masividad de Exposición</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.exposureMassivity || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Ruta Crítica de Exposición</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.exposureCriticalPath || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Complejidad</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.complexity || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Volatilidad del Cambio</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.changeVolatility || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              <Card>
+                                <CardContent className="pt-4">
+                                  <div className="flex items-center justify-between">
+                                    <Label className="text-xs text-muted-foreground">Vulnerabilidades</Label>
+                                    <Badge variant="outline" className="text-sm">
+                                      {viewingRisk.vulnerabilities || 3}
+                                    </Badge>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            </div>
+                          </div>
+
+                          <Separator />
+                        </>
+                      );
+                    })()}
+
+                    {/* Mapa de relaciones */}
+                    <div>
+                      <h3 className="text-sm font-semibold mb-3">Mapa de Relaciones</h3>
+                      <div className="h-[600px] border rounded-lg">
+                        <RiskRelationshipMap
+                          risk={viewingRisk}
+                          macroprocesos={macroprocesos}
+                          processes={processes}
+                          subprocesos={subprocesos}
+                          riskControls={allRiskControls.filter((rc: any) => rc.riskId === viewingRisk.id)}
+                          riskEvents={Array.isArray(viewingRiskEvents) ? viewingRiskEvents : []}
+                          riskProcessLinks={allRiskProcessLinks.filter((link: any) => link.riskId === viewingRisk.id)}
+                        />
                       </div>
-                      <div className="flex items-center gap-3 mt-2 text-xs">
-                        <div className="flex items-center gap-1">
-                          <span className="text-blue-600 font-bold text-sm">●</span>
-                          <span className="text-muted-foreground">Inherente</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-green-600 font-bold text-sm">●</span>
-                          <span className="text-muted-foreground">Residual</span>
-                        </div>
-                      </div>
-                      <div className="mt-2 text-xs text-muted-foreground flex gap-2 flex-wrap justify-center">
-                        <div className="flex items-center gap-1">
-                          <div className="w-2.5 h-2.5 rounded bg-green-500/30"></div>
-                          <span>Bajo</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-2.5 h-2.5 rounded bg-yellow-500/30"></div>
-                          <span>Medio</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-2.5 h-2.5 rounded bg-orange-500/30"></div>
-                          <span>Alto</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <div className="w-2.5 h-2.5 rounded bg-red-500/30"></div>
-                          <span>Crítico</span>
-                        </div>
-                      </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </div>
-
-              <Separator />
-
-                {/* Factores de Evaluación - Solo si fue evaluado por factores */}
-                {(() => {
-                  const hasFactors = viewingRisk.frequencyOccurrence !== undefined || 
-                                   viewingRisk.exposureVolume !== undefined ||
-                                   viewingRisk.exposureMassivity !== undefined ||
-                                   viewingRisk.exposureCriticalPath !== undefined ||
-                                   viewingRisk.complexity !== undefined ||
-                                   viewingRisk.changeVolatility !== undefined ||
-                                   viewingRisk.vulnerabilities !== undefined;
-                  
-                  const evaluatedByFactors = hasFactors && (
-                    (viewingRisk.frequencyOccurrence && viewingRisk.frequencyOccurrence !== 3) ||
-                    (viewingRisk.exposureVolume && viewingRisk.exposureVolume !== 3) ||
-                    (viewingRisk.exposureMassivity && viewingRisk.exposureMassivity !== 3) ||
-                    (viewingRisk.exposureCriticalPath && viewingRisk.exposureCriticalPath !== 3) ||
-                    (viewingRisk.complexity && viewingRisk.complexity !== 3) ||
-                    (viewingRisk.changeVolatility && viewingRisk.changeVolatility !== 3) ||
-                    (viewingRisk.vulnerabilities && viewingRisk.vulnerabilities !== 3)
-                  );
-
-                  if (!evaluatedByFactors) return null;
-
-                  return (
-                    <>
-                      <div>
-                        <h3 className="text-sm font-semibold mb-3">Factores de Evaluación</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Frecuencia de Ocurrencia</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.frequencyOccurrence || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Volumen de Exposición</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.exposureVolume || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Masividad de Exposición</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.exposureMassivity || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Ruta Crítica de Exposición</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.exposureCriticalPath || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Complejidad</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.complexity || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Volatilidad del Cambio</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.changeVolatility || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardContent className="pt-4">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-xs text-muted-foreground">Vulnerabilidades</Label>
-                                <Badge variant="outline" className="text-sm">
-                                  {viewingRisk.vulnerabilities || 3}
-                                </Badge>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </div>
-                      </div>
-
-                      <Separator />
-                    </>
-                  );
-                })()}
-
-                {/* Mapa de relaciones */}
-                <div>
-                  <h3 className="text-sm font-semibold mb-3">Mapa de Relaciones</h3>
-                  <div className="h-[600px] border rounded-lg">
-                    <RiskRelationshipMap 
-                      risk={viewingRisk}
-                      macroprocesos={macroprocesos}
-                      processes={processes}
-                      subprocesos={subprocesos}
-                      riskControls={allRiskControls.filter((rc: any) => rc.riskId === viewingRisk.id)}
-                      riskEvents={Array.isArray(viewingRiskEvents) ? viewingRiskEvents : []}
-                      riskProcessLinks={allRiskProcessLinks.filter((link: any) => link.riskId === viewingRisk.id)}
-                    />
-                  </div>
-                </div>
+                    </div>
 
                     <div className="flex justify-end gap-2 pt-4">
                       <Button variant="outline" onClick={() => setViewingRisk(null)}>
@@ -2825,15 +2825,15 @@ export default function Risks() {
                     </div>
                   </div>
                 </TabsContent>
-                
+
                 <TabsContent value="validations" className="flex-1 overflow-y-auto mt-4">
                   <RiskValidationHistory riskId={viewingRisk.id} riskCode={viewingRisk.code} riskName={viewingRisk.name} />
                 </TabsContent>
-                
+
                 <TabsContent value="history" className="flex-1 overflow-y-auto mt-4">
-                  <AuditHistory 
-                    entityType="risk" 
-                    entityId={viewingRisk.id} 
+                  <AuditHistory
+                    entityType="risk"
+                    entityId={viewingRisk.id}
                     maxHeight="500px"
                   />
                 </TabsContent>
@@ -2851,13 +2851,13 @@ export default function Risks() {
               Selecciona las columnas que deseas mostrar en la tabla de riesgos
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 py-4 overflow-y-auto max-h-[60vh]">
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="col-code"
                 checked={visibleColumns.code}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, code: checked as boolean })
                 }
               />
@@ -2873,7 +2873,7 @@ export default function Risks() {
               <Checkbox
                 id="col-name"
                 checked={visibleColumns.name}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, name: checked as boolean })
                 }
               />
@@ -2889,7 +2889,7 @@ export default function Risks() {
               <Checkbox
                 id="col-evaluationMethod"
                 checked={visibleColumns.evaluationMethod}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, evaluationMethod: checked as boolean })
                 }
               />
@@ -2905,7 +2905,7 @@ export default function Risks() {
               <Checkbox
                 id="col-probability"
                 checked={visibleColumns.probability}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, probability: checked as boolean })
                 }
               />
@@ -2921,7 +2921,7 @@ export default function Risks() {
               <Checkbox
                 id="col-impact"
                 checked={visibleColumns.impact}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, impact: checked as boolean })
                 }
               />
@@ -2937,7 +2937,7 @@ export default function Risks() {
               <Checkbox
                 id="col-inherent"
                 checked={visibleColumns.inherent}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, inherent: checked as boolean })
                 }
               />
@@ -2953,7 +2953,7 @@ export default function Risks() {
               <Checkbox
                 id="col-residual"
                 checked={visibleColumns.residual}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, residual: checked as boolean })
                 }
               />
@@ -2969,7 +2969,7 @@ export default function Risks() {
               <Checkbox
                 id="col-process"
                 checked={visibleColumns.process}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, process: checked as boolean })
                 }
               />
@@ -2985,7 +2985,7 @@ export default function Risks() {
               <Checkbox
                 id="col-responsible"
                 checked={visibleColumns.responsible}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, responsible: checked as boolean })
                 }
               />
@@ -3001,7 +3001,7 @@ export default function Risks() {
               <Checkbox
                 id="col-cargo"
                 checked={visibleColumns.cargo}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, cargo: checked as boolean })
                 }
               />
@@ -3017,7 +3017,7 @@ export default function Risks() {
               <Checkbox
                 id="col-validation"
                 checked={visibleColumns.validation}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, validation: checked as boolean })
                 }
               />
@@ -3033,7 +3033,7 @@ export default function Risks() {
               <Checkbox
                 id="col-status"
                 checked={visibleColumns.status}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, status: checked as boolean })
                 }
               />
@@ -3049,7 +3049,7 @@ export default function Risks() {
               <Checkbox
                 id="col-actions"
                 checked={visibleColumns.actions}
-                onCheckedChange={(checked) => 
+                onCheckedChange={(checked) =>
                   setVisibleColumns({ ...visibleColumns, actions: checked as boolean })
                 }
               />
@@ -3063,8 +3063,8 @@ export default function Risks() {
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => {
                 setVisibleColumns({
                   code: true,
@@ -3098,7 +3098,7 @@ export default function Risks() {
               Selecciona una vista guardada para aplicar sus filtros
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {savedViews.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
@@ -3191,7 +3191,7 @@ export default function Risks() {
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          
+
           <div className="space-y-2 py-4">
             <Label htmlFor="deletion-reason" className="text-sm font-medium">
               Motivo de eliminación <span className="text-destructive">*</span>
@@ -3212,8 +3212,8 @@ export default function Risks() {
 
           <AlertDialogFooter>
             <AlertDialogCancel onClick={cancelDelete}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmDelete} 
+            <AlertDialogAction
+              onClick={confirmDelete}
               disabled={deleteMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"

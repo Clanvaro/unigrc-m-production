@@ -11267,6 +11267,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         createdBy: userId
       });
 
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
+
       res.json(updatedPlan);
     } catch (error) {
       console.error("Error submitting evidence:", error);
@@ -11378,6 +11382,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
+
       res.json(updatedPlan);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -11431,6 +11439,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           reopenedAfterRejections: actionPlan.rejectionCount
         }
       });
+
+      // Invalidate action plans cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await invalidateActionPlanCaches(tenantId);
 
       res.json(updatedPlan);
     } catch (error) {
