@@ -21,3 +21,6 @@ test-results/
 .vite/
 *.log
 .github/workflows/
+
+# Environment variables (Sensitive data - DO NOT COMMIT)
+.env
