@@ -3274,12 +3274,12 @@ export class MemStorage implements IStorage {
         .filter(rc => rc.riskId === riskId)
         .map(rc => rc.controlId)
     );
-    
+
     // Deduplicate within the batch itself (first occurrence wins)
     const seenInBatch = new Set<string>();
     const created: RiskControl[] = [];
     let skipped = 0;
-    
+
     for (const { controlId, residualRisk } of controls) {
       // Skip if already exists in DB or already processed in this batch
       if (existingControlIds.has(controlId) || seenInBatch.has(controlId)) {
@@ -3292,21 +3292,21 @@ export class MemStorage implements IStorage {
       this.riskControls.set(id, riskControl);
       created.push(riskControl);
     }
-    
+
     return { created, skipped };
   }
 
   async deleteRiskControlsBatch(riskId: string, controlIds: string[]): Promise<{ deleted: number }> {
     const controlIdSet = new Set(controlIds);
     let deleted = 0;
-    
+
     for (const [id, rc] of this.riskControls.entries()) {
       if (rc.riskId === riskId && controlIdSet.has(rc.controlId)) {
         this.riskControls.delete(id);
         deleted++;
       }
     }
-    
+
     return { deleted };
   }
 
@@ -8783,7 +8783,7 @@ export class DatabaseStorage extends MemStorage {
     const seenInBatch = new Set<string>();
     const uniqueControls: Array<{ controlId: string; residualRisk: string }> = [];
     let batchDuplicates = 0;
-    
+
     for (const ctrl of controls) {
       if (seenInBatch.has(ctrl.controlId)) {
         batchDuplicates++;
@@ -8811,7 +8811,7 @@ export class DatabaseStorage extends MemStorage {
       .select({ controlId: riskControls.controlId })
       .from(riskControls)
       .where(eq(riskControls.riskId, riskId));
-    
+
     const existingControlIds = new Set(existingLinks.map(l => l.controlId));
     const toCreate = values.filter(v => !existingControlIds.has(v.controlId));
     const dbDuplicates = values.length - toCreate.length;
@@ -10217,89 +10217,94 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getAuditUniverseWithDetails(): Promise<AuditUniverseWithDetails[]> {
-    const items = await db.select().from(auditUniverse).orderBy(auditUniverse.auditableEntity);
+    // Optimized: Fetch all data in a single query with joins instead of N+1 queries
+    const rows = await db
+      .select({
+        universe: auditUniverse,
+        macro: macroprocesos,
+        proc: processes,
+        sub: subprocesos
+      })
+      .from(auditUniverse)
+      .leftJoin(macroprocesos, eq(auditUniverse.macroprocesoId, macroprocesos.id))
+      .leftJoin(processes, eq(auditUniverse.processId, processes.id))
+      .leftJoin(subprocesos, eq(auditUniverse.subprocesoId, subprocesos.id))
+      .orderBy(auditUniverse.auditableEntity);
 
     const result: AuditUniverseWithDetails[] = [];
 
-    for (const item of items) {
+    for (const row of rows) {
+      const { universe: item, macro, proc, sub } = row;
+
       let macroprocesoData = null;
       let processData = null;
       let subprocesoData = null;
 
       // Get macroproceso if ID exists
-      if (item.macroprocesoId) {
-        const [macro] = await db.select().from(macroprocesos).where(eq(macroprocesos.id, item.macroprocesoId));
-        if (macro) {
-          macroprocesoData = {
-            id: macro.id,
-            name: macro.name,
-            description: macro.description,
-            createdAt: macro.createdAt,
-            updatedAt: macro.updatedAt
-          };
-        }
+      if (item.macroprocesoId && macro) {
+        macroprocesoData = {
+          id: macro.id,
+          name: macro.name,
+          description: macro.description,
+          createdAt: macro.createdAt,
+          updatedAt: macro.updatedAt
+        };
       }
 
       // Get process - could be from processes table OR from macroprocesos if macroproceso acts as process
-      if (item.processId) {
-        const [proc] = await db.select().from(processes).where(eq(processes.id, item.processId));
-        if (proc) {
-          processData = {
-            id: proc.id,
-            code: proc.code,
-            name: proc.name,
-            description: proc.description,
-            ownerId: proc.ownerId,
-            macroprocesoId: proc.macroprocesoId,
-            createdAt: proc.createdAt
-          };
-        } else if (item.entityType === 'macroproceso' && macroprocesoData) {
-          // Macroproceso acting as process
-          processData = {
-            id: macroprocesoData.id,
-            code: `MACRO-${macroprocesoData.id.slice(-4)}`,
-            name: macroprocesoData.name,
-            description: macroprocesoData.description,
-            ownerId: null,
-            macroprocesoId: macroprocesoData.id,
-            createdAt: macroprocesoData.createdAt
-          };
-        }
+      if (item.processId && proc) {
+        processData = {
+          id: proc.id,
+          code: proc.code,
+          name: proc.name,
+          description: proc.description,
+          ownerId: proc.ownerId,
+          macroprocesoId: proc.macroprocesoId,
+          createdAt: proc.createdAt
+        };
+      } else if (item.entityType === 'macroproceso' && macroprocesoData) {
+        // Macroproceso acting as process
+        processData = {
+          id: macroprocesoData.id,
+          code: `MACRO-${macroprocesoData.id.slice(-4)}`,
+          name: macroprocesoData.name,
+          description: macroprocesoData.description,
+          ownerId: null,
+          macroprocesoId: macroprocesoData.id,
+          createdAt: macroprocesoData.createdAt
+        };
       }
 
       // Get subproceso - could be from subprocesos table OR from processes if process acts as subproceso OR from macroprocesos if macroproceso acts as both
-      if (item.subprocesoId) {
-        const [sub] = await db.select().from(subprocesos).where(eq(subprocesos.id, item.subprocesoId));
-        if (sub) {
-          subprocesoData = {
-            id: sub.id,
-            code: sub.code,
-            name: sub.name,
-            description: sub.description,
-            procesoId: sub.procesoId,
-            createdAt: sub.createdAt
-          };
-        } else if (item.entityType === 'process' && processData) {
-          // Process acting as subproceso
-          subprocesoData = {
-            id: processData.id,
-            code: processData.code,
-            name: processData.name,
-            description: processData.description,
-            procesoId: processData.id,
-            createdAt: processData.createdAt
-          };
-        } else if (item.entityType === 'macroproceso' && macroprocesoData) {
-          // Macroproceso acting as subproceso
-          subprocesoData = {
-            id: macroprocesoData.id,
-            code: `MACRO-${macroprocesoData.id.slice(-4)}`,
-            name: macroprocesoData.name,
-            description: macroprocesoData.description,
-            procesoId: macroprocesoData.id,
-            createdAt: macroprocesoData.createdAt
-          };
-        }
+      if (item.subprocesoId && sub) {
+        subprocesoData = {
+          id: sub.id,
+          code: sub.code,
+          name: sub.name,
+          description: sub.description,
+          procesoId: sub.procesoId,
+          createdAt: sub.createdAt
+        };
+      } else if (item.entityType === 'process' && processData) {
+        // Process acting as subproceso
+        subprocesoData = {
+          id: processData.id,
+          code: processData.code,
+          name: processData.name,
+          description: processData.description,
+          procesoId: processData.id,
+          createdAt: processData.createdAt
+        };
+      } else if (item.entityType === 'macroproceso' && macroprocesoData) {
+        // Macroproceso acting as subproceso
+        subprocesoData = {
+          id: macroprocesoData.id,
+          code: `MACRO-${macroprocesoData.id.slice(-4)}`,
+          name: macroprocesoData.name,
+          description: macroprocesoData.description,
+          procesoId: macroprocesoData.id,
+          createdAt: macroprocesoData.createdAt
+        };
       }
 
       // Build hierarchical path
