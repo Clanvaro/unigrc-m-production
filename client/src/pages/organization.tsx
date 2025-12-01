@@ -56,21 +56,21 @@ function ProcessMapContent() {
   const [expandedProcesos, setExpandedProcesos] = useState<Set<string>>(new Set());
   const [expandedSubprocesos, setExpandedSubprocesos] = useState<Set<string>>(new Set());
   const [riskModalOpen, setRiskModalOpen] = useState(false);
-  const [selectedEntityRisks, setSelectedEntityRisks] = useState<{risks: Risk[], entityName: string, entityType: string}>({ risks: [], entityName: '', entityType: '' });
-  const [selectedProcessForRisks, setSelectedProcessForRisks] = useState<{type: 'macroproceso' | 'proceso' | 'subproceso', id: string, name: string} | null>(null);
-  const [showExplanation, setShowExplanation] = useState<{type: 'macroproceso' | 'proceso' | 'subproceso', name: string, risks: Risk[]} | null>(null);
+  const [selectedEntityRisks, setSelectedEntityRisks] = useState<{ risks: Risk[], entityName: string, entityType: string }>({ risks: [], entityName: '', entityType: '' });
+  const [selectedProcessForRisks, setSelectedProcessForRisks] = useState<{ type: 'macroproceso' | 'proceso' | 'subproceso', id: string, name: string } | null>(null);
+  const [showExplanation, setShowExplanation] = useState<{ type: 'macroproceso' | 'proceso' | 'subproceso', name: string, risks: Risk[] } | null>(null);
   const [sortField, setSortField] = useState<'name' | 'code' | 'residualRisk' | 'order' | 'macroproceso' | 'proceso' | 'subproceso' | 'responsable' | 'riskCount'>('order');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [draggedMacroproceso, setDraggedMacroproceso] = useState<MacroprocesoWithRisks | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  
+
   const [deleteConfirmMacroproceso, setDeleteConfirmMacroproceso] = useState<Macroproceso | null>(null);
   const [macroprocesoDelReason, setMacroprocesoDelReason] = useState("");
   const [deleteConfirmProcess, setDeleteConfirmProcess] = useState<Process | null>(null);
   const [processDelReason, setProcessDelReason] = useState("");
   const [deleteConfirmSubprocess, setDeleteConfirmSubprocess] = useState<Subproceso | null>(null);
   const [subprocessDelReason, setSubprocessDelReason] = useState("");
-  
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -131,9 +131,9 @@ function ProcessMapContent() {
   });
 
   const { data: processMapValidatedRisks } = useQuery<{
-    macroprocesos: Record<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    processes: Record<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>,
-    subprocesos: Record<string, {validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string}>
+    macroprocesos: Record<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    processes: Record<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>,
+    subprocesos: Record<string, { validatedRiskCount: number, aggregatedInherentRisk: number, aggregatedResidualRisk: number, riskLevel: string }>
   }>({
     queryKey: ["/api/organization/process-map-risks"],
     staleTime: 1000 * 60 * 5, // 5 minutes - aggregated calculations change infrequently
@@ -152,12 +152,12 @@ function ProcessMapContent() {
 
   const enableFullQueries = () => {
     queryClient.refetchQueries({ queryKey: ["/api/processes"] });
-    queryClient.refetchQueries({ queryKey: ["/api/risks"] }); 
+    queryClient.refetchQueries({ queryKey: ["/api/risks"] });
     queryClient.refetchQueries({ queryKey: ["/api/process-validations"] });
   };
 
   const deleteProcessMutation = useMutation({
-    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) => 
+    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) =>
       apiRequest(`/api/processes/${id}`, "DELETE", { deletionReason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
@@ -168,19 +168,19 @@ function ProcessMapContent() {
     },
     onError: (error: any) => {
       let errorMessage = "No se pudo eliminar el proceso.";
-      
+
       if (error?.message?.includes("Cannot delete process with linked risks or subprocesses")) {
         errorMessage = "No se puede eliminar el proceso porque tiene riesgos o subprocesos asociados. Elimine primero todos los elementos vinculados.";
       } else if (error?.message?.includes("Cannot delete the last process of a macroproceso")) {
         errorMessage = "No se puede eliminar el último proceso de un macroproceso. Todo macroproceso debe tener al menos un proceso.";
       }
-      
+
       toast({ title: "Error", description: errorMessage, variant: "destructive" });
     },
   });
 
   const deleteSubprocessMutation = useMutation({
-    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) => 
+    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) =>
       apiRequest(`/api/subprocesos/${id}`, "DELETE", { deletionReason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
@@ -194,7 +194,7 @@ function ProcessMapContent() {
   });
 
   const deleteMacroprocesoMutation = useMutation({
-    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) => 
+    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) =>
       apiRequest(`/api/macroprocesos/${id}`, "DELETE", { deletionReason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -211,13 +211,13 @@ function ProcessMapContent() {
   });
 
   const reorderMacroprocesosMutation = useMutation({
-    mutationFn: (updates: { id: string; order: number }[]) => 
+    mutationFn: (updates: { id: string; order: number }[]) =>
       apiRequest("/api/macroprocesos/reorder", "PUT", { updates }),
     onMutate: async (updates) => {
       await queryClient.cancelQueries({ queryKey: ["/api/macroprocesos"] });
-      
+
       const previousData = queryClient.getQueryData(["/api/macroprocesos"]);
-      
+
       queryClient.setQueryData(["/api/macroprocesos"], (old: MacroprocesoWithRisks[] | undefined) => {
         if (!old) return old;
         return old.map(macro => {
@@ -225,7 +225,7 @@ function ProcessMapContent() {
           return update ? { ...macro, order: update.order } : macro;
         });
       });
-      
+
       return { previousData };
     },
     onError: (err, updates, context) => {
@@ -308,7 +308,7 @@ function ProcessMapContent() {
   const handleDragStart = (e: React.DragEvent, macroproceso: MacroprocesoWithRisks) => {
     setDraggedMacroproceso(macroproceso);
     e.dataTransfer.effectAllowed = 'move';
-    
+
     const dragElement = e.target as HTMLElement;
     dragElement.style.opacity = '0.5';
   };
@@ -332,26 +332,26 @@ function ProcessMapContent() {
 
   const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
-    
+
     if (!draggedMacroproceso || sortField !== 'order') return;
-    
+
     const sortedMacroprocesos = getSortedMacroprocesos();
     const draggedIndex = sortedMacroprocesos.findIndex(m => m.id === draggedMacroproceso.id);
-    
+
     if (draggedIndex === targetIndex) return;
-    
+
     const newList = [...sortedMacroprocesos];
     const [draggedItem] = newList.splice(draggedIndex, 1);
     newList.splice(targetIndex, 0, draggedItem);
-    
+
     const updates = newList.map((macroproceso, index) => ({
       id: macroproceso.id,
       order: index + 1
     }));
-    
+
     try {
       await reorderMacroprocesosMutation.mutateAsync(updates);
-      
+
       toast({
         title: "Orden actualizado",
         description: "El orden de los macroprocesos ha sido actualizado exitosamente.",
@@ -363,7 +363,7 @@ function ProcessMapContent() {
         variant: "destructive",
       });
     }
-    
+
     setDragOverIndex(null);
     setDraggedMacroproceso(null);
   };
@@ -428,14 +428,14 @@ function ProcessMapContent() {
       .flatMap((process) => risks.filter((risk) => risk.processId === process.id));
     const subprocessRisks = processes
       .filter((process) => process.macroprocesoId === macroprocesoId)
-      .flatMap((process) => 
+      .flatMap((process) =>
         subprocesos
           .filter((sub) => sub.procesoId === process.id)
           .flatMap((sub) => risks.filter((risk) => risk.subprocesoId === sub.id))
       );
-    
+
     const allRisks = [...directRisks, ...processRisks, ...subprocessRisks];
-    return allRisks.filter((risk, index, self) => 
+    return allRisks.filter((risk, index, self) =>
       index === self.findIndex(r => r.id === risk.id)
     );
   };
@@ -445,13 +445,13 @@ function ProcessMapContent() {
     const subprocessRisks = subprocesos
       .filter((sub) => sub.procesoId === processId)
       .flatMap((sub) => risks.filter((risk) => risk.subprocesoId === sub.id));
-    
+
     return [...directRisks, ...subprocessRisks];
   };
 
   const openRiskModal = (entityId: string, entityName: string, entityType: 'macroproceso' | 'proceso' | 'subproceso') => {
     let entityRisks: Risk[] = [];
-    
+
     switch (entityType) {
       case 'macroproceso':
         entityRisks = getRisksByMacroproceso(entityId);
@@ -463,7 +463,7 @@ function ProcessMapContent() {
         entityRisks = getRisksBySubproceso(entityId);
         break;
     }
-    
+
     setSelectedEntityRisks({
       risks: entityRisks,
       entityName,
@@ -498,7 +498,7 @@ function ProcessMapContent() {
       changeVolatility: risk.changeVolatility,
       vulnerabilities: risk.vulnerabilities
     };
-    
+
     const calculatedProbability = calculateProbability(factors);
     return risk.probability === calculatedProbability ? 'factors' : 'direct';
   }
@@ -516,28 +516,28 @@ function ProcessMapContent() {
     if (aggregatedStats.rejectedRisks > 0 || aggregatedStats.rejectedControls > 0) {
       return "requires_review";
     }
-    
-    if (aggregatedStats.completionPercentage === 100 || 
-        aggregatedStats.validationStatus.every(s => s === "completed")) {
+
+    if (aggregatedStats.completionPercentage === 100 ||
+      aggregatedStats.validationStatus.every(s => s === "completed")) {
       return "completed";
     }
-    
-    if (aggregatedStats.validationStatus.some(s => s === "in_progress") || 
-        aggregatedStats.completionPercentage > 0) {
+
+    if (aggregatedStats.validationStatus.some(s => s === "in_progress") ||
+      aggregatedStats.completionPercentage > 0) {
       return "in_progress";
     }
-    
+
     return "not_started";
   };
 
   const getResidualRiskForMacroproceso = (macroprocesoId: string) => {
     // Use validated risks data if available
     const validatedData = processMapValidatedRisks?.macroprocesos?.[macroprocesoId];
-    
+
     if (validatedData && validatedData.validatedRiskCount > 0) {
       const riskLevel = validatedData.riskLevel;
       const riskValue = validatedData.aggregatedResidualRisk;
-      
+
       let color = "bg-gray-100 text-gray-600";
       if (riskLevel === "Bajo") {
         color = "bg-green-100 text-green-700";
@@ -548,7 +548,7 @@ function ProcessMapContent() {
       } else if (riskLevel === "Crítico") {
         color = "bg-red-100 text-red-700";
       }
-      
+
       return {
         level: parseFloat(riskValue.toFixed(1)),
         color,
@@ -556,10 +556,10 @@ function ProcessMapContent() {
         validatedRiskCount: validatedData.validatedRiskCount
       };
     }
-    
+
     // Fallback to existing macroproceso data
     const macroproceso = macroprocesos.find(m => m.id === macroprocesoId);
-    
+
     if (!macroproceso || !macroproceso.residualRisk || macroproceso.residualRisk === 0) {
       return {
         level: 0,
@@ -568,9 +568,9 @@ function ProcessMapContent() {
         validatedRiskCount: 0
       };
     }
-    
+
     const riskValue = macroproceso.residualRisk;
-    
+
     if (riskValue <= 6) {
       return {
         level: parseFloat(riskValue.toFixed(1)),
@@ -605,15 +605,15 @@ function ProcessMapContent() {
   const getValidationStatusForMacroproceso = (macroprocesoId: string) => {
     const processData = basicProcesses.length > 0 ? basicProcesses : processes;
     const macroprocesoProcesses = processData.filter(p => p.macroprocesoId === macroprocesoId);
-    const validations = processValidations.filter(v => 
+    const validations = processValidations.filter(v =>
       macroprocesoProcesses.some(p => p.id === v.processId)
     );
-    
+
     if (validations.length === 0) return "not_started";
-    
+
     const aggregatedStats = getValidationStats(macroprocesoId);
     const statusArray = validations.map(v => v.validationStatus);
-    
+
     return mapValidationStatusToUI({
       totalRisks: aggregatedStats.totalRisks,
       validatedRisks: aggregatedStats.risksValidated,
@@ -628,21 +628,21 @@ function ProcessMapContent() {
 
   const getValidationStats = (macroprocesoId: string) => {
     const macroprocesoProcesses = processes.filter(p => p.macroprocesoId === macroprocesoId);
-    const validations = processValidations.filter(v => 
+    const validations = processValidations.filter(v =>
       macroprocesoProcesses.some(p => p.id === v.processId)
     );
-    
+
     const totalRisks = validations.reduce((sum, v) => sum + v.totalRisks, 0);
     const validatedRisks = validations.reduce((sum, v) => sum + v.validatedRisks, 0);
     const rejectedRisks = validations.reduce((sum, v) => sum + v.rejectedRisks, 0);
     const totalControls = validations.reduce((sum, v) => sum + v.totalControls, 0);
     const validatedControls = validations.reduce((sum, v) => sum + v.validatedControls, 0);
     const rejectedControls = validations.reduce((sum, v) => sum + v.rejectedControls, 0);
-    
-    const completionPercentage = totalRisks + totalControls > 0 
+
+    const completionPercentage = totalRisks + totalControls > 0
       ? Math.round(((validatedRisks + validatedControls) / (totalRisks + totalControls)) * 100)
       : 0;
-    
+
     return {
       risksValidated: validatedRisks,
       totalRisks,
@@ -676,11 +676,11 @@ function ProcessMapContent() {
     setTimeout(() => {
       const element = document.querySelector(`[data-testid="macroproceso-card-${macroprocesoId}"]`);
       if (element) {
-        element.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'start' 
+        element.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
         });
-        
+
         element.classList.add('ring-2', 'ring-blue-500', 'ring-offset-2');
         setTimeout(() => {
           element.classList.remove('ring-2', 'ring-blue-500', 'ring-offset-2');
@@ -690,7 +690,7 @@ function ProcessMapContent() {
   };
 
   const [, navigate] = useLocation();
-  
+
   const navigateToValidationDashboard = (macroprocesoId: string) => {
     navigate(`/validation?macroproceso=${macroprocesoId}`);
   };
@@ -708,7 +708,7 @@ function ProcessMapContent() {
     return [...macroprocesos].sort((a, b) => {
       let aValue: string | number;
       let bValue: string | number;
-      
+
       switch (sortField) {
         case 'name':
         case 'macroproceso':
@@ -747,7 +747,7 @@ function ProcessMapContent() {
           aValue = a.order || 0;
           bValue = b.order || 0;
       }
-      
+
       if (sortDirection === 'asc') {
         return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
       } else {
@@ -789,8 +789,8 @@ function ProcessMapContent() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setDeleteConfirmMacroproceso(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmDeleteMacroproceso} 
+            <AlertDialogAction
+              onClick={confirmDeleteMacroproceso}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
@@ -827,8 +827,8 @@ function ProcessMapContent() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setDeleteConfirmProcess(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmDeleteProcess} 
+            <AlertDialogAction
+              onClick={confirmDeleteProcess}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
@@ -865,8 +865,8 @@ function ProcessMapContent() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setDeleteConfirmSubprocess(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmDeleteSubprocess} 
+            <AlertDialogAction
+              onClick={confirmDeleteSubprocess}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
@@ -920,84 +920,29 @@ function ProcessMapContent() {
         </CardHeader>
         <CardContent>
           {viewMode === 'value-chain' ? (
-          <div className="relative bg-gradient-to-r from-blue-50 to-green-50 dark:from-blue-950/20 dark:to-green-950/20 p-6 rounded-lg">
-            <div className="mb-4">
-              <div className="text-sm font-medium text-muted-foreground mb-2 text-center">ACTIVIDADES DE SOPORTE</div>
-              <div className={`grid gap-2 ${getSupportActivities().length <= 4 ? 'grid-cols-1 md:grid-cols-4' : `grid-cols-1 md:grid-cols-${Math.min(getSupportActivities().length, 6)}`}`}>
-                {getSupportActivities().map((macroproceso) => {
-                  const residualRiskInfo = getResidualRiskForMacroproceso(macroproceso.id);
-                  
-                  return (
-                    <div 
-                      key={macroproceso.id}
-                      className="bg-red-600 text-white p-3 text-center font-medium rounded text-sm hover:bg-red-700 transition-colors cursor-pointer relative"
-                      onClick={() => navigateToMacroprocesoDetail(macroproceso.id)}
-                      data-testid={`value-chain-support-${macroproceso.id}`}
-                    >
-                      <div className="mb-2">{macroproceso.name.toUpperCase()}</div>
-                      
-                      {macroproceso.owner && (
-                        <div className="text-xs text-white/80 mb-2">
-                          <User className="h-3 w-3 inline mr-1" />
-                          {macroproceso.owner.name}
-                        </div>
-                      )}
-                      
-                      <div className="flex flex-col gap-1 items-center">
-                        <ResidualRiskIndicator
-                          level={residualRiskInfo.level}
-                          color={residualRiskInfo.color}
-                          label={residualRiskInfo.label}
-                          size="xs"
-                          onClick={() => navigateToMacroprocesoDetail(macroproceso.id)}
-                        />
-                        {residualRiskInfo.validatedRiskCount && residualRiskInfo.validatedRiskCount > 0 && (
-                          <Badge className="text-xs bg-white/20 text-white border-white/20">
-                            <AlertTriangle className="h-2 w-2 mr-1" />
-                            {residualRiskInfo.validatedRiskCount} riesgo{residualRiskInfo.validatedRiskCount !== 1 ? 's' : ''} validado{residualRiskInfo.validatedRiskCount !== 1 ? 's' : ''}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {getSupportActivities().length === 0 && (
-                  <div className="col-span-full text-center text-muted-foreground text-sm p-4 border-2 border-dashed border-muted rounded">
-                    No hay macroprocesos de apoyo configurados
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="relative">
-              <div className="absolute right-0 top-1/2 transform -translate-y-1/2 translate-x-4 z-10">
-                <div className="bg-green-500 text-white px-2 py-6 rounded-r-lg text-sm font-medium transform rotate-90 origin-center">
-                  MARGEN
-                </div>
-              </div>
-
-              <div>
-                <div className="text-sm font-medium text-muted-foreground mb-2 text-center">ACTIVIDADES PRIMARIAS</div>
-                <div className={`gap-2 mx-8 ${getPrimaryActivities().length <= 5 ? 'grid grid-cols-1 md:grid-cols-5' : `grid grid-cols-1 md:grid-cols-${Math.min(getPrimaryActivities().length, 6)}`}`}>
-                  {getPrimaryActivities().map((macroproceso) => {
+            <div className="relative bg-gradient-to-r from-blue-50 to-green-50 dark:from-blue-950/20 dark:to-green-950/20 p-6 rounded-lg">
+              <div className="mb-4">
+                <div className="text-sm font-medium text-muted-foreground mb-2 text-center">ACTIVIDADES DE SOPORTE</div>
+                <div className={`grid gap-2 ${getSupportActivities().length <= 4 ? 'grid-cols-1 md:grid-cols-4' : `grid-cols-1 md:grid-cols-${Math.min(getSupportActivities().length, 6)}`}`}>
+                  {getSupportActivities().map((macroproceso) => {
                     const residualRiskInfo = getResidualRiskForMacroproceso(macroproceso.id);
-                    
+
                     return (
-                      <div 
+                      <div
                         key={macroproceso.id}
-                        className="bg-blue-600 text-white p-4 text-center font-medium rounded text-sm hover:bg-blue-700 transition-colors cursor-pointer min-h-[80px] flex flex-col items-center justify-center"
+                        className="bg-red-600 text-white p-3 text-center font-medium rounded text-sm hover:bg-red-700 transition-colors cursor-pointer relative"
                         onClick={() => navigateToMacroprocesoDetail(macroproceso.id)}
-                        data-testid={`value-chain-primary-${macroproceso.id}`}
+                        data-testid={`value-chain-support-${macroproceso.id}`}
                       >
                         <div className="mb-2">{macroproceso.name.toUpperCase()}</div>
-                        
+
                         {macroproceso.owner && (
                           <div className="text-xs text-white/80 mb-2">
                             <User className="h-3 w-3 inline mr-1" />
                             {macroproceso.owner.name}
                           </div>
                         )}
-                        
+
                         <div className="flex flex-col gap-1 items-center">
                           <ResidualRiskIndicator
                             level={residualRiskInfo.level}
@@ -1016,22 +961,77 @@ function ProcessMapContent() {
                       </div>
                     );
                   })}
-                  {getPrimaryActivities().length === 0 && (
+                  {getSupportActivities().length === 0 && (
                     <div className="col-span-full text-center text-muted-foreground text-sm p-4 border-2 border-dashed border-muted rounded">
-                      No hay macroprocesos primarios configurados
+                      No hay macroprocesos de apoyo configurados
                     </div>
                   )}
                 </div>
               </div>
-            </div>
 
-            <div className="flex justify-center mt-4">
-              <div className="text-center">
-                <ChevronDown className="h-6 w-6 text-green-600 mx-auto animate-bounce" />
-                <div className="text-xs text-muted-foreground mt-1">Ver detalle de procesos</div>
+              <div className="relative">
+                <div className="absolute right-0 top-1/2 transform -translate-y-1/2 translate-x-4 z-10">
+                  <div className="bg-green-500 text-white px-2 py-6 rounded-r-lg text-sm font-medium transform rotate-90 origin-center">
+                    MARGEN
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground mb-2 text-center">ACTIVIDADES PRIMARIAS</div>
+                  <div className={`gap-2 mx-8 ${getPrimaryActivities().length <= 5 ? 'grid grid-cols-1 md:grid-cols-5' : `grid grid-cols-1 md:grid-cols-${Math.min(getPrimaryActivities().length, 6)}`}`}>
+                    {getPrimaryActivities().map((macroproceso) => {
+                      const residualRiskInfo = getResidualRiskForMacroproceso(macroproceso.id);
+
+                      return (
+                        <div
+                          key={macroproceso.id}
+                          className="bg-blue-600 text-white p-4 text-center font-medium rounded text-sm hover:bg-blue-700 transition-colors cursor-pointer min-h-[80px] flex flex-col items-center justify-center"
+                          onClick={() => navigateToMacroprocesoDetail(macroproceso.id)}
+                          data-testid={`value-chain-primary-${macroproceso.id}`}
+                        >
+                          <div className="mb-2">{macroproceso.name.toUpperCase()}</div>
+
+                          {macroproceso.owner && (
+                            <div className="text-xs text-white/80 mb-2">
+                              <User className="h-3 w-3 inline mr-1" />
+                              {macroproceso.owner.name}
+                            </div>
+                          )}
+
+                          <div className="flex flex-col gap-1 items-center">
+                            <ResidualRiskIndicator
+                              level={residualRiskInfo.level}
+                              color={residualRiskInfo.color}
+                              label={residualRiskInfo.label}
+                              size="xs"
+                              onClick={() => navigateToMacroprocesoDetail(macroproceso.id)}
+                            />
+                            {residualRiskInfo.validatedRiskCount && residualRiskInfo.validatedRiskCount > 0 && (
+                              <Badge className="text-xs bg-white/20 text-white border-white/20">
+                                <AlertTriangle className="h-2 w-2 mr-1" />
+                                {residualRiskInfo.validatedRiskCount} riesgo{residualRiskInfo.validatedRiskCount !== 1 ? 's' : ''} validado{residualRiskInfo.validatedRiskCount !== 1 ? 's' : ''}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {getPrimaryActivities().length === 0 && (
+                      <div className="col-span-full text-center text-muted-foreground text-sm p-4 border-2 border-dashed border-muted rounded">
+                        No hay macroprocesos primarios configurados
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-center mt-4">
+                <div className="text-center">
+                  <ChevronDown className="h-6 w-6 text-green-600 mx-auto animate-bounce" />
+                  <div className="text-xs text-muted-foreground mt-1">Ver detalle de procesos</div>
+                </div>
               </div>
             </div>
-          </div>
           ) : (
             <div className="border rounded-lg">
               <div className="max-h-[600px] overflow-auto relative">
@@ -1119,181 +1119,49 @@ function ProcessMapContent() {
                       <TableHead className="text-right bg-background">Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
-                <TableBody>
-                  {getSortedMacroprocesos().map((macroproceso) => {
-                    const macroprocesoProcesses = basicProcesses.filter(p => p.macroprocesoId === macroproceso.id);
-                    const residualRiskInfo = getResidualRiskForMacroproceso(macroproceso.id);
-                    
-                    if (macroprocesoProcesses.length === 0) {
-                      const macroprocesoRiskCount = processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.validatedRiskCount ?? (macroproceso.riskCount || getRisksByMacroproceso(macroproceso.id).length);
-                      
-                      return (
-                        <TableRow 
-                          key={macroproceso.id}
-                          data-testid={`macroproceso-table-row-${macroproceso.id}`}
-                          className="hover:bg-muted/50"
-                        >
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
-                              <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
-                              <span className="font-medium">{macroproceso.name}</span>
-                              <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
-                                {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
-                              </Badge>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">—</TableCell>
-                          <TableCell className="text-muted-foreground">—</TableCell>
-                          <TableCell className="text-muted-foreground">—</TableCell>
-                          <TableCell>
-                            {macroprocesoRiskCount > 0 ? (
-                              <Badge variant="secondary" className="gap-1">
-                                <AlertTriangle className="h-3 w-3" />
-                                {macroprocesoRiskCount} riesgo{macroprocesoRiskCount !== 1 ? 's' : ''}
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">Sin riesgos</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <ResidualRiskIndicator
-                              level={residualRiskInfo.level}
-                              color={residualRiskInfo.color}
-                              label={residualRiskInfo.label}
-                              size="sm"
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  data-testid={`button-actions-${macroproceso.id}`}
-                                >
-                                  <MoreVertical className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setSelectedProcessForRisks({
-                                      type: 'macroproceso',
-                                      id: macroproceso.id,
-                                      name: macroproceso.name
-                                    });
-                                  }}
-                                  data-testid={`action-view-risks-${macroproceso.id}`}
-                                >
-                                  <Eye className="h-4 w-4 mr-2" />
-                                  Ver riesgos asociados
-                                </DropdownMenuItem>
-                                <CreateGuard itemType="proceso">
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setSelectedMacroprocesoId(macroproceso.id);
-                                      setIsCreateProcessDialogOpen(true);
-                                    }}
-                                    data-testid={`action-add-process-${macroproceso.id}`}
-                                  >
-                                    <Plus className="h-4 w-4 mr-2" />
-                                    Agregar proceso
-                                  </DropdownMenuItem>
-                                </CreateGuard>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    const risks = getRisksByMacroproceso(macroproceso.id);
-                                    setShowExplanation({
-                                      type: 'macroproceso',
-                                      name: macroproceso.name,
-                                      risks: risks
-                                    });
-                                  }}
-                                  data-testid={`action-view-calculation-${macroproceso.id}`}
-                                >
-                                  <Calculator className="h-4 w-4 mr-2" />
-                                  Ver cálculo residual
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <EditGuard itemType="macroproceso">
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setEditingMacroproceso(macroproceso);
-                                    }}
-                                    data-testid={`action-edit-${macroproceso.id}`}
-                                  >
-                                    <Edit className="h-4 w-4 mr-2" />
-                                    Editar
-                                  </DropdownMenuItem>
-                                </EditGuard>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    }
+                  <TableBody>
+                    {getSortedMacroprocesos().map((macroproceso) => {
+                      const macroprocesoProcesses = basicProcesses.filter(p => p.macroprocesoId === macroproceso.id);
+                      const residualRiskInfo = getResidualRiskForMacroproceso(macroproceso.id);
 
-                    return macroprocesoProcesses.map((proceso, processIndex) => {
-                      const procesoSubprocesos = subprocesos.filter(s => s.procesoId === proceso.id);
-                      const procesoOwner = processOwners.find(o => o.id === proceso.ownerId);
-                      
-                      if (procesoSubprocesos.length === 0) {
-                        const procesoRiskCount = processMapValidatedRisks?.processes?.[proceso.id]?.validatedRiskCount ?? (proceso.riskCount || getRisksByProcess(proceso.id).length);
-                        
+                      if (macroprocesoProcesses.length === 0) {
+                        const macroprocesoRiskCount = processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.validatedRiskCount ?? (macroproceso.riskCount || getRisksByMacroproceso(macroproceso.id).length);
+
                         return (
-                          <TableRow 
-                            key={`${macroproceso.id}-${proceso.id}`}
-                            data-testid={`process-table-row-${proceso.id}`}
+                          <TableRow
+                            key={macroproceso.id}
+                            data-testid={`macroproceso-table-row-${macroproceso.id}`}
                             className="hover:bg-muted/50"
                           >
                             <TableCell>
-                              {processIndex === 0 && (
-                                <div className="flex flex-col gap-1">
-                                  <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
-                                  <span className="font-medium">{macroproceso.name}</span>
-                                  <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
-                                    {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
-                                  </Badge>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
                               <div className="flex flex-col gap-1">
-                                <Badge variant="outline" className="w-fit">{proceso.code}</Badge>
-                                <span className="font-medium text-sm">{proceso.name}</span>
+                                <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
+                                <span className="font-medium">{macroproceso.name}</span>
+                                <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
+                                  {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
+                                </Badge>
                               </div>
                             </TableCell>
                             <TableCell className="text-muted-foreground">—</TableCell>
+                            <TableCell className="text-muted-foreground">—</TableCell>
+                            <TableCell className="text-muted-foreground">—</TableCell>
                             <TableCell>
-                              {procesoOwner && (
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="h-6 w-6">
-                                    <AvatarFallback className="text-xs">
-                                      {procesoOwner.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="text-sm">{procesoOwner.name}</span>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {procesoRiskCount > 0 ? (
+                              {macroprocesoRiskCount > 0 ? (
                                 <Badge variant="secondary" className="gap-1">
                                   <AlertTriangle className="h-3 w-3" />
-                                  {procesoRiskCount} riesgo{procesoRiskCount !== 1 ? 's' : ''}
+                                  {macroprocesoRiskCount} riesgo{macroprocesoRiskCount !== 1 ? 's' : ''}
                                 </Badge>
                               ) : (
                                 <span className="text-muted-foreground text-xs">Sin riesgos</span>
                               )}
                             </TableCell>
                             <TableCell>
-                              {proceso.residualRisk !== undefined && proceso.residualRisk > 0 ? (
-                                <Badge className={getRiskColor(proceso.residualRisk)}>
-                                  {proceso.residualRisk.toFixed(1)}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground text-xs">Sin riesgo</span>
-                              )}
+                              <ResidualRiskIndicator
+                                level={residualRiskInfo.level}
+                                color={residualRiskInfo.color}
+                                label={residualRiskInfo.label}
+                                size="sm"
+                              />
                             </TableCell>
                             <TableCell className="text-right">
                               <DropdownMenu>
@@ -1301,7 +1169,7 @@ function ProcessMapContent() {
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    data-testid={`button-actions-${proceso.id}`}
+                                    data-testid={`button-actions-${macroproceso.id}`}
                                   >
                                     <MoreVertical className="h-4 w-4" />
                                   </Button>
@@ -1310,49 +1178,49 @@ function ProcessMapContent() {
                                   <DropdownMenuItem
                                     onClick={() => {
                                       setSelectedProcessForRisks({
-                                        type: 'proceso',
-                                        id: proceso.id,
-                                        name: proceso.name
+                                        type: 'macroproceso',
+                                        id: macroproceso.id,
+                                        name: macroproceso.name
                                       });
                                     }}
-                                    data-testid={`action-view-risks-${proceso.id}`}
+                                    data-testid={`action-view-risks-${macroproceso.id}`}
                                   >
                                     <Eye className="h-4 w-4 mr-2" />
                                     Ver riesgos asociados
                                   </DropdownMenuItem>
-                                  <CreateGuard itemType="subproceso">
+                                  <CreateGuard itemType="proceso">
                                     <DropdownMenuItem
                                       onClick={() => {
-                                        setSelectedProcesoId(proceso.id);
-                                        setIsCreateSubprocessDialogOpen(true);
+                                        setSelectedMacroprocesoId(macroproceso.id);
+                                        setIsCreateProcessDialogOpen(true);
                                       }}
-                                      data-testid={`action-add-subprocess-${proceso.id}`}
+                                      data-testid={`action-add-process-${macroproceso.id}`}
                                     >
                                       <Plus className="h-4 w-4 mr-2" />
-                                      Agregar subproceso
+                                      Agregar proceso
                                     </DropdownMenuItem>
                                   </CreateGuard>
                                   <DropdownMenuItem
                                     onClick={() => {
-                                      const risks = getRisksByProcess(proceso.id);
+                                      const risks = getRisksByMacroproceso(macroproceso.id);
                                       setShowExplanation({
-                                        type: 'proceso',
-                                        name: proceso.name,
+                                        type: 'macroproceso',
+                                        name: macroproceso.name,
                                         risks: risks
                                       });
                                     }}
-                                    data-testid={`action-view-calculation-${proceso.id}`}
+                                    data-testid={`action-view-calculation-${macroproceso.id}`}
                                   >
                                     <Calculator className="h-4 w-4 mr-2" />
                                     Ver cálculo residual
                                   </DropdownMenuItem>
                                   <DropdownMenuSeparator />
-                                  <EditGuard itemType="proceso">
+                                  <EditGuard itemType="macroproceso">
                                     <DropdownMenuItem
                                       onClick={() => {
-                                        setEditingProcess(proceso);
+                                        setEditingMacroproceso(macroproceso);
                                       }}
-                                      data-testid={`action-edit-${proceso.id}`}
+                                      data-testid={`action-edit-${macroproceso.id}`}
                                     >
                                       <Edit className="h-4 w-4 mr-2" />
                                       Editar
@@ -1365,138 +1233,270 @@ function ProcessMapContent() {
                         );
                       }
 
-                      return procesoSubprocesos.map((subproceso, subIndex) => {
-                        const subprocesoOwner = processOwners.find(o => o.id === subproceso.ownerId);
-                        const subprocesoRiskCount = processMapValidatedRisks?.subprocesos?.[subproceso.id]?.validatedRiskCount ?? (subproceso.riskCount || getRisksBySubproceso(subproceso.id).length);
-                        
-                        return (
-                          <TableRow 
-                            key={`${macroproceso.id}-${proceso.id}-${subproceso.id}`}
-                            data-testid={`subproceso-table-row-${subproceso.id}`}
-                            className="hover:bg-muted/50"
-                          >
-                            <TableCell>
-                              {processIndex === 0 && subIndex === 0 && (
-                                <div className="flex flex-col gap-1">
-                                  <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
-                                  <span className="font-medium">{macroproceso.name}</span>
-                                  <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
-                                    {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
-                                  </Badge>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {subIndex === 0 && (
+                      return macroprocesoProcesses.map((proceso, processIndex) => {
+                        const procesoSubprocesos = subprocesos.filter(s => s.procesoId === proceso.id);
+                        const procesoOwner = processOwners.find(o => o.id === proceso.ownerId);
+
+                        if (procesoSubprocesos.length === 0) {
+                          const procesoRiskCount = processMapValidatedRisks?.processes?.[proceso.id]?.validatedRiskCount ?? (proceso.riskCount || getRisksByProcess(proceso.id).length);
+
+                          return (
+                            <TableRow
+                              key={`${macroproceso.id}-${proceso.id}`}
+                              data-testid={`process-table-row-${proceso.id}`}
+                              className="hover:bg-muted/50"
+                            >
+                              <TableCell>
+                                {processIndex === 0 && (
+                                  <div className="flex flex-col gap-1">
+                                    <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
+                                    <span className="font-medium">{macroproceso.name}</span>
+                                    <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
+                                      {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
+                                    </Badge>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
                                 <div className="flex flex-col gap-1">
                                   <Badge variant="outline" className="w-fit">{proceso.code}</Badge>
                                   <span className="font-medium text-sm">{proceso.name}</span>
                                 </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex flex-col gap-1">
-                                <Badge variant="outline" className="w-fit bg-purple-50 dark:bg-purple-950">{subproceso.code}</Badge>
-                                <span className="text-sm">{subproceso.name}</span>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {subprocesoOwner && (
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="h-6 w-6">
-                                    <AvatarFallback className="text-xs">
-                                      {subprocesoOwner.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="text-sm">{subprocesoOwner.name}</span>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {subprocesoRiskCount > 0 ? (
-                                <Badge variant="secondary" className="gap-1">
-                                  <AlertTriangle className="h-3 w-3" />
-                                  {subprocesoRiskCount} riesgo{subprocesoRiskCount !== 1 ? 's' : ''}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground text-xs">Sin riesgos</span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              {subproceso.residualRisk !== undefined && subproceso.residualRisk > 0 ? (
-                                <Badge className={getRiskColor(subproceso.residualRisk)}>
-                                  {subproceso.residualRisk.toFixed(1)}
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground text-xs">Sin riesgo</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    data-testid={`button-actions-${subproceso.id}`}
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      setSelectedProcessForRisks({
-                                        type: 'subproceso',
-                                        id: subproceso.id,
-                                        name: subproceso.name
-                                      });
-                                    }}
-                                    data-testid={`action-view-risks-${subproceso.id}`}
-                                  >
-                                    <Eye className="h-4 w-4 mr-2" />
-                                    Ver riesgos asociados
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      const risks = getRisksBySubproceso(subproceso.id);
-                                      setShowExplanation({
-                                        type: 'subproceso',
-                                        name: subproceso.name,
-                                        risks: risks
-                                      });
-                                    }}
-                                    data-testid={`action-view-calculation-${subproceso.id}`}
-                                  >
-                                    <Calculator className="h-4 w-4 mr-2" />
-                                    Ver cálculo residual
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <EditGuard itemType="subproceso">
+                              </TableCell>
+                              <TableCell className="text-muted-foreground">—</TableCell>
+                              <TableCell>
+                                {procesoOwner && (
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="h-6 w-6">
+                                      <AvatarFallback className="text-xs">
+                                        {procesoOwner.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="text-sm">{procesoOwner.name}</span>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {procesoRiskCount > 0 ? (
+                                  <Badge variant="secondary" className="gap-1">
+                                    <AlertTriangle className="h-3 w-3" />
+                                    {procesoRiskCount} riesgo{procesoRiskCount !== 1 ? 's' : ''}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">Sin riesgos</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {proceso.residualRisk !== undefined && proceso.residualRisk > 0 ? (
+                                  <Badge className={getRiskColor(proceso.residualRisk)}>
+                                    {proceso.residualRisk.toFixed(1)}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">Sin riesgo</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      data-testid={`button-actions-${proceso.id}`}
+                                    >
+                                      <MoreVertical className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
                                     <DropdownMenuItem
                                       onClick={() => {
-                                        setEditingSubprocess(subproceso);
+                                        setSelectedProcessForRisks({
+                                          type: 'proceso',
+                                          id: proceso.id,
+                                          name: proceso.name
+                                        });
                                       }}
-                                      data-testid={`action-edit-${subproceso.id}`}
+                                      data-testid={`action-view-risks-${proceso.id}`}
                                     >
-                                      <Edit className="h-4 w-4 mr-2" />
-                                      Editar
+                                      <Eye className="h-4 w-4 mr-2" />
+                                      Ver riesgos asociados
                                     </DropdownMenuItem>
-                                  </EditGuard>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </TableCell>
-                          </TableRow>
-                        );
+                                    <CreateGuard itemType="subproceso">
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setSelectedProcesoId(proceso.id);
+                                          setIsCreateSubprocessDialogOpen(true);
+                                        }}
+                                        data-testid={`action-add-subprocess-${proceso.id}`}
+                                      >
+                                        <Plus className="h-4 w-4 mr-2" />
+                                        Agregar subproceso
+                                      </DropdownMenuItem>
+                                    </CreateGuard>
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const risks = getRisksByProcess(proceso.id);
+                                        setShowExplanation({
+                                          type: 'proceso',
+                                          name: proceso.name,
+                                          risks: risks
+                                        });
+                                      }}
+                                      data-testid={`action-view-calculation-${proceso.id}`}
+                                    >
+                                      <Calculator className="h-4 w-4 mr-2" />
+                                      Ver cálculo residual
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <EditGuard itemType="proceso">
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setEditingProcess(proceso);
+                                        }}
+                                        data-testid={`action-edit-${proceso.id}`}
+                                      >
+                                        <Edit className="h-4 w-4 mr-2" />
+                                        Editar
+                                      </DropdownMenuItem>
+                                    </EditGuard>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        }
+
+                        return procesoSubprocesos.map((subproceso, subIndex) => {
+                          const subprocesoOwner = processOwners.find(o => o.id === subproceso.ownerId);
+                          const subprocesoRiskCount = processMapValidatedRisks?.subprocesos?.[subproceso.id]?.validatedRiskCount ?? (subproceso.riskCount || getRisksBySubproceso(subproceso.id).length);
+
+                          return (
+                            <TableRow
+                              key={`${macroproceso.id}-${proceso.id}-${subproceso.id}`}
+                              data-testid={`subproceso-table-row-${subproceso.id}`}
+                              className="hover:bg-muted/50"
+                            >
+                              <TableCell>
+                                {processIndex === 0 && subIndex === 0 && (
+                                  <div className="flex flex-col gap-1">
+                                    <Badge variant="outline" className="w-fit">{macroproceso.code}</Badge>
+                                    <span className="font-medium">{macroproceso.name}</span>
+                                    <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"} className="w-fit text-xs">
+                                      {macroproceso.type === "clave" ? "Primaria" : "Apoyo"}
+                                    </Badge>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {subIndex === 0 && (
+                                  <div className="flex flex-col gap-1">
+                                    <Badge variant="outline" className="w-fit">{proceso.code}</Badge>
+                                    <span className="font-medium text-sm">{proceso.name}</span>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-col gap-1">
+                                  <Badge variant="outline" className="w-fit bg-purple-50 dark:bg-purple-950">{subproceso.code}</Badge>
+                                  <span className="text-sm">{subproceso.name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {subprocesoOwner && (
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="h-6 w-6">
+                                      <AvatarFallback className="text-xs">
+                                        {subprocesoOwner.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <span className="text-sm">{subprocesoOwner.name}</span>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {subprocesoRiskCount > 0 ? (
+                                  <Badge variant="secondary" className="gap-1">
+                                    <AlertTriangle className="h-3 w-3" />
+                                    {subprocesoRiskCount} riesgo{subprocesoRiskCount !== 1 ? 's' : ''}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">Sin riesgos</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {subproceso.residualRisk !== undefined && subproceso.residualRisk > 0 ? (
+                                  <Badge className={getRiskColor(subproceso.residualRisk)}>
+                                    {subproceso.residualRisk.toFixed(1)}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">Sin riesgo</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      data-testid={`button-actions-${subproceso.id}`}
+                                    >
+                                      <MoreVertical className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        setSelectedProcessForRisks({
+                                          type: 'subproceso',
+                                          id: subproceso.id,
+                                          name: subproceso.name
+                                        });
+                                      }}
+                                      data-testid={`action-view-risks-${subproceso.id}`}
+                                    >
+                                      <Eye className="h-4 w-4 mr-2" />
+                                      Ver riesgos asociados
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() => {
+                                        const risks = getRisksBySubproceso(subproceso.id);
+                                        setShowExplanation({
+                                          type: 'subproceso',
+                                          name: subproceso.name,
+                                          risks: risks
+                                        });
+                                      }}
+                                      data-testid={`action-view-calculation-${subproceso.id}`}
+                                    >
+                                      <Calculator className="h-4 w-4 mr-2" />
+                                      Ver cálculo residual
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <EditGuard itemType="subproceso">
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setEditingSubprocess(subproceso);
+                                        }}
+                                        data-testid={`action-edit-${subproceso.id}`}
+                                      >
+                                        <Edit className="h-4 w-4 mr-2" />
+                                        Editar
+                                      </DropdownMenuItem>
+                                    </EditGuard>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        });
                       });
-                    });
-                  }).flat()}
-                </TableBody>
-              </Table>
-              {getSortedMacroprocesos().length === 0 && (
-                <div className="text-center py-8 text-muted-foreground">
-                  No hay macroprocesos configurados
-                </div>
-              )}
+                    }).flat()}
+                  </TableBody>
+                </Table>
+                {getSortedMacroprocesos().length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No hay macroprocesos configurados
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1518,7 +1518,7 @@ function ProcessMapContent() {
                 <SelectItem value="residualRisk">Riesgo</SelectItem>
               </SelectContent>
             </Select>
-            
+
             <Select value={sortDirection} onValueChange={(value) => setSortDirection(value as 'asc' | 'desc')}>
               <SelectTrigger className="w-24 h-8" data-testid="select-sort-direction">
                 <SelectValue />
@@ -1531,410 +1531,410 @@ function ProcessMapContent() {
           </div>
 
           <div className="space-y-4">
-        {getSortedMacroprocesos().map((macroproceso, index) => {
-          const macroprocesoProcesses = getProcessesByMacroproceso(macroproceso.id);
-          const isExpanded = expandedMacroprocesos.has(macroproceso.id);
-          const isDragOver = dragOverIndex === index;
-          const isBeingDragged = draggedMacroproceso?.id === macroproceso.id;
-          
-          return (
-            <Card 
-              key={macroproceso.id} 
-              data-testid={`macroproceso-card-${macroproceso.id}`}
-              draggable={sortField === 'order'}
-              onDragStart={(e) => sortField === 'order' && handleDragStart(e, macroproceso)}
-              onDragEnd={(e) => sortField === 'order' && handleDragEnd(e)}
-              onDragOver={(e) => sortField === 'order' && handleDragOver(e, index)}
-              onDragLeave={() => sortField === 'order' && handleDragLeave()}
-              onDrop={(e) => sortField === 'order' && handleDrop(e, index)}
-              className={`
+            {getSortedMacroprocesos().map((macroproceso, index) => {
+              const macroprocesoProcesses = getProcessesByMacroproceso(macroproceso.id);
+              const isExpanded = expandedMacroprocesos.has(macroproceso.id);
+              const isDragOver = dragOverIndex === index;
+              const isBeingDragged = draggedMacroproceso?.id === macroproceso.id;
+
+              return (
+                <Card
+                  key={macroproceso.id}
+                  data-testid={`macroproceso-card-${macroproceso.id}`}
+                  draggable={sortField === 'order'}
+                  onDragStart={(e) => sortField === 'order' && handleDragStart(e, macroproceso)}
+                  onDragEnd={(e) => sortField === 'order' && handleDragEnd(e)}
+                  onDragOver={(e) => sortField === 'order' && handleDragOver(e, index)}
+                  onDragLeave={() => sortField === 'order' && handleDragLeave()}
+                  onDrop={(e) => sortField === 'order' && handleDrop(e, index)}
+                  className={`
                 ${sortField === 'order' ? 'cursor-move' : 'cursor-default'}
                 ${isDragOver ? 'border-blue-500 border-2 bg-blue-50' : 'border-border'}
                 ${isBeingDragged ? 'opacity-50' : 'opacity-100'}
                 transition-all duration-200
               `}
-            >
-              <CardHeader>
-                <Collapsible>
-                  <div className="space-y-3">
-                    <CollapsibleTrigger 
-                      className="flex items-center gap-3 hover:no-underline p-0 w-full text-left"
-                      onClick={() => toggleMacroproceso(macroproceso.id)}
-                    >
-                      {isExpanded ? <ChevronDown className="h-4 w-4 flex-shrink-0" /> : <ChevronRight className="h-4 w-4 flex-shrink-0" />}
-                      <Building2 className="h-5 w-5 text-blue-600 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <CardTitle className="text-lg">{macroproceso.name}</CardTitle>
-                        <p className="text-sm text-muted-foreground mt-1">{macroproceso.description}</p>
-                      </div>
-                    </CollapsibleTrigger>
-                    
-                    <div className="flex items-center justify-end gap-2 flex-wrap">
-                      <RiskIndicator 
-                        inherentRisk={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.aggregatedInherentRisk ?? macroproceso.inherentRisk}
-                        residualRisk={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.aggregatedResidualRisk ?? macroproceso.residualRisk}
-                        riskCount={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.validatedRiskCount ?? macroproceso.riskCount}
-                        size="sm"
-                        onRiskCountClick={() => openRiskModal(macroproceso.id, macroproceso.name, 'macroproceso')}
-                      />
-                      {macroproceso.owner && (
-                        <Badge variant="outline" className="gap-1">
-                          <User className="h-3 w-3" />
-                          {macroproceso.owner.name}
-                        </Badge>
-                      )}
-                      <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"}>
-                        {macroproceso.type === "clave" ? "Primaria/Core" : "Apoyo"}
-                      </Badge>
-                      <Badge variant="outline">{macroproceso.code}</Badge>
-                      <EditGuard itemType="process">
-                        <Dialog open={editingMacroproceso?.id === macroproceso.id} onOpenChange={(open) => !open && setEditingMacroproceso(null)}>
-                          <DialogTrigger asChild>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => setEditingMacroproceso(macroproceso)}
-                              data-testid={`button-edit-macroproceso-${macroproceso.id}`}
-                            >
-                              <Edit className="h-3 w-3" />
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-2xl">
-                            <DialogHeader>
-                              <DialogTitle>Editar Macroproceso</DialogTitle>
-                              <DialogDescription>
-                                Actualizar la información de este macroproceso.
-                              </DialogDescription>
-                            </DialogHeader>
-                            <MacroprocesoForm 
-                              macroproceso={editingMacroproceso!} 
-                              onSuccess={handleEditMacroprocesoSuccess} 
-                            />
-                          </DialogContent>
-                        </Dialog>
-                      </EditGuard>
-                      <DeleteGuard itemType="process">
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          onClick={() => handleDeleteMacroproceso(macroproceso)}
-                          data-testid={`button-delete-macroproceso-${macroproceso.id}`}
+                >
+                  <CardHeader>
+                    <Collapsible>
+                      <div className="space-y-3">
+                        <CollapsibleTrigger
+                          className="flex items-center gap-3 hover:no-underline p-0 w-full text-left"
+                          onClick={() => toggleMacroproceso(macroproceso.id)}
                         >
-                          <Trash2 className="h-3 w-3 text-red-500" />
-                        </Button>
-                      </DeleteGuard>
-                    </div>
-                  </div>
-                  
-                  <CollapsibleContent className="mt-4">
-                    <div className="space-y-3">
-                      <div className="flex justify-end">
-                        <Dialog open={isCreateProcessDialogOpen && selectedMacroprocesoId === macroproceso.id} 
-                                onOpenChange={(open) => {
-                                  setIsCreateProcessDialogOpen(open);
-                                  if (!open) setSelectedMacroprocesoId(null);
-                                }}>
-                          <DialogTrigger asChild>
-                            <Button 
-                              variant="outline" 
+                          {isExpanded ? <ChevronDown className="h-4 w-4 flex-shrink-0" /> : <ChevronRight className="h-4 w-4 flex-shrink-0" />}
+                          <Building2 className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <CardTitle className="text-lg">{macroproceso.name}</CardTitle>
+                            <p className="text-sm text-muted-foreground mt-1">{macroproceso.description}</p>
+                          </div>
+                        </CollapsibleTrigger>
+
+                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                          <RiskIndicator
+                            inherentRisk={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.aggregatedInherentRisk ?? macroproceso.inherentRisk}
+                            residualRisk={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.aggregatedResidualRisk ?? macroproceso.residualRisk}
+                            riskCount={processMapValidatedRisks?.macroprocesos?.[macroproceso.id]?.validatedRiskCount ?? macroproceso.riskCount}
+                            size="sm"
+                            onRiskCountClick={() => openRiskModal(macroproceso.id, macroproceso.name, 'macroproceso')}
+                          />
+                          {macroproceso.owner && (
+                            <Badge variant="outline" className="gap-1">
+                              <User className="h-3 w-3" />
+                              {macroproceso.owner.name}
+                            </Badge>
+                          )}
+                          <Badge variant={macroproceso.type === "clave" ? "default" : "secondary"}>
+                            {macroproceso.type === "clave" ? "Primaria/Core" : "Apoyo"}
+                          </Badge>
+                          <Badge variant="outline">{macroproceso.code}</Badge>
+                          <EditGuard itemType="process">
+                            <Dialog open={editingMacroproceso?.id === macroproceso.id} onOpenChange={(open) => !open && setEditingMacroproceso(null)}>
+                              <DialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setEditingMacroproceso(macroproceso)}
+                                  data-testid={`button-edit-macroproceso-${macroproceso.id}`}
+                                >
+                                  <Edit className="h-3 w-3" />
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-w-2xl">
+                                <DialogHeader>
+                                  <DialogTitle>Editar Macroproceso</DialogTitle>
+                                  <DialogDescription>
+                                    Actualizar la información de este macroproceso.
+                                  </DialogDescription>
+                                </DialogHeader>
+                                <MacroprocesoForm
+                                  macroproceso={editingMacroproceso!}
+                                  onSuccess={handleEditMacroprocesoSuccess}
+                                />
+                              </DialogContent>
+                            </Dialog>
+                          </EditGuard>
+                          <DeleteGuard itemType="process">
+                            <Button
+                              variant="ghost"
                               size="sm"
-                              onClick={() => setSelectedMacroprocesoId(macroproceso.id)}
-                              data-testid={`button-add-process-${macroproceso.id}`}
+                              onClick={() => handleDeleteMacroproceso(macroproceso)}
+                              data-testid={`button-delete-macroproceso-${macroproceso.id}`}
                             >
-                              <Plus className="mr-2 h-3 w-3" />
-                              Agregar Proceso
+                              <Trash2 className="h-3 w-3 text-red-500" />
                             </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-2xl">
-                            <DialogHeader>
-                              <DialogTitle>Nuevo Proceso en {macroproceso.name}</DialogTitle>
-                              <DialogDescription>
-                                Crear un nuevo proceso dentro de este macroproceso.
-                              </DialogDescription>
-                            </DialogHeader>
-                            <ProcessForm 
-                              macroprocesoId={macroproceso.id}
-                              onSuccess={handleCreateProcessSuccess} 
-                            />
-                          </DialogContent>
-                        </Dialog>
+                          </DeleteGuard>
+                        </div>
                       </div>
 
-                      {macroprocesoProcesses.length === 0 && (
-                        <div className="text-center py-8 text-muted-foreground">
-                          <Workflow className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                          <p>No hay procesos en este macroproceso</p>
-                        </div>
-                      )}
+                      <CollapsibleContent className="mt-4">
+                        <div className="space-y-3">
+                          <div className="flex justify-end">
+                            <Dialog open={isCreateProcessDialogOpen && selectedMacroprocesoId === macroproceso.id}
+                              onOpenChange={(open) => {
+                                setIsCreateProcessDialogOpen(open);
+                                if (!open) setSelectedMacroprocesoId(null);
+                              }}>
+                              <DialogTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setSelectedMacroprocesoId(macroproceso.id)}
+                                  data-testid={`button-add-process-${macroproceso.id}`}
+                                >
+                                  <Plus className="mr-2 h-3 w-3" />
+                                  Agregar Proceso
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-w-2xl">
+                                <DialogHeader>
+                                  <DialogTitle>Nuevo Proceso en {macroproceso.name}</DialogTitle>
+                                  <DialogDescription>
+                                    Crear un nuevo proceso dentro de este macroproceso.
+                                  </DialogDescription>
+                                </DialogHeader>
+                                <ProcessForm
+                                  macroprocesoId={macroproceso.id}
+                                  onSuccess={handleCreateProcessSuccess}
+                                />
+                              </DialogContent>
+                            </Dialog>
+                          </div>
 
-                      {macroprocesoProcesses.map((process) => {
-                        const procesoSubprocesses = getSubprocessesByProceso(process.id);
-                        const isProcesoExpanded = expandedProcesos.has(process.id);
-                        
-                        return (
-                          <Card key={process.id} className="ml-6 bg-muted/30" data-testid={`process-card-${process.id}`}>
-                            <CardHeader className="pb-3">
-                              <Collapsible>
-                                <div className="flex items-center justify-between">
-                                  <CollapsibleTrigger 
-                                    className="flex items-center gap-3 hover:no-underline p-0"
-                                    onClick={() => toggleProceso(process.id)}
-                                  >
-                                    {procesoSubprocesses.length > 0 && (
-                                      isProcesoExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
-                                    )}
-                                    <Workflow className="h-4 w-4 text-green-600" />
-                                    <div className="text-left">
-                                      <h4 className="font-medium">{process.name}</h4>
-                                      <p className="text-xs text-muted-foreground">{process.description}</p>
-                                    </div>
-                                  </CollapsibleTrigger>
-                                  
-                                  <div className="flex items-center gap-2">
-                                    <RiskIndicator 
-                                      inherentRisk={processMapValidatedRisks?.processes?.[process.id]?.aggregatedInherentRisk ?? process.inherentRisk}
-                                      residualRisk={processMapValidatedRisks?.processes?.[process.id]?.aggregatedResidualRisk ?? process.residualRisk}
-                                      riskCount={processMapValidatedRisks?.processes?.[process.id]?.validatedRiskCount ?? process.riskCount}
-                                      size="xs"
-                                      onRiskCountClick={() => openRiskModal(process.id, process.name, 'proceso')}
-                                    />
-                                    <Badge variant="outline" className="text-xs">{process.code}</Badge>
-                                    <div className="flex gap-1">
-                                      <EditGuard itemType="process">
-                                        <Dialog open={editingProcess?.id === process.id} onOpenChange={(open) => !open && setEditingProcess(null)}>
-                                          <DialogTrigger asChild>
-                                            <Button 
-                                              variant="ghost" 
-                                              size="sm" 
-                                              onClick={() => setEditingProcess(process)}
-                                              data-testid={`button-edit-process-${process.id}`}
-                                            >
-                                              <Edit className="h-3 w-3" />
-                                            </Button>
-                                          </DialogTrigger>
-                                          <DialogContent className="max-w-2xl">
-                                            <DialogHeader>
-                                              <DialogTitle>Editar Proceso</DialogTitle>
-                                              <DialogDescription>
-                                                Actualizar la información de este proceso.
-                                              </DialogDescription>
-                                            </DialogHeader>
-                                            <ProcessForm 
-                                              process={editingProcess!} 
-                                              onSuccess={handleEditProcessSuccess} 
-                                            />
-                                          </DialogContent>
-                                        </Dialog>
-                                      </EditGuard>
-                                      <DeleteGuard itemType="process">
-                                        <Button 
-                                          variant="ghost" 
-                                          size="sm"
-                                          onClick={() => handleDeleteProcess(process)}
-                                          data-testid={`button-delete-process-${process.id}`}
-                                        >
-                                          <Trash2 className="h-3 w-3 text-red-500" />
-                                        </Button>
-                                      </DeleteGuard>
-                                    </div>
-                                  </div>
-                                </div>
+                          {macroprocesoProcesses.length === 0 && (
+                            <div className="text-center py-8 text-muted-foreground">
+                              <Workflow className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                              <p>No hay procesos en este macroproceso</p>
+                            </div>
+                          )}
 
-                                <CollapsibleContent className="mt-3">
-                                  <div className="space-y-2">
-                                    <div className="text-xs text-muted-foreground">
-                                      <strong>Responsable:</strong> {process.owner?.name || "No asignado"}
-                                    </div>
+                          {macroprocesoProcesses.map((process) => {
+                            const procesoSubprocesses = getSubprocessesByProceso(process.id);
+                            const isProcesoExpanded = expandedProcesos.has(process.id);
 
-                                    <div className="flex justify-end">
-                                      <Dialog open={isCreateSubprocessDialogOpen && selectedProcesoId === process.id} 
-                                              onOpenChange={(open) => {
-                                                setIsCreateSubprocessDialogOpen(open);
-                                                if (!open) setSelectedProcesoId(null);
-                                              }}>
-                                        <DialogTrigger asChild>
-                                          <Button 
-                                            variant="outline" 
-                                            size="sm"
-                                            onClick={() => setSelectedProcesoId(process.id)}
-                                            data-testid={`button-add-subprocess-${process.id}`}
-                                          >
-                                            <Plus className="mr-2 h-3 w-3" />
-                                            Agregar Subproceso
-                                          </Button>
-                                        </DialogTrigger>
-                                        <DialogContent className="max-w-2xl">
-                                          <DialogHeader>
-                                            <DialogTitle>Nuevo Subproceso en {process.name}</DialogTitle>
-                                            <DialogDescription>
-                                              Crear un nuevo subproceso dentro de este proceso.
-                                            </DialogDescription>
-                                          </DialogHeader>
-                                          <SubprocessForm 
-                                            procesoId={process.id}
-                                            onSuccess={handleCreateSubprocessSuccess} 
-                                          />
-                                        </DialogContent>
-                                      </Dialog>
-                                    </div>
+                            return (
+                              <Card key={process.id} className="ml-6 bg-muted/30" data-testid={`process-card-${process.id}`}>
+                                <CardHeader className="pb-3">
+                                  <Collapsible>
+                                    <div className="flex items-center justify-between">
+                                      <CollapsibleTrigger
+                                        className="flex items-center gap-3 hover:no-underline p-0"
+                                        onClick={() => toggleProceso(process.id)}
+                                      >
+                                        {procesoSubprocesses.length > 0 && (
+                                          isProcesoExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+                                        )}
+                                        <Workflow className="h-4 w-4 text-green-600" />
+                                        <div className="text-left">
+                                          <h4 className="font-medium">{process.name}</h4>
+                                          <p className="text-xs text-muted-foreground">{process.description}</p>
+                                        </div>
+                                      </CollapsibleTrigger>
 
-                                    {procesoSubprocesses.length === 0 && (
-                                      <div className="text-center py-4 text-muted-foreground">
-                                        <GitBranch className="h-6 w-6 mx-auto mb-1 opacity-50" />
-                                        <p className="text-xs">No hay subprocesos en este proceso</p>
-                                      </div>
-                                    )}
-
-                                    {procesoSubprocesses.map((subproceso) => {
-                                      const subprocesoRisks = getRisksBySubproceso(subproceso.id);
-                                      const isSubprocesoExpanded = expandedSubprocesos.has(subproceso.id);
-                                      
-                                      return (
-                                        <Card key={subproceso.id} className="ml-6 bg-background" data-testid={`subprocess-card-${subproceso.id}`}>
-                                          <CardContent className="p-3">
-                                            <Collapsible>
-                                              <div className="flex items-center justify-between">
-                                                <CollapsibleTrigger 
-                                                  className="flex items-center gap-2 hover:no-underline p-0 flex-1"
-                                                  onClick={() => toggleSubproceso(subproceso.id)}
+                                      <div className="flex items-center gap-2">
+                                        <RiskIndicator
+                                          inherentRisk={processMapValidatedRisks?.processes?.[process.id]?.aggregatedInherentRisk ?? process.inherentRisk}
+                                          residualRisk={processMapValidatedRisks?.processes?.[process.id]?.aggregatedResidualRisk ?? process.residualRisk}
+                                          riskCount={processMapValidatedRisks?.processes?.[process.id]?.validatedRiskCount ?? process.riskCount}
+                                          size="xs"
+                                          onRiskCountClick={() => openRiskModal(process.id, process.name, 'proceso')}
+                                        />
+                                        <Badge variant="outline" className="text-xs">{process.code}</Badge>
+                                        <div className="flex gap-1">
+                                          <EditGuard itemType="process">
+                                            <Dialog open={editingProcess?.id === process.id} onOpenChange={(open) => !open && setEditingProcess(null)}>
+                                              <DialogTrigger asChild>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  onClick={() => setEditingProcess(process)}
+                                                  data-testid={`button-edit-process-${process.id}`}
                                                 >
-                                                  <div className="flex items-center gap-2">
-                                                    {subprocesoRisks.length > 0 && (
-                                                      isSubprocesoExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
-                                                    )}
-                                                    <GitBranch className="h-3 w-3 text-orange-600" />
-                                                    <div className="text-left">
-                                                      <h5 className="text-sm font-medium">{subproceso.name}</h5>
-                                                      <p className="text-xs text-muted-foreground">{subproceso.description}</p>
-                                                      <p className="text-xs text-muted-foreground">
-                                                        <strong>Responsable:</strong> {subproceso.owner?.name || "No asignado"}
-                                                      </p>
-                                                    </div>
-                                                  </div>
-                                                </CollapsibleTrigger>
-                                                
-                                                <div className="flex items-center gap-2">
-                                                  <RiskIndicator 
-                                                    inherentRisk={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.aggregatedInherentRisk ?? subproceso.inherentRisk}
-                                                    residualRisk={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.aggregatedResidualRisk ?? subproceso.residualRisk}
-                                                    riskCount={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.validatedRiskCount ?? subproceso.riskCount}
-                                                    size="xs"
-                                                    onRiskCountClick={() => openRiskModal(subproceso.id, subproceso.name, 'subproceso')}
-                                                  />
-                                                  <Badge variant="outline" className="text-xs">{subproceso.code}</Badge>
-                                                  <div className="flex gap-1">
-                                                    <EditGuard itemType="process">
-                                                      <Dialog open={editingSubprocess?.id === subproceso.id} onOpenChange={(open) => !open && setEditingSubprocess(null)}>
-                                                        <DialogTrigger asChild>
-                                                          <Button 
-                                                            variant="ghost" 
-                                                            size="sm" 
-                                                            onClick={() => setEditingSubprocess(subproceso)}
-                                                            data-testid={`button-edit-subprocess-${subproceso.id}`}
-                                                          >
-                                                            <Edit className="h-3 w-3" />
-                                                          </Button>
-                                                        </DialogTrigger>
-                                                        <DialogContent className="max-w-2xl">
-                                                          <DialogHeader>
-                                                            <DialogTitle>Editar Subproceso</DialogTitle>
-                                                            <DialogDescription>
-                                                              Actualizar la información de este subproceso.
-                                                            </DialogDescription>
-                                                          </DialogHeader>
-                                                          <SubprocessForm 
-                                                            subproceso={editingSubprocess!} 
-                                                            onSuccess={handleEditSubprocessSuccess} 
-                                                          />
-                                                        </DialogContent>
-                                                      </Dialog>
-                                                    </EditGuard>
-                                                    <DeleteGuard itemType="process">
-                                                      <Button 
-                                                        variant="ghost" 
-                                                        size="sm"
-                                                        onClick={() => handleDeleteSubprocess(subproceso)}
-                                                        data-testid={`button-delete-subprocess-${subproceso.id}`}
-                                                      >
-                                                        <Trash2 className="h-3 w-3 text-red-500" />
-                                                      </Button>
-                                                    </DeleteGuard>
-                                                  </div>
-                                                </div>
-                                              </div>
+                                                  <Edit className="h-3 w-3" />
+                                                </Button>
+                                              </DialogTrigger>
+                                              <DialogContent className="max-w-2xl">
+                                                <DialogHeader>
+                                                  <DialogTitle>Editar Proceso</DialogTitle>
+                                                  <DialogDescription>
+                                                    Actualizar la información de este proceso.
+                                                  </DialogDescription>
+                                                </DialogHeader>
+                                                <ProcessForm
+                                                  process={editingProcess!}
+                                                  onSuccess={handleEditProcessSuccess}
+                                                />
+                                              </DialogContent>
+                                            </Dialog>
+                                          </EditGuard>
+                                          <DeleteGuard itemType="process">
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              onClick={() => handleDeleteProcess(process)}
+                                              data-testid={`button-delete-process-${process.id}`}
+                                            >
+                                              <Trash2 className="h-3 w-3 text-red-500" />
+                                            </Button>
+                                          </DeleteGuard>
+                                        </div>
+                                      </div>
+                                    </div>
 
-                                              <CollapsibleContent className="mt-3">
-                                                {subprocesoRisks.length === 0 ? (
-                                                  <div className="text-center py-4 text-muted-foreground">
-                                                    <AlertTriangle className="h-6 w-6 mx-auto mb-1 opacity-50" />
-                                                    <p className="text-xs">No hay riesgos asociados a este subproceso</p>
-                                                  </div>
-                                                ) : (
-                                                  <div className="space-y-2 pl-6">
-                                                    <h6 className="text-xs font-medium text-muted-foreground mb-2">
-                                                      Riesgos asociados ({subprocesoRisks.length})
-                                                    </h6>
-                                                    {subprocesoRisks.map((risk) => (
-                                                      <div key={risk.id} className="border border-border rounded-md p-2 bg-muted/20" data-testid={`risk-summary-${risk.id}`}>
-                                                        <div className="flex items-center justify-between">
-                                                          <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2">
-                                                              <Badge variant="outline" className="text-xs font-mono">{risk.code}</Badge>
-                                                              <h6 className="text-sm font-medium truncate">{risk.name}</h6>
-                                                            </div>
-                                                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{risk.description}</p>
-                                                            {Array.isArray(risk.category) && risk.category.length > 0 && (
-                                                              <div className="flex gap-1 mt-1">
-                                                                {risk.category.slice(0, 2).map((cat: string) => (
-                                                                  <Badge key={cat} variant="secondary" className="text-xs">
-                                                                    {cat}
-                                                                  </Badge>
-                                                                ))}
-                                                                {risk.category.length > 2 && (
-                                                                  <Badge variant="secondary" className="text-xs">
-                                                                    +{risk.category.length - 2} más
-                                                                  </Badge>
-                                                                )}
-                                                              </div>
-                                                            )}
-                                                          </div>
-                                                          <div className="flex flex-col items-end gap-1 ml-2">
-                                                            <div className="flex items-center gap-1">
-                                                              <Badge className={`text-xs ${getIndividualRiskColor(risk.inherentRisk)}`}>
-                                                                I: {risk.inherentRisk}
-                                                              </Badge>
-                                                            </div>
-                                                            <div className="flex items-center gap-1">
-                                                              <span className="text-xs text-muted-foreground">P:{risk.probability}</span>
-                                                              <span className="text-xs text-muted-foreground">×</span>
-                                                              <span className="text-xs text-muted-foreground">I:{risk.impact}</span>
-                                                            </div>
-                                                          </div>
+                                    <CollapsibleContent className="mt-3">
+                                      <div className="space-y-2">
+                                        <div className="text-xs text-muted-foreground">
+                                          <strong>Responsable:</strong> {process.owner?.name || "No asignado"}
+                                        </div>
+
+                                        <div className="flex justify-end">
+                                          <Dialog open={isCreateSubprocessDialogOpen && selectedProcesoId === process.id}
+                                            onOpenChange={(open) => {
+                                              setIsCreateSubprocessDialogOpen(open);
+                                              if (!open) setSelectedProcesoId(null);
+                                            }}>
+                                            <DialogTrigger asChild>
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setSelectedProcesoId(process.id)}
+                                                data-testid={`button-add-subprocess-${process.id}`}
+                                              >
+                                                <Plus className="mr-2 h-3 w-3" />
+                                                Agregar Subproceso
+                                              </Button>
+                                            </DialogTrigger>
+                                            <DialogContent className="max-w-2xl">
+                                              <DialogHeader>
+                                                <DialogTitle>Nuevo Subproceso en {process.name}</DialogTitle>
+                                                <DialogDescription>
+                                                  Crear un nuevo subproceso dentro de este proceso.
+                                                </DialogDescription>
+                                              </DialogHeader>
+                                              <SubprocessForm
+                                                procesoId={process.id}
+                                                onSuccess={handleCreateSubprocessSuccess}
+                                              />
+                                            </DialogContent>
+                                          </Dialog>
+                                        </div>
+
+                                        {procesoSubprocesses.length === 0 && (
+                                          <div className="text-center py-4 text-muted-foreground">
+                                            <GitBranch className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                            <p className="text-xs">No hay subprocesos en este proceso</p>
+                                          </div>
+                                        )}
+
+                                        {procesoSubprocesses.map((subproceso) => {
+                                          const subprocesoRisks = getRisksBySubproceso(subproceso.id);
+                                          const isSubprocesoExpanded = expandedSubprocesos.has(subproceso.id);
+
+                                          return (
+                                            <Card key={subproceso.id} className="ml-6 bg-background" data-testid={`subprocess-card-${subproceso.id}`}>
+                                              <CardContent className="p-3">
+                                                <Collapsible>
+                                                  <div className="flex items-center justify-between">
+                                                    <CollapsibleTrigger
+                                                      className="flex items-center gap-2 hover:no-underline p-0 flex-1"
+                                                      onClick={() => toggleSubproceso(subproceso.id)}
+                                                    >
+                                                      <div className="flex items-center gap-2">
+                                                        {subprocesoRisks.length > 0 && (
+                                                          isSubprocesoExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+                                                        )}
+                                                        <GitBranch className="h-3 w-3 text-orange-600" />
+                                                        <div className="text-left">
+                                                          <h5 className="text-sm font-medium">{subproceso.name}</h5>
+                                                          <p className="text-xs text-muted-foreground">{subproceso.description}</p>
+                                                          <p className="text-xs text-muted-foreground">
+                                                            <strong>Responsable:</strong> {subproceso.owner?.name || "No asignado"}
+                                                          </p>
                                                         </div>
                                                       </div>
-                                                    ))}
+                                                    </CollapsibleTrigger>
+
+                                                    <div className="flex items-center gap-2">
+                                                      <RiskIndicator
+                                                        inherentRisk={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.aggregatedInherentRisk ?? subproceso.inherentRisk}
+                                                        residualRisk={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.aggregatedResidualRisk ?? subproceso.residualRisk}
+                                                        riskCount={processMapValidatedRisks?.subprocesos?.[subproceso.id]?.validatedRiskCount ?? subproceso.riskCount}
+                                                        size="xs"
+                                                        onRiskCountClick={() => openRiskModal(subproceso.id, subproceso.name, 'subproceso')}
+                                                      />
+                                                      <Badge variant="outline" className="text-xs">{subproceso.code}</Badge>
+                                                      <div className="flex gap-1">
+                                                        <EditGuard itemType="process">
+                                                          <Dialog open={editingSubprocess?.id === subproceso.id} onOpenChange={(open) => !open && setEditingSubprocess(null)}>
+                                                            <DialogTrigger asChild>
+                                                              <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => setEditingSubprocess(subproceso)}
+                                                                data-testid={`button-edit-subprocess-${subproceso.id}`}
+                                                              >
+                                                                <Edit className="h-3 w-3" />
+                                                              </Button>
+                                                            </DialogTrigger>
+                                                            <DialogContent className="max-w-2xl">
+                                                              <DialogHeader>
+                                                                <DialogTitle>Editar Subproceso</DialogTitle>
+                                                                <DialogDescription>
+                                                                  Actualizar la información de este subproceso.
+                                                                </DialogDescription>
+                                                              </DialogHeader>
+                                                              <SubprocessForm
+                                                                subproceso={editingSubprocess!}
+                                                                onSuccess={handleEditSubprocessSuccess}
+                                                              />
+                                                            </DialogContent>
+                                                          </Dialog>
+                                                        </EditGuard>
+                                                        <DeleteGuard itemType="process">
+                                                          <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            onClick={() => handleDeleteSubprocess(subproceso)}
+                                                            data-testid={`button-delete-subprocess-${subproceso.id}`}
+                                                          >
+                                                            <Trash2 className="h-3 w-3 text-red-500" />
+                                                          </Button>
+                                                        </DeleteGuard>
+                                                      </div>
+                                                    </div>
                                                   </div>
-                                                )}
-                                              </CollapsibleContent>
-                                            </Collapsible>
-                                          </CardContent>
-                                        </Card>
-                                      );
-                                    })}
-                                  </div>
-                                </CollapsibleContent>
-                              </Collapsible>
-                            </CardHeader>
-                          </Card>
-                        );
-                      })}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              </CardHeader>
-            </Card>
-          );
-        })}
+
+                                                  <CollapsibleContent className="mt-3">
+                                                    {subprocesoRisks.length === 0 ? (
+                                                      <div className="text-center py-4 text-muted-foreground">
+                                                        <AlertTriangle className="h-6 w-6 mx-auto mb-1 opacity-50" />
+                                                        <p className="text-xs">No hay riesgos asociados a este subproceso</p>
+                                                      </div>
+                                                    ) : (
+                                                      <div className="space-y-2 pl-6">
+                                                        <h6 className="text-xs font-medium text-muted-foreground mb-2">
+                                                          Riesgos asociados ({subprocesoRisks.length})
+                                                        </h6>
+                                                        {subprocesoRisks.map((risk) => (
+                                                          <div key={risk.id} className="border border-border rounded-md p-2 bg-muted/20" data-testid={`risk-summary-${risk.id}`}>
+                                                            <div className="flex items-center justify-between">
+                                                              <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                  <Badge variant="outline" className="text-xs font-mono">{risk.code}</Badge>
+                                                                  <h6 className="text-sm font-medium truncate">{risk.name}</h6>
+                                                                </div>
+                                                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{risk.description}</p>
+                                                                {Array.isArray(risk.category) && risk.category.length > 0 && (
+                                                                  <div className="flex gap-1 mt-1">
+                                                                    {risk.category.slice(0, 2).map((cat: string) => (
+                                                                      <Badge key={cat} variant="secondary" className="text-xs">
+                                                                        {cat}
+                                                                      </Badge>
+                                                                    ))}
+                                                                    {risk.category.length > 2 && (
+                                                                      <Badge variant="secondary" className="text-xs">
+                                                                        +{risk.category.length - 2} más
+                                                                      </Badge>
+                                                                    )}
+                                                                  </div>
+                                                                )}
+                                                              </div>
+                                                              <div className="flex flex-col items-end gap-1 ml-2">
+                                                                <div className="flex items-center gap-1">
+                                                                  <Badge className={`text-xs ${getIndividualRiskColor(risk.inherentRisk)}`}>
+                                                                    I: {risk.inherentRisk}
+                                                                  </Badge>
+                                                                </div>
+                                                                <div className="flex items-center gap-1">
+                                                                  <span className="text-xs text-muted-foreground">P:{risk.probability}</span>
+                                                                  <span className="text-xs text-muted-foreground">×</span>
+                                                                  <span className="text-xs text-muted-foreground">I:{risk.impact}</span>
+                                                                </div>
+                                                              </div>
+                                                            </div>
+                                                          </div>
+                                                        ))}
+                                                      </div>
+                                                    )}
+                                                  </CollapsibleContent>
+                                                </Collapsible>
+                                              </CardContent>
+                                            </Card>
+                                          );
+                                        })}
+                                      </div>
+                                    </CollapsibleContent>
+                                  </Collapsible>
+                                </CardHeader>
+                              </Card>
+                            );
+                          })}
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </CardHeader>
+                </Card>
+              );
+            })}
           </div>
         </>
       )}
@@ -1969,7 +1969,7 @@ function ProcessMapContent() {
                           <h4 className="font-medium text-sm">{risk.name}</h4>
                         </div>
                         <p className="text-sm text-muted-foreground mb-3">{risk.description}</p>
-                        
+
                         {Array.isArray(risk.category) && risk.category.length > 0 && (
                           <div className="flex gap-1 mb-3">
                             <span className="text-xs text-muted-foreground mr-2">Categorías:</span>
@@ -2021,7 +2021,7 @@ function ProcessMapContent() {
                           </div>
                         </div>
                       </div>
-                      
+
                       <div className="flex flex-col items-end gap-2 ml-4">
                         <Badge className={`text-xs ${getIndividualRiskColor(risk.inherentRisk)}`}>
                           <AlertTriangle className="h-3 w-3 mr-1" />
@@ -2090,7 +2090,7 @@ function ProcessMapContent() {
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Fórmula: Suma de todos los riesgos inherentes = {showExplanation.risks.map((r, i) => 
+                      Fórmula: Suma de todos los riesgos inherentes = {showExplanation.risks.map((r, i) =>
                         `${(r.inherentRisk || 0).toFixed(1)}`
                       ).join(' + ')} = {showExplanation.risks.reduce((sum, r) => sum + (r.inherentRisk || 0), 0).toFixed(1)}
                     </p>
@@ -2111,9 +2111,9 @@ function ProcessMapContent() {
           <DialogHeader>
             <DialogTitle>Editar Macroproceso</DialogTitle>
           </DialogHeader>
-          <MacroprocesoForm 
-            macroproceso={editingMacroproceso!} 
-            onSuccess={handleEditMacroprocesoSuccess} 
+          <MacroprocesoForm
+            macroproceso={editingMacroproceso!}
+            onSuccess={handleEditMacroprocesoSuccess}
           />
         </DialogContent>
       </Dialog>
@@ -2127,9 +2127,9 @@ function ProcessMapContent() {
           <DialogHeader>
             <DialogTitle>Agregar Proceso</DialogTitle>
           </DialogHeader>
-          <ProcessForm 
-            macroprocesoId={selectedMacroprocesoId || undefined} 
-            onSuccess={handleCreateProcessSuccess} 
+          <ProcessForm
+            macroprocesoId={selectedMacroprocesoId || undefined}
+            onSuccess={handleCreateProcessSuccess}
           />
         </DialogContent>
       </Dialog>
@@ -2140,9 +2140,9 @@ function ProcessMapContent() {
           <DialogHeader>
             <DialogTitle>Editar Proceso</DialogTitle>
           </DialogHeader>
-          <ProcessForm 
-            process={editingProcess!} 
-            onSuccess={handleEditProcessSuccess} 
+          <ProcessForm
+            process={editingProcess!}
+            onSuccess={handleEditProcessSuccess}
           />
         </DialogContent>
       </Dialog>
@@ -2156,9 +2156,9 @@ function ProcessMapContent() {
           <DialogHeader>
             <DialogTitle>Agregar Subproceso</DialogTitle>
           </DialogHeader>
-          <SubprocessForm 
-            procesoId={selectedProcesoId || undefined} 
-            onSuccess={handleCreateSubprocessSuccess} 
+          <SubprocessForm
+            procesoId={selectedProcesoId || undefined}
+            onSuccess={handleCreateSubprocessSuccess}
           />
         </DialogContent>
       </Dialog>
@@ -2169,9 +2169,9 @@ function ProcessMapContent() {
           <DialogHeader>
             <DialogTitle>Editar Subproceso</DialogTitle>
           </DialogHeader>
-          <SubprocessForm 
-            subproceso={editingSubprocess!} 
-            onSuccess={handleEditSubprocessSuccess} 
+          <SubprocessForm
+            subproceso={editingSubprocess!}
+            onSuccess={handleEditSubprocessSuccess}
           />
         </DialogContent>
       </Dialog>
@@ -2236,17 +2236,17 @@ function GerenciasContent() {
     mutationFn: async (data: Partial<Gerencia> & { processAssociations: ProcessAssociation[] }) => {
       const { processAssociations, ...gerenciaData } = data;
       const createdGerencia = await apiRequest("/api/gerencias", "POST", gerenciaData);
-      
+
       // Crear asociaciones de procesos con deduplicación
       if (processAssociations && processAssociations.length > 0) {
         const uniqueAssociations = processAssociations.filter((assoc, index, self) => {
-          return index === self.findIndex(a => 
+          return index === self.findIndex(a =>
             a.macroprocesoId === assoc.macroprocesoId &&
             a.processId === assoc.processId &&
             a.subprocesoId === assoc.subprocesoId
           );
         });
-        
+
         await Promise.all(
           uniqueAssociations.map((association) => {
             // Prioridad: subproceso > proceso > macroproceso (el más específico primero)
@@ -2261,7 +2261,7 @@ function GerenciasContent() {
           })
         );
       }
-      
+
       return createdGerencia;
     },
     onSuccess: () => {
@@ -2281,7 +2281,7 @@ function GerenciasContent() {
         const { processAssociations, ...gerenciaData } = data;
         console.log('Updating gerencia:', id, gerenciaData);
         const updatedGerencia = await apiRequest(`/api/gerencias/${id}`, "PATCH", gerenciaData);
-        
+
         // Eliminar asociaciones existentes
         console.log('Fetching existing associations...');
         const [existingMacros, existingProcesses, existingSubprocesos] = await Promise.all([
@@ -2289,13 +2289,13 @@ function GerenciasContent() {
           apiRequest(`/api/gerencias/${id}/processes`, "GET").catch(() => []),
           apiRequest(`/api/gerencias/${id}/subprocesos`, "GET").catch(() => []),
         ]);
-        
-        console.log('Existing associations:', { 
-          macros: existingMacros.length, 
-          processes: existingProcesses.length, 
-          subprocesos: existingSubprocesos.length 
+
+        console.log('Existing associations:', {
+          macros: existingMacros.length,
+          processes: existingProcesses.length,
+          subprocesos: existingSubprocesos.length
         });
-        
+
         // Eliminar asociaciones existentes - must complete successfully before creating new ones
         const deletePromises = [
           ...existingMacros.map((macro: any) =>
@@ -2308,7 +2308,7 @@ function GerenciasContent() {
             apiRequest(`/api/subprocesos/${subproceso.id}/gerencias/${id}`, "DELETE")
           ),
         ];
-        
+
         // Wait for ALL deletions to complete successfully before creating new associations
         if (deletePromises.length > 0) {
           try {
@@ -2321,19 +2321,19 @@ function GerenciasContent() {
             throw new Error('No se pudieron eliminar las asociaciones existentes. Por favor, intente nuevamente.');
           }
         }
-        
+
         // Crear nuevas asociaciones con deduplicación
         if (processAssociations && processAssociations.length > 0) {
           const uniqueAssociations = processAssociations.filter((assoc, index, self) => {
-            return index === self.findIndex(a => 
+            return index === self.findIndex(a =>
               a.macroprocesoId === assoc.macroprocesoId &&
               a.processId === assoc.processId &&
               a.subprocesoId === assoc.subprocesoId
             );
           });
-          
+
           console.log('Creating new associations:', uniqueAssociations.length);
-          
+
           const createPromises = uniqueAssociations.map((association) => {
             // Prioridad: subproceso > proceso > macroproceso (el más específico primero)
             if (association.subprocesoId) {
@@ -2364,7 +2364,7 @@ function GerenciasContent() {
             }
             return Promise.resolve();
           });
-          
+
           const results = await Promise.allSettled(createPromises);
           const failures = results.filter(r => r.status === 'rejected');
           if (failures.length > 0) {
@@ -2372,7 +2372,7 @@ function GerenciasContent() {
           }
           console.log('New associations created');
         }
-        
+
         return updatedGerencia;
       } catch (error) {
         console.error('Error updating gerencia:', error);
@@ -2435,9 +2435,9 @@ function GerenciasContent() {
     const associations = processGerenciasRelations.filter(
       (rel: any) => rel.gerenciaId === gerenciaId
     );
-    
+
     const processNames: string[] = [];
-    
+
     associations.forEach((rel: any) => {
       if (rel.macroprocesoId) {
         const macro = macroprocesos.find(m => m.id === rel.macroprocesoId);
@@ -2452,7 +2452,7 @@ function GerenciasContent() {
         if (subproceso) processNames.push(`📌 ${subproceso.name}`);
       }
     });
-    
+
     return processNames;
   };
 
@@ -2569,126 +2569,126 @@ function GerenciasContent() {
         <Card>
           <CardContent className="p-0">
             <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort('code')}
-                >
-                  <div className="flex items-center gap-1">
-                    Código
-                    {sortField === 'code' && (
-                      sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
-                    )}
-                  </div>
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort('name')}
-                >
-                  <div className="flex items-center gap-1">
-                    Nombre
-                    {sortField === 'name' && (
-                      sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
-                    )}
-                  </div>
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50 select-none"
-                  onClick={() => handleSort('manager')}
-                >
-                  <div className="flex items-center gap-1">
-                    Gerente
-                    {sortField === 'manager' && (
-                      sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
-                    )}
-                  </div>
-                </TableHead>
-                <TableHead>Procesos Asociados</TableHead>
-                <TableHead>Descripción</TableHead>
-                <TableHead className="text-right">Acciones</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sortedGerencias.length === 0 ? (
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                    No hay gerencias registradas
-                  </TableCell>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted/50 select-none"
+                    onClick={() => handleSort('code')}
+                  >
+                    <div className="flex items-center gap-1">
+                      Código
+                      {sortField === 'code' && (
+                        sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted/50 select-none"
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center gap-1">
+                      Nombre
+                      {sortField === 'name' && (
+                        sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead
+                    className="cursor-pointer hover:bg-muted/50 select-none"
+                    onClick={() => handleSort('manager')}
+                  >
+                    <div className="flex items-center gap-1">
+                      Gerente
+                      {sortField === 'manager' && (
+                        sortOrder === 'asc' ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3 rotate-180" />
+                      )}
+                    </div>
+                  </TableHead>
+                  <TableHead>Procesos Asociados</TableHead>
+                  <TableHead>Descripción</TableHead>
+                  <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
-              ) : (
-                sortedGerencias.map((gerencia) => (
-                  <TableRow key={gerencia.id} data-testid={`row-gerencia-${gerencia.id}`}>
-                    <TableCell className="font-mono text-sm" data-testid={`code-${gerencia.id}`}>
-                      {gerencia.code}
-                    </TableCell>
-                    <TableCell className="font-medium" data-testid={`name-${gerencia.id}`}>
-                      {gerencia.name}
-                    </TableCell>
-                    <TableCell data-testid={`manager-${gerencia.id}`}>
-                      <Badge variant="outline" className="text-xs">
-                        <User className="h-3 w-3 mr-1" />
-                        {getManagerName(gerencia.managerId)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell data-testid={`processes-${gerencia.id}`}>
-                      {(() => {
-                        const associatedProcesses = getAssociatedProcesses(gerencia.id);
-                        if (associatedProcesses.length === 0) {
-                          return (
-                            <span className="text-sm text-muted-foreground">Sin procesos</span>
-                          );
-                        }
-                        return (
-                          <div className="flex flex-wrap gap-1">
-                            {associatedProcesses.slice(0, 3).map((processName, idx) => (
-                              <Badge key={idx} variant="secondary" className="text-xs">
-                                {processName}
-                              </Badge>
-                            ))}
-                            {associatedProcesses.length > 3 && (
-                              <Badge variant="outline" className="text-xs">
-                                +{associatedProcesses.length - 3} más
-                              </Badge>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </TableCell>
-                    <TableCell className="max-w-md truncate text-sm text-muted-foreground" data-testid={`description-${gerencia.id}`}>
-                      {gerencia.description || "Sin descripción"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <EditGuard itemType="gerencia">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditingGerencia(gerencia)}
-                            data-testid={`button-edit-${gerencia.id}`}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        </EditGuard>
-                        <DeleteGuard itemType="gerencia">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDelete(gerencia)}
-                            data-testid={`button-delete-${gerencia.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </DeleteGuard>
-                      </div>
+              </TableHeader>
+              <TableBody>
+                {sortedGerencias.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      No hay gerencias registradas
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                ) : (
+                  sortedGerencias.map((gerencia) => (
+                    <TableRow key={gerencia.id} data-testid={`row-gerencia-${gerencia.id}`}>
+                      <TableCell className="font-mono text-sm" data-testid={`code-${gerencia.id}`}>
+                        {gerencia.code}
+                      </TableCell>
+                      <TableCell className="font-medium" data-testid={`name-${gerencia.id}`}>
+                        {gerencia.name}
+                      </TableCell>
+                      <TableCell data-testid={`manager-${gerencia.id}`}>
+                        <Badge variant="outline" className="text-xs">
+                          <User className="h-3 w-3 mr-1" />
+                          {getManagerName(gerencia.managerId)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell data-testid={`processes-${gerencia.id}`}>
+                        {(() => {
+                          const associatedProcesses = getAssociatedProcesses(gerencia.id);
+                          if (associatedProcesses.length === 0) {
+                            return (
+                              <span className="text-sm text-muted-foreground">Sin procesos</span>
+                            );
+                          }
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {associatedProcesses.slice(0, 3).map((processName, idx) => (
+                                <Badge key={idx} variant="secondary" className="text-xs">
+                                  {processName}
+                                </Badge>
+                              ))}
+                              {associatedProcesses.length > 3 && (
+                                <Badge variant="outline" className="text-xs">
+                                  +{associatedProcesses.length - 3} más
+                                </Badge>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell className="max-w-md truncate text-sm text-muted-foreground" data-testid={`description-${gerencia.id}`}>
+                        {gerencia.description || "Sin descripción"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <EditGuard itemType="gerencia">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setEditingGerencia(gerencia)}
+                              data-testid={`button-edit-${gerencia.id}`}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          </EditGuard>
+                          <DeleteGuard itemType="gerencia">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(gerencia)}
+                              data-testid={`button-delete-${gerencia.id}`}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </DeleteGuard>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
       <Dialog open={!!editingGerencia} onOpenChange={(open) => !open && setEditingGerencia(null)}>
@@ -2792,10 +2792,10 @@ function ResponsablesContent() {
       setIsCreateDialogOpen(false);
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "No se pudo crear el responsable.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "No se pudo crear el responsable.",
+        variant: "destructive"
       });
     },
   });
@@ -2809,10 +2809,10 @@ function ResponsablesContent() {
       setEditingResponsable(null);
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error.message || "No se pudo actualizar el responsable.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error.message || "No se pudo actualizar el responsable.",
+        variant: "destructive"
       });
     },
   });
@@ -3127,9 +3127,11 @@ function ResponsablesContent() {
 }
 
 export default function Organization() {
+  const [activeTab, setActiveTab] = useState("management-units");
+
   return (
     <div className="p-6">
-      <Tabs defaultValue="management-units" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="inline-flex w-full md:grid md:grid-cols-3 overflow-x-auto justify-start md:justify-center">
           <TabsTrigger value="management-units" data-testid="tab-management-units" className="flex-shrink-0">
             Gerencias
@@ -3143,15 +3145,15 @@ export default function Organization() {
         </TabsList>
 
         <TabsContent value="management-units" className="mt-6">
-          <GerenciasContent />
+          {activeTab === "management-units" && <GerenciasContent />}
         </TabsContent>
 
         <TabsContent value="process-map" className="mt-6">
-          <ProcessMapContent />
+          {activeTab === "process-map" && <ProcessMapContent />}
         </TabsContent>
 
         <TabsContent value="responsables" className="mt-6">
-          <ResponsablesContent />
+          {activeTab === "responsables" && <ResponsablesContent />}
         </TabsContent>
       </Tabs>
     </div>
