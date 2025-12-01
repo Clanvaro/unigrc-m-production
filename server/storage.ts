@@ -20122,15 +20122,18 @@ export class DatabaseStorage extends MemStorage {
       .where(inArray(riskProcessLinks.riskId, riskIds))
       .orderBy(riskProcessLinks.createdAt);
 
-    return results.map(result => ({
-      ...result.riskProcessLink,
-      risk: result.risk!,
-      macroproceso: result.macroproceso || undefined,
-      process: result.process || undefined,
-      subproceso: result.subproceso || undefined,
-      responsibleUser: result.responsibleUser || undefined,
-      validatedByUser: result.validatedByUser || undefined,
-    }));
+    // Filter out orphaned links (where risk was deleted) to prevent null pointer errors
+    return results
+      .filter(result => result.risk !== null)
+      .map(result => ({
+        ...result.riskProcessLink,
+        risk: result.risk!,
+        macroproceso: result.macroproceso || undefined,
+        process: result.process || undefined,
+        subproceso: result.subproceso || undefined,
+        responsibleUser: result.responsibleUser || undefined,
+        validatedByUser: result.validatedByUser || undefined,
+      }));
   }
 
   async getRiskProcessLinksByRisk(riskId: string): Promise<RiskProcessLinkWithDetails[]> {
