@@ -1970,6 +1970,35 @@ export class MemStorage implements IStorage {
       this.systemConfigs.set(config.configKey, config);
     });
 
+
+    // Initialize test user for development
+    const testUser: User = {
+      id: 'user-test-1',
+      username: 'valencia.araneda',
+      email: 'Valencia.araneda@gmail.com',
+      password: '$2b$10$zjJDKUilTSBhCVoLHwnFGum7CrlnUp2f/3HxO59YzfoUI8uQlEkuS', // Admin2024!
+      firstName: 'Claudio',
+      lastName: 'Valencia',
+      fullName: 'Claudio Valencia',
+      isActive: true,
+      isAdmin: true,
+      isPlatformAdmin: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastLogin: null,
+      profileImageUrl: null,
+    };
+    this.users.set(testUser.id, testUser);
+
+    // Assign admin role to test user
+    const testUserRole: UserRole = {
+      id: 'user-role-test-1',
+      userId: testUser.id,
+      roleId: 'role-1', // Administrador role
+      assignedAt: new Date(),
+    };
+    this.userRoles.set(testUserRole.id, testUserRole);
+
     // Initialize Approval System with comprehensive default data
     this.initializeApprovalSystem();
   }
@@ -2307,6 +2336,120 @@ export class MemStorage implements IStorage {
     });
 
     console.log(`✅ Approval System initialized with ${defaultApprovalPolicies.length} policies, ${defaultApprovalRules.length} rules, ${defaultApprovalHierarchy.length} hierarchy levels, ${defaultApprovalWorkflows.length} workflows, ${defaultEscalationPaths.length} escalation paths`);
+  }
+
+  // Gerencias
+  async getGerencias(): Promise<Gerencia[]> {
+    return Array.from(this.gerencias.values()).filter(g => !g.deletedAt);
+  }
+
+  async getGerencia(id: string): Promise<Gerencia | undefined> {
+    const gerencia = this.gerencias.get(id);
+    if (!gerencia || gerencia.deletedAt) return undefined;
+    return gerencia;
+  }
+
+  async createGerencia(insertGerencia: InsertGerencia): Promise<Gerencia> {
+    const id = randomUUID();
+    const gerencia: Gerencia = {
+      ...insertGerencia,
+      id,
+      description: insertGerencia.description || null,
+      responsibleId: insertGerencia.responsibleId || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null
+    };
+    this.gerencias.set(id, gerencia);
+    return gerencia;
+  }
+
+  async updateGerencia(id: string, update: Partial<InsertGerencia>): Promise<Gerencia | undefined> {
+    const existing = this.gerencias.get(id);
+    if (!existing || existing.deletedAt) return undefined;
+
+    const updated: Gerencia = {
+      ...existing,
+      ...update,
+      updatedAt: new Date()
+    };
+    this.gerencias.set(id, updated);
+    return updated;
+  }
+
+  async deleteGerencia(id: string, userId?: string): Promise<boolean> {
+    const existing = this.gerencias.get(id);
+    if (!existing || existing.deletedAt) return false;
+
+    const updated: Gerencia = {
+      ...existing,
+      deletedAt: new Date()
+    };
+    this.gerencias.set(id, updated);
+    return true;
+  }
+
+  async restoreGerencia(id: string, userId?: string): Promise<Gerencia | undefined> {
+    const existing = this.gerencias.get(id);
+    if (!existing) return undefined;
+
+    const updated: Gerencia = {
+      ...existing,
+      deletedAt: null,
+      updatedAt: new Date()
+    };
+    this.gerencias.set(id, updated);
+    return updated;
+  }
+
+  async getDeletedGerencias(): Promise<Gerencia[]> {
+    return Array.from(this.gerencias.values()).filter(g => g.deletedAt !== null);
+  }
+
+  // Process Gerencias Relations (Mock implementation for MemStorage)
+  async addProcessGerencia(relation: InsertProcessGerencia): Promise<ProcessGerencia> {
+    throw new Error("Method not implemented in MemStorage");
+  }
+  async removeProcessGerencia(processId: string, gerenciaId: string): Promise<boolean> {
+    return true;
+  }
+  async getGerenciasByProcess(processId: string): Promise<Gerencia[]> {
+    return [];
+  }
+  async getProcessesByGerencia(gerenciaId: string): Promise<Process[]> {
+    return [];
+  }
+
+  // Macroproceso Gerencias Relations (Mock implementation for MemStorage)
+  async addMacroprocesoGerencia(relation: InsertMacroprocesoGerencia): Promise<MacroprocesoGerencia> {
+    throw new Error("Method not implemented in MemStorage");
+  }
+  async removeMacroprocesoGerencia(macroprocesoId: string, gerenciaId: string): Promise<boolean> {
+    return true;
+  }
+  async getGerenciasByMacroproceso(macroprocesoId: string): Promise<Gerencia[]> {
+    return [];
+  }
+  async getMacroprocesosByGerencia(gerenciaId: string): Promise<Macroproceso[]> {
+    return [];
+  }
+
+  // Subproceso Gerencias Relations (Mock implementation for MemStorage)
+  async addSubprocesoGerencia(relation: InsertSubprocesoGerencia): Promise<SubprocesoGerencia> {
+    throw new Error("Method not implemented in MemStorage");
+  }
+  async removeSubprocesoGerencia(subprocesoId: string, gerenciaId: string): Promise<boolean> {
+    return true;
+  }
+  async getGerenciasBySubproceso(subprocesoId: string): Promise<Gerencia[]> {
+    return [];
+  }
+  async getSubprocesosByGerencia(gerenciaId: string): Promise<Subproceso[]> {
+    return [];
+  }
+
+  async getAllProcessGerenciasRelations(): Promise<any[]> {
+    return [];
   }
 
   // Processes
@@ -4645,45 +4788,25 @@ export class MemStorage implements IStorage {
 
   // Updated Processes methods
   async getProcessesByMacroproceso(macroprocesoId: string): Promise<Process[]> {
-    return await db.select().from(processes)
-      .where(and(
-        eq(processes.macroprocesoId, macroprocesoId),
-        isNull(processes.deletedAt)
-      ));
+    return Array.from(this.processes.values()).filter(p =>
+      p.macroprocesoId === macroprocesoId && !p.deletedAt
+    );
   }
 
   // Subprocesos methods
   async getSubprocesos(): Promise<Subproceso[]> {
-    return await db.select().from(subprocesos)
-      .where(isNull(subprocesos.deletedAt));
+    return Array.from(this.subprocesos.values()).filter(s => !s.deletedAt);
   }
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
-    const cacheKey = 'subprocesos-with-owners:single-tenant';
-
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cached = await distributedCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    const results = await db
-      .select({
-        subproceso: subprocesos,
-        owner: processOwners,
-      })
-      .from(subprocesos)
-      .leftJoin(processOwners, eq(subprocesos.ownerId, processOwners.id))
-      .where(isNull(subprocesos.deletedAt));
-
-    const result = results.map(result => ({
-      ...result.subproceso,
-      owner: result.owner,
-    }));
-
-    // Cache for 60 seconds
-    await distributedCache.set(cacheKey, result, 60);
-    return result;
+    const subprocesos = Array.from(this.subprocesos.values()).filter(s => !s.deletedAt);
+    return subprocesos.map(sub => {
+      const owner = sub.ownerId ? this.processOwners.get(sub.ownerId) || null : null;
+      return {
+        ...sub,
+        owner
+      };
+    });
   }
 
   async getSubproceso(id: string): Promise<Subproceso | undefined> {

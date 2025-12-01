@@ -5,17 +5,17 @@ import { registerRoutes, warmCacheForAllTenants } from "./routes";
 import { serveStatic, log } from "./static";
 import { performanceMiddleware, errorLoggingMiddleware } from "./middleware/performance";
 import { logger } from "./logger";
-import { 
+import {
   validateRequiredSecrets,
   helmetConfig,
   corsConfig,
-  globalRateLimiter 
+  globalRateLimiter
 } from "./security";
 import cors from "cors";
-import { 
+import {
   inputSanitizer,
   validateContentType,
-  payloadSizeLimit 
+  payloadSizeLimit
 } from "./validation/input-sanitizer";
 import { responseSanitizer } from "./validation/output-sanitizer";
 import { applyPerformanceOptimizations } from "./performance";
@@ -152,7 +152,7 @@ app.use((req, res, next) => {
 (async () => {
   // Initialize queues before starting server (for memory optimization with lazy loading)
   await initializeQueues();
-  
+
   const server = await registerRoutes(app);
 
   // importantly only setup vite in development and after
@@ -179,13 +179,16 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
+  // Use 0.0.0.0 in production (required for Render/cloud deployments)
+  // Use 127.0.0.1 in development (avoids macOS AirPlay Receiver conflict on port 5000)
+  const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
+
   server.listen({
     port,
-    host: "0.0.0.0",
-    reusePort: true,
+    host,
   }, () => {
-    log(`serving on port ${port}`);
-    
+    log(`serving on port ${port} (host: ${host})`);
+
     // Check OpenAI Service status
     const aiStatus = openAIService.getStatus();
     if (aiStatus.ready) {
@@ -193,7 +196,7 @@ app.use((req, res, next) => {
     } else {
       console.warn('⚠️ OpenAI Service not configured. AI features will be disabled.');
     }
-    
+
     // Warm cache in background (non-blocking) after server is ready
     // This pre-loads common data to Redis to eliminate cold cache latency on first load
     setTimeout(() => {
