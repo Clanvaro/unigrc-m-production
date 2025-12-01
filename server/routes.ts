@@ -8108,6 +8108,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // BATCH ENDPOINT: Create multiple risk-control associations in one request
+  // Reduces N HTTP requests to 1, uses single INSERT query, single cache invalidation
+  app.post("/api/risk-control-links/bulk", isAuthenticated, async (req, res) => {
+    try {
+      const { riskId, controls } = req.body as {
+        riskId: string;
+        controls: Array<{ controlId: string; residualRisk: string }>;
+      };
+
+      if (!riskId || !Array.isArray(controls)) {
+        return res.status(400).json({ 
+          message: "Se requiere riskId y un array de controls" 
+        });
+      }
+
+      const startTime = Date.now();
+      const result = await storage.createRiskControlsBatch(riskId, controls);
+
+      // Single cache invalidation for all associations
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlAssociationCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+        distributedCache.invalidatePattern(`risk-control-summary:${riskId}*`)
+      ]);
+
+      console.log(`[PERF] Batch create ${result.created.length} associations in ${Date.now() - startTime}ms`);
+      res.status(201).json(result);
+    } catch (error: any) {
+      console.error("[ERROR] Batch create risk-controls failed:", error);
+      res.status(500).json({ 
+        message: "Error al crear asociaciones en batch",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  });
+
+  // BATCH ENDPOINT: Delete multiple risk-control associations in one request
+  app.delete("/api/risk-control-links/bulk", isAuthenticated, async (req, res) => {
+    try {
+      const { riskId, controlIds } = req.body as {
+        riskId: string;
+        controlIds: string[];
+      };
+
+      if (!riskId || !Array.isArray(controlIds)) {
+        return res.status(400).json({ 
+          message: "Se requiere riskId y un array de controlIds" 
+        });
+      }
+
+      const startTime = Date.now();
+      const result = await storage.deleteRiskControlsBatch(riskId, controlIds);
+
+      // Single cache invalidation
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        invalidateRiskControlAssociationCaches(),
+        distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
+        distributedCache.invalidatePattern(`risk-control-summary:${riskId}*`)
+      ]);
+
+      console.log(`[PERF] Batch delete ${result.deleted} associations in ${Date.now() - startTime}ms`);
+      res.status(200).json(result);
+    } catch (error: any) {
+      console.error("[ERROR] Batch delete risk-controls failed:", error);
+      res.status(500).json({ 
+        message: "Error al eliminar asociaciones en batch",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  });
 
   // Endpoint dedicado para invalidar manualmente el caché de risk-controls
   // Útil después de despliegues o cuando hay inconsistencias de caché
