@@ -1391,8 +1391,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
 
       res.status(201).json(process);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating process:", error);
+      // Propagate specific error messages (like duplicate name)
+      if (error.message && error.message.includes("Ya existe un proceso")) {
+        return res.status(400).json({ message: error.message });
+      }
       res.status(400).json({ message: "Invalid process data" });
     }
   });
