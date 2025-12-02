@@ -23,7 +23,8 @@
     "pre-deploy": "node scripts/pre-deployment-check.mjs",
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke-test:prod": "echo 'Run: BASE_URL=https://your-app.replit.app npm run smoke-test'",
-    "validate-deploy": "npm run pre-deploy && npm run build && echo '\n✅ Validation complete! Build artifacts ready for deployment.'"
+    "validate-deploy": "npm run pre-deploy && npm run build && echo '\n✅ Validation complete! Build artifacts ready for deployment.'",
+    "apply-matrix-index": "tsx scripts/apply-matrix-index.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
