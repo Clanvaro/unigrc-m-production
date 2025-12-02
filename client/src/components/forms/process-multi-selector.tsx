@@ -20,10 +20,10 @@ interface ProcessMultiSelectorProps {
   maxAssociations?: number;
 }
 
-export default function ProcessMultiSelector({ 
-  value = [], 
-  onChange, 
-  maxAssociations = 10 
+export default function ProcessMultiSelector({
+  value = [],
+  onChange,
+  maxAssociations = 10
 }: ProcessMultiSelectorProps) {
   const [currentSelection, setCurrentSelection] = useState<ProcessAssociation>({});
   const [openMacroproceso, setOpenMacroproceso] = useState(false);
@@ -32,17 +32,20 @@ export default function ProcessMultiSelector({
 
   const { data: macroprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
-    staleTime: 120000,
+    staleTime: 60000,
+    refetchOnMount: "always",
   });
 
   const { data: processes = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
-    staleTime: 120000,
+    staleTime: 60000,
+    refetchOnMount: "always",
   });
 
   const { data: subprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 120000,
+    staleTime: 60000,
+    refetchOnMount: "always",
   });
 
   // Filter processes based on selected macroproceso
@@ -81,7 +84,7 @@ export default function ProcessMultiSelector({
   };
 
   const isAlreadySelected = () => {
-    return value.some(assoc => 
+    return value.some(assoc =>
       assoc.macroprocesoId === currentSelection.macroprocesoId &&
       assoc.processId === currentSelection.processId &&
       assoc.subprocesoId === currentSelection.subprocesoId
@@ -90,17 +93,17 @@ export default function ProcessMultiSelector({
 
   const getAssociationLabel = (assoc: ProcessAssociation) => {
     const parts = [];
-    
+
     if (assoc.macroprocesoId) {
       const macro = macroprocesos.find((m: any) => m.id === assoc.macroprocesoId);
       parts.push(macro?.name || assoc.macroprocesoId);
     }
-    
+
     if (assoc.processId) {
       const process = processes.find((p: any) => p.id === assoc.processId);
       parts.push(process?.name || assoc.processId);
     }
-    
+
     if (assoc.subprocesoId) {
       const subproc = subprocesos.find((s: any) => s.id === assoc.subprocesoId);
       parts.push(subproc?.name || assoc.subprocesoId);
@@ -169,7 +172,7 @@ export default function ProcessMultiSelector({
                 </Button>
               )}
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {/* Macroproceso Combobox */}
               <div>
