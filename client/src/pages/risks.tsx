@@ -2263,8 +2263,8 @@ export default function Risks() {
             </Card>
           ) : (
             <Card className="flex-1 flex flex-col overflow-hidden">
-              <CardContent className="h-full flex flex-col p-0">
-                <div className="flex-1 min-h-0">
+              <CardContent className="p-0 h-full flex flex-col">
+                <div className="flex-1 overflow-hidden">
                   <VirtualizedTable
                     data={displayData}
                     columns={columnsBasic}
@@ -2366,8 +2366,8 @@ export default function Risks() {
             </Card>
           ) : (
             <Card className="flex-1 flex flex-col overflow-hidden">
-              <CardContent className="h-full flex flex-col p-0">
-                <div className="flex-1 min-h-0">
+              <CardContent className="p-0 h-full flex flex-col">
+                <div className="flex-1 overflow-hidden">
                   <VirtualizedTable
                     data={displayData}
                     columns={columns}
