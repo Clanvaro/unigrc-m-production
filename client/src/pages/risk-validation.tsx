@@ -3785,7 +3785,8 @@ export default function RiskValidationPage() {
                 )}
               </div>
             </>
-          </TabsContent>
+          )}
+        </TabsContent>
 
         <TabsContent value="action-plans">
           {/* Action Plans Statistics */}

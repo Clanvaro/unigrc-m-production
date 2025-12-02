@@ -89,12 +89,12 @@ export default function Audits() {
   const [workProgramSortDirection, setWorkProgramSortDirection] = useState<"asc" | "desc">("asc");
   const [deleteConfirmAudit, setDeleteConfirmAudit] = useState<Audit | null>(null);
   const [auditDelReason, setAuditDelReason] = useState("");
-  
+
   // Table sorting state
   const [sortOrder, setSortOrder] = useState<"asc" | "desc" | "none">("none");
   const [sortColumn, setSortColumn] = useState<"code" | "name" | "type" | "process" | "leadAuditor" | "status">("code");
-  
-  const { toast} = useToast();
+
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
 
@@ -174,7 +174,7 @@ export default function Audits() {
     try {
       // First, check if milestones already exist for this audit
       const existingMilestones = await apiRequest(`/api/audits/${auditId}/milestones`, "GET");
-      
+
       if (existingMilestones && Array.isArray(existingMilestones) && existingMilestones.length > 0) {
         toast({
           title: "Hitos ya existen",
@@ -197,15 +197,15 @@ export default function Audits() {
         };
         await apiRequest(`/api/audits/${auditId}/milestones`, "POST", milestoneData);
       }
-      
+
       toast({
         title: "Hitos creados",
         description: "Se han creado los hitos predeterminados para la auditoría"
       });
-      
+
       // Refresh milestones data if needed
       queryClient.invalidateQueries({ queryKey: [`/api/audits/${auditId}/milestones`] });
-      
+
     } catch (error) {
       console.error("Error creating milestones:", error);
       toast({
@@ -256,7 +256,7 @@ export default function Audits() {
     } else {
       form.reset({
         name: "",
-        type: "risk_based", 
+        type: "risk_based",
         status: "borrador",
         scope: "",
         leadAuditor: "",
@@ -276,6 +276,8 @@ export default function Audits() {
   const { data: audits = [], isLoading } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
     staleTime: 0, // Asegurar que siempre se refresquen los datos
+    refetchOnMount: "always", // Siempre refetch al montar el componente
+    refetchOnWindowFocus: true, // Refetch cuando la ventana recupera el foco
     select: (data: any) => data.data || []
   });
 
@@ -395,9 +397,9 @@ export default function Audits() {
 
   const updateReviewPeriodMutation = useMutation({
     mutationFn: async ({ auditId, startDate, endDate }: { auditId: string; startDate: string; endDate: string }) => {
-      return apiRequest(`/api/audits/${auditId}`, "PUT", { 
-        reviewPeriodStartDate: startDate, 
-        reviewPeriodEndDate: endDate 
+      return apiRequest(`/api/audits/${auditId}`, "PUT", {
+        reviewPeriodStartDate: startDate,
+        reviewPeriodEndDate: endDate
       });
     },
     onSuccess: (updatedAudit, variables) => {
@@ -437,8 +439,8 @@ export default function Audits() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/actions", { origin: "audit" }] });
-      toast({ 
-        title: "Compromiso creado", 
+      toast({
+        title: "Compromiso creado",
         description: "El compromiso de auditoría ha sido creado exitosamente"
       });
       setShowCommitmentDialog(false);
@@ -463,8 +465,8 @@ export default function Audits() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/actions", { origin: "audit" }] });
-      toast({ 
-        title: "Compromiso actualizado", 
+      toast({
+        title: "Compromiso actualizado",
         description: "Los cambios han sido guardados exitosamente"
       });
       setShowCommitmentDialog(false);
@@ -490,16 +492,16 @@ export default function Audits() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/actions", { origin: "audit" }] });
-      toast({ 
-        title: "Compromiso eliminado", 
+      toast({
+        title: "Compromiso eliminado",
         description: "El compromiso ha sido eliminado exitosamente"
       });
     },
     onError: () => {
-      toast({ 
-        title: "Error al eliminar compromiso", 
+      toast({
+        title: "Error al eliminar compromiso",
         description: "No se pudo eliminar el compromiso",
-        variant: "destructive" 
+        variant: "destructive"
       });
     },
   });
@@ -513,7 +515,7 @@ export default function Audits() {
       // Invalidate all relevant caches
       queryClient.invalidateQueries({ queryKey: ['/api/audit-tests'] });
       queryClient.invalidateQueries({ queryKey: ['/api/audits'] });
-      
+
       toast({
         title: "Prueba eliminada",
         description: "La prueba de auditoría ha sido eliminada exitosamente."
@@ -603,21 +605,21 @@ export default function Audits() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) => 
+    mutationFn: ({ id, deletionReason }: { id: string; deletionReason: string }) =>
       apiRequest(`/api/audits/${id}`, "DELETE", { deletionReason }),
     onMutate: async ({ id: deletedId }) => {
       // Cancelar cualquier refetch en progreso
       await queryClient.cancelQueries({ queryKey: ["/api/audits"] });
-      
+
       // Guardar el estado previo
       const previousAudits = queryClient.getQueryData(["/api/audits"]);
-      
+
       // Actualización optimista: remover la auditoría inmediatamente
       queryClient.setQueryData(["/api/audits"], (old: any) => {
         if (!old || !Array.isArray(old)) return old;
         return old.filter((audit: any) => audit.id !== deletedId);
       });
-      
+
       return { previousAudits };
     },
     onSuccess: () => {
@@ -631,8 +633,8 @@ export default function Audits() {
         queryClient.setQueryData(["/api/audits"], context.previousAudits);
       }
       console.error("Error al eliminar auditoría:", error);
-      toast({ 
-        title: "Error al eliminar auditoría", 
+      toast({
+        title: "Error al eliminar auditoría",
         variant: "destructive",
         description: "Hubo un problema al eliminar la auditoría. Inténtalo de nuevo."
       });
@@ -644,12 +646,12 @@ export default function Audits() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => 
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
       apiRequest(`/api/audits/${id}`, "PUT", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/audits"] });
-      toast({ 
-        title: "Auditoría actualizada", 
+      toast({
+        title: "Auditoría actualizada",
         description: "Los cambios han sido guardados exitosamente"
       });
       setShowAuditDialog(false);
@@ -669,8 +671,8 @@ export default function Audits() {
     mutationFn: (data: any) => apiRequest("/api/audits", "POST", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/audits"] });
-      toast({ 
-        title: "Auditoría creada", 
+      toast({
+        title: "Auditoría creada",
         description: "La auditoría emergente ha sido creada exitosamente"
       });
       setShowAuditDialog(false);
@@ -686,7 +688,7 @@ export default function Audits() {
   });
 
   const statusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => 
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
       apiRequest(`/api/audits/${id}`, "PUT", { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/audits"] });
@@ -711,8 +713,8 @@ export default function Audits() {
         processId: entityType === 'process' ? planItem.universe.processId : null,
         subprocesoId: entityType === 'subproceso' ? planItem.universe.subprocesoId : null,
         status: "planned" as const,
-        priority: (planItem.prioritization?.calculatedRanking || 10) <= 5 ? "high" : 
-                 (planItem.prioritization?.calculatedRanking || 10) <= 10 ? "medium" : "low",
+        priority: (planItem.prioritization?.calculatedRanking || 10) <= 5 ? "high" :
+          (planItem.prioritization?.calculatedRanking || 10) <= 10 ? "medium" : "low",
         leadAuditor: planItem.proposedLeadAuditor || (auditTeamUsers.length > 0 ? auditTeamUsers[0].id : "user-1"),
         auditTeam: planItem.proposedTeamMembers || (auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : ["user-1"]),
       };
@@ -735,14 +737,14 @@ export default function Audits() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/audits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/audit-plans"] });
-      toast({ 
+      toast({
         title: "Auditoría creada exitosamente",
         description: "La auditoría ha sido creada desde el elemento del plan."
       });
     },
     onError: () => {
-      toast({ 
-        title: "Error al crear auditoría", 
+      toast({
+        title: "Error al crear auditoría",
         variant: "destructive",
         description: "Hubo un problema al crear la auditoría. Inténtalo de nuevo."
       });
@@ -751,12 +753,12 @@ export default function Audits() {
 
 
   const filteredAudits = audits.filter((audit: Audit) => {
-    const matchesSearch = !searchTerm || 
-                         audit.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         audit.code?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = !searchTerm ||
+      audit.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      audit.code?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "all" || audit.status === statusFilter;
     const matchesType = typeFilter === "all" || audit.type === typeFilter;
-    
+
     return matchesSearch && matchesStatus && matchesType;
   });
 
@@ -842,12 +844,12 @@ export default function Audits() {
     const auditRoleIds = roles
       .filter((role: any) => auditRoleNames.includes(role.name))
       .map((role: any) => role.id);
-    
+
     const usersWithAuditRoles = userRoles
       .filter((ur: any) => auditRoleIds.includes(ur.roleId))
       .map((ur: any) => ur.userId);
-    
-    return users.filter((user: User) => 
+
+    return users.filter((user: User) =>
       user.isActive && usersWithAuditRoles.includes(user.id)
     );
   };
@@ -867,7 +869,7 @@ export default function Audits() {
         type: 'process_owner',
         isActive: owner.isActive
       }));
-    
+
     // Combine both arrays and remove duplicates by id
     const combined = [...auditUsers.map((u: User) => ({ ...u, type: 'audit_user' })), ...owners];
     const uniqueById = combined.reduce((acc: any[], current: any) => {
@@ -877,7 +879,7 @@ export default function Audits() {
       }
       return acc;
     }, []);
-    
+
     return uniqueById;
   };
 
@@ -923,10 +925,10 @@ export default function Audits() {
       });
     } else {
       const [type, id] = processValue.split(':');
-      const updateData = type === 'process' 
+      const updateData = type === 'process'
         ? { processId: id, subprocesoId: null }
         : { processId: null, subprocesoId: id };
-      
+
       updateMutation.mutate({
         id: auditId,
         data: updateData
@@ -939,7 +941,7 @@ export default function Audits() {
     const updateData = {
       [field]: value ? new Date(value + "T00:00:00.000Z") : null
     };
-    
+
     updateMutation.mutate({
       id: auditId,
       data: updateData
@@ -949,7 +951,7 @@ export default function Audits() {
   // Crear opciones combinadas para el selector de entidades
   const getScopeEntityOptions = () => {
     const options: Array<{ value: string; label: string; type: string }> = [];
-    
+
     // Agregar macroprocesos
     macroprocesos.forEach((macro) => {
       options.push({
@@ -958,7 +960,7 @@ export default function Audits() {
         type: 'macroproceso'
       });
     });
-    
+
     // Agregar procesos
     processes.forEach((process: Process) => {
       options.push({
@@ -967,7 +969,7 @@ export default function Audits() {
         type: 'proceso'
       });
     });
-    
+
     // Agregar subprocesos
     subprocesos.forEach((subproceso: Subproceso) => {
       options.push({
@@ -976,7 +978,7 @@ export default function Audits() {
         type: 'subproceso'
       });
     });
-    
+
     return options;
   };
 
@@ -1064,8 +1066,8 @@ export default function Audits() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setDeleteConfirmAudit(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={confirmDeleteAudit} 
+            <AlertDialogAction
+              onClick={confirmDeleteAudit}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="button-confirm-delete"
             >
@@ -1105,7 +1107,7 @@ export default function Audits() {
                 </SelectContent>
               </Select>
             </div>
-            
+
             {selectedPlan !== "all" && planItems.length > 0 && (
               <div className="space-y-3">
                 <h4 className="text-sm font-medium">Elementos Disponibles:</h4>
@@ -1137,7 +1139,7 @@ export default function Audits() {
                 </div>
               </div>
             )}
-            
+
             {selectedPlan !== "all" && planItems.length === 0 && (
               <p className="text-sm text-muted-foreground text-center py-4">
                 No hay elementos disponibles en este plan
@@ -1159,633 +1161,633 @@ export default function Audits() {
         }
       }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{editingAudit ? 'Editar Auditoría' : 'Crear Auditoría Emergente'}</DialogTitle>
-              <DialogDescription>
-                {editingAudit ? 'Modifica los detalles de la auditoría' : 'Crea una auditoría no planificada para situaciones imprevistas'}
-              </DialogDescription>
-            </DialogHeader>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(async (data) => {
-                if (editingAudit) {
-                  const updateData = {
-                    ...data,
-                    objectives: data.objectives || [],
-                    plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z") : null,
-                    plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z") : null,
-                  };
-                  
-                  // Actualizar auditoría
-                  updateMutation.mutate({ id: editingAudit.id, data: updateData }, {
-                    onSuccess: async (updatedAudit: any) => {
-                      // Actualizar el alcance (procesos y subprocesos)
-                      if (data.selectedProcesses?.length > 0 || data.selectedSubprocesses?.length > 0) {
-                        try {
-                          await apiRequest(`/api/audits/${updatedAudit.id}/scope`, "PUT", {
-                            processes: data.selectedProcesses || [],
-                            subprocesses: data.selectedSubprocesses || []
-                          });
-                        } catch (error) {
-                          console.error("Error updating audit scope:", error);
-                        }
+          <DialogHeader>
+            <DialogTitle>{editingAudit ? 'Editar Auditoría' : 'Crear Auditoría Emergente'}</DialogTitle>
+            <DialogDescription>
+              {editingAudit ? 'Modifica los detalles de la auditoría' : 'Crea una auditoría no planificada para situaciones imprevistas'}
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(async (data) => {
+              if (editingAudit) {
+                const updateData = {
+                  ...data,
+                  objectives: data.objectives || [],
+                  plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z") : null,
+                  plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z") : null,
+                };
+
+                // Actualizar auditoría
+                updateMutation.mutate({ id: editingAudit.id, data: updateData }, {
+                  onSuccess: async (updatedAudit: any) => {
+                    // Actualizar el alcance (procesos y subprocesos)
+                    if (data.selectedProcesses?.length > 0 || data.selectedSubprocesses?.length > 0) {
+                      try {
+                        await apiRequest(`/api/audits/${updatedAudit.id}/scope`, "PUT", {
+                          processes: data.selectedProcesses || [],
+                          subprocesses: data.selectedSubprocesses || []
+                        });
+                      } catch (error) {
+                        console.error("Error updating audit scope:", error);
                       }
-                    }
-                  });
-                } else {
-                  // Crear auditoría emergente/no planificada
-                  // Generar scope automático si está vacío
-                  let generatedScope = data.scope;
-                  if (!generatedScope || generatedScope.trim() === "") {
-                    if (data.selectedRisks && data.selectedRisks.length > 0) {
-                      const selectedRiskNames = risks
-                        .filter((r: any) => data.selectedRisks.includes(r.id))
-                        .map((r: any) => r.name)
-                        .join(", ");
-                      generatedScope = `Auditoría emergente sobre riesgos: ${selectedRiskNames}`;
-                    } else if (data.selectedProcesses && data.selectedProcesses.length > 0) {
-                      const selectedProcessNames = processes
-                        .filter((p: any) => data.selectedProcesses.includes(p.id))
-                        .map((p: any) => p.name)
-                        .join(", ");
-                      generatedScope = `Auditoría emergente de procesos: ${selectedProcessNames}`;
-                    } else {
-                      generatedScope = `Auditoría emergente - ${data.name}`;
                     }
                   }
-                  
-                  const auditData = {
-                    ...data,
-                    scope: generatedScope, // Usar scope generado o el proporcionado
-                    type: data.type || "risk_based",
-                    planId: null, // Auditoría emergente no tiene plan asociado
-                    priority: "medium", // Prioridad por defecto
-                    leadAuditor: data.leadAuditor || (auditTeamUsers.length > 0 ? auditTeamUsers[0].id : "user-1"), // Usar el seleccionado o primer disponible
-                    auditTeam: auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : ["user-1"], // Primer auditor como equipo
-                    associatedRisks: data.selectedRisks || [], // Agregar riesgos seleccionados
-                    regulationId: data.type === "compliance" ? (data.regulationId || null) : null,
-                    plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z") : null,
-                    plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z") : null,
-                    objectives: data.objectives && data.objectives.length > 0 ? data.objectives : [
-                      "Auditoría emergente - Objetivos a definir durante la planificación"
-                    ]
-                  };
-                  
-                  createMutation.mutate(auditData, {
-                    onSuccess: async (newAudit: any) => {
-                      // Guardar el alcance (procesos y subprocesos)
-                      if (data.selectedProcesses?.length > 0 || data.selectedSubprocesses?.length > 0) {
-                        try {
-                          await apiRequest(`/api/audits/${newAudit.id}/scope`, "PUT", {
-                            processes: data.selectedProcesses || [],
-                            subprocesses: data.selectedSubprocesses || []
-                          });
-                        } catch (error) {
-                          console.error("Error setting audit scope:", error);
-                        }
-                      }
-                      
-                      // If it's a compliance audit with selected controls, create audit-control associations
-                      if (data.type === "compliance" && data.selectedControls?.length > 0) {
-                        try {
-                          for (const controlId of data.selectedControls) {
-                            // Find the corresponding risk for this control from the regulation controls
-                            const controlItem = (regulationControls as any[]).find((item: any) => item.control.id === controlId);
-                            const auditControlData = {
-                              auditId: newAudit.id,
-                              controlId: controlId,
-                              riskId: controlItem?.risk?.id || null,
-                              status: "pending",
-                              testingApproach: "",
-                              expectedResult: "",
-                              actualResult: "",
-                              complianceStatus: "pending",
-                            };
-                            
-                            await apiRequest("/api/audit-controls", "POST", auditControlData);
-                          }
-                        } catch (error) {
-                          console.error("Error creating audit controls:", error);
-                        }
+                });
+              } else {
+                // Crear auditoría emergente/no planificada
+                // Generar scope automático si está vacío
+                let generatedScope = data.scope;
+                if (!generatedScope || generatedScope.trim() === "") {
+                  if (data.selectedRisks && data.selectedRisks.length > 0) {
+                    const selectedRiskNames = risks
+                      .filter((r: any) => data.selectedRisks.includes(r.id))
+                      .map((r: any) => r.name)
+                      .join(", ");
+                    generatedScope = `Auditoría emergente sobre riesgos: ${selectedRiskNames}`;
+                  } else if (data.selectedProcesses && data.selectedProcesses.length > 0) {
+                    const selectedProcessNames = processes
+                      .filter((p: any) => data.selectedProcesses.includes(p.id))
+                      .map((p: any) => p.name)
+                      .join(", ");
+                    generatedScope = `Auditoría emergente de procesos: ${selectedProcessNames}`;
+                  } else {
+                    generatedScope = `Auditoría emergente - ${data.name}`;
+                  }
+                }
+
+                const auditData = {
+                  ...data,
+                  scope: generatedScope, // Usar scope generado o el proporcionado
+                  type: data.type || "risk_based",
+                  planId: null, // Auditoría emergente no tiene plan asociado
+                  priority: "medium", // Prioridad por defecto
+                  leadAuditor: data.leadAuditor || (auditTeamUsers.length > 0 ? auditTeamUsers[0].id : "user-1"), // Usar el seleccionado o primer disponible
+                  auditTeam: auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : ["user-1"], // Primer auditor como equipo
+                  associatedRisks: data.selectedRisks || [], // Agregar riesgos seleccionados
+                  regulationId: data.type === "compliance" ? (data.regulationId || null) : null,
+                  plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z") : null,
+                  plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z") : null,
+                  objectives: data.objectives && data.objectives.length > 0 ? data.objectives : [
+                    "Auditoría emergente - Objetivos a definir durante la planificación"
+                  ]
+                };
+
+                createMutation.mutate(auditData, {
+                  onSuccess: async (newAudit: any) => {
+                    // Guardar el alcance (procesos y subprocesos)
+                    if (data.selectedProcesses?.length > 0 || data.selectedSubprocesses?.length > 0) {
+                      try {
+                        await apiRequest(`/api/audits/${newAudit.id}/scope`, "PUT", {
+                          processes: data.selectedProcesses || [],
+                          subprocesses: data.selectedSubprocesses || []
+                        });
+                      } catch (error) {
+                        console.error("Error setting audit scope:", error);
                       }
                     }
-                  });
-                }
-              })}>
-                <div className="space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Nombre de la Auditoría</FormLabel>
+
+                    // If it's a compliance audit with selected controls, create audit-control associations
+                    if (data.type === "compliance" && data.selectedControls?.length > 0) {
+                      try {
+                        for (const controlId of data.selectedControls) {
+                          // Find the corresponding risk for this control from the regulation controls
+                          const controlItem = (regulationControls as any[]).find((item: any) => item.control.id === controlId);
+                          const auditControlData = {
+                            auditId: newAudit.id,
+                            controlId: controlId,
+                            riskId: controlItem?.risk?.id || null,
+                            status: "pending",
+                            testingApproach: "",
+                            expectedResult: "",
+                            actualResult: "",
+                            complianceStatus: "pending",
+                          };
+
+                          await apiRequest("/api/audit-controls", "POST", auditControlData);
+                        }
+                      } catch (error) {
+                        console.error("Error creating audit controls:", error);
+                      }
+                    }
+                  }
+                });
+              }
+            })}>
+              <div className="space-y-4">
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Nombre de la Auditoría</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Ingresa el nombre de la auditoría"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="type"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tipo</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
-                          <Input 
-                            placeholder="Ingresa el nombre de la auditoría"
-                            {...field}
-                          />
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona el tipo" />
+                          </SelectTrigger>
                         </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                        <SelectContent>
+                          <SelectItem value="risk_based">Basada en Riesgos</SelectItem>
+                          <SelectItem value="compliance">Cumplimiento</SelectItem>
+                          <SelectItem value="operational">Operacional</SelectItem>
+                          <SelectItem value="financial">Financiera</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name="type"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Tipo</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Selecciona el tipo" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="risk_based">Basada en Riesgos</SelectItem>
-                            <SelectItem value="compliance">Cumplimiento</SelectItem>
-                            <SelectItem value="operational">Operacional</SelectItem>
-                            <SelectItem value="financial">Financiera</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                <FormField
+                  control={form.control}
+                  name="status"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Estado</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona el estado" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="borrador">Borrador</SelectItem>
+                          <SelectItem value="en_revision">En Revisión</SelectItem>
+                          <SelectItem value="alcance_aprobado">Alcance Aprobado</SelectItem>
+                          <SelectItem value="en_ejecucion">En Ejecución</SelectItem>
+                          <SelectItem value="cierre_tecnico">Cierre Técnico</SelectItem>
+                          <SelectItem value="informe_preliminar">Informe Preliminar</SelectItem>
+                          <SelectItem value="informe_final">Informe Final</SelectItem>
+                          <SelectItem value="seguimiento">Seguimiento</SelectItem>
+                          <SelectItem value="cancelado">Cancelada</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-                  <FormField
-                    control={form.control}
-                    name="status"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Estado</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Selecciona el estado" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="borrador">Borrador</SelectItem>
-                            <SelectItem value="en_revision">En Revisión</SelectItem>
-                            <SelectItem value="alcance_aprobado">Alcance Aprobado</SelectItem>
-                            <SelectItem value="en_ejecucion">En Ejecución</SelectItem>
-                            <SelectItem value="cierre_tecnico">Cierre Técnico</SelectItem>
-                            <SelectItem value="informe_preliminar">Informe Preliminar</SelectItem>
-                            <SelectItem value="informe_final">Informe Final</SelectItem>
-                            <SelectItem value="seguimiento">Seguimiento</SelectItem>
-                            <SelectItem value="cancelado">Cancelada</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                {/* Compliance Audit Fields */}
+                {form.watch("type") === "compliance" && (
+                  <>
+                    <FormField
+                      control={form.control}
+                      name="regulationId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Normativa</FormLabel>
+                          <Select
+                            onValueChange={(value) => {
+                              field.onChange(value);
+                              // Reset selected controls when regulation changes
+                              form.setValue("selectedControls", []);
+                            }}
+                            value={field.value}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Selecciona la normativa" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {(regulations as any[]).map((regulation: any) => (
+                                <SelectItem key={regulation.id} value={regulation.id}>
+                                  {regulation.name} ({regulation.code})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                  {/* Compliance Audit Fields */}
-                  {form.watch("type") === "compliance" && (
-                    <>
+                    {selectedRegulationId && (
                       <FormField
                         control={form.control}
-                        name="regulationId"
+                        name="selectedControls"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Normativa</FormLabel>
-                            <Select 
-                              onValueChange={(value) => {
-                                field.onChange(value);
-                                // Reset selected controls when regulation changes
-                                form.setValue("selectedControls", []);
-                              }} 
-                              value={field.value}
-                            >
-                              <FormControl>
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Selecciona la normativa" />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {(regulations as any[]).map((regulation: any) => (
-                                  <SelectItem key={regulation.id} value={regulation.id}>
-                                    {regulation.name} ({regulation.code})
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {selectedRegulationId && (
-                        <FormField
-                          control={form.control}
-                          name="selectedControls"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Controles a Auditar</FormLabel>
-                              <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
-                                {(regulationControls as any[]).length > 0 ? (
-                                  (regulationControls as any[]).map((item: any) => (
-                                    <div key={item.control.id} className="flex items-center space-x-2">
-                                      <input
-                                        type="checkbox"
-                                        id={`control-${item.control.id}`}
-                                        checked={(field.value as string[])?.includes(item.control.id) || false}
-                                        onChange={(e) => {
-                                          const currentValue: string[] = field.value || [];
-                                          if (e.target.checked) {
-                                            field.onChange([...currentValue, item.control.id]);
-                                          } else {
-                                            field.onChange(currentValue.filter((id: string) => id !== item.control.id));
-                                          }
-                                        }}
-                                        className="rounded border-gray-300"
-                                      />
-                                      <label htmlFor={`control-${item.control.id}`} className="text-sm cursor-pointer flex-1">
-                                        <span className="font-medium">{item.control.name}</span>
-                                        <span className="text-xs text-muted-foreground block">
-                                          {item.control.type === 'preventive' ? 'Preventivo' : 
-                                           item.control.type === 'detective' ? 'Detective' : 'Correctivo'} - 
-                                          Riesgo: {item.risk.name}
-                                        </span>
-                                        {item.control.evidence && (
-                                          <span className="text-blue-600 block text-xs mt-1">
-                                            📋 Evidencia: {item.control.evidence}
-                                          </span>
-                                        )}
-                                      </label>
-                                    </div>
-                                  ))
-                                ) : (
-                                  <p className="text-sm text-muted-foreground">No hay controles disponibles para esta normativa</p>
-                                )}
-                              </div>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      )}
-                    </>
-                  )}
-
-                  <FormField
-                    control={form.control}
-                    name="scope"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Alcance</FormLabel>
-                        <FormControl>
-                          <Input 
-                            placeholder="Describe el alcance de la auditoría"
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  {/* Selección de Procesos para el Alcance */}
-                  <FormField
-                    control={form.control}
-                    name="selectedProcesses"
-                    render={({ field }) => (
-                      <FormItem>
-                        <div className="flex items-center justify-between mb-3">
-                          <FormLabel>Procesos en el Alcance</FormLabel>
-                          {getFilteredProcesses().length > 0 && (
-                            <span className="text-sm text-muted-foreground">
-                              {getFilteredProcesses().length} {getFilteredProcesses().length === 1 ? 'proceso' : 'procesos'} encontrado{getFilteredProcesses().length === 1 ? '' : 's'}
-                            </span>
-                          )}
-                        </div>
-                        
-                        {/* Search input for processes */}
-                        <div className="relative mb-4">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                          <Input
-                            type="text"
-                            placeholder="Buscar por nombre, descripción o responsable..."
-                            value={processSearchTerm}
-                            onChange={(e) => setProcessSearchTerm(e.target.value)}
-                            className="pl-10"
-                            data-testid="input-search-processes"
-                          />
-                        </div>
-                        
-                        <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
-                          {getFilteredProcesses().length > 0 ? (
-                            getFilteredProcesses().map((process: Process) => (
-                              <div key={process.id} className="flex items-center space-x-2">
-                                <input
-                                  type="checkbox"
-                                  id={`process-${process.id}`}
-                                  checked={(field.value as string[])?.includes(process.id) || false}
-                                  onChange={(e) => {
-                                    const currentValue: string[] = field.value || [];
-                                    if (e.target.checked) {
-                                      field.onChange([...currentValue, process.id]);
-                                    } else {
-                                      field.onChange(currentValue.filter((id: string) => id !== process.id));
-                                    }
-                                  }}
-                                  className="rounded border-gray-300"
-                                  data-testid={`checkbox-process-${process.id}`}
-                                />
-                                <label htmlFor={`process-${process.id}`} className="text-sm cursor-pointer flex-1">
-                                  <span className="font-medium">{process.name}</span>
-                                  <span className="text-xs text-muted-foreground block">
-                                    {process.description}
-                                  </span>
-                                </label>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              {processSearchTerm ? 'No se encontraron procesos con ese criterio de búsqueda' : 'No hay procesos disponibles'}
-                            </p>
-                          )}
-                        </div>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  {/* Selección de Subprocesos para el Alcance */}
-                  <FormField
-                    control={form.control}
-                    name="selectedSubprocesses"
-                    render={({ field }) => (
-                      <FormItem>
-                        <div className="flex items-center justify-between mb-3">
-                          <FormLabel>Subprocesos en el Alcance</FormLabel>
-                          {getFilteredSubprocesses().length > 0 && (
-                            <span className="text-sm text-muted-foreground">
-                              {getFilteredSubprocesses().length} {getFilteredSubprocesses().length === 1 ? 'subproceso' : 'subprocesos'} encontrado{getFilteredSubprocesses().length === 1 ? '' : 's'}
-                            </span>
-                          )}
-                        </div>
-                        
-                        {/* Search input for subprocesses */}
-                        <div className="relative mb-4">
-                          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                          <Input
-                            type="text"
-                            placeholder="Buscar por nombre, descripción o proceso padre..."
-                            value={subprocessSearchTerm}
-                            onChange={(e) => setSubprocessSearchTerm(e.target.value)}
-                            className="pl-10"
-                            data-testid="input-search-subprocesses"
-                          />
-                        </div>
-                        
-                        <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
-                          {getFilteredSubprocesses().length > 0 ? (
-                            getFilteredSubprocesses().map((subproceso: Subproceso) => {
-                              const parentProcess = processes.find((p: Process) => p.id === subproceso.procesoId);
-                              return (
-                                <div key={subproceso.id} className="flex items-center space-x-2">
-                                  <input
-                                    type="checkbox"
-                                    id={`subproceso-${subproceso.id}`}
-                                    checked={(field.value as string[])?.includes(subproceso.id) || false}
-                                    onChange={(e) => {
-                                      const currentValue: string[] = field.value || [];
-                                      if (e.target.checked) {
-                                        field.onChange([...currentValue, subproceso.id]);
-                                      } else {
-                                        field.onChange(currentValue.filter((id: string) => id !== subproceso.id));
-                                      }
-                                    }}
-                                    className="rounded border-gray-300"
-                                    data-testid={`checkbox-subproceso-${subproceso.id}`}
-                                  />
-                                  <label htmlFor={`subproceso-${subproceso.id}`} className="text-sm cursor-pointer flex-1">
-                                    <span className="font-medium">{subproceso.name}</span>
-                                    <span className="text-xs text-muted-foreground block">
-                                      Proceso padre: {parentProcess?.name || 'N/A'}
-                                    </span>
-                                  </label>
-                                </div>
-                              );
-                            })
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              {subprocessSearchTerm ? 'No se encontraron subprocesos con ese criterio de búsqueda' : 'No hay subprocesos disponibles'}
-                            </p>
-                          )}
-                        </div>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="leadAuditor"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Auditor Líder</FormLabel>
-                        <Select onValueChange={field.onChange} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Selecciona el auditor líder" />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            {auditTeamUsers.map((user: User) => (
-                              <SelectItem key={user.id} value={user.id}>
-                                {user.fullName} - {roles.find(r => userRoles.find(ur => ur.userId === user.id && ur.roleId === r.id))?.name || 'Sin rol'}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="selectedRisks"
-                    render={({ field }) => {
-                      // Filtrar riesgos basado en el término de búsqueda
-                      const filteredRisks = (risks as any[]).filter((risk: any) =>
-                        risk.name.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
-                        risk.code.toLowerCase().includes(riskSearchTerm.toLowerCase())
-                      );
-
-                      return (
-                        <FormItem>
-                          <FormLabel>Riesgos a Auditar</FormLabel>
-                          {/* Campo de búsqueda */}
-                          <div className="space-y-2">
-                            <div className="relative">
-                              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                              <Input
-                                placeholder="Buscar riesgo por nombre o código..."
-                                value={riskSearchTerm}
-                                onChange={(e) => setRiskSearchTerm(e.target.value)}
-                                className="pl-8"
-                                data-testid="input-risk-search"
-                              />
-                            </div>
-                            {/* Lista de riesgos filtrados */}
+                            <FormLabel>Controles a Auditar</FormLabel>
                             <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
-                              {filteredRisks.length > 0 ? (
-                                filteredRisks.map((risk: any) => (
-                                  <div key={risk.id} className="flex items-center space-x-2">
+                              {(regulationControls as any[]).length > 0 ? (
+                                (regulationControls as any[]).map((item: any) => (
+                                  <div key={item.control.id} className="flex items-center space-x-2">
                                     <input
                                       type="checkbox"
-                                      id={`risk-${risk.id}`}
-                                      checked={(field.value as string[])?.includes(risk.id) || false}
+                                      id={`control-${item.control.id}`}
+                                      checked={(field.value as string[])?.includes(item.control.id) || false}
                                       onChange={(e) => {
                                         const currentValue: string[] = field.value || [];
                                         if (e.target.checked) {
-                                          field.onChange([...currentValue, risk.id]);
+                                          field.onChange([...currentValue, item.control.id]);
                                         } else {
-                                          field.onChange(currentValue.filter((id: string) => id !== risk.id));
+                                          field.onChange(currentValue.filter((id: string) => id !== item.control.id));
                                         }
                                       }}
                                       className="rounded border-gray-300"
                                     />
-                                    <label htmlFor={`risk-${risk.id}`} className="text-sm cursor-pointer flex-1">
-                                      <span className="font-medium">{risk.name}</span>
-                                      <span className="text-xs text-muted-foreground ml-2">
-                                        ({risk.code}) - Riesgo {risk.inherentRisk <= 5 ? 'Bajo' : risk.inherentRisk <= 15 ? 'Medio' : 'Alto'}
+                                    <label htmlFor={`control-${item.control.id}`} className="text-sm cursor-pointer flex-1">
+                                      <span className="font-medium">{item.control.name}</span>
+                                      <span className="text-xs text-muted-foreground block">
+                                        {item.control.type === 'preventive' ? 'Preventivo' :
+                                          item.control.type === 'detective' ? 'Detective' : 'Correctivo'} -
+                                        Riesgo: {item.risk.name}
                                       </span>
+                                      {item.control.evidence && (
+                                        <span className="text-blue-600 block text-xs mt-1">
+                                          📋 Evidencia: {item.control.evidence}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
                                 ))
-                              ) : riskSearchTerm ? (
-                                <p className="text-sm text-muted-foreground">No se encontraron riesgos que coincidan con "{riskSearchTerm}"</p>
                               ) : (
-                                <p className="text-sm text-muted-foreground">No hay riesgos disponibles</p>
+                                <p className="text-sm text-muted-foreground">No hay controles disponibles para esta normativa</p>
                               )}
                             </div>
-                            
-                            {/* Mostrar riesgos seleccionados */}
-                            {field.value && field.value.length > 0 && (
-                              <div className="mt-3">
-                                <Label className="text-sm font-medium text-green-700">Riesgos Seleccionados ({field.value.length})</Label>
-                                <div className="border border-green-200 rounded-md p-3 mt-2 bg-green-50 space-y-2">
-                                  {field.value.map((riskId: string) => {
-                                    const selectedRisk = (risks as any[]).find((risk: any) => risk.id === riskId);
-                                    if (!selectedRisk) return null;
-                                    
-                                    return (
-                                      <div key={riskId} className="flex items-center justify-between bg-white p-2 rounded border">
-                                        <div className="flex-1">
-                                          <span className="font-medium text-sm">{selectedRisk.name}</span>
-                                          <span className="text-xs text-muted-foreground ml-2">
-                                            ({selectedRisk.code}) - Riesgo {selectedRisk.inherentRisk <= 5 ? 'Bajo' : selectedRisk.inherentRisk <= 15 ? 'Medio' : 'Alto'}
-                                          </span>
-                                        </div>
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="ghost"
-                                          onClick={() => {
-                                            const currentValue: string[] = field.value || [];
-                                            field.onChange(currentValue.filter((id: string) => id !== riskId));
-                                          }}
-                                          className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                          data-testid={`button-remove-risk-${riskId}`}
-                                        >
-                                          ×
-                                        </Button>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+                  </>
+                )}
+
+                <FormField
+                  control={form.control}
+                  name="scope"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Alcance</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Describe el alcance de la auditoría"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Selección de Procesos para el Alcance */}
+                <FormField
+                  control={form.control}
+                  name="selectedProcesses"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center justify-between mb-3">
+                        <FormLabel>Procesos en el Alcance</FormLabel>
+                        {getFilteredProcesses().length > 0 && (
+                          <span className="text-sm text-muted-foreground">
+                            {getFilteredProcesses().length} {getFilteredProcesses().length === 1 ? 'proceso' : 'procesos'} encontrado{getFilteredProcesses().length === 1 ? '' : 's'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Search input for processes */}
+                      <div className="relative mb-4">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                        <Input
+                          type="text"
+                          placeholder="Buscar por nombre, descripción o responsable..."
+                          value={processSearchTerm}
+                          onChange={(e) => setProcessSearchTerm(e.target.value)}
+                          className="pl-10"
+                          data-testid="input-search-processes"
+                        />
+                      </div>
+
+                      <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
+                        {getFilteredProcesses().length > 0 ? (
+                          getFilteredProcesses().map((process: Process) => (
+                            <div key={process.id} className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                id={`process-${process.id}`}
+                                checked={(field.value as string[])?.includes(process.id) || false}
+                                onChange={(e) => {
+                                  const currentValue: string[] = field.value || [];
+                                  if (e.target.checked) {
+                                    field.onChange([...currentValue, process.id]);
+                                  } else {
+                                    field.onChange(currentValue.filter((id: string) => id !== process.id));
+                                  }
+                                }}
+                                className="rounded border-gray-300"
+                                data-testid={`checkbox-process-${process.id}`}
+                              />
+                              <label htmlFor={`process-${process.id}`} className="text-sm cursor-pointer flex-1">
+                                <span className="font-medium">{process.name}</span>
+                                <span className="text-xs text-muted-foreground block">
+                                  {process.description}
+                                </span>
+                              </label>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            {processSearchTerm ? 'No se encontraron procesos con ese criterio de búsqueda' : 'No hay procesos disponibles'}
+                          </p>
+                        )}
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Selección de Subprocesos para el Alcance */}
+                <FormField
+                  control={form.control}
+                  name="selectedSubprocesses"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center justify-between mb-3">
+                        <FormLabel>Subprocesos en el Alcance</FormLabel>
+                        {getFilteredSubprocesses().length > 0 && (
+                          <span className="text-sm text-muted-foreground">
+                            {getFilteredSubprocesses().length} {getFilteredSubprocesses().length === 1 ? 'subproceso' : 'subprocesos'} encontrado{getFilteredSubprocesses().length === 1 ? '' : 's'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Search input for subprocesses */}
+                      <div className="relative mb-4">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                        <Input
+                          type="text"
+                          placeholder="Buscar por nombre, descripción o proceso padre..."
+                          value={subprocessSearchTerm}
+                          onChange={(e) => setSubprocessSearchTerm(e.target.value)}
+                          className="pl-10"
+                          data-testid="input-search-subprocesses"
+                        />
+                      </div>
+
+                      <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
+                        {getFilteredSubprocesses().length > 0 ? (
+                          getFilteredSubprocesses().map((subproceso: Subproceso) => {
+                            const parentProcess = processes.find((p: Process) => p.id === subproceso.procesoId);
+                            return (
+                              <div key={subproceso.id} className="flex items-center space-x-2">
+                                <input
+                                  type="checkbox"
+                                  id={`subproceso-${subproceso.id}`}
+                                  checked={(field.value as string[])?.includes(subproceso.id) || false}
+                                  onChange={(e) => {
+                                    const currentValue: string[] = field.value || [];
+                                    if (e.target.checked) {
+                                      field.onChange([...currentValue, subproceso.id]);
+                                    } else {
+                                      field.onChange(currentValue.filter((id: string) => id !== subproceso.id));
+                                    }
+                                  }}
+                                  className="rounded border-gray-300"
+                                  data-testid={`checkbox-subproceso-${subproceso.id}`}
+                                />
+                                <label htmlFor={`subproceso-${subproceso.id}`} className="text-sm cursor-pointer flex-1">
+                                  <span className="font-medium">{subproceso.name}</span>
+                                  <span className="text-xs text-muted-foreground block">
+                                    Proceso padre: {parentProcess?.name || 'N/A'}
+                                  </span>
+                                </label>
                               </div>
+                            );
+                          })
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            {subprocessSearchTerm ? 'No se encontraron subprocesos con ese criterio de búsqueda' : 'No hay subprocesos disponibles'}
+                          </p>
+                        )}
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="leadAuditor"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Auditor Líder</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona el auditor líder" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {auditTeamUsers.map((user: User) => (
+                            <SelectItem key={user.id} value={user.id}>
+                              {user.fullName} - {roles.find(r => userRoles.find(ur => ur.userId === user.id && ur.roleId === r.id))?.name || 'Sin rol'}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="selectedRisks"
+                  render={({ field }) => {
+                    // Filtrar riesgos basado en el término de búsqueda
+                    const filteredRisks = (risks as any[]).filter((risk: any) =>
+                      risk.name.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
+                      risk.code.toLowerCase().includes(riskSearchTerm.toLowerCase())
+                    );
+
+                    return (
+                      <FormItem>
+                        <FormLabel>Riesgos a Auditar</FormLabel>
+                        {/* Campo de búsqueda */}
+                        <div className="space-y-2">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              placeholder="Buscar riesgo por nombre o código..."
+                              value={riskSearchTerm}
+                              onChange={(e) => setRiskSearchTerm(e.target.value)}
+                              className="pl-8"
+                              data-testid="input-risk-search"
+                            />
+                          </div>
+                          {/* Lista de riesgos filtrados */}
+                          <div className="border rounded-md p-3 max-h-32 overflow-y-auto space-y-2">
+                            {filteredRisks.length > 0 ? (
+                              filteredRisks.map((risk: any) => (
+                                <div key={risk.id} className="flex items-center space-x-2">
+                                  <input
+                                    type="checkbox"
+                                    id={`risk-${risk.id}`}
+                                    checked={(field.value as string[])?.includes(risk.id) || false}
+                                    onChange={(e) => {
+                                      const currentValue: string[] = field.value || [];
+                                      if (e.target.checked) {
+                                        field.onChange([...currentValue, risk.id]);
+                                      } else {
+                                        field.onChange(currentValue.filter((id: string) => id !== risk.id));
+                                      }
+                                    }}
+                                    className="rounded border-gray-300"
+                                  />
+                                  <label htmlFor={`risk-${risk.id}`} className="text-sm cursor-pointer flex-1">
+                                    <span className="font-medium">{risk.name}</span>
+                                    <span className="text-xs text-muted-foreground ml-2">
+                                      ({risk.code}) - Riesgo {risk.inherentRisk <= 5 ? 'Bajo' : risk.inherentRisk <= 15 ? 'Medio' : 'Alto'}
+                                    </span>
+                                  </label>
+                                </div>
+                              ))
+                            ) : riskSearchTerm ? (
+                              <p className="text-sm text-muted-foreground">No se encontraron riesgos que coincidan con "{riskSearchTerm}"</p>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">No hay riesgos disponibles</p>
                             )}
                           </div>
-                          <FormMessage />
-                        </FormItem>
-                      );
-                    }}
-                  />
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <FormField
-                      control={form.control}
-                      name="plannedStartDate"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Fecha de Inicio Planificada *</FormLabel>
-                          <FormControl>
-                            <Input 
-                              type="date"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                          {/* Mostrar riesgos seleccionados */}
+                          {field.value && field.value.length > 0 && (
+                            <div className="mt-3">
+                              <Label className="text-sm font-medium text-green-700">Riesgos Seleccionados ({field.value.length})</Label>
+                              <div className="border border-green-200 rounded-md p-3 mt-2 bg-green-50 space-y-2">
+                                {field.value.map((riskId: string) => {
+                                  const selectedRisk = (risks as any[]).find((risk: any) => risk.id === riskId);
+                                  if (!selectedRisk) return null;
 
-                    <FormField
-                      control={form.control}
-                      name="plannedEndDate"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Fecha de Fin Planificada *</FormLabel>
-                          <FormControl>
-                            <Input 
-                              type="date"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
+                                  return (
+                                    <div key={riskId} className="flex items-center justify-between bg-white p-2 rounded border">
+                                      <div className="flex-1">
+                                        <span className="font-medium text-sm">{selectedRisk.name}</span>
+                                        <span className="text-xs text-muted-foreground ml-2">
+                                          ({selectedRisk.code}) - Riesgo {selectedRisk.inherentRisk <= 5 ? 'Bajo' : selectedRisk.inherentRisk <= 15 ? 'Medio' : 'Alto'}
+                                        </span>
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => {
+                                          const currentValue: string[] = field.value || [];
+                                          field.onChange(currentValue.filter((id: string) => id !== riskId));
+                                        }}
+                                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                        data-testid={`button-remove-risk-${riskId}`}
+                                      >
+                                        ×
+                                      </Button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
+                />
 
-                  {/* Objetivos Específicos Editor */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
-                    name="objectives"
+                    name="plannedStartDate"
                     render={({ field }) => (
                       <FormItem>
-                        <ObjectivesEditor 
-                          objectives={field.value || []}
-                          onChange={field.onChange}
-                          disabled={form.formState.isSubmitting}
-                          className="mt-6"
-                        />
+                        <FormLabel>Fecha de Inicio Planificada *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="date"
+                            {...field}
+                          />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
 
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      onClick={() => {
-                        setShowAuditDialog(false);
-                        setEditingAudit(null);
-                      }}
-                    >
-                      Cancelar
-                    </Button>
-                    <Button 
-                      type="submit"
-                      disabled={updateMutation.isPending || createMutation.isPending}
-                    >
-                      {updateMutation.isPending ? 'Guardando...' : 
-                       createMutation.isPending ? 'Creando...' : 
-                       (editingAudit ? 'Guardar Cambios' : 'Crear Auditoría Emergente')}
-                    </Button>
-                  </div>
+                  <FormField
+                    control={form.control}
+                    name="plannedEndDate"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Fecha de Fin Planificada *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="date"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 </div>
-              </form>
-            </Form>
-          </DialogContent>
-        </Dialog>
+
+                {/* Objetivos Específicos Editor */}
+                <FormField
+                  control={form.control}
+                  name="objectives"
+                  render={({ field }) => (
+                    <FormItem>
+                      <ObjectivesEditor
+                        objectives={field.value || []}
+                        onChange={field.onChange}
+                        disabled={form.formState.isSubmitting}
+                        className="mt-6"
+                      />
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className="flex justify-end gap-2 mt-6">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setShowAuditDialog(false);
+                      setEditingAudit(null);
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={updateMutation.isPending || createMutation.isPending}
+                  >
+                    {updateMutation.isPending ? 'Guardando...' :
+                      createMutation.isPending ? 'Creando...' :
+                        (editingAudit ? 'Guardar Cambios' : 'Crear Auditoría Emergente')}
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
 
       {/* Tabla de auditorías */}
       <Card data-testid="card-audits-table" className="flex-1 flex flex-col">
@@ -1793,272 +1795,272 @@ export default function Audits() {
           <div className="max-w-full min-w-0 overflow-x-auto">
             <ResponsiveTable variant="default" showScrollIndicator={true}>
               <ResponsiveTableContent variant="compact">
-              <ResponsiveTableHeader variant="default">
-              <ResponsiveTableRow variant="default">
-                <ResponsiveTableHead variant="default" priority="high">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground"
-                    onClick={() => handleSort("code")}
-                    data-testid="sort-code"
-                  >
-                    Código
-                    {sortColumn === "code" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "code" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="high">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground"
-                    onClick={() => handleSort("name")}
-                    data-testid="sort-name"
-                  >
-                    Nombre
-                    {sortColumn === "name" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "name" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="medium">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground"
-                    onClick={() => handleSort("type")}
-                    data-testid="sort-type"
-                  >
-                    Tipo
-                    {sortColumn === "type" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "type" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="medium" className="min-w-[120px]">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
-                    onClick={() => handleSort("process")}
-                    data-testid="sort-process"
-                  >
-                    Proceso
-                    {sortColumn === "process" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "process" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="low" className="min-w-[120px]">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
-                    onClick={() => handleSort("leadAuditor")}
-                    data-testid="sort-lead-auditor"
-                  >
-                    Auditor Líder
-                    {sortColumn === "leadAuditor" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "leadAuditor" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="high" className="min-w-[110px]">
-                  <div 
-                    className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
-                    onClick={() => handleSort("status")}
-                    data-testid="sort-status"
-                  >
-                    Estado
-                    {sortColumn === "status" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
-                    {sortColumn === "status" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
-                  </div>
-                </ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="medium">Fechas</ResponsiveTableHead>
-                <ResponsiveTableHead variant="default" priority="low">Acciones</ResponsiveTableHead>
-              </ResponsiveTableRow>
-            </ResponsiveTableHeader>
-            <ResponsiveTableBody variant="default">
-              {sortedAudits.map((audit: Audit) => (
-                <ResponsiveTableRow key={audit.id} data-testid={`row-audit-${audit.id}`} variant="default">
-                  <ResponsiveTableCell variant="default" priority="high" label="Código">
-                    <Badge variant="outline" className="font-mono">
-                      {audit.code}
-                    </Badge>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="high" label="Nombre">
-                    <p 
-                      className="font-medium text-blue-600 hover:text-blue-800 cursor-pointer hover:underline transition-colors truncate max-w-[200px]"
-                      onClick={() => setLocation(`/audits/${audit.id}`)}
-                      data-testid={`text-audit-name-${audit.id}`}
-                    >
-                      {audit.name}
-                    </p>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="medium" label="Tipo">
-                    <Badge variant="secondary">
-                      {getTypeText(audit.type)}
-                    </Badge>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="medium" label="Proceso/Subproceso">
-                    {editingProcess === audit.id ? (
-                      <Select
-                        value={audit.subprocesoId ? `subproceso:${audit.subprocesoId}` : audit.processId ? `process:${audit.processId}` : 'none'}
-                        onValueChange={(value) => handleProcessChange(audit.id, value)}
-                        onOpenChange={(open) => {
-                          if (!open) setEditingProcess(null);
-                        }}
+                <ResponsiveTableHeader variant="default">
+                  <ResponsiveTableRow variant="default">
+                    <ResponsiveTableHead variant="default" priority="high">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground"
+                        onClick={() => handleSort("code")}
+                        data-testid="sort-code"
                       >
-                        <SelectTrigger className="w-48 h-8">
-                          <SelectValue placeholder="Seleccionar proceso" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Sin asignar</SelectItem>
-                          {processes.map((process: Process) => (
-                            <SelectItem key={process.id} value={`process:${process.id}`}>
-                              📋 {process.name}
-                            </SelectItem>
-                          ))}
-                          {subprocesos.map((subproceso: Subproceso) => (
-                            <SelectItem key={subproceso.id} value={`subproceso:${subproceso.id}`}>
-                              📄 Sub: {subproceso.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span 
-                        className="cursor-pointer hover:text-blue-600 hover:underline"
-                        onClick={() => setEditingProcess(audit.id)}
-                        data-testid={`process-${audit.id}`}
+                        Código
+                        {sortColumn === "code" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "code" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="high">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground"
+                        onClick={() => handleSort("name")}
+                        data-testid="sort-name"
                       >
-                        {getProcessName(audit.processId, audit.subprocesoId)}
-                      </span>
-                    )}
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="low" label="Auditor Líder">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-muted-foreground" />
-                      {editingAuditorLeader === audit.id ? (
-                        <Select
-                          value={audit.leadAuditor}
-                          onValueChange={(value) => handleAuditorLeaderChange(audit.id, value)}
-                          onOpenChange={(open) => {
-                            if (!open) setEditingAuditorLeader(null);
-                          }}
-                        >
-                          <SelectTrigger className="w-40 h-8">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {auditTeamUsers.map((user: User) => (
-                              <SelectItem key={user.id} value={user.id}>
-                                {user.fullName} - {roles.find(r => userRoles.find(ur => ur.userId === user.id && ur.roleId === r.id))?.name || 'Sin rol'}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <span 
-                          className="cursor-pointer hover:text-blue-600 hover:underline"
-                          onClick={() => setEditingAuditorLeader(audit.id)}
-                          data-testid={`auditor-leader-${audit.id}`}
-                        >
-                          {getAuditorName(audit.leadAuditor)}
-                        </span>
-                      )}
-                    </div>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="high" label="Estado">
-                    <Badge className={getStatusColor(audit.status)}>
-                      {getStatusText(audit.status)}
-                    </Badge>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="medium" label="Fechas">
-                    <div className="space-y-1.5">
-                      <DateCell
-                        auditId={audit.id}
-                        field="plannedStartDate"
-                        value={audit.plannedStartDate ? new Date(audit.plannedStartDate) : null}
-                        onCommit={handleDateChange}
-                        size="sm"
-                        renderTrigger={(date) => (
-                          <Badge variant="outline" className="flex items-center bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800 gap-1.5 px-2.5 py-1 cursor-pointer hover:bg-green-100 dark:hover:bg-green-900 transition-colors w-full justify-start">
-                            <Calendar className="h-3.5 w-3.5" />
-                            <span className="text-xs font-medium">Inicio:</span>
-                            <span className="text-xs">{date ? format(date, "dd/MM/yyyy", { locale: es }) : "No definido"}</span>
-                          </Badge>
-                        )}
-                      />
-                      <DateCell
-                        auditId={audit.id}
-                        field="plannedEndDate"
-                        value={audit.plannedEndDate ? new Date(audit.plannedEndDate) : null}
-                        onCommit={handleDateChange}
-                        size="sm"
-                        renderTrigger={(date) => (
-                          <Badge variant="outline" className="flex items-center bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800 gap-1.5 px-2.5 py-1 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors w-full justify-start">
-                            <CalendarCheck className="h-3.5 w-3.5" />
-                            <span className="text-xs font-medium">Fin:</span>
-                            <span className="text-xs">{date ? format(date, "dd/MM/yyyy", { locale: es }) : "No definido"}</span>
-                          </Badge>
-                        )}
-                      />
-                    </div>
-                  </ResponsiveTableCell>
-                  <ResponsiveTableCell variant="default" priority="low" label="Acciones">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          data-testid={`button-actions-${audit.id}`}
-                        >
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {audit.status === "planned" && (
-                          <DropdownMenuItem
-                            onClick={() => handleStartAudit(audit.id)}
-                            data-testid={`menu-start-${audit.id}`}
-                          >
-                            <Play className="h-4 w-4 mr-2" />
-                            Iniciar Auditoría
-                          </DropdownMenuItem>
-                        )}
-                        {(audit.status === "in_progress" || audit.status === "fieldwork") && (
-                          <DropdownMenuItem
-                            onClick={() => handleCompleteAudit(audit.id)}
-                            data-testid={`menu-complete-${audit.id}`}
-                          >
-                            <CheckCircle className="h-4 w-4 mr-2" />
-                            Completar Auditoría
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
+                        Nombre
+                        {sortColumn === "name" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "name" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="medium">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground"
+                        onClick={() => handleSort("type")}
+                        data-testid="sort-type"
+                      >
+                        Tipo
+                        {sortColumn === "type" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "type" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="medium" className="min-w-[120px]">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
+                        onClick={() => handleSort("process")}
+                        data-testid="sort-process"
+                      >
+                        Proceso
+                        {sortColumn === "process" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "process" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="low" className="min-w-[120px]">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
+                        onClick={() => handleSort("leadAuditor")}
+                        data-testid="sort-lead-auditor"
+                      >
+                        Auditor Líder
+                        {sortColumn === "leadAuditor" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "leadAuditor" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="high" className="min-w-[110px]">
+                      <div
+                        className="flex items-center gap-1 cursor-pointer hover:text-foreground whitespace-nowrap"
+                        onClick={() => handleSort("status")}
+                        data-testid="sort-status"
+                      >
+                        Estado
+                        {sortColumn === "status" && sortOrder === "asc" && <ChevronUp className="h-3 w-3" />}
+                        {sortColumn === "status" && sortOrder === "desc" && <ChevronDown className="h-3 w-3" />}
+                      </div>
+                    </ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="medium">Fechas</ResponsiveTableHead>
+                    <ResponsiveTableHead variant="default" priority="low">Acciones</ResponsiveTableHead>
+                  </ResponsiveTableRow>
+                </ResponsiveTableHeader>
+                <ResponsiveTableBody variant="default">
+                  {sortedAudits.map((audit: Audit) => (
+                    <ResponsiveTableRow key={audit.id} data-testid={`row-audit-${audit.id}`} variant="default">
+                      <ResponsiveTableCell variant="default" priority="high" label="Código">
+                        <Badge variant="outline" className="font-mono">
+                          {audit.code}
+                        </Badge>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="high" label="Nombre">
+                        <p
+                          className="font-medium text-blue-600 hover:text-blue-800 cursor-pointer hover:underline transition-colors truncate max-w-[200px]"
                           onClick={() => setLocation(`/audits/${audit.id}`)}
-                          data-testid={`menu-details-${audit.id}`}
+                          data-testid={`text-audit-name-${audit.id}`}
                         >
-                          <Eye className="h-4 w-4 mr-2" />
-                          Ver Detalles
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setEditingAudit(audit);
-                            setShowAuditDialog(true);
-                          }}
-                          data-testid={`menu-edit-${audit.id}`}
-                        >
-                          <Edit className="h-4 w-4 mr-2" />
-                          Editar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteAudit(audit)}
-                          disabled={deleteMutation.isPending}
-                          className="text-destructive focus:text-destructive"
-                          data-testid={`menu-delete-${audit.id}`}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Eliminar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </ResponsiveTableCell>
-                </ResponsiveTableRow>
-              ))}
-            </ResponsiveTableBody>
+                          {audit.name}
+                        </p>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="medium" label="Tipo">
+                        <Badge variant="secondary">
+                          {getTypeText(audit.type)}
+                        </Badge>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="medium" label="Proceso/Subproceso">
+                        {editingProcess === audit.id ? (
+                          <Select
+                            value={audit.subprocesoId ? `subproceso:${audit.subprocesoId}` : audit.processId ? `process:${audit.processId}` : 'none'}
+                            onValueChange={(value) => handleProcessChange(audit.id, value)}
+                            onOpenChange={(open) => {
+                              if (!open) setEditingProcess(null);
+                            }}
+                          >
+                            <SelectTrigger className="w-48 h-8">
+                              <SelectValue placeholder="Seleccionar proceso" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Sin asignar</SelectItem>
+                              {processes.map((process: Process) => (
+                                <SelectItem key={process.id} value={`process:${process.id}`}>
+                                  📋 {process.name}
+                                </SelectItem>
+                              ))}
+                              {subprocesos.map((subproceso: Subproceso) => (
+                                <SelectItem key={subproceso.id} value={`subproceso:${subproceso.id}`}>
+                                  📄 Sub: {subproceso.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span
+                            className="cursor-pointer hover:text-blue-600 hover:underline"
+                            onClick={() => setEditingProcess(audit.id)}
+                            data-testid={`process-${audit.id}`}
+                          >
+                            {getProcessName(audit.processId, audit.subprocesoId)}
+                          </span>
+                        )}
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="low" label="Auditor Líder">
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-muted-foreground" />
+                          {editingAuditorLeader === audit.id ? (
+                            <Select
+                              value={audit.leadAuditor}
+                              onValueChange={(value) => handleAuditorLeaderChange(audit.id, value)}
+                              onOpenChange={(open) => {
+                                if (!open) setEditingAuditorLeader(null);
+                              }}
+                            >
+                              <SelectTrigger className="w-40 h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {auditTeamUsers.map((user: User) => (
+                                  <SelectItem key={user.id} value={user.id}>
+                                    {user.fullName} - {roles.find(r => userRoles.find(ur => ur.userId === user.id && ur.roleId === r.id))?.name || 'Sin rol'}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <span
+                              className="cursor-pointer hover:text-blue-600 hover:underline"
+                              onClick={() => setEditingAuditorLeader(audit.id)}
+                              data-testid={`auditor-leader-${audit.id}`}
+                            >
+                              {getAuditorName(audit.leadAuditor)}
+                            </span>
+                          )}
+                        </div>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="high" label="Estado">
+                        <Badge className={getStatusColor(audit.status)}>
+                          {getStatusText(audit.status)}
+                        </Badge>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="medium" label="Fechas">
+                        <div className="space-y-1.5">
+                          <DateCell
+                            auditId={audit.id}
+                            field="plannedStartDate"
+                            value={audit.plannedStartDate ? new Date(audit.plannedStartDate) : null}
+                            onCommit={handleDateChange}
+                            size="sm"
+                            renderTrigger={(date) => (
+                              <Badge variant="outline" className="flex items-center bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800 gap-1.5 px-2.5 py-1 cursor-pointer hover:bg-green-100 dark:hover:bg-green-900 transition-colors w-full justify-start">
+                                <Calendar className="h-3.5 w-3.5" />
+                                <span className="text-xs font-medium">Inicio:</span>
+                                <span className="text-xs">{date ? format(date, "dd/MM/yyyy", { locale: es }) : "No definido"}</span>
+                              </Badge>
+                            )}
+                          />
+                          <DateCell
+                            auditId={audit.id}
+                            field="plannedEndDate"
+                            value={audit.plannedEndDate ? new Date(audit.plannedEndDate) : null}
+                            onCommit={handleDateChange}
+                            size="sm"
+                            renderTrigger={(date) => (
+                              <Badge variant="outline" className="flex items-center bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800 gap-1.5 px-2.5 py-1 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors w-full justify-start">
+                                <CalendarCheck className="h-3.5 w-3.5" />
+                                <span className="text-xs font-medium">Fin:</span>
+                                <span className="text-xs">{date ? format(date, "dd/MM/yyyy", { locale: es }) : "No definido"}</span>
+                              </Badge>
+                            )}
+                          />
+                        </div>
+                      </ResponsiveTableCell>
+                      <ResponsiveTableCell variant="default" priority="low" label="Acciones">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              data-testid={`button-actions-${audit.id}`}
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {audit.status === "planned" && (
+                              <DropdownMenuItem
+                                onClick={() => handleStartAudit(audit.id)}
+                                data-testid={`menu-start-${audit.id}`}
+                              >
+                                <Play className="h-4 w-4 mr-2" />
+                                Iniciar Auditoría
+                              </DropdownMenuItem>
+                            )}
+                            {(audit.status === "in_progress" || audit.status === "fieldwork") && (
+                              <DropdownMenuItem
+                                onClick={() => handleCompleteAudit(audit.id)}
+                                data-testid={`menu-complete-${audit.id}`}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                Completar Auditoría
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
+                              onClick={() => setLocation(`/audits/${audit.id}`)}
+                              data-testid={`menu-details-${audit.id}`}
+                            >
+                              <Eye className="h-4 w-4 mr-2" />
+                              Ver Detalles
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setEditingAudit(audit);
+                                setShowAuditDialog(true);
+                              }}
+                              data-testid={`menu-edit-${audit.id}`}
+                            >
+                              <Edit className="h-4 w-4 mr-2" />
+                              Editar
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleDeleteAudit(audit)}
+                              disabled={deleteMutation.isPending}
+                              className="text-destructive focus:text-destructive"
+                              data-testid={`menu-delete-${audit.id}`}
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Eliminar
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </ResponsiveTableCell>
+                    </ResponsiveTableRow>
+                  ))}
+                </ResponsiveTableBody>
               </ResponsiveTableContent>
             </ResponsiveTable>
           </div>
-          
+
           {sortedAudits.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
               No se encontraron auditorías que coincidan con los filtros aplicados.
@@ -2177,9 +2179,9 @@ export default function Audits() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setShowWorkplanDialog(false);
                   setWorkplanFormData({
@@ -2206,7 +2208,7 @@ export default function Audits() {
                     });
                     return;
                   }
-                  
+
                   const testData = {
                     testName: workplanFormData.name,
                     description: workplanFormData.description,
@@ -2218,7 +2220,7 @@ export default function Audits() {
                     status: "pending",
                     progress: 0
                   };
-                  
+
                   createAuditTestMutation.mutate(testData);
                 }}
                 disabled={createAuditTestMutation.isPending}
@@ -2300,9 +2302,9 @@ export default function Audits() {
                     value=""
                     onValueChange={(value) => {
                       if (!milestoneFormData.participants.includes(value)) {
-                        setMilestoneFormData({ 
-                          ...milestoneFormData, 
-                          participants: [...milestoneFormData.participants, value] 
+                        setMilestoneFormData({
+                          ...milestoneFormData,
+                          participants: [...milestoneFormData.participants, value]
                         });
                       }
                     }}
@@ -2315,7 +2317,7 @@ export default function Audits() {
                         .filter((p: any) => !milestoneFormData.participants.includes(p.id))
                         .map((participant: any) => (
                           <SelectItem key={participant.id} value={participant.id}>
-                            {participant.fullName || participant.username} 
+                            {participant.fullName || participant.username}
                             {participant.type === 'process_owner' && ' (Dueño de Proceso)'}
                           </SelectItem>
                         ))}
@@ -2326,8 +2328,8 @@ export default function Audits() {
                       {milestoneFormData.participants.map(participantId => {
                         const participant = meetingParticipants.find((p: any) => p.id === participantId);
                         return (
-                          <Badge 
-                            key={participantId} 
+                          <Badge
+                            key={participantId}
                             variant="secondary"
                             className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
                             onClick={() => {
@@ -2367,9 +2369,9 @@ export default function Audits() {
             )}
 
             <div className="flex justify-end gap-2">
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setShowMilestoneDialog(false);
                   setEditingMilestone(null);
@@ -2391,10 +2393,10 @@ export default function Audits() {
                   }
 
                   // Para tipo reunión, validar que tenga fecha de reunión
-                  const isMeetingType = milestoneFormData.type === "meeting" || 
-                                       milestoneFormData.type === "reunion_inicio" || 
-                                       milestoneFormData.type === "reunion_cierre";
-                  
+                  const isMeetingType = milestoneFormData.type === "meeting" ||
+                    milestoneFormData.type === "reunion_inicio" ||
+                    milestoneFormData.type === "reunion_cierre";
+
                   if (isMeetingType && !milestoneFormData.meetingDate) {
                     toast({
                       title: "Campos requeridos",
@@ -2413,14 +2415,14 @@ export default function Audits() {
                     });
                     return;
                   }
-                  
+
                   const updateData: any = {
                     name: milestoneFormData.name,
                     description: milestoneFormData.description,
                     type: milestoneFormData.type,
                     // Para tipo reunión, usar fecha de reunión como fecha planificada
-                    plannedDate: isMeetingType 
-                      ? milestoneFormData.meetingDate 
+                    plannedDate: isMeetingType
+                      ? milestoneFormData.meetingDate
                       : milestoneFormData.plannedDate
                   };
 
@@ -2433,7 +2435,7 @@ export default function Audits() {
                       updateData.meetingMinutesUrl = milestoneFormData.meetingMinutesUrl;
                     }
                   }
-                  
+
                   updateMilestoneMutation.mutate({
                     id: editingMilestone.id,
                     data: updateData
@@ -2450,8 +2452,8 @@ export default function Audits() {
 
 
       {/* Delete Test Confirmation Dialog */}
-      <AlertDialog 
-        open={showDeleteTestDialog} 
+      <AlertDialog
+        open={showDeleteTestDialog}
         onOpenChange={(open) => {
           if (!open) {
             setDeletingTest(null);
@@ -2465,7 +2467,7 @@ export default function Audits() {
             <AlertDialogTitle>¿Eliminar prueba de auditoría?</AlertDialogTitle>
             <AlertDialogDescription>
               Esta acción no se puede deshacer. Se eliminará permanentemente la prueba "{deletingTest?.name}" y todos sus datos asociados.
-              
+
               {deleteTestWarnings.length > 0 && (
                 <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
                   <p className="font-semibold text-yellow-900 mb-2">Advertencias:</p>
