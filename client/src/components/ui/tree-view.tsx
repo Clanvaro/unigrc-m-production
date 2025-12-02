@@ -49,12 +49,12 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
   const [isExpanded, setIsExpanded] = useState(true);
   const hasChildren = node.children && node.children.length > 0;
   const isSelected = selectedIds.has(node.id);
-  
+
   // Check if all descendants are selected (recursively)
   const allChildrenSelected = hasChildren
     ? areAllDescendantsSelected(node, selectedIds)
     : false;
-    
+
   // Check if some (but not all) descendants are selected
   const someChildrenSelected = hasChildren
     ? areSomeDescendantsSelected(node, selectedIds) && !allChildrenSelected
@@ -78,18 +78,10 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
     <div>
       <div
         className={cn(
-          "flex items-center gap-2 py-2 hover:bg-muted/50 rounded-sm cursor-pointer",
+          "flex items-center gap-2 py-2 hover:bg-muted/50 rounded-sm",
           indentClass
         )}
         data-testid={`tree-node-${node.id}`}
-        onClick={(e) => {
-          // Don't toggle if clicking on expand button or checkbox
-          if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('[role="checkbox"]')) {
-            return;
-          }
-          // Toggle checkbox when clicking anywhere on the row
-          handleCheckboxChange(!(isSelected || allChildrenSelected));
-        }}
       >
         {hasChildren ? (
           <button
@@ -109,7 +101,7 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
         ) : (
           <div className="w-8" />
         )}
-        
+
         <div className="p-1 -m-1 touch-manipulation">
           <Checkbox
             checked={isSelected || allChildrenSelected}
@@ -127,8 +119,18 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
             )}
           />
         </div>
-        
-        <div className="flex-1 flex items-center justify-between min-w-0">
+
+        <div
+          className={cn(
+            "flex-1 flex items-center justify-between min-w-0",
+            hasChildren && "cursor-pointer"
+          )}
+          onClick={() => {
+            if (hasChildren) {
+              handleToggle();
+            }
+          }}
+        >
           <span className={cn(
             "font-medium",
             node.level === 0 && "text-base font-semibold",
@@ -137,7 +139,7 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
           )}>
             {node.label}
           </span>
-          
+
           {renderNodeInfo && (
             <div className="flex items-center gap-2 flex-shrink-0">
               {renderNodeInfo(node)}
@@ -145,7 +147,7 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
           )}
         </div>
       </div>
-      
+
       {hasChildren && isExpanded && (
         <div>
           {node.children!.map((child) => (
