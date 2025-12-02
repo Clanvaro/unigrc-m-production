@@ -100,7 +100,7 @@ const translateSelfAssessment = (assessment: any) => {
 const generateMockControls = (count: number): Control[] => {
   const types: Control['type'][] = ['preventive', 'detective', 'corrective'];
   const validationStatuses: Control['validationStatus'][] = ['validated', 'rejected', 'pending_validation'];
-  
+
   return Array.from({ length: count }, (_, i) => ({
     id: `mock-control-${i}`,
     code: `CTL-${String(i + 1).padStart(6, '0')}`,
@@ -137,11 +137,11 @@ export default function Controls() {
   const [testMode50k, setTestMode50k] = useState(false);
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
   const [columnConfigDialogOpen, setColumnConfigDialogOpen] = useState(false);
-  
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  
+
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({
     code: true,
@@ -154,12 +154,12 @@ export default function Controls() {
     validatedAt: true,
     actions: true,
   });
-  
+
   // Filter and Search state
   const [filters, setFilters] = useState<Record<string, any>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [responsibleFilter, setResponsibleFilter] = useState<string | null>(null);
-  
+
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -241,17 +241,38 @@ export default function Controls() {
   }, [filters, searchTerm, responsibleFilter]);
 
   const { data: controlsResponse, isLoading, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
-    queryKey: queryKeys.controls.paginated({ 
-      limit: pageSize, 
+    queryKey: queryKeys.controls.paginated({
+      limit: pageSize,
       offset: (currentPage - 1) * pageSize,
-      paginate: true 
+      paginate: true,
+      search: searchTerm,
+      type: filters.typeFilter,
+      effectiveness: filters.effectivenessFilter,
+      status: filters.statusFilter,
+      validationStatus: filters.validationStatusFilter
     }),
     queryFn: async () => {
+      // Map frontend filter values to backend expected values
+      const effectivenessMap: Record<string, { min?: string, max?: string }> = {
+        'high': { min: '80' },
+        'medium': { min: '50', max: '79' },
+        'low': { max: '49' }
+      };
+
+      const effRange = filters.effectivenessFilter ? effectivenessMap[filters.effectivenessFilter] : {};
+
       const params = new URLSearchParams({
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
-        paginate: "true"
+        paginate: "true",
+        search: searchTerm || "",
+        type: filters.typeFilter !== "all" ? filters.typeFilter : "",
+        status: filters.statusFilter !== "all" ? filters.statusFilter : "",
+        validationStatus: filters.validationStatusFilter !== "all" ? filters.validationStatusFilter : "",
+        ...(effRange?.min ? { minEffectiveness: effRange.min } : {}),
+        ...(effRange?.max ? { maxEffectiveness: effRange.max } : {})
       });
+
       const response = await fetch(`/api/controls?${params}`);
       if (!response.ok) throw new Error("Failed to fetch controls");
       return response.json();
@@ -290,7 +311,7 @@ export default function Controls() {
     queryFn: async () => {
       const currentControl = riskDialogControl || viewingControl;
       if (!currentControl) return [];
-      
+
       // Use dedicated endpoint that returns risks with all details
       const response = await fetch(`/api/controls/${currentControl.id}/risks`);
       if (!response.ok) {
@@ -347,7 +368,7 @@ export default function Controls() {
 
   const confirmDelete = () => {
     if (!deleteConfirmControl) return;
-    
+
     if (!deletionReason.trim()) {
       toast({
         title: "Motivo requerido",
@@ -356,7 +377,7 @@ export default function Controls() {
       });
       return;
     }
-    
+
     deleteMutation.mutate({
       id: deleteConfirmControl.id,
       deletionReason: deletionReason.trim()
@@ -376,7 +397,7 @@ export default function Controls() {
       const control = controls.find((c: Control) => c.id === controlId);
       const risk = risks.find((r: Risk) => r.id === riskId);
       if (!control || !risk) throw new Error("Control o riesgo no encontrado");
-      
+
       const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
       return apiRequest(`/api/risks/${riskId}/controls`, "POST", {
         controlId,
@@ -390,7 +411,7 @@ export default function Controls() {
       if (!control || !risk) return;
 
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ 
+      await queryClient.cancelQueries({
         queryKey: queryKeys.controls.risks(controlId)
       });
 
@@ -402,9 +423,9 @@ export default function Controls() {
       const tempId = `temp-${Date.now()}`;
       queryClient.setQueryData(
         queryKeys.controls.risks(controlId),
-        (old: any[] = []) => [...old, { 
+        (old: any[] = []) => [...old, {
           id: tempId,
-          riskId: risk.id, 
+          riskId: risk.id,
           controlId: control.id,
           residualRisk,
           riskCode: risk.code,
@@ -417,18 +438,18 @@ export default function Controls() {
     },
     onSuccess: async (_data, variables, context) => {
       // Invalidate all control queries (list and paginated)
-      await queryClient.invalidateQueries({ 
+      await queryClient.invalidateQueries({
         queryKey: queryKeys.controls.all(),
         exact: false // This will match all queries starting with ["/api/controls"]
       });
-      
+
       // Also invalidate the specific control's risks
       if (context?.controlId) {
-        await queryClient.invalidateQueries({ 
+        await queryClient.invalidateQueries({
           queryKey: queryKeys.controls.risks(context.controlId)
         });
       }
-      
+
       toast({ title: "Riesgo asociado", description: "El riesgo ha sido asociado al control exitosamente." });
     },
     onError: (_error, _variables, context) => {
@@ -451,7 +472,7 @@ export default function Controls() {
       if (!currentControl) return;
 
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ 
+      await queryClient.cancelQueries({
         queryKey: queryKeys.controls.risks(currentControl.id)
       });
 
@@ -468,18 +489,18 @@ export default function Controls() {
     },
     onSuccess: async (_data, _variables, context) => {
       // Invalidate all control queries (list and paginated)
-      await queryClient.invalidateQueries({ 
+      await queryClient.invalidateQueries({
         queryKey: queryKeys.controls.all(),
         exact: false // This will match all queries starting with ["/api/controls"]
       });
-      
+
       // Also invalidate the specific control's risks
       if (context?.currentControl) {
-        await queryClient.invalidateQueries({ 
+        await queryClient.invalidateQueries({
           queryKey: queryKeys.controls.risks(context.currentControl.id)
         });
       }
-      
+
       toast({ title: "Riesgo removido", description: "El riesgo ha sido removido del control." });
     },
     onError: (_error, _variables, context) => {
@@ -517,37 +538,37 @@ export default function Controls() {
   const sortedControls = [...(controls as Control[])].sort((a, b) => {
     let aValue: any = a[sortField];
     let bValue: any = b[sortField];
-    
+
     // Handle string comparison for code
     if (sortField === 'code') {
       aValue = aValue || '';
       bValue = bValue || '';
     }
-    
+
     // Handle string comparison for control name
     if (sortField === 'control') {
       aValue = a.name || '';
       bValue = b.name || '';
     }
-    
+
     // Handle string comparison for responsible (controlOwner.fullName)
     if (sortField === 'responsible') {
       aValue = (a as any).controlOwner?.fullName || '';
       bValue = (b as any).controlOwner?.fullName || '';
     }
-    
+
     // Handle date comparison for validatedAt
     if (sortField === 'validatedAt') {
       aValue = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
       bValue = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
     }
-    
+
     // Handle number comparison for effectiveness
     if (sortField === 'effectiveness') {
       aValue = aValue || 0;
       bValue = bValue || 0;
     }
-    
+
     if (sortDirection === 'asc') {
       return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
     } else {
@@ -577,14 +598,14 @@ export default function Controls() {
   const getAvailableRisks = () => {
     const associatedRiskIds = controlRiskAssociations.map((cra: any) => cra.riskId);
     const availableRisks = risks.filter((risk: Risk) => !associatedRiskIds.includes(risk.id));
-    
+
     if (riskSearchTerm.trim()) {
-      return availableRisks.filter((risk: Risk) => 
+      return availableRisks.filter((risk: Risk) =>
         risk.name.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
         risk.description?.toLowerCase().includes(riskSearchTerm.toLowerCase())
       );
     }
-    
+
     return availableRisks;
   };
 
@@ -624,9 +645,9 @@ export default function Controls() {
 
     sortedControls.forEach((control: Control) => {
       const typeText = control.type === 'preventive' ? 'Preventivo' :
-                       control.type === 'detective' ? 'Detectivo' : 'Correctivo';
+        control.type === 'detective' ? 'Detectivo' : 'Correctivo';
       const validationText = control.validationStatus === 'validated' ? 'Validado' :
-                            control.validationStatus === 'rejected' ? 'Rechazado' : 'Pendiente';
+        control.validationStatus === 'rejected' ? 'Rechazado' : 'Pendiente';
 
       worksheet.addRow({
         code: control.code,
@@ -656,66 +677,63 @@ export default function Controls() {
     });
   };
 
-  // Display data with test mode support and search filtering
+  // Display data with test mode support
+  // SPRINT 3: Removed client-side filtering for production mode (handled by backend now)
   const displayData = useMemo(() => {
-    let data = testMode50k ? generateMockControls(50000) as any[] : sortedControls;
-    
-    // Apply search filter
-    if (searchTerm) {
-      const lowerSearch = searchTerm.toLowerCase();
-      data = data.filter((control: Control) => {
-        return (
-          control.code?.toLowerCase().includes(lowerSearch) ||
-          control.name?.toLowerCase().includes(lowerSearch) ||
-          control.description?.toLowerCase().includes(lowerSearch)
-        );
-      });
-    }
-    
-    // Apply type filter
-    if (filters.typeFilter && filters.typeFilter !== "all") {
-      data = data.filter((control: Control) => control.type === filters.typeFilter);
-    }
-    
-    // Apply effectiveness filter
-    if (filters.effectivenessFilter && filters.effectivenessFilter !== "all") {
-      data = data.filter((control: Control) => {
-        const effectiveness = control.effectiveness;
-        if (filters.effectivenessFilter === "high") {
-          return effectiveness >= 80;
-        } else if (filters.effectivenessFilter === "medium") {
-          return effectiveness >= 50 && effectiveness < 80;
-        } else if (filters.effectivenessFilter === "low") {
-          return effectiveness < 50;
-        }
-        return true;
-      });
-    }
-    
-    // Apply status filter (active/inactive)
-    if (filters.statusFilter && filters.statusFilter !== "all") {
-      data = data.filter((control: Control) => {
-        if (filters.statusFilter === "active") {
-          return control.isActive === true;
-        } else if (filters.statusFilter === "inactive") {
-          return control.isActive === false;
-        }
-        return true;
-      });
-    }
-    
-    // Apply validation status filter
-    if (filters.validationStatusFilter && filters.validationStatusFilter !== "all") {
-      data = data.filter((control: Control) => control.validationStatus === filters.validationStatusFilter);
-    }
-    
-    // Apply responsible filter
-    if (responsibleFilter) {
-      data = data.filter((control: Control) => (control as any).controlOwner?.id === responsibleFilter);
-    }
-    
-    // Apply sorting for test mode
+    // If in test mode, generate mock data and apply client-side filtering
     if (testMode50k) {
+      let data = generateMockControls(50000) as any[];
+
+      // Apply search filter
+      if (searchTerm) {
+        const lowerSearch = searchTerm.toLowerCase();
+        data = data.filter((control: Control) => {
+          return (
+            control.code?.toLowerCase().includes(lowerSearch) ||
+            control.name?.toLowerCase().includes(lowerSearch) ||
+            control.description?.toLowerCase().includes(lowerSearch)
+          );
+        });
+      }
+
+      // Apply type filter
+      if (filters.typeFilter && filters.typeFilter !== "all") {
+        data = data.filter((control: Control) => control.type === filters.typeFilter);
+      }
+
+      // Apply effectiveness filter
+      if (filters.effectivenessFilter && filters.effectivenessFilter !== "all") {
+        data = data.filter((control: Control) => {
+          const effectiveness = control.effectiveness;
+          if (filters.effectivenessFilter === "high") {
+            return effectiveness >= 80;
+          } else if (filters.effectivenessFilter === "medium") {
+            return effectiveness >= 50 && effectiveness < 80;
+          } else if (filters.effectivenessFilter === "low") {
+            return effectiveness < 50;
+          }
+          return true;
+        });
+      }
+
+      // Apply status filter (active/inactive)
+      if (filters.statusFilter && filters.statusFilter !== "all") {
+        data = data.filter((control: Control) => {
+          if (filters.statusFilter === "active") {
+            return control.isActive === true;
+          } else if (filters.statusFilter === "inactive") {
+            return control.isActive === false;
+          }
+          return true;
+        });
+      }
+
+      // Apply validation status filter
+      if (filters.validationStatusFilter && filters.validationStatusFilter !== "all") {
+        data = data.filter((control: Control) => control.validationStatus === filters.validationStatusFilter);
+      }
+
+      // Apply sorting for test mode
       return data.sort((a, b) => {
         const aValue: any = a[sortField];
         const bValue: any = b[sortField];
@@ -726,12 +744,15 @@ export default function Controls() {
         }
       });
     }
-    
-    return data;
-  }, [testMode50k, sortedControls, sortField, sortDirection, searchTerm, filters, responsibleFilter]);
+
+    // In production mode, data is already filtered and paginated by the server
+    // We only need to apply client-side sorting for the current page if needed
+    // (Ideally sorting should also be server-side, but for now we sort the current page)
+    return [...sortedControls];
+  }, [testMode50k, sortedControls, sortField, sortDirection, searchTerm, filters]);
 
   const activeControls = controls.filter((control: Control) => control.isActive);
-  const avgEffectiveness = controls.length > 0 
+  const avgEffectiveness = controls.length > 0
     ? Math.round(controls.reduce((sum: number, control: Control) => sum + control.effectiveness, 0) / controls.length)
     : 0;
   const criticalControls = controls.filter((control: Control) => control.effectiveness < 70).length;
@@ -747,8 +768,8 @@ export default function Controls() {
         </div>
       ),
       cell: (control: any) => (
-        <Badge 
-          variant="outline" 
+        <Badge
+          variant="outline"
           className="cursor-pointer hover:bg-accent transition-colors"
           onClick={() => setViewingControl(control)}
           data-testid={`badge-code-${control.id}`}
@@ -809,7 +830,7 @@ export default function Controls() {
         <div className="min-w-0">
           <Badge variant="outline" className="mb-1">
             {control.type === "preventive" ? "Preventivo" :
-             control.type === "detective" ? "Detectivo" : "Correctivo"}
+              control.type === "detective" ? "Detectivo" : "Correctivo"}
           </Badge>
           {(control as any).automationLevel && (
             <p className="text-xs text-muted-foreground line-clamp-1">
@@ -826,7 +847,7 @@ export default function Controls() {
       cell: (control: Control) => {
         const effectTarget = (control as any).effectTarget || 'both';
         const getObjectiveDisplay = (target: string) => {
-          switch(target) {
+          switch (target) {
             case 'probability':
               return {
                 icon: <TrendingDown className="h-4 w-4" />,
@@ -852,7 +873,7 @@ export default function Controls() {
           }
         };
         const objective = getObjectiveDisplay(effectTarget);
-        
+
         return (
           <div className="min-w-0">
             <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md ${objective.bgColor}`}>
@@ -870,7 +891,7 @@ export default function Controls() {
       cell: (control: Control) => {
         const associatedRisks = (control as any).associatedRisks || [];
         const count = (control as any).associatedRisksCount || 0;
-        
+
         if (count === 0) {
           return (
             <div className="flex items-center justify-center">
@@ -878,11 +899,11 @@ export default function Controls() {
             </div>
           );
         }
-        
+
         return (
           <div className="flex flex-wrap items-center gap-1 justify-center">
             {associatedRisks.slice(0, 3).map((risk: { id: string; code: string }) => (
-              <Badge 
+              <Badge
                 key={risk.id}
                 variant="outline"
                 className="text-xs cursor-pointer hover:bg-accent transition-colors"
@@ -892,7 +913,7 @@ export default function Controls() {
               </Badge>
             ))}
             {count > 3 && (
-              <Badge 
+              <Badge
                 variant="secondary"
                 className="text-xs cursor-pointer hover:bg-accent transition-colors"
                 onClick={() => setAssociatedRisksControl(control)}
@@ -930,11 +951,10 @@ export default function Controls() {
             <div className="flex items-center gap-2 whitespace-nowrap">
               <span className="text-sm font-medium">{control.effectiveness}%</span>
               <div className="w-16 h-2 bg-muted rounded-full overflow-hidden flex-shrink-0">
-                <div 
-                  className={`h-full rounded-full ${
-                    control.effectiveness >= 80 ? 'bg-chart-1' :
+                <div
+                  className={`h-full rounded-full ${control.effectiveness >= 80 ? 'bg-chart-1' :
                     control.effectiveness >= 60 ? 'bg-chart-2' : 'bg-destructive'
-                  }`}
+                    }`}
                   style={{ width: `${control.effectiveness}%` }}
                 ></div>
               </div>
@@ -978,7 +998,7 @@ export default function Controls() {
               ]}
               dataSource={{
                 table: controlRisks.length > 0 ? 'controls, risk_controls, risks' : 'controls',
-                query: controlRisks.length > 0 
+                query: controlRisks.length > 0
                   ? `SELECT AVG(r.inherent_risk), AVG(rc.residual_risk) FROM risks r JOIN risk_controls rc WHERE rc.control_id = '${control.id}'`
                   : `SELECT effectiveness FROM controls WHERE id = '${control.id}'`,
                 timestamp: control.updatedAt ? new Date(control.updatedAt).toLocaleString() : 'N/A'
@@ -1011,7 +1031,7 @@ export default function Controls() {
       header: 'Fecha de Validación',
       cell: (control: Control) => (
         <span className="text-sm" data-testid={`validation-date-${control.id}`}>
-          {control.validatedAt 
+          {control.validatedAt
             ? new Date(control.validatedAt).toLocaleDateString()
             : "No validado"
           }
@@ -1027,8 +1047,8 @@ export default function Controls() {
         <div className="flex justify-center">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 size="sm"
                 data-testid={`button-actions-${control.id}`}
               >
@@ -1045,7 +1065,7 @@ export default function Controls() {
                   Editar
                 </DropdownMenuItem>
               </EditGuard>
-              
+
               <DropdownMenuItem
                 onClick={() => setRiskDialogControl(control)}
                 data-testid={`menu-risks-${control.id}`}
@@ -1053,9 +1073,9 @@ export default function Controls() {
                 <Shield className="h-4 w-4 mr-2" />
                 Asociar Riesgos
               </DropdownMenuItem>
-              
+
               <DropdownMenuSeparator />
-              
+
               <DeleteGuard itemType="control">
                 <DropdownMenuItem
                   onClick={() => setControlToDelete(control)}
@@ -1068,7 +1088,7 @@ export default function Controls() {
               </DeleteGuard>
             </DropdownMenuContent>
           </DropdownMenu>
-          
+
           {/* Dialogs remain open based on state */}
           <Dialog open={editingControl?.id === control.id} onOpenChange={(open) => !open && setEditingControl(null)}>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -1078,15 +1098,15 @@ export default function Controls() {
                   Actualizar la información y configuración de este control.
                 </DialogDescription>
               </DialogHeader>
-              <ControlForm 
-                control={editingControl!} 
-                onSuccess={handleEditSuccess} 
+              <ControlForm
+                control={editingControl!}
+                onSuccess={handleEditSuccess}
               />
             </DialogContent>
           </Dialog>
-          
-          <Dialog 
-            open={riskDialogControl?.id === control.id} 
+
+          <Dialog
+            open={riskDialogControl?.id === control.id}
             onOpenChange={(open) => {
               if (!open) {
                 setRiskDialogControl(null);
@@ -1101,7 +1121,7 @@ export default function Controls() {
                   Agregar y gestionar riesgos asociados a este control
                 </DialogDescription>
               </DialogHeader>
-              
+
               {riskDialogControl && (
                 <div className="flex-1 overflow-hidden flex flex-col">
                   {/* Add Risk Section */}
@@ -1115,14 +1135,14 @@ export default function Controls() {
                             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent 
-                          className="w-[400px] p-0" 
+                        <PopoverContent
+                          className="w-[400px] p-0"
                           align="start"
                           onWheel={(e) => e.stopPropagation()}
                         >
                           <Command className="max-h-[500px]">
-                            <CommandInput 
-                              placeholder="Buscar riesgo..." 
+                            <CommandInput
+                              placeholder="Buscar riesgo..."
                               value={riskSearchTerm}
                               onValueChange={setRiskSearchTerm}
                             />
@@ -1130,7 +1150,7 @@ export default function Controls() {
                               <CommandEmpty>No se encontraron riesgos.</CommandEmpty>
                               <CommandGroup>
                                 {risks
-                                  .filter(risk => 
+                                  .filter(risk =>
                                     !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
                                   )
                                   .map((risk) => (
@@ -1203,10 +1223,10 @@ export default function Controls() {
                   </div>
                 </div>
               )}
-              
+
               <DialogFooter className="mt-4">
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   onClick={() => {
                     setRiskDialogControl(null);
                     setRiskSearchTerm("");
@@ -1232,7 +1252,7 @@ export default function Controls() {
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="controls-content" role="region" aria-label="Gestión de Controles">
       <h1 id="controls-page-title" className="sr-only">Controles</h1>
-      
+
       {/* Active Filters Display */}
       {(searchTerm || responsibleFilter) && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
@@ -1424,160 +1444,160 @@ export default function Controls() {
                 <TabsTrigger value="details">Detalles</TabsTrigger>
                 <TabsTrigger value="history">Historial</TabsTrigger>
               </TabsList>
-              
+
               <TabsContent value="details" className="flex-1 overflow-y-auto mt-4">
                 <div className="space-y-6">
-              {/* Basic Information */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Código</Label>
-                  <p className="font-medium">{viewingControl.code}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Tipo</Label>
-                  <p className="font-medium">{translateControlType(viewingControl.type)}</p>
-                </div>
-                <div className="col-span-2">
-                  <Label className="text-xs text-muted-foreground">Nombre</Label>
-                  <p className="font-medium">{viewingControl.name}</p>
-                </div>
-                <div className="col-span-2">
-                  <Label className="text-xs text-muted-foreground">Descripción</Label>
-                  <p className="text-sm">{viewingControl.description || 'Sin descripción'}</p>
-                </div>
-              </div>
-
-              {/* Control Details - Factores de Efectividad */}
-              <div className="pt-4 border-t">
-                <h3 className="font-semibold mb-3 text-sm">Factores de Efectividad del Control</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  {viewingControl.automationLevel && (
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Nivel de Automatización</Label>
-                      <p className="font-medium">{translateAutomationLevel(viewingControl.automationLevel)}</p>
-                    </div>
-                  )}
-                  
-                  {viewingControl.effectTarget && (
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Objetivo del Efecto</Label>
-                      <p className="font-medium">
-                        {viewingControl.effectTarget === 'both' ? 'Probabilidad e Impacto' : 
-                         viewingControl.effectTarget === 'probability' ? 'Probabilidad' : 'Impacto'}
-                      </p>
-                    </div>
-                  )}
-                  
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Efectividad</Label>
-                    <p className="font-medium">{viewingControl.effectiveness}%</p>
-                  </div>
-                  
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Estado</Label>
-                    <Badge variant={viewingControl.isActive ? "default" : "secondary"}>
-                      {viewingControl.isActive ? 'Activo' : 'Inactivo'}
-                    </Badge>
-                  </div>
-
-                  {viewingControl.selfAssessment && (
-                    <div className="col-span-2">
-                      <Label className="text-xs text-muted-foreground">Autoevaluación</Label>
-                      <p className="font-medium">
-                        {translateSelfAssessment(viewingControl.selfAssessment)}
-                      </p>
-                      {viewingControl.selfAssessmentComments && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {viewingControl.selfAssessmentComments}
-                        </p>
-                      )}
-                      {viewingControl.selfAssessmentDate && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Evaluado el: {new Date(viewingControl.selfAssessmentDate).toLocaleDateString('es-ES')}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Evidence */}
-              {viewingControl.evidence && (
-                <div className="pt-4 border-t">
-                  <Label className="text-xs text-muted-foreground">Evidencia</Label>
-                  <p className="text-sm mt-1">{viewingControl.evidence}</p>
-                </div>
-              )}
-
-              {/* Associated Risks */}
-              <div className="pt-4 border-t">
-                <Label className="text-sm font-semibold mb-3 block">Riesgos Asociados</Label>
-                {controlRiskAssociations.length > 0 ? (
-                  <div className="space-y-3">
-                    {controlRiskAssociations.map((association: any) => (
-                      <div key={association.id} className="p-3 border rounded-lg bg-muted/30">
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1">
-                            <h4 className="font-medium">{association.risk?.name || 'Sin nombre'}</h4>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              {association.risk?.description || 'Sin descripción'}
-                            </p>
-                            <Badge variant="outline" className="mt-2 text-xs">
-                              {association.risk?.code}
-                            </Badge>
-                          </div>
-                          <div className="text-right">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-muted-foreground">Riesgo Residual:</span>
-                              <Badge variant="secondary" className="text-xs">
-                                {association.residualRisk}
-                              </Badge>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">
-                    No hay riesgos asociados a este control
-                  </p>
-                )}
-              </div>
-
-              {/* Validation Status */}
-              {viewingControl.validationStatus && (
-                <div className="pt-4 border-t">
+                  {/* Basic Information */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label className="text-xs text-muted-foreground">Estado de Validación</Label>
-                      <Badge variant={viewingControl.validationStatus === 'validated' ? 'default' : 'secondary'} className="mt-1">
-                        {viewingControl.validationStatus === 'validated' ? 'Validado' : 
-                         viewingControl.validationStatus === 'pending' ? 'Pendiente' : 'Rechazado'}
-                      </Badge>
+                      <Label className="text-xs text-muted-foreground">Código</Label>
+                      <p className="font-medium">{viewingControl.code}</p>
                     </div>
-                    {viewingControl.validatedAt && (
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Tipo</Label>
+                      <p className="font-medium">{translateControlType(viewingControl.type)}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs text-muted-foreground">Nombre</Label>
+                      <p className="font-medium">{viewingControl.name}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs text-muted-foreground">Descripción</Label>
+                      <p className="text-sm">{viewingControl.description || 'Sin descripción'}</p>
+                    </div>
+                  </div>
+
+                  {/* Control Details - Factores de Efectividad */}
+                  <div className="pt-4 border-t">
+                    <h3 className="font-semibold mb-3 text-sm">Factores de Efectividad del Control</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      {viewingControl.automationLevel && (
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Nivel de Automatización</Label>
+                          <p className="font-medium">{translateAutomationLevel(viewingControl.automationLevel)}</p>
+                        </div>
+                      )}
+
+                      {viewingControl.effectTarget && (
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Objetivo del Efecto</Label>
+                          <p className="font-medium">
+                            {viewingControl.effectTarget === 'both' ? 'Probabilidad e Impacto' :
+                              viewingControl.effectTarget === 'probability' ? 'Probabilidad' : 'Impacto'}
+                          </p>
+                        </div>
+                      )}
+
                       <div>
-                        <Label className="text-xs text-muted-foreground">Fecha de Validación</Label>
-                        <p className="text-sm">{new Date(viewingControl.validatedAt).toLocaleDateString()}</p>
+                        <Label className="text-xs text-muted-foreground">Efectividad</Label>
+                        <p className="font-medium">{viewingControl.effectiveness}%</p>
                       </div>
+
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Estado</Label>
+                        <Badge variant={viewingControl.isActive ? "default" : "secondary"}>
+                          {viewingControl.isActive ? 'Activo' : 'Inactivo'}
+                        </Badge>
+                      </div>
+
+                      {viewingControl.selfAssessment && (
+                        <div className="col-span-2">
+                          <Label className="text-xs text-muted-foreground">Autoevaluación</Label>
+                          <p className="font-medium">
+                            {translateSelfAssessment(viewingControl.selfAssessment)}
+                          </p>
+                          {viewingControl.selfAssessmentComments && (
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {viewingControl.selfAssessmentComments}
+                            </p>
+                          )}
+                          {viewingControl.selfAssessmentDate && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Evaluado el: {new Date(viewingControl.selfAssessmentDate).toLocaleDateString('es-ES')}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Evidence */}
+                  {viewingControl.evidence && (
+                    <div className="pt-4 border-t">
+                      <Label className="text-xs text-muted-foreground">Evidencia</Label>
+                      <p className="text-sm mt-1">{viewingControl.evidence}</p>
+                    </div>
+                  )}
+
+                  {/* Associated Risks */}
+                  <div className="pt-4 border-t">
+                    <Label className="text-sm font-semibold mb-3 block">Riesgos Asociados</Label>
+                    {controlRiskAssociations.length > 0 ? (
+                      <div className="space-y-3">
+                        {controlRiskAssociations.map((association: any) => (
+                          <div key={association.id} className="p-3 border rounded-lg bg-muted/30">
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1">
+                                <h4 className="font-medium">{association.risk?.name || 'Sin nombre'}</h4>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {association.risk?.description || 'Sin descripción'}
+                                </p>
+                                <Badge variant="outline" className="mt-2 text-xs">
+                                  {association.risk?.code}
+                                </Badge>
+                              </div>
+                              <div className="text-right">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-muted-foreground">Riesgo Residual:</span>
+                                  <Badge variant="secondary" className="text-xs">
+                                    {association.residualRisk}
+                                  </Badge>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No hay riesgos asociados a este control
+                      </p>
                     )}
                   </div>
-                  {viewingControl.validationComments && (
-                    <div className="mt-3">
-                      <Label className="text-xs text-muted-foreground">Comentarios de Validación</Label>
-                      <p className="text-sm mt-1">{viewingControl.validationComments}</p>
+
+                  {/* Validation Status */}
+                  {viewingControl.validationStatus && (
+                    <div className="pt-4 border-t">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Estado de Validación</Label>
+                          <Badge variant={viewingControl.validationStatus === 'validated' ? 'default' : 'secondary'} className="mt-1">
+                            {viewingControl.validationStatus === 'validated' ? 'Validado' :
+                              viewingControl.validationStatus === 'pending' ? 'Pendiente' : 'Rechazado'}
+                          </Badge>
+                        </div>
+                        {viewingControl.validatedAt && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Fecha de Validación</Label>
+                            <p className="text-sm">{new Date(viewingControl.validatedAt).toLocaleDateString()}</p>
+                          </div>
+                        )}
+                      </div>
+                      {viewingControl.validationComments && (
+                        <div className="mt-3">
+                          <Label className="text-xs text-muted-foreground">Comentarios de Validación</Label>
+                          <p className="text-sm mt-1">{viewingControl.validationComments}</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-                </div>
               </TabsContent>
-              
+
               <TabsContent value="history" className="flex-1 overflow-y-auto mt-4">
-                <AuditHistory 
-                  entityType="control" 
-                  entityId={viewingControl.id} 
+                <AuditHistory
+                  entityType="control"
+                  entityId={viewingControl.id}
                   maxHeight="500px"
                 />
               </TabsContent>
@@ -1595,7 +1615,7 @@ export default function Controls() {
               Lista de riesgos que están mitigados por este control y el nivel de riesgo residual.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4">
             {associatedRisksData.length > 0 ? (
               <div className="space-y-3">
@@ -1616,7 +1636,7 @@ export default function Controls() {
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
                         <span className="text-muted-foreground">Riesgo Inherente:</span>
@@ -1668,7 +1688,7 @@ export default function Controls() {
               Selecciona una vista guardada para aplicar sus filtros
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {savedViews.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
@@ -1764,20 +1784,20 @@ export default function Controls() {
                   type="checkbox"
                   id="col-code"
                   checked={visibleColumns.code}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, code: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, code: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-code" className="text-sm font-normal cursor-pointer">
                   Código
                 </Label>
               </div>
-              
+
               <div className="flex items-center space-x-2">
                 <input
                   type="checkbox"
                   id="col-control"
                   checked={visibleColumns.control}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, control: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, control: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-control" className="text-sm font-normal cursor-pointer">
@@ -1790,7 +1810,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-responsible"
                   checked={visibleColumns.responsible}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, responsible: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, responsible: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-responsible" className="text-sm font-normal cursor-pointer">
@@ -1803,7 +1823,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-type"
                   checked={visibleColumns.type}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, type: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, type: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-type" className="text-sm font-normal cursor-pointer">
@@ -1816,7 +1836,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-controlObjective"
                   checked={visibleColumns.controlObjective}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, controlObjective: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, controlObjective: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-controlObjective" className="text-sm font-normal cursor-pointer">
@@ -1829,7 +1849,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-risks"
                   checked={visibleColumns.risks}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, risks: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, risks: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-risks" className="text-sm font-normal cursor-pointer">
@@ -1842,7 +1862,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-effectiveness"
                   checked={visibleColumns.effectiveness}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, effectiveness: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, effectiveness: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-effectiveness" className="text-sm font-normal cursor-pointer">
@@ -1855,7 +1875,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-validatedAt"
                   checked={visibleColumns.validatedAt}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, validatedAt: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, validatedAt: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-validatedAt" className="text-sm font-normal cursor-pointer">
@@ -1868,7 +1888,7 @@ export default function Controls() {
                   type="checkbox"
                   id="col-actions"
                   checked={visibleColumns.actions}
-                  onChange={(e) => setVisibleColumns({...visibleColumns, actions: e.target.checked})}
+                  onChange={(e) => setVisibleColumns({ ...visibleColumns, actions: e.target.checked })}
                   className="h-4 w-4"
                 />
                 <Label htmlFor="col-actions" className="text-sm font-normal cursor-pointer">
@@ -1878,13 +1898,13 @@ export default function Controls() {
             </div>
           </div>
           <DialogFooter>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setColumnConfigDialogOpen(false)}
             >
               Cerrar
             </Button>
-            <Button 
+            <Button
               onClick={() => {
                 // Reset to all visible
                 setVisibleColumns({

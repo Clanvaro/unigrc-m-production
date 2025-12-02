@@ -3626,6 +3626,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // SPRINT 2 OPTIMIZATION: Server-side Pagination for Validation Center
+  // Replaced in-memory slicing with SQL LIMIT/OFFSET to handle 10x data scale
   app.get("/api/controls/validation/notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
       const { limit, offset } = normalizePaginationParams(req.query);
@@ -3634,6 +3636,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
+      // 1. Get Total Count (Fast)
+      const [{ count }] = await requireDb()
+        .select({ count: sql<number>`count(*)` })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .where(and(
+          isNull(controls.deletedAt),
+          eq(controls.validationStatus, 'pending_validation'),
+          isNotNull(controls.notifiedAt)
+        ));
+
+      // 2. Get Paginated Data (Optimized)
       const notifiedControls = await requireDb()
         .select({
           control: controls,
@@ -3649,22 +3666,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           isNull(controls.deletedAt),
           eq(controls.validationStatus, 'pending_validation'),
           isNotNull(controls.notifiedAt)
-        ));
+        ))
+        .limit(limit)
+        .offset(offset);
 
       const controlsWithOwner = notifiedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
 
-      const total = controlsWithOwner.length;
-      const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
-
-      // Get associated risks for paginated controls
-      const controlIds = paginatedControls.map(c => c.id);
+      // Get associated risks for paginated controls ONLY
+      const controlIds = controlsWithOwner.map(c => c.id);
       if (controlIds.length > 0) {
-        if (!db) {
-          return res.status(500).json({ message: "Database not available" });
-        }
         const associatedRisks = await requireDb()
           .select({
             controlId: riskControls.controlId,
@@ -3675,7 +3688,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(inArray(riskControls.controlId, controlIds));
 
         // Map risks to controls
-        const controlsWithRisks = paginatedControls.map(control => ({
+        const controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
           associatedRisks: associatedRisks
             .filter(ar => ar.controlId === control.id && ar.risk)
@@ -3687,9 +3700,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }))
         }));
 
-        res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
+        res.json(createPaginatedResponse(controlsWithRisks, Number(count), limit, offset));
       } else {
-        res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
+        res.json(createPaginatedResponse(controlsWithOwner, Number(count), limit, offset));
       }
     } catch (error) {
       console.error("Failed to fetch notified controls:", error);
@@ -3705,6 +3718,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
+      // 1. Get Total Count (Fast)
+      const [{ count }] = await requireDb()
+        .select({ count: sql<number>`count(*)` })
+        .from(controls)
+        .leftJoin(controlOwners, and(
+          eq(controls.id, controlOwners.controlId),
+          eq(controlOwners.isActive, true)
+        ))
+        .where(and(
+          isNull(controls.deletedAt),
+          or(
+            isNull(controls.validationStatus),
+            and(
+              eq(controls.validationStatus, 'pending_validation'),
+              isNull(controls.notifiedAt)
+            )
+          )
+        ));
+
+      // 2. Get Paginated Data (Optimized)
       const notNotifiedControls = await requireDb()
         .select({
           control: controls,
@@ -3725,22 +3758,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               isNull(controls.notifiedAt)
             )
           )
-        ));
+        ))
+        .limit(limit)
+        .offset(offset);
 
       const controlsWithOwner = notNotifiedControls.map(row => ({
         ...row.control,
         owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
       }));
 
-      const total = controlsWithOwner.length;
-      const paginatedControls = controlsWithOwner.slice(offset, offset + limit);
-
-      // Get associated risks for paginated controls
-      const controlIds = paginatedControls.map(c => c.id);
+      // Get associated risks for paginated controls ONLY
+      const controlIds = controlsWithOwner.map(c => c.id);
       if (controlIds.length > 0) {
-        if (!db) {
-          return res.status(500).json({ message: "Database not available" });
-        }
         const associatedRisks = await requireDb()
           .select({
             controlId: riskControls.controlId,
@@ -3751,7 +3780,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(inArray(riskControls.controlId, controlIds));
 
         // Map risks to controls
-        const controlsWithRisks = paginatedControls.map(control => ({
+        const controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
           associatedRisks: associatedRisks
             .filter(ar => ar.controlId === control.id && ar.risk)
@@ -3763,9 +3792,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }))
         }));
 
-        res.json(createPaginatedResponse(controlsWithRisks, total, limit, offset));
+        res.json(createPaginatedResponse(controlsWithRisks, Number(count), limit, offset));
       } else {
-        res.json(createPaginatedResponse(paginatedControls, total, limit, offset));
+        res.json(createPaginatedResponse(controlsWithOwner, Number(count), limit, offset));
       }
     } catch (error) {
       console.error("Failed to fetch not-notified controls:", error);
@@ -6948,6 +6977,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Controls (with 15s cache - will need proper invalidation for production)
+  // SPRINT 3 OPTIMIZATION: Server-side Pagination & Filtering for Controls List
+  // Replaced 'fetch all' with dynamic SQL queries to handle 10x data scale
   app.get("/api/controls", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
       // Get active tenant ID
@@ -6956,6 +6987,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
+      const paginate = req.query.paginate === 'true';
 
       // Build filters object
       const filters: import('./storage').ControlFilters = {
@@ -6963,26 +6995,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         type: req.query.type as string,
         frequency: req.query.frequency as string,
         status: req.query.status as string,
+        validationStatus: req.query.validationStatus as string,
         ownerId: req.query.ownerId as string,
         minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
         maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
       };
 
-      // Create cache key including all filters
-      const cacheKey = `controls:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
-
-      // Try cache first
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        return res.json(cached);
-      }
-
-      // Cache miss - query database with optimized paginated method
-      const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(
-        filters,
-        limit,
-        offset
-      );
 
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;

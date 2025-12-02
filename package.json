@@ -24,7 +24,10 @@
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke-test:prod": "echo 'Run: BASE_URL=https://your-app.replit.app npm run smoke-test'",
     "validate-deploy": "npm run pre-deploy && npm run build && echo '\n✅ Validation complete! Build artifacts ready for deployment.'",
-    "apply-matrix-index": "tsx scripts/apply-matrix-index.ts"
+    "apply-matrix-index": "tsx scripts/apply-matrix-index.ts",
+    "measure-baseline": "tsx scripts/measure-baseline.ts",
+    "apply-validation-indexes": "tsx scripts/apply-validation-indexes.ts",
+    "apply-controls-indexes": "tsx scripts/apply-controls-indexes.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
