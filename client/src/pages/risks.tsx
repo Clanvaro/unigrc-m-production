@@ -306,7 +306,7 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
-    enabled: (needsDetailedData || visibleColumns.process || visibleColumns.responsible) && riskIds.length > 0, // Fetch if details needed OR columns are visible
+    enabled: (needsDetailedData || visibleColumns.process || visibleColumns.responsible || activeTab === "detalle") && riskIds.length > 0, // Fetch if details needed OR columns are visible OR detail tab is active
     staleTime: 1000 * 15, // 15 seconds
   });
 
