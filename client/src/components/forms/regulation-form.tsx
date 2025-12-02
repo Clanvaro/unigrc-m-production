@@ -60,8 +60,7 @@ export default function RegulationForm({ regulation, onSuccess }: RegulationForm
   // Load available risks
   const { data: risksResponse } = useQuery<{ data: any[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
-    staleTime: 0,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
   const risks = risksResponse?.data || [];
 
@@ -89,7 +88,7 @@ export default function RegulationForm({ regulation, onSuccess }: RegulationForm
   const { data: existingAssociations = [] } = useQuery<any[]>({
     queryKey: ["/api/regulations", regulation?.id, "risks"],
     enabled: !!regulation?.id,
-    staleTime: 0,
+    staleTime: 60000,
   });
 
   const form = useForm<FormData>({

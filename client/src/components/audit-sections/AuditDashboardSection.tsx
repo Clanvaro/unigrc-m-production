@@ -24,27 +24,22 @@ import type { AuditTest, AuditFinding, AuditRisk, User } from "@shared/schema";
 export function AuditDashboardSection({ audit }: AuditSectionProps) {
   const { data: auditTests = [], isLoading: testsLoading } = useQuery<AuditTest[]>({
     queryKey: ["/api/audits", audit.id, "tests"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: auditMilestones = [], isLoading: milestonesLoading } = useQuery<any[]>({
     queryKey: ["/api/audits", audit.id, "milestones"],
-    staleTime: 0,
-    refetchOnMount: true,
+    staleTime: 60000,
   });
 
   const { data: auditFindings = [], isLoading: findingsLoading } = useQuery<AuditFinding[]>({
     queryKey: ["/api/audits", audit.id, "findings"],
-    staleTime: 0,
-    refetchOnMount: true,
+    staleTime: 60000,
   });
 
   const { data: auditRisks = [], isLoading: risksLoading } = useQuery<AuditRisk[]>({
     queryKey: ["/api/audits", audit.id, "ad-hoc-risks"],
-    staleTime: 0,
-    refetchOnMount: true,
+    staleTime: 60000,
   });
 
   const { data: users = [] } = useQuery<User[]>({

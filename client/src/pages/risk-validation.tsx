@@ -116,67 +116,45 @@ export default function RiskValidationPage() {
   const { data: validatedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-    gcTime: 1000 * 60 * 5,
+    staleTime: 60000,
   });
 
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
     enabled: activeTab === "risks",
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-    gcTime: 1000 * 60 * 5,
+    staleTime: 60000,
   });
 
   const { data: observedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/observed"],
     enabled: activeTab === "risks",
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-    gcTime: 1000 * 60 * 5,
+    staleTime: 60000,
   });
 
-  // Legacy queries for backward compatibility (can be removed later)
-  const { data: pendingRisks = [] } = useQuery<Risk[]>({
-    queryKey: ["/api/risks/validation/pending"],
-    enabled: false, // Disabled for now
-  });
-
-  const { data: validatedRisks = [] } = useQuery<Risk[]>({
-    queryKey: ["/api/risks/validation/validated"],
-    enabled: false, // Disabled for now
-  });
-
-  const { data: rejectedRisks = [] } = useQuery<Risk[]>({
-    queryKey: ["/api/risks/validation/rejected"],
-    enabled: false, // Disabled for now
-  });
-
-  // Shared queries (always enabled) with staleTime optimization
+  // Shared catalog queries (always enabled) with 2-minute staleTime
   const { data: processes = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
-    staleTime: 60000, // 60s for shared data
+    staleTime: 120000,
   });
 
   const { data: macroprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
-    staleTime: 60000,
+    staleTime: 120000,
   });
 
   const { data: subprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 60000,
+    staleTime: 120000,
   });
 
   const { data: users = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],
-    staleTime: 60000,
+    staleTime: 120000,
   });
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
-    staleTime: 60000,
+    staleTime: 120000,
   });
 
   // Listen for filter changes from header
@@ -270,9 +248,7 @@ export default function RiskValidationPage() {
   const { data: notifiedRiskProcessLinksResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/risk-processes/validation/notified/list", { limit: notifiedRisksPagination.limit, offset: notifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notifiedRiskProcessLinks = notifiedRiskProcessLinksResponse?.data || [];
@@ -281,9 +257,7 @@ export default function RiskValidationPage() {
   const { data: notNotifiedRiskProcessLinksResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/risk-processes/validation/not-notified/list", { limit: notNotifiedRisksPagination.limit, offset: notNotifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notNotifiedRiskProcessLinks = notNotifiedRiskProcessLinksResponse?.data || [];
@@ -294,9 +268,7 @@ export default function RiskValidationPage() {
   const { data: notifiedControlsResponse } = useQuery<{ data: Control[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/controls/validation/notified", { limit: notifiedControlsPagination.limit, offset: notifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notifiedControls = notifiedControlsResponse?.data || [];
@@ -305,9 +277,7 @@ export default function RiskValidationPage() {
   const { data: notNotifiedControlsResponse } = useQuery<{ data: Control[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/controls/validation/not-notified", { limit: notNotifiedControlsPagination.limit, offset: notNotifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notNotifiedControls = notNotifiedControlsResponse?.data || [];
@@ -318,43 +288,33 @@ export default function RiskValidationPage() {
   const { data: validatedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/validated"],
     enabled: activeTab === "controls",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: observedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/observed"],
     enabled: activeTab === "controls",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: rejectedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/rejected"],
     enabled: activeTab === "controls",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   // Action Plans validation queries
-  // OPTIMIZATION: Only fetch when action-plans tab is active + 30s staleTime
+  // OPTIMIZATION: Only fetch when action-plans tab is active + 60s staleTime
   const { data: pendingActionPlans = [], isLoading: isLoadingActionPlans } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/pending"],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: notifiedActionPlansResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/action-plans/validation/notified", { limit: notifiedActionPlansPagination.limit, offset: notifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notifiedActionPlans = notifiedActionPlansResponse?.data || [];
@@ -363,9 +323,7 @@ export default function RiskValidationPage() {
   const { data: notNotifiedActionPlansResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/action-plans/validation/not-notified", { limit: notNotifiedActionPlansPagination.limit, offset: notNotifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const notNotifiedActionPlans = notNotifiedActionPlansResponse?.data || [];
@@ -374,25 +332,19 @@ export default function RiskValidationPage() {
   const { data: validatedActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/validated"],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: rejectedActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/rejected"],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: observedActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/observed"],
     enabled: activeTab === "action-plans",
-    staleTime: 30000,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   // Query for action plan details
@@ -1406,25 +1358,6 @@ export default function RiskValidationPage() {
   // Calculate total unique processes (count only proceso level, not macroprocesos or subprocesos)
   const uniqueTotalProcesses = processes.filter(p => ownerFilter === "all" || p.ownerId === ownerFilter).length;
 
-  // Legacy filter functions (kept for backward compatibility with old UI)
-  const filteredPendingRisks = pendingRisks.filter(risk => {
-    if (ownerFilter !== "all" && risk.processOwner !== ownerFilter) return false;
-    if (selectedProcessId && risk.macroprocesoId !== selectedProcessId) return false;
-    return true;
-  });
-
-  const filteredValidatedRisks = validatedRisks.filter(risk => {
-    if (ownerFilter !== "all" && risk.processOwner !== ownerFilter) return false;
-    if (selectedProcessId && risk.macroprocesoId !== selectedProcessId) return false;
-    return true;
-  });
-
-  const filteredRejectedRisks = rejectedRisks.filter(risk => {
-    if (ownerFilter !== "all" && risk.processOwner !== ownerFilter) return false;
-    if (selectedProcessId && risk.macroprocesoId !== selectedProcessId) return false;
-    return true;
-  });
-
   // Get owner name for action plan filtering
   const selectedOwner = processOwners.find(owner => owner.id === ownerFilter);
   const ownerName = selectedOwner?.name;
@@ -1656,10 +1589,6 @@ export default function RiskValidationPage() {
     }
     return true;
   });
-
-  // Get unique owners
-  const allRisks = [...pendingRisks, ...validatedRisks, ...rejectedRisks];
-  const uniqueOwners = Array.from(new Set(allRisks.map(risk => risk.processOwner).filter(Boolean)));
 
   const getRiskLevelColor = (inherentRisk: number) => {
     const level = getRiskLevel(inherentRisk);

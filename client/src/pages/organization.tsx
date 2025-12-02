@@ -76,58 +76,46 @@ function ProcessMapContent() {
 
   const { data: macroprocesos = [], isLoading: isLoadingMacroprocesos } = useQuery<MacroprocesoWithRisks[]>({
     queryKey: ["/api/macroprocesos"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: basicProcesses = [] } = useQuery<ProcessWithRisks[]>({
     queryKey: ["/api/processes/basic"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: processes = [] } = useQuery<ProcessWithRisks[]>({
     queryKey: ["/api/processes"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
     enabled: false,
   });
 
   const { data: subprocesos = [] } = useQuery<SubprocesoWithRisks[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
   });
 
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
-    staleTime: 30000, // 30 seconds - frequently changing data
+    staleTime: 60000,
     enabled: false,
   });
   const risks = risksResponse?.data || [];
 
   const { data: processValidations = [] } = useQuery<ProcessValidation[]>({
     queryKey: ["/api/process-validations"],
-    staleTime: 30000, // 30 seconds - validation states change frequently
+    staleTime: 60000,
     enabled: false,
   });
 
   const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 120000,
   });
 
   const { data: gerencias = [] } = useQuery<Gerencia[]>({
     queryKey: ["/api/gerencias"],
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 120000,
   });
 
   const { data: processMapValidatedRisks } = useQuery<{
