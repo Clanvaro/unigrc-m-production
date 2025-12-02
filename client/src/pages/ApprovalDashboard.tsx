@@ -41,25 +41,29 @@ export default function ApprovalDashboard() {
   // Fetch dashboard data
   const { data: dashboardData, isLoading: dashboardLoading, error: dashboardError } = useQuery({
     queryKey: ['/api/approval/dashboard'],
-    refetchInterval: 300000, // Optimized: 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min) - reduces server load
+    refetchOnWindowFocus: true,
   });
 
   // Fetch pending approvals
   const { data: pendingApprovals, isLoading: pendingLoading } = useQuery({
     queryKey: ['/api/approval/pending'],
-    refetchInterval: 300000, // Optimized: 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min)
+    refetchOnWindowFocus: true,
   });
 
   // Fetch current metrics
   const { data: metricsData, isLoading: metricsLoading } = useQuery({
     queryKey: ['/api/approval/metrics'],
-    refetchInterval: 300000, // Optimized: 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min)
+    refetchOnWindowFocus: true,
   });
 
   // Fetch active escalations
   const { data: escalationsData, isLoading: escalationsLoading } = useQuery({
     queryKey: ['/api/approval/escalations', { status: 'active' }],
-    refetchInterval: 300000, // Optimized: 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min)
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {

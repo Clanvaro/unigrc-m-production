@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/usePermissions";
-import { 
-  MetricsCard, 
-  ProgressChart, 
-  ActivityTimeline, 
-  DeadlineCalendar 
+import {
+  MetricsCard,
+  ProgressChart,
+  ActivityTimeline,
+  DeadlineCalendar
 } from "@/components/dashboard-widgets";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,8 +81,9 @@ export default function ExecutorDashboard() {
       return response.json();
     },
     enabled: !!currentUser?.id && !permissionsLoading,
-    refetchInterval: 5 * 60 * 1000, // Refresh every 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min) - reduces server load
     staleTime: 60000, // 1 minute - dashboard data, moderate change frequency
+    refetchOnWindowFocus: true, // Refetch when user returns to tab
   });
 
   // Fetch recent activity separately for real-time updates
@@ -96,7 +97,8 @@ export default function ExecutorDashboard() {
       return response.json();
     },
     enabled: !!currentUser?.id,
-    refetchInterval: 2 * 60 * 1000, // Refresh activity more frequently
+    refetchInterval: 5 * 60 * 1000, // Optimized: 5 minutes (was 2min) - activity updates less frequently
+    refetchOnWindowFocus: true,
   });
 
   // Handle loading state
@@ -192,7 +194,7 @@ export default function ExecutorDashboard() {
             Bienvenido de nuevo, {currentUser.firstName || currentUser.email}
           </p>
         </div>
-        
+
         <div className="flex items-center space-x-3">
           <Button variant="outline" size="sm" onClick={handleUploadDocument} data-testid="button-upload">
             <Upload className="h-4 w-4 mr-2" />
@@ -217,7 +219,7 @@ export default function ExecutorDashboard() {
           loading={isLoading}
           data-testid="card-assigned-tests"
         />
-        
+
         <MetricsCard
           title="En Progreso"
           value={metrics?.inProgressTests || 0}
@@ -228,7 +230,7 @@ export default function ExecutorDashboard() {
           loading={isLoading}
           data-testid="card-in-progress"
         />
-        
+
         <MetricsCard
           title="Completadas"
           value={metrics?.completedTests || 0}
@@ -239,14 +241,14 @@ export default function ExecutorDashboard() {
           loading={isLoading}
           data-testid="card-completed"
         />
-        
+
         <MetricsCard
           title="Vencidas"
           value={metrics?.overdueTests || 0}
           subtitle="Necesitan atención"
           icon={AlertTriangle}
           iconColor="text-red-600"
-          badge={metrics?.overdueTests && metrics.overdueTests > 0 ? 
+          badge={metrics?.overdueTests && metrics.overdueTests > 0 ?
             { text: "Urgente", variant: "destructive" } : undefined
           }
           loading={isLoading}

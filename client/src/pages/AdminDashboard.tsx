@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/usePermissions";
-import { 
-  MetricsCard, 
-  ProgressChart, 
-  ActivityTimeline, 
-  WorkloadDistribution 
+import {
+  MetricsCard,
+  ProgressChart,
+  ActivityTimeline,
+  WorkloadDistribution
 } from "@/components/dashboard-widgets";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,10 +67,10 @@ interface AdminDashboardMetrics {
     attachmentStorageUsed: number;
     averageResponseTime: number;
     activeUsers: number;
-    systemAlerts: Array<{ 
+    systemAlerts: Array<{
       id: string;
-      type: string; 
-      message: string; 
+      type: string;
+      message: string;
       severity: string;
       timestamp: Date;
       resolved?: boolean;
@@ -98,7 +98,7 @@ export default function AdminDashboard() {
   const { data: dashboardData, isLoading, error, refetch } = useQuery<AdminDashboardMetrics>({
     queryKey: ['/api/dashboard/admin'],
     enabled: !!currentUser?.id,
-    refetchInterval: 10 * 60 * 1000, // Refresh every 10 minutes
+    refetchInterval: 30 * 60 * 1000, // Optimized: 30 minutes (was 10min) - admin metrics change infrequently
     staleTime: 1000 * 60 * 5, // 5 minutes - dashboard data changes infrequently
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -220,7 +220,7 @@ export default function AdminDashboard() {
             Resumen y analíticas del sistema de auditoría organizacional
           </p>
         </div>
-        
+
         <div className="flex items-center space-x-3">
           <Select value={selectedTimeRange} onValueChange={setSelectedTimeRange}>
             <SelectTrigger className="w-32" data-testid="time-range-select">
@@ -233,17 +233,17 @@ export default function AdminDashboard() {
               <SelectItem value="365">Último año</SelectItem>
             </SelectContent>
           </Select>
-          
+
           <Button variant="outline" size="sm" onClick={handleRefreshData} data-testid="button-refresh">
             <RefreshCw className="h-4 w-4 mr-2" />
             Actualizar
           </Button>
-          
+
           <Button variant="outline" size="sm" onClick={handleExportReport} data-testid="button-export">
             <Download className="h-4 w-4 mr-2" />
             Exportar
           </Button>
-          
+
           {canManageSystem && (
             <Button size="sm" onClick={handleSystemSettings} data-testid="button-settings">
               <Settings className="h-4 w-4 mr-2" />
@@ -265,7 +265,7 @@ export default function AdminDashboard() {
           loading={isLoading}
           data-testid="card-total-tests"
         />
-        
+
         <MetricsCard
           title="Usuarios Activos"
           value={overview?.totalUsers || 0}
@@ -276,7 +276,7 @@ export default function AdminDashboard() {
           loading={isLoading}
           data-testid="card-active-users"
         />
-        
+
         <MetricsCard
           title="Salud del Sistema"
           value={`${systemHealthPercentage}%`}
@@ -287,15 +287,15 @@ export default function AdminDashboard() {
           loading={isLoading}
           data-testid="card-system-health"
         />
-        
+
         <MetricsCard
           title="Hallazgos Críticos"
           value={compliance?.criticalFindings || 0}
           subtitle="Requieren atención inmediata"
           icon={AlertTriangle}
           iconColor="text-red-600"
-          badge={compliance?.criticalFindings && compliance.criticalFindings > 0 ? 
-            { text: "Urgente", variant: "destructive" } : 
+          badge={compliance?.criticalFindings && compliance.criticalFindings > 0 ?
+            { text: "Urgente", variant: "destructive" } :
             { text: "Bueno", variant: "outline" }
           }
           loading={isLoading}
@@ -370,12 +370,12 @@ export default function AdminDashboard() {
                             {systemHealth?.averageResponseTime ? `${systemHealth.averageResponseTime}s` : 'N/A'}
                           </span>
                         </div>
-                        <Progress 
-                          value={systemHealth?.averageResponseTime ? Math.min(100, (1 / systemHealth.averageResponseTime) * 100) : 0} 
+                        <Progress
+                          value={systemHealth?.averageResponseTime ? Math.min(100, (1 / systemHealth.averageResponseTime) * 100) : 0}
                           className="h-2"
                         />
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-muted-foreground">Uso de Almacenamiento</span>
@@ -383,12 +383,12 @@ export default function AdminDashboard() {
                             {systemHealth?.attachmentStorageUsed || 0}%
                           </span>
                         </div>
-                        <Progress 
-                          value={systemHealth?.attachmentStorageUsed || 0} 
+                        <Progress
+                          value={systemHealth?.attachmentStorageUsed || 0}
                           className="h-2"
                         />
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-muted-foreground">Tiempo Promedio de Revisión</span>
@@ -396,12 +396,12 @@ export default function AdminDashboard() {
                             {resourceUtil?.averageWorkload || 0} días
                           </span>
                         </div>
-                        <Progress 
-                          value={Math.min(100, (resourceUtil?.averageWorkload || 0) * 10)} 
+                        <Progress
+                          value={Math.min(100, (resourceUtil?.averageWorkload || 0) * 10)}
                           className="h-2"
                         />
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-muted-foreground">Actividad de Usuarios</span>
@@ -409,12 +409,12 @@ export default function AdminDashboard() {
                             {systemHealth?.activeUsers || 0}
                           </span>
                         </div>
-                        <Progress 
-                          value={Math.min(100, (systemHealth?.activeUsers || 0) * 10)} 
+                        <Progress
+                          value={Math.min(100, (systemHealth?.activeUsers || 0) * 10)}
                           className="h-2"
                         />
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-muted-foreground">Cobertura de Riesgos</span>
@@ -422,12 +422,12 @@ export default function AdminDashboard() {
                             {compliance?.riskCoverage ? `${Math.round(compliance.riskCoverage * 100)}%` : '0%'}
                           </span>
                         </div>
-                        <Progress 
-                          value={compliance?.riskCoverage ? compliance.riskCoverage * 100 : 0} 
+                        <Progress
+                          value={compliance?.riskCoverage ? compliance.riskCoverage * 100 : 0}
                           className="h-2"
                         />
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-muted-foreground">Acciones Abiertas</span>
@@ -435,8 +435,8 @@ export default function AdminDashboard() {
                             {compliance?.openActions || 0} elementos
                           </span>
                         </div>
-                        <Progress 
-                          value={Math.min(100, (compliance?.openActions || 0) * 10)} 
+                        <Progress
+                          value={Math.min(100, (compliance?.openActions || 0) * 10)}
                           className="h-2"
                         />
                       </div>
@@ -470,14 +470,14 @@ export default function AdminDashboard() {
                         </div>
                         <div className="text-sm text-muted-foreground">Tasa de Finalización</div>
                       </div>
-                      
+
                       <div className="space-y-2">
                         <div className="text-2xl font-bold" data-testid="avg-review-time">
                           {resourceUtil?.averageWorkload || 0}
                         </div>
                         <div className="text-sm text-muted-foreground">Tiempo Promedio de Revisión (días)</div>
                       </div>
-                      
+
                       <div className="space-y-2">
                         <div className="text-2xl font-bold" data-testid="system-health-score">
                           {systemHealthPercentage}%
@@ -515,27 +515,27 @@ export default function AdminDashboard() {
                           {resourceUtil?.totalExecutors || 0}
                         </Badge>
                       </div>
-                      
+
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Supervisores Activos</span>
                         <Badge variant="outline" data-testid="active-supervisors-badge">
                           {resourceUtil?.totalSupervisors || 0}
                         </Badge>
                       </div>
-                      
+
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Hallazgos Críticos</span>
-                        <Badge 
+                        <Badge
                           variant={compliance?.criticalFindings && compliance.criticalFindings > 0 ? "destructive" : "outline"}
                           data-testid="critical-findings-badge"
                         >
                           {compliance?.criticalFindings || 0}
                         </Badge>
                       </div>
-                      
+
                       <div className="flex justify-between items-center">
                         <span className="text-sm">Alertas del Sistema</span>
-                        <Badge 
+                        <Badge
                           variant={(criticalAlertsCount + warningAlertsCount) > 0 ? "secondary" : "outline"}
                           data-testid="system-alerts-badge"
                         >
@@ -709,22 +709,21 @@ export default function AdminDashboard() {
               ) : (
                 <div className="space-y-3">
                   {alerts.map((alert) => (
-                    <div 
+                    <div
                       key={alert.id}
                       className="flex items-start space-x-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
                       onClick={() => handleViewAlert(alert.id)}
                       data-testid={`alert-${alert.id}`}
                     >
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                        alert.type === 'critical' ? 'bg-red-100 text-red-600 dark:bg-red-900' :
-                        alert.type === 'warning' ? 'bg-orange-100 text-orange-600 dark:bg-orange-900' :
-                        'bg-blue-100 text-blue-600 dark:bg-blue-900'
-                      }`}>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${alert.type === 'critical' ? 'bg-red-100 text-red-600 dark:bg-red-900' :
+                          alert.type === 'warning' ? 'bg-orange-100 text-orange-600 dark:bg-orange-900' :
+                            'bg-blue-100 text-blue-600 dark:bg-blue-900'
+                        }`}>
                         {alert.type === 'critical' ? <XCircle className="h-4 w-4" /> :
-                         alert.type === 'warning' ? <AlertTriangle className="h-4 w-4" /> :
-                         <Eye className="h-4 w-4" />}
+                          alert.type === 'warning' ? <AlertTriangle className="h-4 w-4" /> :
+                            <Eye className="h-4 w-4" />}
                       </div>
-                      
+
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium" data-testid={`alert-message-${alert.id}`}>
                           {alert.message}

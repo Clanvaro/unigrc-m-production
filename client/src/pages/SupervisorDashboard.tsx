@@ -1,11 +1,11 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { usePermissions } from "@/hooks/usePermissions";
-import { 
-  MetricsCard, 
+import {
+  MetricsCard,
   TeamPerformanceTable,
   WorkloadDistribution,
   ActivityTimeline,
-  ProgressChart 
+  ProgressChart
 } from "@/components/dashboard-widgets";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,8 +126,9 @@ export default function SupervisorDashboard() {
       return response.json();
     },
     enabled: !!currentUser?.id && !permissionsLoading && canViewTeams,
-    refetchInterval: 5 * 60 * 1000, // Refresh every 5 minutes
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min) - reduces server load
     staleTime: 60000, // 1 minute - dashboard data, moderate change frequency
+    refetchOnWindowFocus: true,
   });
 
   // Fetch workload distribution
@@ -141,7 +142,8 @@ export default function SupervisorDashboard() {
       return response.json();
     },
     enabled: !!currentUser?.id && canViewTeams,
-    refetchInterval: 5 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000, // Optimized: 15 minutes (was 5min)
+    refetchOnWindowFocus: true,
   });
 
   // Approve test review mutation
@@ -213,7 +215,7 @@ export default function SupervisorDashboard() {
 
   const teamStats = dashboardData?.teamStats;
   const reviewQueue = dashboardData?.reviewQueue || [];
-  
+
   // Calculate team performance trend
   const getTeamPerformanceTrend = (score: number) => {
     return {
@@ -267,7 +269,7 @@ export default function SupervisorDashboard() {
             Administra y supervisa tu equipo de auditoría
           </p>
         </div>
-        
+
         <div className="flex items-center space-x-3">
           <Select value={selectedTimeRange} onValueChange={setSelectedTimeRange}>
             <SelectTrigger className="w-32" data-testid="time-range-select">
@@ -301,19 +303,19 @@ export default function SupervisorDashboard() {
           loading={isLoading}
           data-testid="card-team-size"
         />
-        
+
         <MetricsCard
           title="Revisiones Pendientes"
           value={teamStats?.pendingReviews || 0}
           subtitle={`${teamStats?.overdueReviews || 0} vencidas`}
           icon={FileCheck}
           iconColor="text-yellow-600"
-          badge={teamStats?.overdueReviews && teamStats.overdueReviews > 0 ? 
+          badge={teamStats?.overdueReviews && teamStats.overdueReviews > 0 ?
             { text: "Acción Requerida", variant: "destructive" } : undefined}
           loading={isLoading}
           data-testid="card-pending-reviews"
         />
-        
+
         <MetricsCard
           title="Rendimiento del Equipo"
           value={`${teamStats?.teamPerformanceScore || 0}%`}
@@ -324,7 +326,7 @@ export default function SupervisorDashboard() {
           loading={isLoading}
           data-testid="card-team-performance"
         />
-        
+
         <MetricsCard
           title="Tiempo Promedio de Revisión"
           value={`${teamStats?.averageReviewTime || 0}`}
@@ -479,7 +481,7 @@ export default function SupervisorDashboard() {
               ) : (
                 <div className="space-y-3">
                   {reviewQueue.map((item) => (
-                    <div 
+                    <div
                       key={item.testId}
                       className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                       onClick={() => handleReviewTest(item.testId)}
@@ -490,7 +492,7 @@ export default function SupervisorDashboard() {
                           <h4 className="font-medium text-sm truncate" data-testid={`review-test-name-${item.testId}`}>
                             {item.testName}
                           </h4>
-                          <Badge 
+                          <Badge
                             variant={item.priority === 'critical' ? 'destructive' : item.priority === 'high' ? 'secondary' : 'outline'}
                             data-testid={`review-priority-${item.testId}`}
                           >
@@ -507,11 +509,11 @@ export default function SupervisorDashboard() {
                           </span>
                         </div>
                       </div>
-                      
+
                       {canReviewTests && (
                         <div className="flex space-x-2 ml-4">
-                          <Button 
-                            size="sm" 
+                          <Button
+                            size="sm"
                             variant="outline"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -522,7 +524,7 @@ export default function SupervisorDashboard() {
                           >
                             Rechazar
                           </Button>
-                          <Button 
+                          <Button
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
