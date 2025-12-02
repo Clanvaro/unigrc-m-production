@@ -23,7 +23,7 @@ async function applyMatrixIndex() {
 
     const pool = new Pool({
         connectionString: databaseUrl,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        ssl: { rejectUnauthorized: false }, // Required for Render PostgreSQL
     });
 
     const db = drizzle(pool);
@@ -56,10 +56,8 @@ async function applyMatrixIndex() {
       CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_matrix_aggregation 
       ON risks(
         status,
-        inherent_probability, 
-        inherent_impact,
-        residual_probability,
-        residual_impact
+        probability, 
+        impact
       ) 
       WHERE status != 'deleted'
     `);

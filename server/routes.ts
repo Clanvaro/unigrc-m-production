@@ -14546,8 +14546,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // SPRINT 1 OPTIMIZATION: Optimized Risk Matrix Endpoint
-  // Returns pre-aggregated matrix data instead of full risk objects
-  // Reduces data transfer by ~90% and enables aggressive caching
+  // Returns lightweight risk objects for heatmap instead of full objects
+  // Reduces data transfer by ~80% and enables aggressive caching
   app.get("/api/risks/matrix-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     try {
@@ -14560,55 +14560,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ ...cached, cacheHit: true });
       }
 
-      // Fetch aggregated matrix data using SQL GROUP BY
-      // This is 10-100x faster than client-side aggregation
-      const matrixAggregation = await requireDb().execute(sql`
+      // 1. Fetch lightweight risk data (using new index on status, probability, impact)
+      // We explicitly select only fields needed for the heatmap
+      const risksData = await requireDb().execute(sql`
         SELECT 
-          inherent_probability,
-          inherent_impact,
-          residual_probability,
-          residual_impact,
-          COUNT(*)::int as count,
-          ARRAY_AGG(id) as risk_ids
+          id, code, name, 
+          probability, impact, 
+          (probability * impact) as "inherentRisk",
+          status, category,
+          macroproceso_id as "macroprocesoId",
+          process_id as "processId",
+          subproceso_id as "subprocesoId"
         FROM ${risks}
         WHERE status != 'deleted' 
           AND status = 'active'
-        GROUP BY 
-          inherent_probability, 
-          inherent_impact,
-          residual_probability,
-          residual_impact
       `);
 
-      // Transform to matrix structure
-      const matrix = {
-        inherent: {} as Record<string, { count: number; riskIds: string[] }>,
-        residual: {} as Record<string, { count: number; riskIds: string[] }>
-      };
+      // 2. Fetch control effectiveness for all active risks
+      // We join risk_controls with controls to get effectiveness
+      // This is much faster than fetching full control objects
+      const controlsData = await requireDb().execute(sql`
+        SELECT 
+          rc.risk_id as "riskId",
+          c.effectiveness
+        FROM ${riskControls} rc
+        JOIN ${controls} c ON rc.control_id = c.id
+        WHERE c.status != 'deleted'
+      `);
 
-      for (const row of matrixAggregation.rows) {
-        const inherentKey = `${row.inherent_probability}-${row.inherent_impact}`;
-        const residualKey = `${row.residual_probability}-${row.residual_impact}`;
-
-        matrix.inherent[inherentKey] = {
-          count: row.count,
-          riskIds: row.risk_ids
-        };
-
-        matrix.residual[residualKey] = {
-          count: row.count,
-          riskIds: row.risk_ids
-        };
+      // 3. Build map of control effectiveness by risk ID
+      const controlsByRiskId = new Map<string, number[]>();
+      for (const row of controlsData.rows) {
+        if (!controlsByRiskId.has(row.riskId)) {
+          controlsByRiskId.set(row.riskId, []);
+        }
+        if (row.effectiveness) {
+          controlsByRiskId.get(row.riskId)!.push(Number(row.effectiveness));
+        }
       }
 
-      // Fetch catalog data (macroprocesos, processes) in parallel
+      // 4. Construct HeatmapDataPoint array
+      const heatmapData = risksData.rows.map((risk: any) => ({
+        id: risk.id,
+        code: risk.code,
+        name: risk.name,
+        probability: Number(risk.probability) || 1,
+        impact: Number(risk.impact) || 1,
+        inherentRisk: Number(risk.inherentRisk) || (Number(risk.probability) * Number(risk.impact)),
+        controlEffectiveness: controlsByRiskId.get(risk.id) || [],
+        status: risk.status,
+        category: risk.category || [],
+        macroprocesoId: risk.macroprocesoId,
+        processId: risk.processId,
+        subprocesoId: risk.subprocesoId
+      }));
+
+      // 5. Fetch catalog data (macroprocesos, processes) in parallel
       const [macroprocesos, processes] = await Promise.all([
         storage.getMacroprocesos(),
         storage.getProcesses()
       ]);
 
       const response = {
-        matrix,
+        heatmapData, // Compatible with frontend
         macroprocesos: macroprocesos.filter((m: any) => m.status !== 'deleted').map((m: any) => ({
           id: m.id,
           code: m.code,
@@ -14628,7 +14642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache for 5 minutes (300 seconds)
       await distributedCache.set(cacheKey, response, 300);
 
-      console.log(`[DB] /api/risks/matrix-data in ${Date.now() - startTime}ms (aggregated ${matrixAggregation.rows.length} cells)`);
+      console.log(`[DB] /api/risks/matrix-data in ${Date.now() - startTime}ms (fetched ${heatmapData.length} risks)`);
       res.json(response);
     } catch (error) {
       console.error(`[ERROR] /api/risks/matrix-data failed after ${Date.now() - startTime}ms:`, error);
