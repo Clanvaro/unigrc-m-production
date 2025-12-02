@@ -20,6 +20,30 @@ The backend uses Express.js with TypeScript and Zod for validation. Data is stor
 
 The system operates in a single-tenant architecture. It incorporates robust performance optimizations including tuned PostgreSQL connection pooling, parallel loading, client-side risk calculation, in-memory caching, compression, CDN-ready headers, extensive database indexing, and frontend lazy loading. A centralized cache invalidation architecture ensures real-time UI updates across all views. Observability and monitoring features include health checks, performance metrics, pool monitoring logs, automatic alerts, and deployment version tracking. Anti-regression protection is ensured through environment locking, ESLint, GitHub CI/CD, Playwright E2E tests, unit/integration/smoke tests, and database schema validation. The application is optimized for Replit Reserved VM deployment. A two-level distributed caching architecture (endpoint and storage function) is implemented for maximum performance.
 
+## API Optimization Principles
+
+Guía de optimización para APIs de lectura intensiva. La secuencia **índice → pool → cache** es la hoja de ruta más efectiva:
+
+### 1. Índices Primero (No es Node.js)
+El 95% del tiempo de respuesta está en esperar a la base de datos. Antes de optimizar código JavaScript, verifica que las columnas en WHERE, JOIN y ORDER BY tengan índices adecuados. Sin índices, PostgreSQL hace escaneos completos de tablas.
+
+### 2. Connection Pools (No conexiones por request)
+Abrir una conexión SSL toma ~50-100ms cada vez. Usar un pool pre-calentado elimina esta latencia. Configurar `min` connections para mantener conexiones "tibias" listas para usar inmediatamente.
+
+### 3. Cache en Lecturas Frecuentes
+Para datos que no cambian frecuentemente (dashboards, catálogos, contadores), usar cache con TTL apropiado. En sistemas single-tenant, TTLs de 2-15 minutos son seguros y eliminan ~90% de queries redundantes.
+
+### 4. Microoptimizaciones al Final
+Optimizar loops, cambiar `for` por `forEach`, o reducir allocations solo tiene impacto cuando ya resolviste los cuellos de botella de I/O. Hasta entonces, es ruido.
+
+### Errores Comunes a Evitar
+- Culpar a Node.js cuando el problema son índices faltantes
+- Abrir/cerrar conexiones por request en vez de usar pools
+- No usar cache en lecturas frecuentes
+- Confiar en microoptimizaciones antes de resolver la capa de datos
+
+---
+
 ## Performance Optimizations (Nov 30, 2025)
 
 ### Aggressive Caching Strategy (Single-Tenant)
