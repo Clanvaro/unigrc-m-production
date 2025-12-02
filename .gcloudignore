@@ -1,0 +1,41 @@
+# Files to exclude from Google Cloud Build upload
+
+# Dependencies (will be installed by Cloud Build)
+node_modules/
+
+# Version control
+.git/
+.gitignore
+
+# Local environment secrets
+.env
+.env.local
+.env.*
+
+# Build artifacts (optional, usually better to rebuild in cloud)
+dist/
+build/
+
+# IDE settings
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+npm-debug.log
+yarn-error.log
+
+# Testing and Scripts
+tests/
+coverage/
+scripts/
+*.ts
+!server/index.ts
+!server/**/*.ts
+!client/**/*.ts
+!client/**/*.tsx
+!shared/**/*.ts
+
+# Documentation
+*.md
+docs/
