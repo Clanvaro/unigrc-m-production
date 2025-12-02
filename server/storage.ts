@@ -17737,9 +17737,11 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getAdminDashboardMetrics() {
+    console.time('getAdminDashboardMetrics');
     try {
       // PERFORMANCE: Execute ALL independent queries in a single Promise.all
       // This reduces sequential round-trips to the database from 3 to 1
+      console.time('db:admin-batch-1');
       const [
         totalTests,
         totalUsers,
@@ -17809,7 +17811,9 @@ export class DatabaseStorage extends MemStorage {
           .from(risks)
           .where(sql`${risks.macroprocesoId} IS NOT NULL`)
       ]);
+      console.timeEnd('db:admin-batch-1');
 
+      console.time('processing:admin-metrics');
       const organizationalCompletionRate = totalTests[0].count > 0
         ? (completedTests[0].count / totalTests[0].count) * 100
         : 0;
@@ -17854,6 +17858,7 @@ export class DatabaseStorage extends MemStorage {
       });
 
       // Resource utilization - roles already loaded above in parallel
+      console.time('db:admin-batch-2');
       const [totalExecutors, totalSupervisors, activeUsers] = await Promise.all([
         executorRole.length > 0
           ? db.select({ count: sql<number>`cast(count(*) as integer)` })
@@ -17872,6 +17877,7 @@ export class DatabaseStorage extends MemStorage {
           .from(users)
           .where(eq(users.isActive, true))
       ]);
+      console.timeEnd('db:admin-batch-2');
 
       // Compliance status - data already loaded above
       const riskCoverage = totalRisks[0].count > 0
@@ -17906,7 +17912,7 @@ export class DatabaseStorage extends MemStorage {
         ]
       };
 
-      return {
+      const result = {
         systemOverview: {
           totalTests: totalTests[0].count,
           totalUsers: totalUsers[0].count,
@@ -17935,8 +17941,13 @@ export class DatabaseStorage extends MemStorage {
         },
         trends
       };
+      console.timeEnd('processing:admin-metrics');
+      console.timeEnd('getAdminDashboardMetrics');
+      return result;
 
     } catch (error) {
+      console.timeEnd('processing:admin-metrics');
+      console.timeEnd('getAdminDashboardMetrics');
       console.error("Error getting admin dashboard metrics:", error);
       return {
         systemOverview: {

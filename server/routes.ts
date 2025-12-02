@@ -13853,6 +13853,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/dashboard/admin", isAuthenticated, async (req, res) => {
+    console.time('endpoint:/api/dashboard/admin');
     try {
       // Get tenant from authenticated user - admins see org-specific metrics, not platform-wide
       const tenantId = req.user?.activeTenantId;
@@ -13860,20 +13861,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Cache dashboard metrics for 30 seconds to improve performance
       const cacheKey = `dashboard-admin:${tenantId || 'platform'}`;
+      console.time('cache:dashboard-admin');
       const cached = await distributedCache.get(cacheKey);
+      console.timeEnd('cache:dashboard-admin');
 
       if (cached) {
         console.log('[Admin Dashboard] Cache hit');
+        console.timeEnd('endpoint:/api/dashboard/admin');
         return res.json(cached);
       }
 
       const metrics = await storage.getAdminDashboardMetrics();
 
       // Cache for 30 seconds
+      console.time('cache:set-dashboard-admin');
       await distributedCache.set(cacheKey, metrics, 30);
+      console.timeEnd('cache:set-dashboard-admin');
 
+      console.timeEnd('endpoint:/api/dashboard/admin');
       res.json(metrics);
     } catch (error) {
+      console.timeEnd('endpoint:/api/dashboard/admin');
       console.error("Error fetching admin dashboard metrics:", error);
       res.status(500).json({ message: "Failed to fetch admin dashboard metrics" });
     }
