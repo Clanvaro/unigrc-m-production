@@ -13859,7 +13859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const tenantId = req.user?.activeTenantId;
       console.log('[Admin Dashboard] tenantId:', tenantId, 'user:', req.user?.email);
 
-      // Cache dashboard metrics for 30 seconds to improve performance
+      // Cache dashboard metrics for 2 minutes (single-tenant, data changes infrequently)
       const cacheKey = `dashboard-admin:${tenantId || 'platform'}`;
       console.time('cache:dashboard-admin');
       const cached = await distributedCache.get(cacheKey);
@@ -13873,9 +13873,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const metrics = await storage.getAdminDashboardMetrics();
 
-      // Cache for 30 seconds
+      // Cache for 2 minutes (120 seconds) - single-tenant mode, data changes infrequently
       console.time('cache:set-dashboard-admin');
-      await distributedCache.set(cacheKey, metrics, 30);
+      await distributedCache.set(cacheKey, metrics, 120);
       console.timeEnd('cache:set-dashboard-admin');
 
       console.timeEnd('endpoint:/api/dashboard/admin');

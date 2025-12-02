@@ -669,14 +669,17 @@ if (pool) {
     } else {
       // Pool warming for Render PostgreSQL
       // Pre-establish connections respecting pool max to avoid SSL handshake latency during requests
-      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
-      const poolMax = isRender ? 4 : 4; // Match actual pool.max setting
-      const warmCount = Math.min(isRender ? 3 : 2, poolMax); // Warm 3 of 4 max connections
-      console.log(`🔥 Starting pool warming (${warmCount} of ${poolMax} connections)...`);
+      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || 
+                       process.env.DATABASE_URL?.includes('render.com') || false;
+      // Match actual pool config: max=20, min=5 for Render
+      const poolMax = isRender ? 20 : 6;
+      // Warm up to min connections (5 for Render) to ensure fast initial requests
+      const warmCount = Math.min(isRender ? 8 : 3, poolMax);
+      console.log(`🔥 Starting aggressive pool warming (${warmCount} of ${poolMax} connections)...`);
       await warmPool(warmCount);
       startPoolWarming();
     }
-  }, 1000); // Start sooner (was 2000)
+  }, 500); // Start even sooner for faster cold start
 }
 
 // Cleanup on shutdown

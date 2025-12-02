@@ -13,6 +13,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_residual_risk ON risks(residua
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_category ON risks(category) WHERE deleted_at IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_status ON risks(status) WHERE deleted_at IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_deleted_at ON risks(deleted_at);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_macroproceso_id ON risks(macroproceso_id) WHERE deleted_at IS NULL;
 
 -- Controls table indexes
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_controls_type ON controls(type) WHERE deleted_at IS NULL;
@@ -53,6 +54,15 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audits_deleted_at ON audits(deleted_
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_findings_audit_id ON audit_findings(audit_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_findings_severity ON audit_findings(severity);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_findings_status ON audit_findings(status);
+
+-- Audit tests (critical for Admin Dashboard)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_tests_status ON audit_tests(status);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_tests_risk_id ON audit_tests(risk_id) WHERE risk_id IS NOT NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_tests_status_risk ON audit_tests(status, risk_id) WHERE risk_id IS NOT NULL;
+
+-- Actions table (for open actions count)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actions_status ON actions(status) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actions_deleted_at ON actions(deleted_at);
 
 -- Users and authentication
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_email ON users(email) WHERE deleted_at IS NULL;
