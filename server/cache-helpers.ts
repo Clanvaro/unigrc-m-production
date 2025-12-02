@@ -21,6 +21,9 @@ export async function invalidateRiskMatrixCache() {
     await distributedCache.invalidate(`risk-matrix-aggregated:${CACHE_VERSION}:${TENANT_KEY}`);
     // Also invalidate old version for backward compatibility
     await distributedCache.invalidate(`risk-matrix-aggregated:${TENANT_KEY}`);
+    // NEW: Invalidate optimized matrix endpoint cache (Sprint 1)
+    await distributedCache.invalidate(`risk-matrix:data:${CACHE_VERSION}:${TENANT_KEY}`);
+    await distributedCache.invalidate(`risk-matrix:heatmap:${TENANT_KEY}`);
   } catch (error) {
     console.error(`Error invalidating risk matrix cache:`, error);
   }
@@ -162,7 +165,7 @@ export async function invalidateValidationCaches() {
 export async function invalidateRiskControlCaches() {
   const startTime = Date.now();
   console.log(`[CACHE INVALIDATION START] Nuclear invalidation (consider using granular functions)`);
-  
+
   try {
     // Execute all invalidations in parallel for speed
     await Promise.all([
@@ -171,26 +174,26 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
       distributedCache.invalidate(`risks-with-details:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-with-details:${TENANT_KEY}`),
-      
+
       // Control caches
       distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidatePattern(`controls:${TENANT_KEY}:*`),
-      
+
       // Validation caches
       distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:${CACHE_VERSION}:*:${TENANT_KEY}`),
-      
+
       // Association caches
       distributedCache.invalidatePattern(`risk-control-associations:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-basic:single-tenant`),
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
-      
+
       // Page data caches
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
-      
+
       // Matrix caches
       distributedCache.invalidate(`risk-matrix:macroprocesos:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix:processes:${TENANT_KEY}`),
@@ -198,9 +201,9 @@ export async function invalidateRiskControlCaches() {
       distributedCache.invalidate(`process-map-risks:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-matrix-lite:${CACHE_VERSION}:${TENANT_KEY}`),
     ]);
-    
+
     await invalidateRiskMatrixCache();
-    
+
     const duration = Date.now() - startTime;
     console.log(`✅ [CACHE INVALIDATION COMPLETE] Nuclear invalidation in ${duration}ms`);
   } catch (error) {
@@ -278,7 +281,7 @@ export async function invalidateRiskEventsPageDataCache() {
 export async function invalidateCatalogBasicCaches(catalogs?: ('macroprocesos' | 'processes' | 'subprocesos' | 'risks')[]) {
   try {
     const allCatalogs = catalogs || ['macroprocesos', 'processes', 'subprocesos'];
-    const invalidations = allCatalogs.map(catalog => 
+    const invalidations = allCatalogs.map(catalog =>
       distributedCache.invalidate(`${catalog}-basic:${TENANT_KEY}`)
     );
     await Promise.all(invalidations);
@@ -343,14 +346,14 @@ export function getCatalogFromCache<T>(key: CatalogKey): T | null {
     console.log(`[CATALOG CACHE MISS] ${key}`);
     return null;
   }
-  
+
   const now = Date.now();
   if (now - entry.timestamp > entry.ttl) {
     console.log(`[CATALOG CACHE EXPIRED] ${key} (age: ${Math.round((now - entry.timestamp) / 1000)}s, ttl: ${entry.ttl / 1000}s)`);
     catalogCache.delete(key);
     return null;
   }
-  
+
   console.log(`[CATALOG CACHE HIT] ${key} (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
   return entry.data as T;
 }
