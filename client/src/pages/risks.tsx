@@ -308,6 +308,7 @@ export default function Risks() {
     },
     enabled: (needsDetailedData || visibleColumns.process || visibleColumns.responsible || activeTab === "detalle") && riskIds.length > 0, // Fetch if details needed OR columns are visible OR detail tab is active
     staleTime: 1000 * 15, // 15 seconds
+    refetchOnMount: true, // Always refetch when component mounts or tab changes
   });
 
   // Extract relations from batch response (empty when not loaded)
