@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -42,10 +43,10 @@ import { ValidationHistoryModal } from "@/components/ValidationHistoryModal";
 import { PreValidationWarningModal } from "@/components/PreValidationWarningModal";
 import { usePagination } from "@/hooks/use-pagination";
 import { GmailStylePagination, SelectAllBanner, PaginationControls } from "@/components/GmailStylePagination";
-import { 
-  RiskDetailDialog, 
-  ControlDetailDialog, 
-  ActionPlanDetailDialog 
+import {
+  RiskDetailDialog,
+  ControlDetailDialog,
+  ActionPlanDetailDialog
 } from "@/components/validation/ValidationDetailDialogs";
 import { isUUID, displayResponsible } from "@/components/validation/ValidationUtils";
 
@@ -69,7 +70,7 @@ export default function RiskValidationPage() {
   const [selectedActionPlans, setSelectedActionPlans] = useState<string[]>([]);
   const [sendNotification, setSendNotification] = useState(true);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
-  const [selectedHistoryRiskProcessLink, setSelectedHistoryRiskProcessLink] = useState<{id: string, riskCode?: string, riskName?: string} | null>(null);
+  const [selectedHistoryRiskProcessLink, setSelectedHistoryRiskProcessLink] = useState<{ id: string, riskCode?: string, riskName?: string } | null>(null);
   // Pre-validation warning modal state
   const [preValidationWarningOpen, setPreValidationWarningOpen] = useState(false);
   const [preValidationData, setPreValidationData] = useState<any | null>(null);
@@ -181,14 +182,14 @@ export default function RiskValidationPage() {
   // Listen for filter changes from header
   useEffect(() => {
     const handleFiltersChanged = (event: CustomEvent) => {
-      const { 
-        statusFilter: newStatusFilter, 
+      const {
+        statusFilter: newStatusFilter,
         ownerFilter: newOwnerFilter,
         processFilter: newProcessFilter,
         macroprocesoFilter: newMacroprocesoFilter,
         riskLevelFilter: newRiskLevelFilter
       } = event.detail;
-      
+
       if (newStatusFilter !== undefined) {
         console.log("📡 Received statusFilter change event from header:", newStatusFilter);
         setStatusFilter(newStatusFilter);
@@ -201,7 +202,7 @@ export default function RiskValidationPage() {
         console.log("📡 Received riskLevelFilter change event from header:", newRiskLevelFilter);
         setRiskLevelFilter(newRiskLevelFilter);
       }
-      
+
       // Handle process filter changes
       if (newProcessFilter !== undefined) {
         console.log("📡 Received processFilter change event from header:", newProcessFilter);
@@ -227,7 +228,7 @@ export default function RiskValidationPage() {
     const handleProcessFilterChanged = (event: CustomEvent) => {
       const { processFilter, macroprocesoFilter, subprocesoFilter } = event.detail;
       console.log("📡 Received process filter change:", { processFilter, macroprocesoFilter, subprocesoFilter });
-      
+
       // Determine which process level was selected and set selectedProcessId
       if (subprocesoFilter && subprocesoFilter !== "all") {
         setSelectedProcessId(subprocesoFilter);
@@ -311,6 +312,8 @@ export default function RiskValidationPage() {
 
   const notNotifiedControls = notNotifiedControlsResponse?.data || [];
   const notNotifiedControlsPaginationInfo = notNotifiedControlsResponse?.pagination;
+
+  const isLoadingControls = !notifiedControlsResponse || !notNotifiedControlsResponse;
 
   const { data: validatedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/validated"],
@@ -588,16 +591,16 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/notified"] });
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
-      toast({ 
-        title: "Email reenviado", 
-        description: `Se reenvió el email de validación al responsable del plan de acción.` 
+      toast({
+        title: "Email reenviado",
+        description: `Se reenvió el email de validación al responsable del plan de acción.`
       });
     },
     onError: (error: any) => {
-      toast({ 
-        title: "Error", 
-        description: error?.message || "No se pudo reenviar el email de validación.", 
-        variant: "destructive" 
+      toast({
+        title: "Error",
+        description: error?.message || "No se pudo reenviar el email de validación.",
+        variant: "destructive"
       });
     },
   });
@@ -626,26 +629,26 @@ export default function RiskValidationPage() {
       const message = result?.message || "Se reenvió el email de validación al responsable del proceso";
       const description = result?.email ? `${message} (${result.email})` : message;
       console.log("📧 [RESEND] Showing toast with message:", message, "description:", description);
-      toast({ 
-        title: "Email reenviado", 
+      toast({
+        title: "Email reenviado",
         description: description
       });
     },
     onError: (error: any) => {
       console.error("❌ [RESEND] onError called with error:", error);
-      toast({ 
-        title: "Error al reenviar", 
-        description: error?.message || "No se pudo reenviar el email de validación.", 
-        variant: "destructive" 
+      toast({
+        title: "Error al reenviar",
+        description: error?.message || "No se pudo reenviar el email de validación.",
+        variant: "destructive"
       });
     },
   });
 
   // Email validation mutations
   const sendEmailValidationMutation = useMutation({
-    mutationFn: async ({ entityId, entityType, processOwnerEmail }: { 
-      entityId: string; 
-      entityType: 'risk' | 'control'; 
+    mutationFn: async ({ entityId, entityType, processOwnerEmail }: {
+      entityId: string;
+      entityType: 'risk' | 'control';
       processOwnerEmail: string;
     }) => {
       // Create validation token and send email (backend sends email automatically)
@@ -654,7 +657,7 @@ export default function RiskValidationPage() {
         entityId,
         processOwnerEmail
       });
-      
+
       return tokenData;
     },
     onSuccess: (result: any) => {
@@ -681,10 +684,10 @@ export default function RiskValidationPage() {
   });
 
   const sendBulkEmailValidationMutation = useMutation({
-    mutationFn: async ({ entities }: { 
-      entities: Array<{ 
-        entityId: string; 
-        entityType: 'risk' | 'control'; 
+    mutationFn: async ({ entities }: {
+      entities: Array<{
+        entityId: string;
+        entityType: 'risk' | 'control';
         processOwnerEmail: string;
       }>;
     }) => {
@@ -696,14 +699,14 @@ export default function RiskValidationPage() {
             entityId: entity.entityId,
             processOwnerEmail: entity.processOwnerEmail
           });
-          
+
           return tokenData;
         })
       );
-      
+
       const successful = results.filter(result => result.status === 'fulfilled').length;
       const failed = results.filter(result => result.status === 'rejected').length;
-      
+
       return { successful, failed, total: entities.length };
     },
     onSuccess: (result) => {
@@ -726,14 +729,14 @@ export default function RiskValidationPage() {
   const sendProcessToValidationMutation = useMutation({
     mutationFn: async ({ processIds, revalidateAll = true }: { processIds: string[], revalidateAll?: boolean }) => {
       const results = await Promise.allSettled(
-        processIds.map(processId => 
+        processIds.map(processId =>
           apiRequest(`/api/processes/${processId}/send-to-validation`, 'POST', { revalidateAll })
         )
       );
-      
+
       const successful = results.filter(r => r.status === 'fulfilled');
       const failed = results.filter(r => r.status === 'rejected');
-      
+
       return {
         successful: successful.length,
         failed: failed.length,
@@ -743,7 +746,7 @@ export default function RiskValidationPage() {
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/process-validations/dashboard"] });
-      
+
       if (data.failed > 0) {
         toast({
           title: "Envío parcial",
@@ -756,7 +759,7 @@ export default function RiskValidationPage() {
           description: `Se enviaron ${data.successful} procesos a validación exitosamente.`,
         });
       }
-      
+
       setSelectedProcesses([]);
     },
     onError: (error: any) => {
@@ -863,7 +866,7 @@ export default function RiskValidationPage() {
       });
       return;
     }
-    
+
     sendEmailValidationMutation.mutate({
       entityId,
       entityType,
@@ -873,7 +876,7 @@ export default function RiskValidationPage() {
 
   const handleSendBulkEmailValidation = async () => {
     // Use grouped email endpoints for each entity type
-    
+
     // Handle risks with new grouped endpoint
     if (selectedRiskProcessLinks.length > 0) {
       handleSendBulkRiskEmailValidation();
@@ -891,7 +894,7 @@ export default function RiskValidationPage() {
     const notifiedActionPlanIds = Array.from(notifiedActionPlansPagination.selectedIds);
     const notNotifiedActionPlanIds = Array.from(notNotifiedActionPlansPagination.selectedIds);
     const allSelectedActionPlanIds = [...notifiedActionPlanIds, ...notNotifiedActionPlanIds];
-    
+
     if (allSelectedActionPlanIds.length > 0) {
       try {
         const planIds = allSelectedActionPlanIds;
@@ -900,7 +903,7 @@ export default function RiskValidationPage() {
           subject: 'Validación de Plan de Acción',
           message: 'Se requiere su atención para validar el plan de acción asignado.'
         });
-        
+
         if (result.sentCount > 0) {
           toast({
             title: "Emails enviados",
@@ -971,13 +974,13 @@ export default function RiskValidationPage() {
       });
     } else if (bulkActionTarget === "controls") {
       // Use pagination selectedIds for controls
-      const controlIds = Array.from(notifiedControlsPagination.selectedIds.size > 0 
-        ? notifiedControlsPagination.selectedIds 
+      const controlIds = Array.from(notifiedControlsPagination.selectedIds.size > 0
+        ? notifiedControlsPagination.selectedIds
         : notNotifiedControlsPagination.selectedIds);
-      
+
       controlIds.forEach(controlId => {
-        const control = notifiedControls.find(c => c.id === controlId) || 
-                       notNotifiedControls.find(c => c.id === controlId);
+        const control = notifiedControls.find(c => c.id === controlId) ||
+          notNotifiedControls.find(c => c.id === controlId);
         if (control) handleValidateControl(control, bulkActionType);
       });
     } else if (bulkActionTarget === "action-plans") {
@@ -985,12 +988,12 @@ export default function RiskValidationPage() {
       const notifiedActionPlanIds = Array.from(notifiedActionPlansPagination.selectedIds);
       const notNotifiedActionPlanIds = Array.from(notNotifiedActionPlansPagination.selectedIds);
       const allSelectedActionPlanIds = [...notifiedActionPlanIds, ...notNotifiedActionPlanIds, ...selectedActionPlans];
-      
+
       allSelectedActionPlanIds.forEach(planId => {
         // Try to find in notifiedActionPlans or notNotifiedActionPlans or fallback pending
-        const plan = notifiedActionPlans.find(p => p.id === planId) || 
-                     notNotifiedActionPlans.find(p => p.id === planId) ||
-                     filteredPendingActionPlans.find(p => p.id === planId);
+        const plan = notifiedActionPlans.find(p => p.id === planId) ||
+          notNotifiedActionPlans.find(p => p.id === planId) ||
+          filteredPendingActionPlans.find(p => p.id === planId);
         if (plan) handleValidateActionPlan(plan, bulkActionType);
       });
     }
@@ -1008,17 +1011,17 @@ export default function RiskValidationPage() {
 
   const getBulkActionMessage = () => {
     const count = bulkActionTarget === "risks" ? selectedRiskProcessLinks.length :
-                  bulkActionTarget === "controls" ? (notifiedControlsPagination.selectedIds.size + notNotifiedControlsPagination.selectedIds.size) :
-                  (notifiedActionPlansPagination.selectedIds.size + notNotifiedActionPlansPagination.selectedIds.size + selectedActionPlans.length);
-    
+      bulkActionTarget === "controls" ? (notifiedControlsPagination.selectedIds.size + notNotifiedControlsPagination.selectedIds.size) :
+        (notifiedActionPlansPagination.selectedIds.size + notNotifiedActionPlansPagination.selectedIds.size + selectedActionPlans.length);
+
     const entityName = bulkActionTarget === "risks" ? "riesgo(s)" :
-                       bulkActionTarget === "controls" ? "control(es)" :
-                       "plan(es) de acción";
-    
+      bulkActionTarget === "controls" ? "control(es)" :
+        "plan(es) de acción";
+
     const actionText = bulkActionType === "validated" ? "aprobar" :
-                       bulkActionType === "observed" ? "observar" :
-                       "rechazar";
-    
+      bulkActionType === "observed" ? "observar" :
+        "rechazar";
+
     return `¿Está seguro que desea ${actionText} ${count} ${entityName} seleccionado(s)?`;
   };
 
@@ -1062,10 +1065,10 @@ export default function RiskValidationPage() {
     // Check both selection states: old array (pending) and new pagination Set (not-notified)
     const selectedFromArray = selectedRiskProcessLinks;
     const selectedFromPagination = Array.from(notNotifiedRisksPagination.selectedIds);
-    
+
     // Use whichever has selections
     const riskProcessLinkIds = selectedFromPagination.length > 0 ? selectedFromPagination : selectedFromArray;
-    
+
     if (riskProcessLinkIds.length === 0) return;
     sendBulkRiskEmailsMutation.mutate(riskProcessLinkIds);
   };
@@ -1107,7 +1110,7 @@ export default function RiskValidationPage() {
     try {
       // Get the control owner information from the API
       const controlOwner = await apiRequest(`/api/control-owners/by-control/${controlId}`, 'GET');
-      
+
       if (!controlOwner || !controlOwner.user?.email) {
         toast({
           title: "Error",
@@ -1160,13 +1163,13 @@ export default function RiskValidationPage() {
 
   const handleSendProcessesToValidation = async () => {
     if (selectedProcesses.length === 0) return;
-    
+
     // For single process selection, check if there are already validated risks
     if (selectedProcesses.length === 1) {
       try {
         const processId = selectedProcesses[0];
         const checkData = await apiRequest(`/api/processes/${processId}/check-validation-status`, 'POST');
-        
+
         if (checkData.hasValidatedRisks) {
           // Show warning modal
           setPreValidationData(checkData);
@@ -1179,29 +1182,29 @@ export default function RiskValidationPage() {
         // Continue with normal flow if check fails
       }
     }
-    
+
     // If no validated risks or multiple processes, proceed normally
     sendProcessToValidationMutation.mutate({ processIds: selectedProcesses });
   };
 
   const handleConfirmPreValidation = (revalidateAll: boolean) => {
     if (pendingProcessIds.length === 0) return;
-    
+
     setPreValidationWarningOpen(false);
-    
+
     // Send processes with revalidateAll parameter
-    sendProcessToValidationMutation.mutate({ 
-      processIds: pendingProcessIds, 
-      revalidateAll 
+    sendProcessToValidationMutation.mutate({
+      processIds: pendingProcessIds,
+      revalidateAll
     });
-    
+
     setPendingProcessIds([]);
     setPreValidationData(null);
   };
 
   const toggleMacroprocesoExpanded = (macroprocesoId: string) => {
-    setExpandedMacroprocesos(prev => 
-      prev.includes(macroprocesoId) 
+    setExpandedMacroprocesos(prev =>
+      prev.includes(macroprocesoId)
         ? prev.filter(id => id !== macroprocesoId)
         : [...prev, macroprocesoId]
     );
@@ -1222,11 +1225,11 @@ export default function RiskValidationPage() {
   // Sort function for risk-process-links
   const sortRiskProcessLinks = (links: any[]) => {
     if (!sortField) return links;
-    
+
     return [...links].sort((a, b) => {
       let aVal = "";
       let bVal = "";
-      
+
       if (sortField === "code") {
         aVal = a.risk?.code || "";
         bVal = b.risk?.code || "";
@@ -1237,11 +1240,11 @@ export default function RiskValidationPage() {
         aVal = a.responsibleUser?.fullName || a.risk?.processOwner || "";
         bVal = b.responsibleUser?.fullName || b.risk?.processOwner || "";
       }
-      
+
       // Convert to lowercase for case-insensitive sorting
       aVal = aVal.toLowerCase();
       bVal = bVal.toLowerCase();
-      
+
       if (sortDirection === "asc") {
         return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
       } else {
@@ -1253,28 +1256,28 @@ export default function RiskValidationPage() {
   // Helper function to check if a risk-process link belongs to the filtered owner
   const matchesOwnerFilter = (rpl: any): boolean => {
     if (ownerFilter === "all") return true;
-    
+
     // Check if the responsible user directly matches
     if (rpl.responsibleUser?.id === ownerFilter) return true;
-    
+
     // Check if macroproceso owner matches
     if (rpl.macroprocesoId) {
       const macroproceso = macroprocesos.find((m: any) => m.id === rpl.macroprocesoId);
       if (macroproceso?.ownerId === ownerFilter) return true;
     }
-    
+
     // Check if proceso owner matches
     if (rpl.processId) {
       const process = processes.find((p: any) => p.id === rpl.processId);
       if (process?.ownerId === ownerFilter) return true;
     }
-    
+
     // Check if subproceso owner matches
     if (rpl.subprocesoId) {
       const subproceso = subprocesos.find((s: any) => s.id === rpl.subprocesoId);
       if (subproceso?.ownerId === ownerFilter) return true;
     }
-    
+
     return false;
   };
 
@@ -1282,11 +1285,11 @@ export default function RiskValidationPage() {
   const matchesRiskLevelFilterForRisk = (rpl: any): boolean => {
     if (riskLevelFilter === "all") return true;
     if (!rpl.risk) return false;
-    
+
     // Get residual risk or fallback to inherent risk
     const riskValue = rpl.risk.residualRisk ?? rpl.risk.inherentRisk;
     if (riskValue === null || riskValue === undefined) return false;
-    
+
     const riskLevelText = getRiskLevelText(riskValue);
     // Case-insensitive comparison (header sends "bajo", "medio", "alto", "crítico")
     return riskLevelText.toLowerCase() === riskLevelFilter.toLowerCase();
@@ -1296,9 +1299,9 @@ export default function RiskValidationPage() {
   const filteredPendingRiskProcessLinks = sortRiskProcessLinks(pendingRiskProcessLinks.filter(rpl => {
     // Filter by selected process (check macroproceso, proceso, or subproceso)
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1311,9 +1314,9 @@ export default function RiskValidationPage() {
 
   const filteredValidatedRiskProcessLinks = validatedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1324,9 +1327,9 @@ export default function RiskValidationPage() {
 
   const filteredRejectedRiskProcessLinks = rejectedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1337,9 +1340,9 @@ export default function RiskValidationPage() {
 
   const filteredObservedRiskProcessLinks = observedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1350,9 +1353,9 @@ export default function RiskValidationPage() {
 
   const filteredNotifiedRiskProcessLinks = notifiedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1363,9 +1366,9 @@ export default function RiskValidationPage() {
 
   const filteredNotNotifiedRiskProcessLinks = notNotifiedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
-      const matchesProcess = 
-        rpl.macroprocesoId === selectedProcessId || 
-        rpl.processId === selectedProcessId || 
+      const matchesProcess =
+        rpl.macroprocesoId === selectedProcessId ||
+        rpl.processId === selectedProcessId ||
         rpl.subprocesoId === selectedProcessId;
       if (!matchesProcess) return false;
     }
@@ -1473,7 +1476,7 @@ export default function RiskValidationPage() {
     // Get the macroproceso to check its owner
     const macroproceso = macroprocesos.find(m => m.id === item.macroprocesoId);
     if (!macroproceso) return false;
-    
+
     if (ownerFilter !== "all" && macroproceso.ownerId !== ownerFilter) {
       return false;
     }
@@ -1483,11 +1486,11 @@ export default function RiskValidationPage() {
   // Sort function for controls
   const sortControls = (controls: any[]) => {
     if (!sortField || !['code', 'control', 'responsible', 'validatedAt'].includes(sortField)) return controls;
-    
+
     return [...controls].sort((a, b) => {
       let aVal: any = "";
       let bVal: any = "";
-      
+
       if (sortField === "code") {
         aVal = a.code || "";
         bVal = b.code || "";
@@ -1501,7 +1504,7 @@ export default function RiskValidationPage() {
         aVal = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
         bVal = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
       }
-      
+
       // For dates, use numeric comparison; for strings, use lowercase comparison
       if (sortField === "validatedAt") {
         if (sortDirection === "asc") {
@@ -1513,7 +1516,7 @@ export default function RiskValidationPage() {
         // Convert to lowercase for case-insensitive sorting
         aVal = aVal.toLowerCase();
         bVal = bVal.toLowerCase();
-        
+
         if (sortDirection === "asc") {
           return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
         } else {
@@ -1527,12 +1530,12 @@ export default function RiskValidationPage() {
   const matchesRiskLevelFilter = (control: any) => {
     if (riskLevelFilter === "all") return true;
     if (!control.associatedRisks || control.associatedRisks.length === 0) return false;
-    
+
     // A control matches if at least one of its associated risks matches the selected level
     return control.associatedRisks.some((risk: any) => {
       const riskValue = risk.residualRisk ?? risk.inherentRisk;
       if (riskValue === null || riskValue === undefined) return false;
-      
+
       const riskLevelText = getRiskLevelText(riskValue);
       // Case-insensitive comparison (header sends "bajo", "medio", "alto", "crítico")
       return riskLevelText.toLowerCase() === riskLevelFilter.toLowerCase();
@@ -1594,15 +1597,15 @@ export default function RiskValidationPage() {
   // Sort function for action plans
   const sortActionPlans = (plans: any[]) => {
     if (!sortField) return plans;
-    
+
     return [...plans].sort((a, b) => {
       let aVal = sortField === "code" ? (a.code || "") : (a.responsible || "");
       let bVal = sortField === "code" ? (b.code || "") : (b.responsible || "");
-      
+
       // Convert to lowercase for case-insensitive sorting
       aVal = aVal.toLowerCase();
       bVal = bVal.toLowerCase();
-      
+
       if (sortDirection === "asc") {
         return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
       } else {
@@ -1827,11 +1830,11 @@ export default function RiskValidationPage() {
                 <div className="flex items-center space-x-2">
                   <span className="text-muted-foreground">Estado:</span>
                   <Badge className={
-                    control.validationStatus === "validated" 
-                      ? "bg-green-100 text-green-800" 
+                    control.validationStatus === "validated"
+                      ? "bg-green-100 text-green-800"
                       : control.validationStatus === "observed"
-                      ? "bg-orange-100 text-orange-800"
-                      : "bg-red-100 text-red-800"
+                        ? "bg-orange-100 text-orange-800"
+                        : "bg-red-100 text-red-800"
                   }>
                     {control.validationStatus === "validated" ? "Aprobado" : control.validationStatus === "observed" ? "Observado" : "Rechazado"}
                   </Badge>
@@ -1883,7 +1886,7 @@ export default function RiskValidationPage() {
             Planes de Acción
           </TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="risks">
           {/* Process Filter Indicator */}
           {selectedProcessId && (
@@ -1911,1840 +1914,1883 @@ export default function RiskValidationPage() {
           )}
 
           {/* Statistics */}
-      <div className="grid grid-cols-6 gap-4 mb-8">
-        <Card 
-          className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
-          onClick={() => setStatusFilter("notified")}
-          data-testid="card-filter-notified"
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Notificados</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold mb-1" data-testid="stat-notified-risks">
-              {notifiedRisksPaginationInfo?.total || 0}
-            </div>
-            <p className="text-xs text-muted-foreground">Pendiente Respuesta</p>
-          </CardContent>
-        </Card>
-        <Card 
-          className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "not_notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
-          onClick={() => setStatusFilter("not_notified")}
-          data-testid="card-filter-not-notified"
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Sin Notificar</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold mb-1" data-testid="stat-not-notified-risks">
-              {notNotifiedRisksPaginationInfo?.total || 0}
-            </div>
-            <p className="text-xs text-muted-foreground">Por Enviar</p>
-          </CardContent>
-        </Card>
-        <Card 
-          className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "validated" ? "border-2 border-green-500 bg-green-50 dark:bg-green-950 shadow-lg" : ""}`}
-          onClick={() => setStatusFilter("validated")}
-          data-testid="card-filter-validated"
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Aprobados</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="stat-approved-risks">
-              {filteredValidatedRiskProcessLinks.length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card 
-          className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "observed" ? "border-2 border-orange-500 bg-orange-50 dark:bg-orange-950 shadow-lg" : ""}`}
-          onClick={() => setStatusFilter("observed")}
-          data-testid="card-filter-observed"
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Observados</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="stat-observed-risks">
-              {filteredObservedRiskProcessLinks.length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card 
-          className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "rejected" ? "border-2 border-red-500 bg-red-50 dark:bg-red-950 shadow-lg" : ""}`}
-          onClick={() => setStatusFilter("rejected")}
-          data-testid="card-filter-rejected"
-        >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Rechazados</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="stat-rejected-risks">
-              {filteredRejectedRiskProcessLinks.length}
-            </div>
-          </CardContent>
-        </Card>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Card 
-                className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "all" ? "border-2 border-gray-500 bg-gray-50 dark:bg-gray-900 shadow-lg" : ""}`}
-                onClick={() => setStatusFilter("all")}
-                data-testid="card-filter-total"
+          <div className="grid grid-cols-6 gap-4 mb-8">
+            <Card
+              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
+              onClick={() => setStatusFilter("notified")}
+              data-testid="card-filter-notified"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Notificados</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold mb-1" data-testid="stat-notified-risks">
+                  {notifiedRisksPaginationInfo?.total || 0}
+                </div>
+                <p className="text-xs text-muted-foreground">Pendiente Respuesta</p>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "not_notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
+              onClick={() => setStatusFilter("not_notified")}
+              data-testid="card-filter-not-notified"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Sin Notificar</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold mb-1" data-testid="stat-not-notified-risks">
+                  {notNotifiedRisksPaginationInfo?.total || 0}
+                </div>
+                <p className="text-xs text-muted-foreground">Por Enviar</p>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "validated" ? "border-2 border-green-500 bg-green-50 dark:bg-green-950 shadow-lg" : ""}`}
+              onClick={() => setStatusFilter("validated")}
+              data-testid="card-filter-validated"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Aprobados</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold" data-testid="stat-approved-risks">
+                  {filteredValidatedRiskProcessLinks.length}
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "observed" ? "border-2 border-orange-500 bg-orange-50 dark:bg-orange-950 shadow-lg" : ""}`}
+              onClick={() => setStatusFilter("observed")}
+              data-testid="card-filter-observed"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Observados</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold" data-testid="stat-observed-risks">
+                  {filteredObservedRiskProcessLinks.length}
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "rejected" ? "border-2 border-red-500 bg-red-50 dark:bg-red-950 shadow-lg" : ""}`}
+              onClick={() => setStatusFilter("rejected")}
+              data-testid="card-filter-rejected"
+            >
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Rechazados</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold" data-testid="stat-rejected-risks">
+                  {filteredRejectedRiskProcessLinks.length}
+                </div>
+              </CardContent>
+            </Card>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Card
+                    className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "all" ? "border-2 border-gray-500 bg-gray-50 dark:bg-gray-900 shadow-lg" : ""}`}
+                    onClick={() => setStatusFilter("all")}
+                    data-testid="card-filter-total"
+                  >
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                      <CardTitle className="text-sm font-medium">Total</CardTitle>
+                      <Info className="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-3xl font-bold" data-testid="stat-total-risks">
+                        {(notifiedRisksPaginationInfo?.total || 0) + (notNotifiedRisksPaginationInfo?.total || 0) + filteredValidatedRiskProcessLinks.length + filteredObservedRiskProcessLinks.length + filteredRejectedRiskProcessLinks.length}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  <p className="text-sm">
+                    Un mismo riesgo puede aparecer en múltiples filas si está asociado a diferentes procesos o tiene distintos responsables asignados. Cada fila representa una validación independiente por responsable y proceso.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+
+          {/* Bulk Actions for Risks */}
+          {selectedRiskProcessLinks.length > 0 && (
+            <div className="flex items-center space-x-2 mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <span className="text-sm font-medium text-blue-900">
+                {selectedRiskProcessLinks.length} riesgo(s) seleccionado(s)
+              </span>
+              <div className="flex-1" />
+              <Button
+                size="sm"
+                onClick={() => openBulkActionConfirm("validated", "risks")}
+                className="bg-green-600 hover:bg-green-700"
+                data-testid="button-bulk-approve-risks"
               >
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total</CardTitle>
-                  <Info className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-3xl font-bold" data-testid="stat-total-risks">
-                    {(notifiedRisksPaginationInfo?.total || 0) + (notNotifiedRisksPaginationInfo?.total || 0) + filteredValidatedRiskProcessLinks.length + filteredObservedRiskProcessLinks.length + filteredRejectedRiskProcessLinks.length}
-                  </div>
-                </CardContent>
-              </Card>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              <p className="text-sm">
-                Un mismo riesgo puede aparecer en múltiples filas si está asociado a diferentes procesos o tiene distintos responsables asignados. Cada fila representa una validación independiente por responsable y proceso.
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
+                <CheckCircle className="h-4 w-4 mr-1" />
+                Aprobar Seleccionados
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => openBulkActionConfirm("observed", "risks")}
+                className="bg-orange-600 hover:bg-orange-700"
+                data-testid="button-bulk-observe-risks"
+              >
+                <AlertCircle className="h-4 w-4 mr-1" />
+                Observar Seleccionados
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => openBulkActionConfirm("rejected", "risks")}
+                data-testid="button-bulk-reject-risks"
+              >
+                <XCircle className="h-4 w-4 mr-1" />
+                Rechazar Seleccionados
+              </Button>
+            </div>
+          )}
 
-      {/* Bulk Actions for Risks */}
-      {selectedRiskProcessLinks.length > 0 && (
-        <div className="flex items-center space-x-2 mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-          <span className="text-sm font-medium text-blue-900">
-            {selectedRiskProcessLinks.length} riesgo(s) seleccionado(s)
-          </span>
-          <div className="flex-1" />
-          <Button
-            size="sm"
-            onClick={() => openBulkActionConfirm("validated", "risks")}
-            className="bg-green-600 hover:bg-green-700"
-            data-testid="button-bulk-approve-risks"
-          >
-            <CheckCircle className="h-4 w-4 mr-1" />
-            Aprobar Seleccionados
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => openBulkActionConfirm("observed", "risks")}
-            className="bg-orange-600 hover:bg-orange-700"
-            data-testid="button-bulk-observe-risks"
-          >
-            <AlertCircle className="h-4 w-4 mr-1" />
-            Observar Seleccionados
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={() => openBulkActionConfirm("rejected", "risks")}
-            data-testid="button-bulk-reject-risks"
-          >
-            <XCircle className="h-4 w-4 mr-1" />
-            Rechazar Seleccionados
-          </Button>
-        </div>
-      )}
-
-      {/* Pending Risks */}
-      <div className="space-y-8">
-        {(statusFilter === "all" || statusFilter === "pending_validation") && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold flex items-center space-x-2">
-                <Clock className="h-5 w-5 text-yellow-500" />
-                <span>Riesgos Pendientes de Validación ({filteredPendingRiskProcessLinks.length})</span>
-              </h2>
-              {filteredPendingRiskProcessLinks.length > 0 && (
-                <div className="flex items-center space-x-4">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div>
-                          <Checkbox
-                            checked={filteredPendingRiskProcessLinks.every(rpl => selectedRiskProcessLinks.includes(rpl.id))}
-                            onCheckedChange={(checked) => handleSelectAll(filteredPendingRiskProcessLinks, checked as boolean)}
-                            data-testid="checkbox-select-all-pending"
-                          />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent>Seleccionar todos</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                  {(selectedRiskProcessLinks.length > 0 || selectedControls.length > 0) && (
-                    <Button
-                      variant="outline"
-                      onClick={handleSendBulkEmailValidation}
-                      disabled={sendBulkRiskEmailsMutation.isPending || sendBulkControlEmailsMutation.isPending}
-                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                      data-testid="button-bulk-email"
-                    >
-                      <Mail className="h-4 w-4 mr-2" />
-                      {(sendBulkRiskEmailsMutation.isPending || sendBulkControlEmailsMutation.isPending) ? 'Enviando...' : `Enviar por Email Seleccionados (${selectedRiskProcessLinks.length + selectedControls.length})`}
-                    </Button>
+          {/* Pending Risks */}
+          <div className="space-y-8">
+            {(statusFilter === "all" || statusFilter === "pending_validation") && (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-xl font-semibold flex items-center space-x-2">
+                    <Clock className="h-5 w-5 text-yellow-500" />
+                    <span>Riesgos Pendientes de Validación ({filteredPendingRiskProcessLinks.length})</span>
+                  </h2>
+                  {filteredPendingRiskProcessLinks.length > 0 && (
+                    <div className="flex items-center space-x-4">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div>
+                              <Checkbox
+                                checked={filteredPendingRiskProcessLinks.every(rpl => selectedRiskProcessLinks.includes(rpl.id))}
+                                onCheckedChange={(checked) => handleSelectAll(filteredPendingRiskProcessLinks, checked as boolean)}
+                                data-testid="checkbox-select-all-pending"
+                              />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>Seleccionar todos</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      {(selectedRiskProcessLinks.length > 0 || selectedControls.length > 0) && (
+                        <Button
+                          variant="outline"
+                          onClick={handleSendBulkEmailValidation}
+                          disabled={sendBulkRiskEmailsMutation.isPending || sendBulkControlEmailsMutation.isPending}
+                          className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                          data-testid="button-bulk-email"
+                        >
+                          <Mail className="h-4 w-4 mr-2" />
+                          {(sendBulkRiskEmailsMutation.isPending || sendBulkControlEmailsMutation.isPending) ? 'Enviando...' : `Enviar por Email Seleccionados (${selectedRiskProcessLinks.length + selectedControls.length})`}
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-            </div>
-            {filteredPendingRiskProcessLinks.length > 0 ? (
-              <div className="border rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b">
-                      <tr>
-                        <th className="w-12 px-2 py-3 text-left">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div>
-                                  <Checkbox
-                                    checked={filteredPendingRiskProcessLinks.every(rpl => selectedRiskProcessLinks.includes(rpl.id))}
-                                    onCheckedChange={(checked) => handleSelectAll(filteredPendingRiskProcessLinks, checked as boolean)}
-                                    data-testid="checkbox-select-all-pending-table"
-                                  />
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent>Seleccionar todos</TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                          <button
-                            onClick={() => handleSort("code")}
-                            className="flex items-center space-x-1 hover:text-primary transition-colors"
-                            data-testid="sort-code-button"
-                          >
-                            <span>Código</span>
-                            {sortField === "code" && (
-                              sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                            )}
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                          <button
-                            onClick={() => handleSort("process")}
-                            className="flex items-center space-x-1 hover:text-primary transition-colors"
-                            data-testid="sort-process-button"
-                          >
-                            <span>Proceso</span>
-                            {sortField === "process" && (
-                              sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                            )}
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                          <button
-                            onClick={() => handleSort("responsible")}
-                            className="flex items-center space-x-1 hover:text-primary transition-colors"
-                            data-testid="sort-responsible-button"
-                          >
-                            <span>Responsable</span>
-                            {sortField === "responsible" && (
-                              sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                            )}
-                          </button>
-                        </th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                        <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredPendingRiskProcessLinks.map((rpl) => (
-                        rpl.risk && (
-                          <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-pending-risk-${rpl.risk.id}`}>
-                            <td className="w-12 px-2 py-3">
-                              <Checkbox
-                                checked={selectedRiskProcessLinks.includes(rpl.id)}
-                                onCheckedChange={(checked) => handleSelectRiskProcessLink(rpl.id, checked as boolean)}
-                                data-testid={`checkbox-pending-risk-${rpl.risk.id}`}
-                              />
-                            </td>
-                            <td className="px-4 py-3">
+                {filteredPendingRiskProcessLinks.length > 0 ? (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="w-12 px-2 py-3 text-left">
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <div>
+                                      <Checkbox
+                                        checked={filteredPendingRiskProcessLinks.every(rpl => selectedRiskProcessLinks.includes(rpl.id))}
+                                        onCheckedChange={(checked) => handleSelectAll(filteredPendingRiskProcessLinks, checked as boolean)}
+                                        data-testid="checkbox-select-all-pending-table"
+                                      />
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Seleccionar todos</TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
                               <button
-                                onClick={() => setViewingRisk(rpl.risk)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-risk-${rpl.risk.id}`}
+                                onClick={() => handleSort("code")}
+                                className="flex items-center space-x-1 hover:text-primary transition-colors"
+                                data-testid="sort-code-button"
                               >
-                                {rpl.risk.code || "N/A"}
+                                <span>Código</span>
+                                {sortField === "code" && (
+                                  sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                )}
                               </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{rpl.risk.name}</div>
-                            </td>
-                            <td className="px-4 py-3 text-sm">
-                              {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                            </td>
-                            <td className="px-4 py-3 text-sm">
-                              {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                                {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center justify-end space-x-1">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleValidate(rpl.risk, "validated")}
-                                  className="bg-green-600 hover:bg-green-700"
-                                  data-testid={`button-approve-risk-${rpl.risk.id}`}
-                                >
-                                  <CheckCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleValidate(rpl.risk, "observed")}
-                                  className="bg-orange-600 hover:bg-orange-700"
-                                  data-testid={`button-observe-risk-${rpl.risk.id}`}
-                                >
-                                  <AlertCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleValidate(rpl.risk, "rejected")}
-                                  data-testid={`button-reject-risk-${rpl.risk.id}`}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setSelectedHistoryRiskProcessLink({
-                                      id: rpl.id,
-                                      riskCode: rpl.risk.code,
-                                      riskName: rpl.risk.name
-                                    });
-                                    setHistoryModalOpen(true);
-                                  }}
-                                  data-testid={`button-history-risk-${rpl.risk.id}`}
-                                  title="Ver historial de validaciones"
-                                >
-                                  <History className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </td>
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                              <button
+                                onClick={() => handleSort("process")}
+                                className="flex items-center space-x-1 hover:text-primary transition-colors"
+                                data-testid="sort-process-button"
+                              >
+                                <span>Proceso</span>
+                                {sortField === "process" && (
+                                  sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                )}
+                              </button>
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                              <button
+                                onClick={() => handleSort("responsible")}
+                                className="flex items-center space-x-1 hover:text-primary transition-colors"
+                                data-testid="sort-responsible-button"
+                              >
+                                <span>Responsable</span>
+                                {sortField === "responsible" && (
+                                  sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                )}
+                              </button>
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                            <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
                           </tr>
-                        )
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <Clock className="mx-auto h-12 w-12 mb-4" />
-                <p>No hay riesgos pendientes de validación</p>
-                {selectedProcessId && (
-                  <p className="text-sm mt-2">Mostrando riesgos para: {processes.find(p => p.id === selectedProcessId)?.name || subprocesos.find(s => s.id === selectedProcessId)?.name || macroprocesos.find(m => m.id === selectedProcessId)?.name}</p>
+                        </thead>
+                        <tbody>
+                          {filteredPendingRiskProcessLinks.map((rpl) => (
+                            rpl.risk && (
+                              <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-pending-risk-${rpl.risk.id}`}>
+                                <td className="w-12 px-2 py-3">
+                                  <Checkbox
+                                    checked={selectedRiskProcessLinks.includes(rpl.id)}
+                                    onCheckedChange={(checked) => handleSelectRiskProcessLink(rpl.id, checked as boolean)}
+                                    data-testid={`checkbox-pending-risk-${rpl.risk.id}`}
+                                  />
+                                </td>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingRisk(rpl.risk)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-risk-${rpl.risk.id}`}
+                                  >
+                                    {rpl.risk.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{rpl.risk.name}</div>
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                    {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end space-x-1">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleValidate(rpl.risk, "validated")}
+                                      className="bg-green-600 hover:bg-green-700"
+                                      data-testid={`button-approve-risk-${rpl.risk.id}`}
+                                    >
+                                      <CheckCircle className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleValidate(rpl.risk, "observed")}
+                                      className="bg-orange-600 hover:bg-orange-700"
+                                      data-testid={`button-observe-risk-${rpl.risk.id}`}
+                                    >
+                                      <AlertCircle className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleValidate(rpl.risk, "rejected")}
+                                      data-testid={`button-reject-risk-${rpl.risk.id}`}
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        setSelectedHistoryRiskProcessLink({
+                                          id: rpl.id,
+                                          riskCode: rpl.risk.code,
+                                          riskName: rpl.risk.name
+                                        });
+                                        setHistoryModalOpen(true);
+                                      }}
+                                      data-testid={`button-history-risk-${rpl.risk.id}`}
+                                      title="Ver historial de validaciones"
+                                    >
+                                      <History className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Clock className="mx-auto h-12 w-12 mb-4" />
+                    <p>No hay riesgos pendientes de validación</p>
+                    {selectedProcessId && (
+                      <p className="text-sm mt-2">Mostrando riesgos para: {processes.find(p => p.id === selectedProcessId)?.name || subprocesos.find(s => s.id === selectedProcessId)?.name || macroprocesos.find(m => m.id === selectedProcessId)?.name}</p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
-          </div>
-        )}
 
-        {/* Validated Risks */}
-        {(statusFilter === "all" || statusFilter === "validated") && filteredValidatedRiskProcessLinks.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-              <CheckCircle className="h-5 w-5 text-green-500" />
-              <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length})</span>
-            </h2>
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredValidatedRiskProcessLinks.map((rpl) => (
-                      rpl.risk && (
-                        <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${rpl.risk.id}`}>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => setViewingRisk(rpl.risk)}
-                              className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                              data-testid={`button-view-validated-risk-${rpl.risk.id}`}
-                            >
-                              {rpl.risk.code || "N/A"}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-sm">{rpl.risk.name}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                              {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validationComments || "-"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedHistoryRiskProcessLink({
-                                    id: rpl.id,
-                                    riskCode: rpl.risk.code,
-                                    riskName: rpl.risk.name
-                                  });
-                                  setHistoryModalOpen(true);
-                                }}
-                                data-testid={`button-history-validated-risk-${rpl.risk.id}`}
-                                title="Ver historial de validaciones"
-                              >
-                                <History className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
+            {/* Validated Risks */}
+            {(statusFilter === "all" || statusFilter === "validated") && filteredValidatedRiskProcessLinks.length > 0 && (
+              <div>
+                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length})</span>
+                </h2>
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
                         </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Observed Risks */}
-        {(statusFilter === "all" || statusFilter === "observed") && filteredObservedRiskProcessLinks.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-              <AlertCircle className="h-5 w-5 text-orange-500" />
-              <span>Riesgos Observados ({filteredObservedRiskProcessLinks.length})</span>
-            </h2>
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Observación</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredObservedRiskProcessLinks.map((rpl) => (
-                      rpl.risk && (
-                        <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-observed-risk-${rpl.risk.id}`}>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => setViewingRisk(rpl.risk)}
-                              className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                              data-testid={`button-view-observed-risk-${rpl.risk.id}`}
-                            >
-                              {rpl.risk.code || "N/A"}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-sm">{rpl.risk.name}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                              {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validationComments || "-"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end space-x-1">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
-                                      disabled={resendRiskProcessLinkEmailMutation.isPending}
-                                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                                      data-testid={`button-resend-observed-risk-${rpl.risk.id}`}
-                                    >
-                                      <Mail className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Reenviar email de validación</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedHistoryRiskProcessLink({
-                                    id: rpl.id,
-                                    riskCode: rpl.risk.code,
-                                    riskName: rpl.risk.name
-                                  });
-                                  setHistoryModalOpen(true);
-                                }}
-                                data-testid={`button-history-observed-risk-${rpl.risk.id}`}
-                                title="Ver historial de validaciones"
-                              >
-                                <History className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Rejected Risks */}
-        {(statusFilter === "all" || statusFilter === "rejected") && filteredRejectedRiskProcessLinks.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-              <XCircle className="h-5 w-5 text-red-500" />
-              <span>Riesgos Rechazados ({filteredRejectedRiskProcessLinks.length})</span>
-            </h2>
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Rechazo</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredRejectedRiskProcessLinks.map((rpl) => (
-                      rpl.risk && (
-                        <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-rejected-risk-${rpl.risk.id}`}>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => setViewingRisk(rpl.risk)}
-                              className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                              data-testid={`button-view-rejected-risk-${rpl.risk.id}`}
-                            >
-                              {rpl.risk.code || "N/A"}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-sm">{rpl.risk.name}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                              {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.validationComments || "-"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end space-x-1">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
-                                      disabled={resendRiskProcessLinkEmailMutation.isPending}
-                                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                                      data-testid={`button-resend-rejected-risk-${rpl.risk.id}`}
-                                    >
-                                      <Mail className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Reenviar email de validación</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedHistoryRiskProcessLink({
-                                    id: rpl.id,
-                                    riskCode: rpl.risk.code,
-                                    riskName: rpl.risk.name
-                                  });
-                                  setHistoryModalOpen(true);
-                                }}
-                                data-testid={`button-history-rejected-risk-${rpl.risk.id}`}
-                                title="Ver historial de validaciones"
-                              >
-                                <History className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Notified Risks */}
-        {(statusFilter === "all" || statusFilter === "notified") && filteredNotifiedRiskProcessLinks.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-              <Mail className="h-5 w-5 text-blue-500" />
-              <span>Riesgos Notificados - Pendiente Validación ({notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length})</span>
-            </h2>
-            <SelectAllBanner
-              selectedCount={notifiedRisksPagination.selectedIds.size}
-              totalCount={notifiedRisksPaginationInfo?.total || 0}
-              pageSize={notifiedRisksPagination.pageSize}
-              totalItems={notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length}
-              currentPage={notifiedRisksPagination.currentPage}
-              onSelectAll={() => {
-                if (notifiedRisksPaginationInfo?.total) {
-                  notifiedRisksPagination.handleSelectAll(
-                    Array.from({ length: notifiedRisksPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
-                    () => String(Math.random())
-                  );
-                }
-              }}
-              onClearAll={notifiedRisksPagination.handleClearAll}
-              itemName="riesgos notificados"
-            />
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="w-12 px-2 py-3">
-                        <Checkbox
-                          checked={filteredNotifiedRiskProcessLinks.length > 0 && filteredNotifiedRiskProcessLinks.every((rpl: any) => notifiedRisksPagination.selectedIds.has(rpl.id))}
-                          onCheckedChange={(checked) => notifiedRisksPagination.handleSelectPage(filteredNotifiedRiskProcessLinks, (rpl: any) => rpl.id, checked as boolean)}
-                          data-testid="checkbox-select-all-notified-risks"
-                        />
-                      </th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredNotifiedRiskProcessLinks.map((rpl) => (
-                      rpl.risk && (
-                        <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-notified-risk-${rpl.risk.id}`}>
-                          <td className="w-12 px-2 py-3">
-                            <Checkbox
-                              checked={notifiedRisksPagination.selectedIds.has(rpl.id)}
-                              onCheckedChange={() => notifiedRisksPagination.handleSelectItem(rpl.id)}
-                              data-testid={`checkbox-notified-risk-${rpl.risk.id}`}
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => setViewingRisk(rpl.risk)}
-                              className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                              data-testid={`button-view-notified-risk-${rpl.risk.id}`}
-                            >
-                              {rpl.risk.code || "N/A"}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-sm">{rpl.risk.name}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                              {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end space-x-1">
-                              <Button
-                                size="sm"
-                                onClick={() => handleValidate(rpl.risk, "validated")}
-                                className="bg-green-600 hover:bg-green-700"
-                                data-testid={`button-approve-notified-risk-${rpl.risk.id}`}
-                              >
-                                <CheckCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                onClick={() => handleValidate(rpl.risk, "observed")}
-                                className="bg-orange-600 hover:bg-orange-700"
-                                data-testid={`button-observe-notified-risk-${rpl.risk.id}`}
-                              >
-                                <AlertCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => handleValidate(rpl.risk, "rejected")}
-                                data-testid={`button-reject-notified-risk-${rpl.risk.id}`}
-                              >
-                                <XCircle className="h-4 w-4" />
-                              </Button>
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
-                                      disabled={resendRiskProcessLinkEmailMutation.isPending}
-                                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                                      data-testid={`button-resend-notified-risk-${rpl.risk.id}`}
-                                    >
-                                      <Mail className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Reenviar email de validación</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedHistoryRiskProcessLink({
-                                    id: rpl.id,
-                                    riskCode: rpl.risk.code,
-                                    riskName: rpl.risk.name
-                                  });
-                                  setHistoryModalOpen(true);
-                                }}
-                                data-testid={`button-history-notified-risk-${rpl.risk.id}`}
-                                title="Ver historial de validaciones"
-                              >
-                                <History className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="p-4">
-                <PaginationControls
-                  currentPage={notifiedRisksPagination.currentPage}
-                  totalItems={notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length}
-                  pageSize={notifiedRisksPagination.pageSize}
-                  onPageChange={notifiedRisksPagination.handlePageChange}
-                  itemName="riesgos notificados"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Not Notified Risks */}
-        {(statusFilter === "all" || statusFilter === "not_notified") && filteredNotNotifiedRiskProcessLinks.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-              <Bell className="h-5 w-5 text-blue-500" />
-              <span>Riesgos Sin Notificar ({notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length})</span>
-            </h2>
-            {notNotifiedRisksPagination.selectedIds.size > 0 && (
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  onClick={handleSendBulkRiskEmailValidation}
-                  disabled={sendBulkRiskEmailsMutation.isPending}
-                  className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                  data-testid="button-bulk-email-not-notified-risks"
-                >
-                  <Mail className="h-4 w-4 mr-2" />
-                  {sendBulkRiskEmailsMutation.isPending ? 'Enviando...' : `Enviar por Email Seleccionados (${notNotifiedRisksPagination.selectedIds.size})`}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => openBulkActionConfirm("validated", "risks")}
-                  className="bg-green-600 hover:bg-green-700"
-                  data-testid="button-bulk-approve-not-notified-risks"
-                >
-                  <CheckCircle className="h-4 w-4 mr-1" />
-                  Aprobar Seleccionados ({notNotifiedRisksPagination.selectedIds.size})
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => openBulkActionConfirm("observed", "risks")}
-                  className="bg-orange-600 hover:bg-orange-700"
-                  data-testid="button-bulk-observe-not-notified-risks"
-                >
-                  <AlertCircle className="h-4 w-4 mr-1" />
-                  Observar Seleccionados
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => openBulkActionConfirm("rejected", "risks")}
-                  data-testid="button-bulk-reject-not-notified-risks"
-                >
-                  <XCircle className="h-4 w-4 mr-1" />
-                  Rechazar Seleccionados
-                </Button>
+                      </thead>
+                      <tbody>
+                        {filteredValidatedRiskProcessLinks.map((rpl) => (
+                          rpl.risk && (
+                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${rpl.risk.id}`}>
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => setViewingRisk(rpl.risk)}
+                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                  data-testid={`button-view-validated-risk-${rpl.risk.id}`}
+                                >
+                                  {rpl.risk.code || "N/A"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-sm">{rpl.risk.name}</div>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validationComments || "-"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedHistoryRiskProcessLink({
+                                        id: rpl.id,
+                                        riskCode: rpl.risk.code,
+                                        riskName: rpl.risk.name
+                                      });
+                                      setHistoryModalOpen(true);
+                                    }}
+                                    data-testid={`button-history-validated-risk-${rpl.risk.id}`}
+                                    title="Ver historial de validaciones"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             )}
-            <SelectAllBanner
-              selectedCount={notNotifiedRisksPagination.selectedIds.size}
-              totalCount={notNotifiedRisksPaginationInfo?.total || 0}
-              pageSize={notNotifiedRisksPagination.pageSize}
-              totalItems={notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length}
-              currentPage={notNotifiedRisksPagination.currentPage}
-              onSelectAll={() => {
-                if (notNotifiedRisksPaginationInfo?.total) {
-                  notNotifiedRisksPagination.handleSelectAll(
-                    Array.from({ length: notNotifiedRisksPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
-                    () => String(Math.random())
-                  );
-                }
-              }}
-              onClearAll={notNotifiedRisksPagination.handleClearAll}
-              itemName="riesgos sin notificar"
-            />
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="w-12 px-2 py-3">
-                        <Checkbox
-                          checked={filteredNotNotifiedRiskProcessLinks.length > 0 && filteredNotNotifiedRiskProcessLinks.every((rpl: any) => notNotifiedRisksPagination.selectedIds.has(rpl.id))}
-                          onCheckedChange={(checked) => notNotifiedRisksPagination.handleSelectPage(filteredNotNotifiedRiskProcessLinks, (rpl: any) => rpl.id, checked as boolean)}
-                          data-testid="checkbox-select-all-not-notified-risks"
-                        />
-                      </th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                      <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredNotNotifiedRiskProcessLinks.map((rpl) => (
-                      rpl.risk && (
-                        <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-not-notified-risk-${rpl.risk.id}`}>
-                          <td className="w-12 px-2 py-3">
-                            <Checkbox
-                              checked={notNotifiedRisksPagination.selectedIds.has(rpl.id)}
-                              onCheckedChange={() => notNotifiedRisksPagination.handleSelectItem(rpl.id)}
-                              data-testid={`checkbox-not-notified-risk-${rpl.risk.id}`}
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => setViewingRisk(rpl.risk)}
-                              className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                              data-testid={`button-view-not-notified-risk-${rpl.risk.id}`}
-                            >
-                              {rpl.risk.code || "N/A"}
-                            </button>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="font-medium text-sm">{rpl.risk.name}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                          </td>
-                          <td className="px-4 py-3 text-sm">
-                            {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                              {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end space-x-1">
-                              <Button
-                                size="sm"
-                                onClick={() => handleValidate(rpl.risk, "validated")}
-                                className="bg-green-600 hover:bg-green-700"
-                                data-testid={`button-approve-not-notified-risk-${rpl.risk.id}`}
-                              >
-                                <CheckCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                onClick={() => handleValidate(rpl.risk, "observed")}
-                                className="bg-orange-600 hover:bg-orange-700"
-                                data-testid={`button-observe-not-notified-risk-${rpl.risk.id}`}
-                              >
-                                <AlertCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => handleValidate(rpl.risk, "rejected")}
-                                data-testid={`button-reject-not-notified-risk-${rpl.risk.id}`}
-                              >
-                                <XCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedHistoryRiskProcessLink({
-                                    id: rpl.id,
-                                    riskCode: rpl.risk.code,
-                                    riskName: rpl.risk.name
-                                  });
-                                  setHistoryModalOpen(true);
-                                }}
-                                data-testid={`button-history-not-notified-risk-${rpl.risk.id}`}
-                                title="Ver historial de validaciones"
-                              >
-                                <History className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
+
+            {/* Observed Risks */}
+            {(statusFilter === "all" || statusFilter === "observed") && filteredObservedRiskProcessLinks.length > 0 && (
+              <div>
+                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                  <AlertCircle className="h-5 w-5 text-orange-500" />
+                  <span>Riesgos Observados ({filteredObservedRiskProcessLinks.length})</span>
+                </h2>
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Observación</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
                         </tr>
-                      )
-                    ))}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {filteredObservedRiskProcessLinks.map((rpl) => (
+                          rpl.risk && (
+                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-observed-risk-${rpl.risk.id}`}>
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => setViewingRisk(rpl.risk)}
+                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                  data-testid={`button-view-observed-risk-${rpl.risk.id}`}
+                                >
+                                  {rpl.risk.code || "N/A"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-sm">{rpl.risk.name}</div>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validationComments || "-"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end space-x-1">
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
+                                          disabled={resendRiskProcessLinkEmailMutation.isPending}
+                                          className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                          data-testid={`button-resend-observed-risk-${rpl.risk.id}`}
+                                        >
+                                          <Mail className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Reenviar email de validación</TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedHistoryRiskProcessLink({
+                                        id: rpl.id,
+                                        riskCode: rpl.risk.code,
+                                        riskName: rpl.risk.name
+                                      });
+                                      setHistoryModalOpen(true);
+                                    }}
+                                    data-testid={`button-history-observed-risk-${rpl.risk.id}`}
+                                    title="Ver historial de validaciones"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
-              <div className="p-4">
-                <PaginationControls
-                  currentPage={notNotifiedRisksPagination.currentPage}
-                  totalItems={notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length}
+            )}
+
+            {/* Rejected Risks */}
+            {(statusFilter === "all" || statusFilter === "rejected") && filteredRejectedRiskProcessLinks.length > 0 && (
+              <div>
+                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                  <XCircle className="h-5 w-5 text-red-500" />
+                  <span>Riesgos Rechazados ({filteredRejectedRiskProcessLinks.length})</span>
+                </h2>
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Rechazo</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredRejectedRiskProcessLinks.map((rpl) => (
+                          rpl.risk && (
+                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-rejected-risk-${rpl.risk.id}`}>
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => setViewingRisk(rpl.risk)}
+                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                  data-testid={`button-view-rejected-risk-${rpl.risk.id}`}
+                                >
+                                  {rpl.risk.code || "N/A"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-sm">{rpl.risk.name}</div>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.validationComments || "-"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end space-x-1">
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
+                                          disabled={resendRiskProcessLinkEmailMutation.isPending}
+                                          className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                          data-testid={`button-resend-rejected-risk-${rpl.risk.id}`}
+                                        >
+                                          <Mail className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Reenviar email de validación</TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedHistoryRiskProcessLink({
+                                        id: rpl.id,
+                                        riskCode: rpl.risk.code,
+                                        riskName: rpl.risk.name
+                                      });
+                                      setHistoryModalOpen(true);
+                                    }}
+                                    data-testid={`button-history-rejected-risk-${rpl.risk.id}`}
+                                    title="Ver historial de validaciones"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Notified Risks */}
+            {(statusFilter === "all" || statusFilter === "notified") && filteredNotifiedRiskProcessLinks.length > 0 && (
+              <div>
+                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                  <Mail className="h-5 w-5 text-blue-500" />
+                  <span>Riesgos Notificados - Pendiente Validación ({notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length})</span>
+                </h2>
+                <SelectAllBanner
+                  selectedCount={notifiedRisksPagination.selectedIds.size}
+                  totalCount={notifiedRisksPaginationInfo?.total || 0}
+                  pageSize={notifiedRisksPagination.pageSize}
+                  totalItems={notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length}
+                  currentPage={notifiedRisksPagination.currentPage}
+                  onSelectAll={() => {
+                    if (notifiedRisksPaginationInfo?.total) {
+                      notifiedRisksPagination.handleSelectAll(
+                        Array.from({ length: notifiedRisksPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
+                        () => String(Math.random())
+                      );
+                    }
+                  }}
+                  onClearAll={notifiedRisksPagination.handleClearAll}
+                  itemName="riesgos notificados"
+                />
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="w-12 px-2 py-3">
+                            <Checkbox
+                              checked={filteredNotifiedRiskProcessLinks.length > 0 && filteredNotifiedRiskProcessLinks.every((rpl: any) => notifiedRisksPagination.selectedIds.has(rpl.id))}
+                              onCheckedChange={(checked) => notifiedRisksPagination.handleSelectPage(filteredNotifiedRiskProcessLinks, (rpl: any) => rpl.id, checked as boolean)}
+                              data-testid="checkbox-select-all-notified-risks"
+                            />
+                          </th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredNotifiedRiskProcessLinks.map((rpl) => (
+                          rpl.risk && (
+                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-notified-risk-${rpl.risk.id}`}>
+                              <td className="w-12 px-2 py-3">
+                                <Checkbox
+                                  checked={notifiedRisksPagination.selectedIds.has(rpl.id)}
+                                  onCheckedChange={() => notifiedRisksPagination.handleSelectItem(rpl.id)}
+                                  data-testid={`checkbox-notified-risk-${rpl.risk.id}`}
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => setViewingRisk(rpl.risk)}
+                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                  data-testid={`button-view-notified-risk-${rpl.risk.id}`}
+                                >
+                                  {rpl.risk.code || "N/A"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-sm">{rpl.risk.name}</div>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end space-x-1">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleValidate(rpl.risk, "validated")}
+                                    className="bg-green-600 hover:bg-green-700"
+                                    data-testid={`button-approve-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleValidate(rpl.risk, "observed")}
+                                    className="bg-orange-600 hover:bg-orange-700"
+                                    data-testid={`button-observe-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <AlertCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleValidate(rpl.risk, "rejected")}
+                                    data-testid={`button-reject-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => resendRiskProcessLinkEmailMutation.mutate(rpl.id)}
+                                          disabled={resendRiskProcessLinkEmailMutation.isPending}
+                                          className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                          data-testid={`button-resend-notified-risk-${rpl.risk.id}`}
+                                        >
+                                          <Mail className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Reenviar email de validación</TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedHistoryRiskProcessLink({
+                                        id: rpl.id,
+                                        riskCode: rpl.risk.code,
+                                        riskName: rpl.risk.name
+                                      });
+                                      setHistoryModalOpen(true);
+                                    }}
+                                    data-testid={`button-history-notified-risk-${rpl.risk.id}`}
+                                    title="Ver historial de validaciones"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="p-4">
+                    <PaginationControls
+                      currentPage={notifiedRisksPagination.currentPage}
+                      totalItems={notifiedRisksPaginationInfo?.total || filteredNotifiedRiskProcessLinks.length}
+                      pageSize={notifiedRisksPagination.pageSize}
+                      onPageChange={notifiedRisksPagination.handlePageChange}
+                      itemName="riesgos notificados"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Not Notified Risks */}
+            {(statusFilter === "all" || statusFilter === "not_notified") && filteredNotNotifiedRiskProcessLinks.length > 0 && (
+              <div>
+                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                  <Bell className="h-5 w-5 text-blue-500" />
+                  <span>Riesgos Sin Notificar ({notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length})</span>
+                </h2>
+                {notNotifiedRisksPagination.selectedIds.size > 0 && (
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleSendBulkRiskEmailValidation}
+                      disabled={sendBulkRiskEmailsMutation.isPending}
+                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                      data-testid="button-bulk-email-not-notified-risks"
+                    >
+                      <Mail className="h-4 w-4 mr-2" />
+                      {sendBulkRiskEmailsMutation.isPending ? 'Enviando...' : `Enviar por Email Seleccionados (${notNotifiedRisksPagination.selectedIds.size})`}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => openBulkActionConfirm("validated", "risks")}
+                      className="bg-green-600 hover:bg-green-700"
+                      data-testid="button-bulk-approve-not-notified-risks"
+                    >
+                      <CheckCircle className="h-4 w-4 mr-1" />
+                      Aprobar Seleccionados ({notNotifiedRisksPagination.selectedIds.size})
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => openBulkActionConfirm("observed", "risks")}
+                      className="bg-orange-600 hover:bg-orange-700"
+                      data-testid="button-bulk-observe-not-notified-risks"
+                    >
+                      <AlertCircle className="h-4 w-4 mr-1" />
+                      Observar Seleccionados
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => openBulkActionConfirm("rejected", "risks")}
+                      data-testid="button-bulk-reject-not-notified-risks"
+                    >
+                      <XCircle className="h-4 w-4 mr-1" />
+                      Rechazar Seleccionados
+                    </Button>
+                  </div>
+                )}
+                <SelectAllBanner
+                  selectedCount={notNotifiedRisksPagination.selectedIds.size}
+                  totalCount={notNotifiedRisksPaginationInfo?.total || 0}
                   pageSize={notNotifiedRisksPagination.pageSize}
-                  onPageChange={notNotifiedRisksPagination.handlePageChange}
+                  totalItems={notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length}
+                  currentPage={notNotifiedRisksPagination.currentPage}
+                  onSelectAll={() => {
+                    if (notNotifiedRisksPaginationInfo?.total) {
+                      notNotifiedRisksPagination.handleSelectAll(
+                        Array.from({ length: notNotifiedRisksPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
+                        () => String(Math.random())
+                      );
+                    }
+                  }}
+                  onClearAll={notNotifiedRisksPagination.handleClearAll}
                   itemName="riesgos sin notificar"
                 />
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="w-12 px-2 py-3">
+                            <Checkbox
+                              checked={filteredNotNotifiedRiskProcessLinks.length > 0 && filteredNotNotifiedRiskProcessLinks.every((rpl: any) => notNotifiedRisksPagination.selectedIds.has(rpl.id))}
+                              onCheckedChange={(checked) => notNotifiedRisksPagination.handleSelectPage(filteredNotNotifiedRiskProcessLinks, (rpl: any) => rpl.id, checked as boolean)}
+                              data-testid="checkbox-select-all-not-notified-risks"
+                            />
+                          </th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredNotNotifiedRiskProcessLinks.map((rpl) => (
+                          rpl.risk && (
+                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-not-notified-risk-${rpl.risk.id}`}>
+                              <td className="w-12 px-2 py-3">
+                                <Checkbox
+                                  checked={notNotifiedRisksPagination.selectedIds.has(rpl.id)}
+                                  onCheckedChange={() => notNotifiedRisksPagination.handleSelectItem(rpl.id)}
+                                  data-testid={`checkbox-not-notified-risk-${rpl.risk.id}`}
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <button
+                                  onClick={() => setViewingRisk(rpl.risk)}
+                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                  data-testid={`button-view-not-notified-risk-${rpl.risk.id}`}
+                                >
+                                  {rpl.risk.code || "N/A"}
+                                </button>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-sm">{rpl.risk.name}</div>
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end space-x-1">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleValidate(rpl.risk, "validated")}
+                                    className="bg-green-600 hover:bg-green-700"
+                                    data-testid={`button-approve-not-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleValidate(rpl.risk, "observed")}
+                                    className="bg-orange-600 hover:bg-orange-700"
+                                    data-testid={`button-observe-not-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <AlertCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleValidate(rpl.risk, "rejected")}
+                                    data-testid={`button-reject-not-notified-risk-${rpl.risk.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setSelectedHistoryRiskProcessLink({
+                                        id: rpl.id,
+                                        riskCode: rpl.risk.code,
+                                        riskName: rpl.risk.name
+                                      });
+                                      setHistoryModalOpen(true);
+                                    }}
+                                    data-testid={`button-history-not-notified-risk-${rpl.risk.id}`}
+                                    title="Ver historial de validaciones"
+                                  >
+                                    <History className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="p-4">
+                    <PaginationControls
+                      currentPage={notNotifiedRisksPagination.currentPage}
+                      totalItems={notNotifiedRisksPaginationInfo?.total || filteredNotNotifiedRiskProcessLinks.length}
+                      pageSize={notNotifiedRisksPagination.pageSize}
+                      onPageChange={notNotifiedRisksPagination.handlePageChange}
+                      itemName="riesgos sin notificar"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
-      </div>
 
         </TabsContent>
 
         <TabsContent value="controls">
           {/* Note: Controls don't currently support process filtering */}
-          
-          {/* Control Statistics */}
-          <div className="grid grid-cols-6 gap-4 mb-8">
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("notified")}
-              data-testid="card-filter-control-notified"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Notificados</CardTitle>
-                <Mail className="h-4 w-4 text-blue-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-notified">
-                  {notifiedControlsPaginationInfo?.total || 0}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Pendiente Respuesta
-                </p>
-              </CardContent>
-            </Card>
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "not_notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("not_notified")}
-              data-testid="card-filter-control-not-notified"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Sin Notificar</CardTitle>
-                <Clock className="h-4 w-4 text-yellow-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-not-notified">
-                  {notNotifiedControlsPaginationInfo?.total || 0}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Por Enviar
-                </p>
-              </CardContent>
-            </Card>
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "validated" ? "border-2 border-green-500 bg-green-50 dark:bg-green-950 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("validated")}
-              data-testid="card-filter-control-validated"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Aprobados</CardTitle>
-                <CheckCircle className="h-4 w-4 text-green-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-approved">
-                  {filteredValidatedControls.length}
-                </div>
-              </CardContent>
-            </Card>
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "observed" ? "border-2 border-orange-500 bg-orange-50 dark:bg-orange-950 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("observed")}
-              data-testid="card-filter-control-observed"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Observados</CardTitle>
-                <AlertCircle className="h-4 w-4 text-orange-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-observed">
-                  {filteredObservedControls.length}
-                </div>
-              </CardContent>
-            </Card>
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "rejected" ? "border-2 border-red-500 bg-red-50 dark:bg-red-950 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("rejected")}
-              data-testid="card-filter-control-rejected"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Rechazados</CardTitle>
-                <XCircle className="h-4 w-4 text-red-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-rejected">
-                  {filteredRejectedControls.length}
-                </div>
-              </CardContent>
-            </Card>
-            <Card 
-              className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "all" ? "border-2 border-gray-500 bg-gray-50 dark:bg-gray-900 shadow-lg" : ""}`}
-              onClick={() => setStatusFilter("all")}
-              data-testid="card-filter-control-total"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total</CardTitle>
-                <FileText className="h-4 w-4 text-gray-500" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="stat-control-total">
-                  {(notifiedControlsPaginationInfo?.total || 0) + (notNotifiedControlsPaginationInfo?.total || 0) + filteredValidatedControls.length + filteredObservedControls.length + filteredRejectedControls.length}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
 
-          {/* Controls Sections */}
-          <div className="space-y-8">
-            {/* Notified Controls */}
-            {(statusFilter === "all" || statusFilter === "notified") && filteredNotifiedControls.length > 0 && (
-              <div>
+          {isLoadingControls ? (
+            <div className="space-y-8">
+              {/* Stats Skeleton */}
+              <div className="grid grid-cols-6 gap-4 mb-8">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <Card key={i}>
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                      <Skeleton className="h-4 w-20" />
+                      <Skeleton className="h-4 w-4" />
+                    </CardHeader>
+                    <CardContent>
+                      <Skeleton className="h-8 w-16 mb-1" />
+                      <Skeleton className="h-3 w-24" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Table Skeleton */}
+              <div className="space-y-4">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-semibold flex items-center space-x-2">
-                    <Mail className="h-5 w-5 text-blue-500" />
-                    <span>Controles Notificados ({notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length})</span>
-                  </h2>
+                  <Skeleton className="h-8 w-64" />
                 </div>
-                {notifiedControlsPagination.selectedIds.size > 0 && (
-                  <div className="mb-4 flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => openBulkActionConfirm("validated", "controls")}
-                      className="bg-green-600 hover:bg-green-700"
-                      data-testid="button-bulk-approve-notified-controls"
-                    >
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      Aprobar Seleccionados ({notifiedControlsPagination.selectedIds.size})
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => openBulkActionConfirm("observed", "controls")}
-                      className="bg-orange-600 hover:bg-orange-700"
-                      data-testid="button-bulk-observe-notified-controls"
-                    >
-                      <AlertCircle className="h-4 w-4 mr-1" />
-                      Observar Seleccionados
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => openBulkActionConfirm("rejected", "controls")}
-                      data-testid="button-bulk-reject-notified-controls"
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Rechazar Seleccionados
-                    </Button>
-                  </div>
-                )}
-                <SelectAllBanner
-                  selectedCount={notifiedControlsPagination.selectedIds.size}
-                  totalCount={notifiedControlsPaginationInfo?.total || 0}
-                  pageSize={notifiedControlsPagination.pageSize}
-                  totalItems={notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length}
-                  currentPage={notifiedControlsPagination.currentPage}
-                  onSelectAll={() => {
-                    if (notifiedControlsPaginationInfo?.total) {
-                      notifiedControlsPagination.handleSelectAll(
-                        Array.from({ length: notifiedControlsPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
-                        () => String(Math.random())
-                      );
-                    }
-                  }}
-                  onClearAll={notifiedControlsPagination.handleClearAll}
-                  itemName="controles notificados"
-                />
                 <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="w-12 px-2 py-3 text-left">
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div>
-                                    <Checkbox
-                                      checked={filteredNotifiedControls.every(control => notifiedControlsPagination.selectedIds.has(control.id))}
-                                      onCheckedChange={(checked) => notifiedControlsPagination.handleSelectPage(filteredNotifiedControls, (c: any) => c.id, checked as boolean)}
-                                      data-testid="checkbox-select-all-notified-controls"
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent>Seleccionar todos en esta página</TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("code")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-code-control"
-                            >
-                              <span>Código</span>
-                              {sortField === "code" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("control")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-control"
-                            >
-                              <span>Nombre</span>
-                              {sortField === "control" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("responsible")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-responsible-control"
-                            >
-                              <span>Responsable</span>
-                              {sortField === "responsible" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Notificación</th>
-                          <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredNotifiedControls.map((control: any) => (
-                          <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-notified-control-${control.id}`}>
-                            <td className="w-12 px-2 py-3">
-                              <Checkbox
-                                checked={notifiedControlsPagination.selectedIds.has(control.id)}
-                                onCheckedChange={() => notifiedControlsPagination.handleSelectItem(control.id)}
-                                data-testid={`checkbox-notified-control-${control.id}`}
-                              />
-                            </td>
-                            <td className="px-4 py-3">
-                              <button
-                                onClick={() => setViewingControl(control)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-control-${control.id}`}
-                              >
-                                {control.code || "N/A"}
-                              </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{control.name}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getControlTypeColor(control.type)}>
-                                {getControlTypeText(control.type)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
-                            <td className="px-4 py-3 text-sm">
-                              {control.notifiedAt ? new Date(control.notifiedAt).toLocaleDateString() : "N/A"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex justify-center">
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-8 w-8 p-0"
-                                      data-testid={`button-actions-control-${control.id}`}
-                                    >
-                                      <MoreVertical className="h-4 w-4" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end">
-                                    <DropdownMenuItem
-                                      onClick={() => handleResendControl(control)}
-                                      data-testid={`button-resend-control-${control.id}`}
-                                    >
-                                      <Mail className="h-4 w-4 mr-2" />
-                                      Reenviar a validación
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="p-4 space-y-4">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} className="flex items-center space-x-4">
+                        <Skeleton className="h-4 w-4" />
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-4 w-48" />
+                        <Skeleton className="h-4 w-20" />
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-8 w-24 ml-auto" />
+                      </div>
+                    ))}
                   </div>
-                  <div className="p-4">
-                    <PaginationControls
-                      currentPage={notifiedControlsPagination.currentPage}
-                      totalItems={notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Control Statistics */}
+              <div className="grid grid-cols-6 gap-4 mb-8">
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("notified")}
+                  data-testid="card-filter-control-notified"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Notificados</CardTitle>
+                    <Mail className="h-4 w-4 text-blue-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-notified">
+                      {notifiedControlsPaginationInfo?.total || 0}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Pendiente Respuesta
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "not_notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("not_notified")}
+                  data-testid="card-filter-control-not-notified"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Sin Notificar</CardTitle>
+                    <Clock className="h-4 w-4 text-yellow-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-not-notified">
+                      {notNotifiedControlsPaginationInfo?.total || 0}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Por Enviar
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "validated" ? "border-2 border-green-500 bg-green-50 dark:bg-green-950 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("validated")}
+                  data-testid="card-filter-control-validated"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Aprobados</CardTitle>
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-approved">
+                      {filteredValidatedControls.length}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "observed" ? "border-2 border-orange-500 bg-orange-50 dark:bg-orange-950 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("observed")}
+                  data-testid="card-filter-control-observed"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Observados</CardTitle>
+                    <AlertCircle className="h-4 w-4 text-orange-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-observed">
+                      {filteredObservedControls.length}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "rejected" ? "border-2 border-red-500 bg-red-50 dark:bg-red-950 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("rejected")}
+                  data-testid="card-filter-control-rejected"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Rechazados</CardTitle>
+                    <XCircle className="h-4 w-4 text-red-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-rejected">
+                      {filteredRejectedControls.length}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card
+                  className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "all" ? "border-2 border-gray-500 bg-gray-50 dark:bg-gray-900 shadow-lg" : ""}`}
+                  onClick={() => setStatusFilter("all")}
+                  data-testid="card-filter-control-total"
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Total</CardTitle>
+                    <FileText className="h-4 w-4 text-gray-500" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold" data-testid="stat-control-total">
+                      {(notifiedControlsPaginationInfo?.total || 0) + (notNotifiedControlsPaginationInfo?.total || 0) + filteredValidatedControls.length + filteredObservedControls.length + filteredRejectedControls.length}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Controls Sections */}
+              <div className="space-y-8">
+                {/* Notified Controls */}
+                {(statusFilter === "all" || statusFilter === "notified") && filteredNotifiedControls.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-semibold flex items-center space-x-2">
+                        <Mail className="h-5 w-5 text-blue-500" />
+                        <span>Controles Notificados ({notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length})</span>
+                      </h2>
+                    </div>
+                    {notifiedControlsPagination.selectedIds.size > 0 && (
+                      <div className="mb-4 flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => openBulkActionConfirm("validated", "controls")}
+                          className="bg-green-600 hover:bg-green-700"
+                          data-testid="button-bulk-approve-notified-controls"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          Aprobar Seleccionados ({notifiedControlsPagination.selectedIds.size})
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => openBulkActionConfirm("observed", "controls")}
+                          className="bg-orange-600 hover:bg-orange-700"
+                          data-testid="button-bulk-observe-notified-controls"
+                        >
+                          <AlertCircle className="h-4 w-4 mr-1" />
+                          Observar Seleccionados
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => openBulkActionConfirm("rejected", "controls")}
+                          data-testid="button-bulk-reject-notified-controls"
+                        >
+                          <XCircle className="h-4 w-4 mr-1" />
+                          Rechazar Seleccionados
+                        </Button>
+                      </div>
+                    )}
+                    <SelectAllBanner
+                      selectedCount={notifiedControlsPagination.selectedIds.size}
+                      totalCount={notifiedControlsPaginationInfo?.total || 0}
                       pageSize={notifiedControlsPagination.pageSize}
-                      onPageChange={notifiedControlsPagination.handlePageChange}
+                      totalItems={notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length}
+                      currentPage={notifiedControlsPagination.currentPage}
+                      onSelectAll={() => {
+                        if (notifiedControlsPaginationInfo?.total) {
+                          notifiedControlsPagination.handleSelectAll(
+                            Array.from({ length: notifiedControlsPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
+                            () => String(Math.random())
+                          );
+                        }
+                      }}
+                      onClearAll={notifiedControlsPagination.handleClearAll}
                       itemName="controles notificados"
                     />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Not Notified Controls */}
-            {(statusFilter === "all" || statusFilter === "not_notified") && filteredNotNotifiedControls.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-semibold flex items-center space-x-2">
-                    <Clock className="h-5 w-5 text-yellow-500" />
-                    <span>Controles Sin Notificar ({notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length})</span>
-                  </h2>
-                </div>
-                {notNotifiedControlsPagination.selectedIds.size > 0 && (
-                  <div className="mb-4 flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={handleSendBulkControlEmailValidation}
-                      disabled={sendBulkControlEmailsMutation.isPending}
-                      className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-                      data-testid="button-bulk-email-not-notified-controls"
-                    >
-                      <Mail className="h-4 w-4 mr-2" />
-                      {sendBulkControlEmailsMutation.isPending ? 'Enviando...' : `Enviar por Email Seleccionados (${notNotifiedControlsPagination.selectedIds.size})`}
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => openBulkActionConfirm("validated", "controls")}
-                      className="bg-green-600 hover:bg-green-700"
-                      data-testid="button-bulk-approve-controls"
-                    >
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      Aprobar Seleccionados ({notNotifiedControlsPagination.selectedIds.size})
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => openBulkActionConfirm("observed", "controls")}
-                      className="bg-orange-600 hover:bg-orange-700"
-                      data-testid="button-bulk-observe-controls"
-                    >
-                      <AlertCircle className="h-4 w-4 mr-1" />
-                      Observar Seleccionados
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => openBulkActionConfirm("rejected", "controls")}
-                      data-testid="button-bulk-reject-controls"
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Rechazar Seleccionados
-                    </Button>
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="w-12 px-2 py-3 text-left">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div>
+                                        <Checkbox
+                                          checked={filteredNotifiedControls.every(control => notifiedControlsPagination.selectedIds.has(control.id))}
+                                          onCheckedChange={(checked) => notifiedControlsPagination.handleSelectPage(filteredNotifiedControls, (c: any) => c.id, checked as boolean)}
+                                          data-testid="checkbox-select-all-notified-controls"
+                                        />
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Seleccionar todos en esta página</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("code")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-code-control"
+                                >
+                                  <span>Código</span>
+                                  {sortField === "code" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("control")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-control"
+                                >
+                                  <span>Nombre</span>
+                                  {sortField === "control" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("responsible")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-responsible-control"
+                                >
+                                  <span>Responsable</span>
+                                  {sortField === "responsible" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Notificación</th>
+                              <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredNotifiedControls.map((control: any) => (
+                              <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-notified-control-${control.id}`}>
+                                <td className="w-12 px-2 py-3">
+                                  <Checkbox
+                                    checked={notifiedControlsPagination.selectedIds.has(control.id)}
+                                    onCheckedChange={() => notifiedControlsPagination.handleSelectItem(control.id)}
+                                    data-testid={`checkbox-notified-control-${control.id}`}
+                                  />
+                                </td>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingControl(control)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-control-${control.id}`}
+                                  >
+                                    {control.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{control.name}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getControlTypeColor(control.type)}>
+                                    {getControlTypeText(control.type)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
+                                <td className="px-4 py-3 text-sm">
+                                  {control.notifiedAt ? new Date(control.notifiedAt).toLocaleDateString() : "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex justify-center">
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0"
+                                          data-testid={`button-actions-control-${control.id}`}
+                                        >
+                                          <MoreVertical className="h-4 w-4" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem
+                                          onClick={() => handleResendControl(control)}
+                                          data-testid={`button-resend-control-${control.id}`}
+                                        >
+                                          <Mail className="h-4 w-4 mr-2" />
+                                          Reenviar a validación
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="p-4">
+                        <PaginationControls
+                          currentPage={notifiedControlsPagination.currentPage}
+                          totalItems={notifiedControlsPaginationInfo?.total || filteredNotifiedControls.length}
+                          pageSize={notifiedControlsPagination.pageSize}
+                          onPageChange={notifiedControlsPagination.handlePageChange}
+                          itemName="controles notificados"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
-                <SelectAllBanner
-                  selectedCount={notNotifiedControlsPagination.selectedIds.size}
-                  totalCount={notNotifiedControlsPaginationInfo?.total || 0}
-                  pageSize={notNotifiedControlsPagination.pageSize}
-                  totalItems={notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length}
-                  currentPage={notNotifiedControlsPagination.currentPage}
-                  onSelectAll={() => {
-                    if (notNotifiedControlsPaginationInfo?.total) {
-                      notNotifiedControlsPagination.handleSelectAll(
-                        Array.from({ length: notNotifiedControlsPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
-                        () => String(Math.random())
-                      );
-                    }
-                  }}
-                  onClearAll={notNotifiedControlsPagination.handleClearAll}
-                  itemName="controles sin notificar"
-                />
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="w-12 px-2 py-3 text-left">
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div>
-                                    <Checkbox
-                                      checked={filteredNotNotifiedControls.every(control => notNotifiedControlsPagination.selectedIds.has(control.id))}
-                                      onCheckedChange={(checked) => notNotifiedControlsPagination.handleSelectPage(filteredNotNotifiedControls, (c: any) => c.id, checked as boolean)}
-                                      data-testid="checkbox-select-all-not-notified-controls"
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                <TooltipContent>Seleccionar todos en esta página</TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("code")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-code-control-not-notified"
-                            >
-                              <span>Código</span>
-                              {sortField === "code" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("responsible")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-responsible-control-not-notified"
-                            >
-                              <span>Responsable</span>
-                              {sortField === "responsible" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredNotNotifiedControls.map((control: any) => (
-                          <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-not-notified-control-${control.id}`}>
-                            <td className="w-12 px-2 py-3">
-                              <Checkbox
-                                checked={notNotifiedControlsPagination.selectedIds.has(control.id)}
-                                onCheckedChange={() => notNotifiedControlsPagination.handleSelectItem(control.id)}
-                                data-testid={`checkbox-not-notified-control-${control.id}`}
-                              />
-                            </td>
-                            <td className="px-4 py-3">
-                              <button
-                                onClick={() => setViewingControl(control)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-control-${control.id}`}
-                              >
-                                {control.code || "N/A"}
-                              </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{control.name}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getControlTypeColor(control.type)}>
-                                {getControlTypeText(control.type)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center justify-end space-x-1">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleValidateControl(control, "validated")}
-                                  className="bg-green-600 hover:bg-green-700"
-                                  data-testid={`button-approve-not-notified-control-${control.id}`}
-                                >
-                                  <CheckCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleValidateControl(control, "observed")}
-                                  className="bg-orange-600 hover:bg-orange-700"
-                                  data-testid={`button-observe-not-notified-control-${control.id}`}
-                                >
-                                  <AlertCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleValidateControl(control, "rejected")}
-                                  data-testid={`button-reject-not-notified-control-${control.id}`}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="p-4">
-                    <PaginationControls
-                      currentPage={notNotifiedControlsPagination.currentPage}
-                      totalItems={notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length}
+
+                {/* Not Notified Controls */}
+                {(statusFilter === "all" || statusFilter === "not_notified") && filteredNotNotifiedControls.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-semibold flex items-center space-x-2">
+                        <Clock className="h-5 w-5 text-yellow-500" />
+                        <span>Controles Sin Notificar ({notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length})</span>
+                      </h2>
+                    </div>
+                    {notNotifiedControlsPagination.selectedIds.size > 0 && (
+                      <div className="mb-4 flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={handleSendBulkControlEmailValidation}
+                          disabled={sendBulkControlEmailsMutation.isPending}
+                          className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                          data-testid="button-bulk-email-not-notified-controls"
+                        >
+                          <Mail className="h-4 w-4 mr-2" />
+                          {sendBulkControlEmailsMutation.isPending ? 'Enviando...' : `Enviar por Email Seleccionados (${notNotifiedControlsPagination.selectedIds.size})`}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => openBulkActionConfirm("validated", "controls")}
+                          className="bg-green-600 hover:bg-green-700"
+                          data-testid="button-bulk-approve-controls"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          Aprobar Seleccionados ({notNotifiedControlsPagination.selectedIds.size})
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => openBulkActionConfirm("observed", "controls")}
+                          className="bg-orange-600 hover:bg-orange-700"
+                          data-testid="button-bulk-observe-controls"
+                        >
+                          <AlertCircle className="h-4 w-4 mr-1" />
+                          Observar Seleccionados
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => openBulkActionConfirm("rejected", "controls")}
+                          data-testid="button-bulk-reject-controls"
+                        >
+                          <XCircle className="h-4 w-4 mr-1" />
+                          Rechazar Seleccionados
+                        </Button>
+                      </div>
+                    )}
+                    <SelectAllBanner
+                      selectedCount={notNotifiedControlsPagination.selectedIds.size}
+                      totalCount={notNotifiedControlsPaginationInfo?.total || 0}
                       pageSize={notNotifiedControlsPagination.pageSize}
-                      onPageChange={notNotifiedControlsPagination.handlePageChange}
+                      totalItems={notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length}
+                      currentPage={notNotifiedControlsPagination.currentPage}
+                      onSelectAll={() => {
+                        if (notNotifiedControlsPaginationInfo?.total) {
+                          notNotifiedControlsPagination.handleSelectAll(
+                            Array.from({ length: notNotifiedControlsPaginationInfo.total }, (_, i) => ({ id: String(i) })) as any[],
+                            () => String(Math.random())
+                          );
+                        }
+                      }}
+                      onClearAll={notNotifiedControlsPagination.handleClearAll}
                       itemName="controles sin notificar"
                     />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Validated Controls */}
-            {(statusFilter === "all" || statusFilter === "validated") && filteredValidatedControls.length > 0 && (
-              <div>
-                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span>Controles Aprobados ({filteredValidatedControls.length})</span>
-                </h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("code")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-code-control-validated"
-                            >
-                              <span>Código</span>
-                              {sortField === "code" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("control")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-control-validated"
-                            >
-                              <span>Nombre</span>
-                              {sortField === "control" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("responsible")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-responsible-validated"
-                            >
-                              <span>Responsable</span>
-                              {sortField === "responsible" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("validatedAt")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-validated-at"
-                            >
-                              <span>Fecha Validación</span>
-                              {sortField === "validatedAt" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredValidatedControls.map((control: any) => (
-                          <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-control-${control.id}`}>
-                            <td className="px-4 py-3">
-                              <button
-                                onClick={() => setViewingControl(control)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-control-${control.id}`}
-                              >
-                                {control.code || "N/A"}
-                              </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{control.name}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getControlTypeColor(control.type)}>
-                                {getControlTypeText(control.type)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
-                            <td className="px-4 py-3 text-sm">
-                              {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="space-y-1">
-                                <Badge className="bg-green-100 text-green-800">Aprobado</Badge>
-                                {control.validationComments && (
-                                  <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
-                                    {control.validationComments}
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="w-12 px-2 py-3 text-left">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div>
+                                        <Checkbox
+                                          checked={filteredNotNotifiedControls.every(control => notNotifiedControlsPagination.selectedIds.has(control.id))}
+                                          onCheckedChange={(checked) => notNotifiedControlsPagination.handleSelectPage(filteredNotNotifiedControls, (c: any) => c.id, checked as boolean)}
+                                          data-testid="checkbox-select-all-not-notified-controls"
+                                        />
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Seleccionar todos en esta página</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("code")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-code-control-not-notified"
+                                >
+                                  <span>Código</span>
+                                  {sortField === "code" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("responsible")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-responsible-control-not-notified"
+                                >
+                                  <span>Responsable</span>
+                                  {sortField === "responsible" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredNotNotifiedControls.map((control: any) => (
+                              <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-not-notified-control-${control.id}`}>
+                                <td className="w-12 px-2 py-3">
+                                  <Checkbox
+                                    checked={notNotifiedControlsPagination.selectedIds.has(control.id)}
+                                    onCheckedChange={() => notNotifiedControlsPagination.handleSelectItem(control.id)}
+                                    data-testid={`checkbox-not-notified-control-${control.id}`}
+                                  />
+                                </td>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingControl(control)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-control-${control.id}`}
+                                  >
+                                    {control.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{control.name}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getControlTypeColor(control.type)}>
+                                    {getControlTypeText(control.type)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end space-x-1">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleValidateControl(control, "validated")}
+                                      className="bg-green-600 hover:bg-green-700"
+                                      data-testid={`button-approve-not-notified-control-${control.id}`}
+                                    >
+                                      <CheckCircle className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleValidateControl(control, "observed")}
+                                      className="bg-orange-600 hover:bg-orange-700"
+                                      data-testid={`button-observe-not-notified-control-${control.id}`}
+                                    >
+                                      <AlertCircle className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleValidateControl(control, "rejected")}
+                                      data-testid={`button-reject-not-notified-control-${control.id}`}
+                                    >
+                                      <XCircle className="h-4 w-4" />
+                                    </Button>
                                   </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="p-4">
+                        <PaginationControls
+                          currentPage={notNotifiedControlsPagination.currentPage}
+                          totalItems={notNotifiedControlsPaginationInfo?.total || filteredNotNotifiedControls.length}
+                          pageSize={notNotifiedControlsPagination.pageSize}
+                          onPageChange={notNotifiedControlsPagination.handlePageChange}
+                          itemName="controles sin notificar"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
+                )}
 
-            {/* Observed Controls */}
-            {(statusFilter === "all" || statusFilter === "observed") && filteredObservedControls.length > 0 && (
-              <div>
-                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-                  <AlertCircle className="h-5 w-5 text-orange-500" />
-                  <span>Controles Observados ({filteredObservedControls.length})</span>
-                </h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("code")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-code-control-observed"
-                            >
-                              <span>Código</span>
-                              {sortField === "code" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("control")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-control-observed"
-                            >
-                              <span>Nombre</span>
-                              {sortField === "control" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("responsible")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-responsible-observed"
-                            >
-                              <span>Responsable</span>
-                              {sortField === "responsible" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("validatedAt")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-validated-at-observed"
-                            >
-                              <span>Fecha Validación</span>
-                              {sortField === "validatedAt" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Observaciones</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredObservedControls.map((control: any) => (
-                          <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-observed-control-${control.id}`}>
-                            <td className="px-4 py-3">
-                              <button
-                                onClick={() => setViewingControl(control)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-control-${control.id}`}
-                              >
-                                {control.code || "N/A"}
-                              </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{control.name}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getControlTypeColor(control.type)}>
-                                {getControlTypeText(control.type)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
-                            <td className="px-4 py-3 text-sm">
-                              {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="space-y-1">
-                                <Badge className="bg-orange-100 text-orange-800">Observado</Badge>
-                                {control.validationComments && (
-                                  <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
-                                    {control.validationComments}
+                {/* Validated Controls */}
+                {(statusFilter === "all" || statusFilter === "validated") && filteredValidatedControls.length > 0 && (
+                  <div>
+                    <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      <span>Controles Aprobados ({filteredValidatedControls.length})</span>
+                    </h2>
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("code")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-code-control-validated"
+                                >
+                                  <span>Código</span>
+                                  {sortField === "code" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("control")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-control-validated"
+                                >
+                                  <span>Nombre</span>
+                                  {sortField === "control" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("responsible")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-responsible-validated"
+                                >
+                                  <span>Responsable</span>
+                                  {sortField === "responsible" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("validatedAt")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-validated-at"
+                                >
+                                  <span>Fecha Validación</span>
+                                  {sortField === "validatedAt" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredValidatedControls.map((control: any) => (
+                              <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-control-${control.id}`}>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingControl(control)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-control-${control.id}`}
+                                  >
+                                    {control.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{control.name}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getControlTypeColor(control.type)}>
+                                    {getControlTypeText(control.type)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
+                                <td className="px-4 py-3 text-sm">
+                                  {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="space-y-1">
+                                    <Badge className="bg-green-100 text-green-800">Aprobado</Badge>
+                                    {control.validationComments && (
+                                      <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
+                                        {control.validationComments}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm"
-                                    data-testid={`button-actions-${control.id}`}
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem 
-                                    onClick={() => handleResendControl(control)}
-                                    className="text-blue-600 focus:text-blue-700"
-                                    data-testid={`menu-resend-validation-${control.id}`}
-                                  >
-                                    <Send className="h-4 w-4 mr-2" />
-                                    Reenviar a Validación
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
+                )}
 
-            {/* Rejected Controls */}
-            {(statusFilter === "all" || statusFilter === "rejected") && filteredRejectedControls.length > 0 && (
-              <div>
-                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-                  <XCircle className="h-5 w-5 text-red-500" />
-                  <span>Controles Rechazados ({filteredRejectedControls.length})</span>
-                </h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("code")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-code-control-rejected"
-                            >
-                              <span>Código</span>
-                              {sortField === "code" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("control")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-control-rejected"
-                            >
-                              <span>Nombre</span>
-                              {sortField === "control" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("responsible")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-responsible-rejected"
-                            >
-                              <span>Responsable</span>
-                              {sortField === "responsible" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
-                            <button
-                              onClick={() => handleSort("validatedAt")}
-                              className="flex items-center space-x-1 hover:text-primary"
-                              data-testid="button-sort-validated-at-rejected"
-                            >
-                              <span>Fecha Validación</span>
-                              {sortField === "validatedAt" && (
-                                sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
-                              )}
-                            </button>
-                          </th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Observaciones</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredRejectedControls.map((control: any) => (
-                          <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-rejected-control-${control.id}`}>
-                            <td className="px-4 py-3">
-                              <button
-                                onClick={() => setViewingControl(control)}
-                                className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                data-testid={`button-view-control-${control.id}`}
-                              >
-                                {control.code || "N/A"}
-                              </button>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium text-sm">{control.name}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge className={getControlTypeColor(control.type)}>
-                                {getControlTypeText(control.type)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
-                            <td className="px-4 py-3 text-sm">
-                              {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="space-y-1">
-                                <Badge className="bg-red-100 text-red-800">Rechazado</Badge>
-                                {control.validationComments && (
-                                  <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
-                                    {control.validationComments}
+                {/* Observed Controls */}
+                {(statusFilter === "all" || statusFilter === "observed") && filteredObservedControls.length > 0 && (
+                  <div>
+                    <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                      <AlertCircle className="h-5 w-5 text-orange-500" />
+                      <span>Controles Observados ({filteredObservedControls.length})</span>
+                    </h2>
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("code")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-code-control-observed"
+                                >
+                                  <span>Código</span>
+                                  {sortField === "code" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("control")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-control-observed"
+                                >
+                                  <span>Nombre</span>
+                                  {sortField === "control" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("responsible")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-responsible-observed"
+                                >
+                                  <span>Responsable</span>
+                                  {sortField === "responsible" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("validatedAt")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-validated-at-observed"
+                                >
+                                  <span>Fecha Validación</span>
+                                  {sortField === "validatedAt" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Observaciones</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredObservedControls.map((control: any) => (
+                              <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-observed-control-${control.id}`}>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingControl(control)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-control-${control.id}`}
+                                  >
+                                    {control.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{control.name}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getControlTypeColor(control.type)}>
+                                    {getControlTypeText(control.type)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
+                                <td className="px-4 py-3 text-sm">
+                                  {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="space-y-1">
+                                    <Badge className="bg-orange-100 text-orange-800">Observado</Badge>
+                                    {control.validationComments && (
+                                      <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
+                                        {control.validationComments}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm"
-                                    data-testid={`button-actions-${control.id}`}
-                                  >
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem 
-                                    onClick={() => handleResendControl(control)}
-                                    className="text-blue-600 focus:text-blue-700"
-                                    data-testid={`menu-resend-validation-${control.id}`}
-                                  >
-                                    <Send className="h-4 w-4 mr-2" />
-                                    Reenviar a Validación
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        data-testid={`button-actions-${control.id}`}
+                                      >
+                                        <MoreVertical className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem
+                                        onClick={() => handleResendControl(control)}
+                                        className="text-blue-600 focus:text-blue-700"
+                                        data-testid={`menu-resend-validation-${control.id}`}
+                                      >
+                                        <Send className="h-4 w-4 mr-2" />
+                                        Reenviar a Validación
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Rejected Controls */}
+                {(statusFilter === "all" || statusFilter === "rejected") && filteredRejectedControls.length > 0 && (
+                  <div>
+                    <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                      <XCircle className="h-5 w-5 text-red-500" />
+                      <span>Controles Rechazados ({filteredRejectedControls.length})</span>
+                    </h2>
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("code")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-code-control-rejected"
+                                >
+                                  <span>Código</span>
+                                  {sortField === "code" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("control")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-control-rejected"
+                                >
+                                  <span>Nombre</span>
+                                  {sortField === "control" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Tipo</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("responsible")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-responsible-rejected"
+                                >
+                                  <span>Responsable</span>
+                                  {sortField === "responsible" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <button
+                                  onClick={() => handleSort("validatedAt")}
+                                  className="flex items-center space-x-1 hover:text-primary"
+                                  data-testid="button-sort-validated-at-rejected"
+                                >
+                                  <span>Fecha Validación</span>
+                                  {sortField === "validatedAt" && (
+                                    sortDirection === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Observaciones</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredRejectedControls.map((control: any) => (
+                              <tr key={control.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-rejected-control-${control.id}`}>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingControl(control)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-control-${control.id}`}
+                                  >
+                                    {control.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{control.name}</div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getControlTypeColor(control.type)}>
+                                    {getControlTypeText(control.type)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">{control.owner?.name || "N/A"}</td>
+                                <td className="px-4 py-3 text-sm">
+                                  {control.validatedAt ? new Date(control.validatedAt).toLocaleDateString() : "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="space-y-1">
+                                    <Badge className="bg-red-100 text-red-800">Rechazado</Badge>
+                                    {control.validationComments && (
+                                      <div className="text-xs text-gray-600 mt-1" data-testid={`text-control-validation-comments-${control.id}`}>
+                                        {control.validationComments}
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        data-testid={`button-actions-${control.id}`}
+                                      >
+                                        <MoreVertical className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem
+                                        onClick={() => handleResendControl(control)}
+                                        className="text-blue-600 focus:text-blue-700"
+                                        data-testid={`menu-resend-validation-${control.id}`}
+                                      >
+                                        <Send className="h-4 w-4 mr-2" />
+                                        Reenviar a Validación
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </TabsContent>
+            </>
+          </TabsContent>
 
         <TabsContent value="action-plans">
           {/* Action Plans Statistics */}
           <div className="grid grid-cols-6 gap-4 mb-8">
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("notified")}
               data-testid="card-filter-action-plan-notified"
@@ -3762,7 +3808,7 @@ export default function RiskValidationPage() {
                 </p>
               </CardContent>
             </Card>
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "not_notified" ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("not_notified")}
               data-testid="card-filter-action-plan-not-notified"
@@ -3780,7 +3826,7 @@ export default function RiskValidationPage() {
                 </p>
               </CardContent>
             </Card>
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "validated" ? "border-2 border-green-500 bg-green-50 dark:bg-green-950 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("validated")}
               data-testid="card-filter-action-plan-validated"
@@ -3795,7 +3841,7 @@ export default function RiskValidationPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "observed" ? "border-2 border-orange-500 bg-orange-50 dark:bg-orange-950 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("observed")}
               data-testid="card-filter-action-plan-observed"
@@ -3810,7 +3856,7 @@ export default function RiskValidationPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "rejected" ? "border-2 border-red-500 bg-red-50 dark:bg-red-950 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("rejected")}
               data-testid="card-filter-action-plan-rejected"
@@ -3825,7 +3871,7 @@ export default function RiskValidationPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card 
+            <Card
               className={`cursor-pointer hover:shadow-md transition-all ${statusFilter === "all" ? "border-2 border-gray-500 bg-gray-50 dark:bg-gray-900 shadow-lg" : ""}`}
               onClick={() => setStatusFilter("all")}
               data-testid="card-filter-action-plan-total"
@@ -3893,7 +3939,7 @@ export default function RiskValidationPage() {
                     <Button
                       variant="outline"
                       onClick={() => {
-                        const selectedPlans = filteredNotifiedActionPlans.filter(plan => 
+                        const selectedPlans = filteredNotifiedActionPlans.filter(plan =>
                           notifiedActionPlansPagination.selectedIds.has(plan.id)
                         );
                         handleSendBulkEmailValidation();
@@ -3975,22 +4021,22 @@ export default function RiskValidationPage() {
                               <div className="font-medium text-sm">{plan.title}</div>
                             </td>
                             <td className="px-4 py-3">
-                              <Badge 
+                              <Badge
                                 variant={
-                                  plan.origin === 'audit' ? 'default' : 
-                                  plan.origin === 'compliance' ? 'outline' : 
-                                  'secondary'
+                                  plan.origin === 'audit' ? 'default' :
+                                    plan.origin === 'compliance' ? 'outline' :
+                                      'secondary'
                                 }
                                 className={
-                                  plan.origin === 'compliance' 
-                                    ? 'border-green-500 text-green-700 dark:text-green-400' 
+                                  plan.origin === 'compliance'
+                                    ? 'border-green-500 text-green-700 dark:text-green-400'
                                     : ''
                                 }
                               >
-                                {plan.origin === 'audit' ? 'Auditoría' : 
-                                 plan.origin === 'compliance' ? 'Cumplimiento' : 
-                                 plan.origin === 'risk' ? 'Gestión de Riesgos' : 
-                                 'Sin origen'}
+                                {plan.origin === 'audit' ? 'Auditoría' :
+                                  plan.origin === 'compliance' ? 'Cumplimiento' :
+                                    plan.origin === 'risk' ? 'Gestión de Riesgos' :
+                                      'Sin origen'}
                               </Badge>
                             </td>
                             <td className="px-4 py-3 text-sm">
@@ -4336,22 +4382,22 @@ export default function RiskValidationPage() {
                                 </div>
                               </td>
                               <td className="px-4 py-3">
-                                <Badge 
+                                <Badge
                                   variant={
-                                    plan.origin === 'audit' ? 'default' : 
-                                    plan.origin === 'compliance' ? 'outline' : 
-                                    'secondary'
+                                    plan.origin === 'audit' ? 'default' :
+                                      plan.origin === 'compliance' ? 'outline' :
+                                        'secondary'
                                   }
                                   className={
-                                    plan.origin === 'compliance' 
-                                      ? 'border-green-500 text-green-700 dark:text-green-400' 
+                                    plan.origin === 'compliance'
+                                      ? 'border-green-500 text-green-700 dark:text-green-400'
                                       : ''
                                   }
                                 >
-                                  {plan.origin === 'audit' ? 'Auditoría' : 
-                                   plan.origin === 'compliance' ? 'Cumplimiento' : 
-                                   plan.origin === 'risk' ? 'Gestión de Riesgos' : 
-                                   'Sin origen'}
+                                  {plan.origin === 'audit' ? 'Auditoría' :
+                                    plan.origin === 'compliance' ? 'Cumplimiento' :
+                                      plan.origin === 'risk' ? 'Gestión de Riesgos' :
+                                        'Sin origen'}
                                 </Badge>
                               </td>
                               <td className="px-4 py-3">
@@ -4578,8 +4624,8 @@ export default function RiskValidationPage() {
                             <td className="px-4 py-3">
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button 
-                                    variant="ghost" 
+                                  <Button
+                                    variant="ghost"
                                     size="sm"
                                     data-testid={`button-actions-${plan.id}`}
                                   >
@@ -4587,7 +4633,7 @@ export default function RiskValidationPage() {
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
-                                  <DropdownMenuItem 
+                                  <DropdownMenuItem
                                     onClick={() => handleResendValidation(plan.id)}
                                     className="text-blue-600 focus:text-blue-700"
                                     data-testid={`menu-resend-validation-${plan.id}`}
@@ -4676,8 +4722,8 @@ export default function RiskValidationPage() {
                             <td className="px-4 py-3">
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button 
-                                    variant="ghost" 
+                                  <Button
+                                    variant="ghost"
                                     size="sm"
                                     data-testid={`button-actions-${plan.id}`}
                                   >
@@ -4685,7 +4731,7 @@ export default function RiskValidationPage() {
                                   </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
-                                  <DropdownMenuItem 
+                                  <DropdownMenuItem
                                     onClick={() => handleResendValidation(plan.id)}
                                     className="text-blue-600 focus:text-blue-700"
                                     data-testid={`menu-resend-validation-${plan.id}`}
@@ -4743,7 +4789,7 @@ export default function RiskValidationPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium">
@@ -4751,11 +4797,11 @@ export default function RiskValidationPage() {
               </label>
               <Textarea
                 placeholder={
-                  validationAction === "validated" 
-                    ? "Comentarios sobre la aprobación..." 
+                  validationAction === "validated"
+                    ? "Comentarios sobre la aprobación..."
                     : validationAction === "observed"
-                    ? "Explica las observaciones..."
-                    : "Explica las razones del rechazo..."
+                      ? "Explica las observaciones..."
+                      : "Explica las razones del rechazo..."
                 }
                 value={validationComments}
                 onChange={(e) => setValidationComments(e.target.value)}
@@ -4763,7 +4809,7 @@ export default function RiskValidationPage() {
                 data-testid="textarea-validation-comments"
               />
             </div>
-            
+
             {validationType === "action-plan" && (
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -4776,7 +4822,7 @@ export default function RiskValidationPage() {
                 </label>
               </div>
             )}
-            
+
             <div className="flex justify-end space-x-2">
               <Button
                 variant="outline"
@@ -4803,13 +4849,13 @@ export default function RiskValidationPage() {
                   validationAction === "validated"
                     ? "bg-green-600 hover:bg-green-700"
                     : validationAction === "observed"
-                    ? "bg-orange-600 hover:bg-orange-700"
-                    : ""
+                      ? "bg-orange-600 hover:bg-orange-700"
+                      : ""
                 }
                 variant={validationAction === "rejected" ? "destructive" : "default"}
                 data-testid="button-confirm-validation"
               >
-                {(validateMutation.isPending || validateControlMutation.isPending || validateActionPlanMutation.isPending) ? "Procesando..." : 
+                {(validateMutation.isPending || validateControlMutation.isPending || validateActionPlanMutation.isPending) ? "Procesando..." :
                   validationAction === "validated" ? "Aprobar" : validationAction === "observed" ? "Observar" : "Rechazar"
                 }
               </Button>
@@ -4991,7 +5037,7 @@ function ProcessValidationCard({ process, onDrillDown }: ProcessValidationCardPr
           </Badge>
         </div>
       </CardHeader>
-      
+
       <CardContent className="space-y-4">
         {/* Progress Bar */}
         <div className="space-y-2">
@@ -5000,7 +5046,7 @@ function ProcessValidationCard({ process, onDrillDown }: ProcessValidationCardPr
             <span className="font-medium">{process.completionPercentage}%</span>
           </div>
           <div className="w-full bg-gray-200 rounded-full h-2">
-            <div 
+            <div
               className="bg-blue-600 h-2 rounded-full transition-all duration-300"
               style={{ width: `${process.completionPercentage}%` }}
             />
@@ -5037,7 +5083,7 @@ function ProcessValidationCard({ process, onDrillDown }: ProcessValidationCardPr
         )}
 
         {/* Drill Down Button */}
-        <Button 
+        <Button
           onClick={() => onDrillDown(process.macroprocesoId)}
           className="w-full"
           variant="outline"
