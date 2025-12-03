@@ -41,7 +41,9 @@ COPY . .
 
 # Build the frontend application
 # This runs: vite build -> outputs to dist/public
-RUN npm run build
+# Debug: List client directory to verify existence
+RUN ls -la client/
+RUN npx vite build
 
 # Verify build output exists
 RUN ls -la dist/public && \
