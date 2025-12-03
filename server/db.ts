@@ -21,12 +21,21 @@ const isRenderDb =
   process.env.RENDER === 'true' || // Generic Render environment flag
   false;
 
+// Detect if using Google Cloud SQL
+const isCloudSql = 
+  process.env.IS_GCP_DEPLOYMENT === 'true' ||
+  databaseUrl?.includes('.googleapis.com') ||
+  databaseUrl?.includes('cloudsql') ||
+  false;
+
 // Detect pooler based on actual connection string content (not env var name)
-const isPooled = !isRenderDb && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
+const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
 
 // Log which database is being used
 if (isRenderDb) {
   console.log(`[DB Config] Using: Render PostgreSQL (Detected via ${process.env.RENDER === 'true' ? 'Env Var' : 'URL'}), host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
+} else if (isCloudSql) {
+  console.log(`[DB Config] Using: Google Cloud SQL, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 } else {
   console.log(`[DB Config] Using: ${isPooled ? 'Neon Pooled connection' : 'Neon Direct connection'}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 }
@@ -43,6 +52,16 @@ if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL && !isRenderDb) 
 if (databaseUrl) {
   const isProduction = process.env.NODE_ENV === 'production';
 
+  // Ensure Cloud SQL connection string has sslmode=require
+  // Cloud SQL with public IP requires SSL but should not require client certificates
+  let normalizedDatabaseUrl = databaseUrl;
+  if (isCloudSql && !databaseUrl.includes('sslmode=')) {
+    normalizedDatabaseUrl = databaseUrl.includes('?')
+      ? `${databaseUrl}&sslmode=require`
+      : `${databaseUrl}?sslmode=require`;
+    console.log('[DB Config] Added sslmode=require to Cloud SQL connection string');
+  }
+
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
   // Increase timeout to handle occasional slow SSL negotiations
   const connectionTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
@@ -52,8 +71,12 @@ if (databaseUrl) {
 
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
+  // Cloud SQL requires SSL but may not require client certificates if configured properly
+  // For Cloud SQL with public IP, use sslmode=require (not verify-full) to avoid client cert requirement
   const sslConfig = isRenderDb
     ? { rejectUnauthorized: false }  // Render requires SSL
+    : isCloudSql
+    ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
     : (isProduction ? { rejectUnauthorized: false } : false);
 
   // Optimized pool settings for Render PostgreSQL Basic-1gb (1 GB RAM, 0.5 CPU)
@@ -62,7 +85,7 @@ if (databaseUrl) {
   // - Shorter idle timeout to recycle connections before Render closes them
   // - Aggressive keep-alive to maintain connection health
   pool = new Pool({
-    connectionString: databaseUrl,
+    connectionString: normalizedDatabaseUrl,
     max: isRenderDb ? 20 : (isPooled ? 10 : 6),  // Increased to 20 for Render Basic-1gb (can handle ~50-100)
     min: isRenderDb ? 5 : 2,  // Keep 5 warm connections for faster response
     idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
