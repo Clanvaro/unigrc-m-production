@@ -15,9 +15,20 @@ console.log(`Starting frontend server...`);
 console.log(`PORT: ${PORT}`);
 console.log(`API_URL: ${API_URL}`);
 
+// Request logging middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.send('OK');
+});
+
+// Test API routing
+app.get('/api/test', (req, res) => {
+    res.json({ message: 'API routing works', apiUrl: API_URL });
 });
 
 // Proxy API requests
@@ -25,11 +36,12 @@ app.use('/api', createProxyMiddleware({
     target: API_URL,
     changeOrigin: true,
     secure: false, // Handle potential SSL issues if any
+    logLevel: 'debug', // Enable debug logging
     pathRewrite: {
         // Keep /api prefix as backend expects it
     },
     onProxyReq: (proxyReq, req, res) => {
-        // Optional: Add custom headers if needed
+        console.log(`Proxying ${req.method} ${req.url} -> ${API_URL}${req.url}`);
     },
     onError: (err, req, res) => {
         console.error('Proxy Error:', err);
@@ -42,6 +54,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Handle SPA routing - return index.html for all non-API requests
 app.get('*', (req, res) => {
+    console.log(`Fallback to index.html for: ${req.url}`);
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
