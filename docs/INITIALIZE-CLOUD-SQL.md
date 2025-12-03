@@ -12,7 +12,15 @@ Este documento explica cómo inicializar la base de datos en Google Cloud SQL de
 
 ## Opción 1: Inicialización desde tu máquina local (Recomendado)
 
-### Paso 1: Instalar Cloud SQL Proxy
+### Paso 1: Autenticar con Google Cloud
+
+```bash
+gcloud auth application-default login
+```
+
+Esto abrirá tu navegador para autenticarte. Sigue las instrucciones en pantalla.
+
+### Paso 2: Instalar Cloud SQL Proxy
 
 ```bash
 # macOS
@@ -27,25 +35,37 @@ chmod +x cloud-sql-proxy
 # Descargar desde: https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.windows.amd64.exe
 ```
 
-### Paso 2: Iniciar Cloud SQL Proxy
+### Paso 3: Iniciar Cloud SQL Proxy
 
-En una terminal separada:
+**Abre una terminal nueva** y ejecuta (deja esta terminal abierta):
 
 ```bash
 ./cloud-sql-proxy unigrc-m:southamerica-west1:unigrc-db --port=5432
 ```
 
-Esto creará un túnel local en `localhost:5432` que se conecta a Cloud SQL.
-
-### Paso 3: Configurar DATABASE_URL local
-
-```bash
-export DATABASE_URL="postgresql://unigrc_user:UniGRC2025User!@localhost:5432/unigrc_db"
+Deberías ver un mensaje como:
+```
+2025/12/03 17:00:00 Listening on 127.0.0.1:5432 for unigrc-m:southamerica-west1:unigrc-db
+2025/12/03 17:00:00 Ready for new connections
 ```
 
-**Nota:** Reemplaza la contraseña con la contraseña real de tu base de datos.
+**⚠️ IMPORTANTE:** Deja esta terminal abierta mientras ejecutas el script de inicialización.
 
-### Paso 4: Ejecutar script de inicialización
+### Paso 4: Configurar DATABASE_URL local
+
+En **otra terminal nueva**, ejecuta:
+
+```bash
+export DATABASE_URL="postgresql://unigrc_user:UniGRC2025User%@localhost:5432/unigrc_db"
+```
+
+**Nota:** 
+- Reemplaza `UniGRC2025User%` con tu contraseña real (si tiene caracteres especiales, codifícalos en URL)
+- El `%` al final debe ser `%25` si lo pones directamente en la URL, o simplemente `%` si usas comillas simples
+
+### Paso 5: Ejecutar script de inicialización
+
+En la misma terminal del Paso 4:
 
 ```bash
 npm run db:init

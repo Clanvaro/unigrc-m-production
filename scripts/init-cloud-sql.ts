@@ -26,6 +26,15 @@ async function initDatabase() {
     process.exit(1);
   }
 
+  // Para conexiones con IP pública de Cloud SQL, usar sslmode=no-verify temporalmente
+  // Esto es solo para inicialización local, en producción se usa Cloud SQL Proxy
+  let dbUrl = process.env.DATABASE_URL;
+  if (dbUrl.includes('34.176.37.114') && !dbUrl.includes('sslmode=')) {
+    dbUrl = dbUrl.includes('?') ? `${dbUrl}&sslmode=no-verify` : `${dbUrl}?sslmode=no-verify`;
+    process.env.DATABASE_URL = dbUrl;
+    console.log('ℹ️  Usando sslmode=no-verify para conexión con IP pública (solo inicialización)');
+  }
+
   try {
     // Paso 1: Crear el esquema
     console.log('📊 Paso 1: Creando esquema de la base de datos...');
