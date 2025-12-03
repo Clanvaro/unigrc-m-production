@@ -41,8 +41,12 @@ COPY . .
 
 # Build the frontend application
 # This runs: vite build -> outputs to dist/public
-# Debug: List client directory to verify existence
-RUN ls -la client/
+# Build the frontend application
+# This runs: vite build -> outputs to dist/public
+# Debug: List files to verify config existence
+RUN ls -la
+# Rename config to JS to avoid TS loading issues in Docker
+RUN mv vite.config.ts vite.config.js
 RUN npx vite build
 
 # Verify build output exists
