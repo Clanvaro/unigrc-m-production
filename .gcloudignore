@@ -35,6 +35,8 @@ scripts/
 !client/**/*.ts
 !client/**/*.tsx
 !shared/**/*.ts
+!vite.config.ts
+!tailwind.config.ts
 
 # Documentation
 *.md
