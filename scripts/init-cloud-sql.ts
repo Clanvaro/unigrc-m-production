@@ -76,7 +76,7 @@ async function initDatabase() {
     const [adminUser] = await db.insert(users).values({
       username: 'admin',
       email: 'admin@unigrc.local',
-      passwordHash,
+      password: passwordHash, // El campo en el schema es 'password', no 'passwordHash'
       fullName: 'Administrador del Sistema',
       isActive: true,
       isPlatformAdmin: true
