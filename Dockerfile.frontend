@@ -10,6 +10,26 @@ FROM node:20-alpine AS builder
 # Set working directory
 WORKDIR /app
 
+# Install Python and build dependencies (required for node-gyp and canvas)
+# This MUST happen before npm install
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    make \
+    g++ \
+    pkgconf \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    giflib-dev \
+    pixman-dev
+
+# Create symlink for python (node-gyp looks for 'python')
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Set Python path explicitly for node-gyp
+ENV PYTHON=/usr/bin/python3
+
 # Copy package files for dependency installation
 COPY package*.json ./
 
