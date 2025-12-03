@@ -64,6 +64,9 @@ RUN apk add --no-cache dumb-init
 # Set working directory
 WORKDIR /app
 
+# Create package.json with type:module for ESM support
+RUN echo '{"type":"module"}' > package.json
+
 # Install production dependencies for the server
 RUN npm install express@4 http-proxy-middleware@2
 
