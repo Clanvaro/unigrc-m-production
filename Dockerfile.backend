@@ -61,16 +61,28 @@ RUN mkdir -p dist/public
 # ============================================================================
 FROM node:20-alpine AS runtime
 
-# Install dumb-init and runtime dependencies
+# Install dumb-init, runtime dependencies, and build tools
+# Build tools are needed because canvas needs to compile with node-gyp
 RUN apk add --no-cache \
     dumb-init \
     python3 \
+    make \
+    g++ \
     pkgconf \
     cairo \
+    cairo-dev \
     jpeg \
+    jpeg-dev \
     pango \
+    pango-dev \
     giflib \
-    pixman
+    giflib-dev \
+    pixman \
+    pixman-dev
+
+# Create symlink for python (node-gyp looks for 'python')
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+ENV PYTHON=/usr/bin/python3
 
 # Set working directory
 WORKDIR /app
