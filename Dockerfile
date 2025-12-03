@@ -101,6 +101,9 @@ COPY --from=builder /app/shared ./shared
 # Copy migrations (needed for database initialization)
 COPY --from=builder /app/migrations ./migrations
 
+# Create empty dist/public directory (backend expects this for static serving)
+RUN mkdir -p dist/public
+
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=8080
