@@ -7,6 +7,11 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+console.log("📍 Vite Config Debug:");
+console.log("   __dirname:", __dirname);
+console.log("   root:", path.resolve(__dirname, "client"));
+console.log("   input:", path.resolve(__dirname, "client/index.html"));
+
 export default defineConfig({
   base: "/",
   plugins: [
@@ -33,6 +38,7 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
     rollupOptions: {
+      input: path.resolve(__dirname, "client/index.html"),
       output: {
         manualChunks: {
           "react-vendor": ["react", "react-dom", "react-hook-form"],
