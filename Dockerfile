@@ -38,8 +38,22 @@ RUN npm ci --legacy-peer-deps
 # Copy source code and configuration files
 COPY . .
 
-# Build the application
-RUN npm run build
+# Build ONLY the backend (skip frontend build)
+RUN npx esbuild server/index.ts \
+    --platform=node \
+    --packages=external \
+    --bundle \
+    --format=esm \
+    --minify \
+    --tree-shaking=true \
+    --external:exceljs \
+    --external:chartjs-node-canvas \
+    --external:pdfjs-dist \
+    --external:puppeteer \
+    --external:html2canvas \
+    --external:./vite \
+    --external:vite \
+    --outdir=dist
 
 # ============================================================================
 # Stage 2: Runtime - Production-only dependencies and built artifacts
