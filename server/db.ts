@@ -28,6 +28,10 @@ const isCloudSql =
   databaseUrl?.includes('cloudsql') ||
   false;
 
+// Detect if using Cloud SQL Proxy (Unix socket connection)
+// Cloud SQL Proxy uses format: postgresql://user:pass@/db?host=/cloudsql/...
+const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
+
 // Detect pooler based on actual connection string content (not env var name)
 const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
 
@@ -52,10 +56,15 @@ if (process.env.POOLED_DATABASE_URL && process.env.DATABASE_URL && !isRenderDb) 
 if (databaseUrl) {
   const isProduction = process.env.NODE_ENV === 'production';
 
-  // Ensure Cloud SQL connection string has sslmode=require
+  // Normalize Cloud SQL connection string
+  // Cloud SQL Proxy (Unix socket) doesn't need SSL
   // Cloud SQL with public IP requires SSL but should not require client certificates
   let normalizedDatabaseUrl = databaseUrl;
-  if (isCloudSql && !databaseUrl.includes('sslmode=')) {
+  if (isCloudSqlProxy) {
+    // Remove sslmode if present (Cloud SQL Proxy doesn't need SSL)
+    normalizedDatabaseUrl = normalizedDatabaseUrl.replace(/[&?]sslmode=[^&]*/g, '');
+    console.log('[DB Config] Using Cloud SQL Proxy - SSL not required');
+  } else if (isCloudSql && !databaseUrl.includes('sslmode=')) {
     normalizedDatabaseUrl = databaseUrl.includes('?')
       ? `${databaseUrl}&sslmode=require`
       : `${databaseUrl}?sslmode=require`;
@@ -71,9 +80,12 @@ if (databaseUrl) {
 
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
-  // Cloud SQL requires SSL but may not require client certificates if configured properly
+  // Cloud SQL Proxy (Unix socket) doesn't need SSL - connection is already secure
+  // Cloud SQL with public IP requires SSL but may not require client certificates if configured properly
   // For Cloud SQL with public IP, use sslmode=require (not verify-full) to avoid client cert requirement
-  const sslConfig = isRenderDb
+  const sslConfig = isCloudSqlProxy
+    ? false  // Cloud SQL Proxy doesn't need SSL
+    : isRenderDb
     ? { rejectUnauthorized: false }  // Render requires SSL
     : isCloudSql
     ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
