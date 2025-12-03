@@ -77,6 +77,9 @@ const allowedOrigins = [
   'https://unigrc.onrender.com',
   ...(process.env.RENDER_EXTERNAL_URL ? [process.env.RENDER_EXTERNAL_URL] : []),
   
+  // Google Cloud Run domains
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  
   // AWS Production domains (CloudFront, ALB, EC2, ECS, Elastic Beanstalk)
   ...(process.env.AWS_ALLOWED_ORIGINS?.split(',') || []),
   ...(process.env.CLOUDFRONT_DOMAIN ? [`https://${process.env.CLOUDFRONT_DOMAIN}`] : []),
@@ -100,6 +103,11 @@ export const corsConfig: CorsOptions = {
     
     // Check Render patterns (*.onrender.com)
     if (origin.endsWith('.onrender.com')) {
+      return callback(null, true);
+    }
+    
+    // Check Google Cloud Run patterns (*.run.app)
+    if (origin.endsWith('.run.app')) {
       return callback(null, true);
     }
     
