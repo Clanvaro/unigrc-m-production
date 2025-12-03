@@ -17,6 +17,7 @@ RUN apk add --no-cache \
     py3-pip \
     make \
     g++ \
+    pkg-config \
     cairo-dev \
     jpeg-dev \
     pango-dev \
@@ -64,6 +65,14 @@ FROM node:20-alpine AS runtime
 RUN apk add --no-cache \
     dumb-init \
     python3 \
+    make \
+    g++ \
+    pkg-config \
+    cairo-dev \
+    jpeg-dev \
+    pango-dev \
+    giflib-dev \
+    pixman-dev \
     cairo \
     jpeg \
     pango \
