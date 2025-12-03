@@ -1,0 +1,97 @@
+# ============================================================================
+# .dockerignore - Optimize Docker Build Context
+# ============================================================================
+# This file excludes unnecessary files from the Docker build context,
+# significantly reducing build time and image size.
+# ============================================================================
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json.bak
+
+# Build outputs (will be generated during Docker build)
+dist/
+build/
+.next/
+out/
+
+# Development files
+.env
+.env.local
+.env.*.local
+*.log
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
+__tests__/
+tests/
+test/
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# Replit-specific files (not needed in GCP)
+.replit
+.replitignore
+replit.nix
+.upm/
+.config/
+
+# Deployment configs for other platforms
+render.yaml
+app.yaml
+Procfile
+railway.json
+fly.toml
+
+# Scripts (not needed in container)
+scripts/
+*.sh
+!deploy-gcp.sh
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+
+# Artifacts directory (Gemini/Antigravity)
+.gemini/
+
+# Database files (should not be in container)
+*.db
+*.sqlite
+*.sqlite3
+
+# Misc
+.npmrc
+.editorconfig
+.prettierrc
+.eslintrc*
+tsconfig.tsbuildinfo
