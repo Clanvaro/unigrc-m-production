@@ -54,7 +54,7 @@ RUN ls -la dist/public && \
     echo "✅ Frontend build completed successfully"
 
 # ============================================================================
-# Stage 2: Runtime - Serve static files with 'serve' package
+# Stage 2: Runtime - Serve static files with Express Proxy
 # ============================================================================
 FROM node:20-alpine AS runtime
 
@@ -64,12 +64,14 @@ RUN apk add --no-cache dumb-init
 # Set working directory
 WORKDIR /app
 
-# Install 'serve' package globally for serving static files
-# serve is a lightweight static file server perfect for SPAs
-RUN npm install -g serve@14
+# Install production dependencies for the server
+RUN npm install express@4 http-proxy-middleware@2
 
 # Copy built static files from builder stage
 COPY --from=builder /app/dist/public ./public
+
+# Copy the server script
+COPY server.js ./
 
 # Set environment variables
 ENV NODE_ENV=production
@@ -81,9 +83,5 @@ EXPOSE 8080
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
 
-# Serve the static files
-# Options:
-#   -s: Single-page application mode (rewrites all routes to index.html)
-#   -l: Listen port
-#   public: Directory to serve
-CMD ["serve", "-s", "public", "-l", "8080"]
+# Run the Express server
+CMD ["node", "server.js"]
