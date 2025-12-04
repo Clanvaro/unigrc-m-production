@@ -407,6 +407,90 @@ export default function Risks() {
     enabled: !!viewingRisk?.id,
   });
 
+  // Memoize legacy helper function for backward compatibility
+  // This must be defined before getRiskProcessResponsibles since it's used there
+  const getProcessOwnerDetailsLegacy = useCallback((risk: Risk): ResponsibleWithValidation | null => {
+    // First, try to use direct processOwner if exists
+    if (risk.processOwner && risk.processOwner.trim() !== '') {
+      // Extract just the name (before " - " if it exists)
+      const cleanName = risk.processOwner.split(' - ')[0].trim();
+
+      // Find process owner by name
+      const owner = processOwners.find((po: any) => po.name === cleanName);
+      if (owner) {
+        return {
+          name: owner.name,
+          position: owner.position || 'Sin cargo definido',
+          validationStatus: 'pending_validation'
+        };
+      }
+
+      // If not found in process owners table, use the clean name
+      return {
+        name: cleanName,
+        position: 'Cargo no definido',
+        validationStatus: 'pending_validation'
+      };
+    }
+
+    // If no direct processOwner, inherit from process hierarchy
+    let ownerId: string | null = null;
+
+    // Try to get owner from subproceso first
+    if (risk.subprocesoId) {
+      const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
+      if (subproceso?.ownerId) {
+        ownerId = subproceso.ownerId;
+      } else if (subproceso?.procesoId) {
+        // If subproceso has no owner, try its parent process
+        const process = processes.find((p: any) => p.id === subproceso.procesoId);
+        if (process?.ownerId) {
+          ownerId = process.ownerId;
+        } else if (process?.macroprocesoId) {
+          // If process has no owner, try its parent macroproceso
+          const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
+          if (macroproceso?.ownerId) {
+            ownerId = macroproceso.ownerId;
+          }
+        }
+      }
+    }
+    // Try to get owner from process if not found in subproceso
+    else if (risk.processId) {
+      const process = processes.find((p: any) => p.id === risk.processId);
+      if (process?.ownerId) {
+        ownerId = process.ownerId;
+      } else if (process?.macroprocesoId) {
+        // If process has no owner, try its parent macroproceso
+        const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
+        if (macroproceso?.ownerId) {
+          ownerId = macroproceso.ownerId;
+        }
+      }
+    }
+    // Try to get owner from macroproceso if not found in process
+    else if (risk.macroprocesoId) {
+      const macroproceso = macroprocesos.find((m: any) => m.id === risk.macroprocesoId);
+      if (macroproceso?.ownerId) {
+        ownerId = macroproceso.ownerId;
+      }
+    }
+
+    // If we found an ownerId, get the process owner details
+    if (ownerId) {
+      const owner = processOwners.find((po: any) => po.id === ownerId);
+      if (owner) {
+        return {
+          name: owner.name,
+          position: owner.position || 'Sin cargo definido',
+          validationStatus: 'pending_validation'
+        };
+      }
+    }
+
+    return null;
+  }, [processOwners, subprocesos, processes, macroprocesos]);
+
   // Memoize helper function to get all responsible owners for a risk from riskProcessLinks
   // This function is called frequently in filters and columns, so memoization prevents recalculation
   const getRiskProcessResponsibles = useCallback((risk: Risk): ResponsibleWithValidation[] => {
@@ -510,90 +594,7 @@ export default function Risks() {
 
     // Convert map to array
     return Array.from(responsiblesMap.values());
-  };
-
-  // Memoize legacy helper function for backward compatibility
-  const getProcessOwnerDetailsLegacy = useCallback((risk: Risk): ResponsibleWithValidation | null => {
-    // First, try to use direct processOwner if exists
-    if (risk.processOwner && risk.processOwner.trim() !== '') {
-      // Extract just the name (before " - " if it exists)
-      const cleanName = risk.processOwner.split(' - ')[0].trim();
-
-      // Find process owner by name
-      const owner = processOwners.find((po: any) => po.name === cleanName);
-      if (owner) {
-        return {
-          name: owner.name,
-          position: owner.position || 'Sin cargo definido',
-          validationStatus: 'pending_validation'
-        };
-      }
-
-      // If not found in process owners table, use the clean name
-      return {
-        name: cleanName,
-        position: 'Cargo no definido',
-        validationStatus: 'pending_validation'
-      };
-    }
-
-    // If no direct processOwner, inherit from process hierarchy
-    let ownerId: string | null = null;
-
-    // Try to get owner from subproceso first
-    if (risk.subprocesoId) {
-      const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
-      if (subproceso?.ownerId) {
-        ownerId = subproceso.ownerId;
-      } else if (subproceso?.procesoId) {
-        // If subproceso has no owner, try its parent process
-        const process = processes.find((p: any) => p.id === subproceso.procesoId);
-        if (process?.ownerId) {
-          ownerId = process.ownerId;
-        } else if (process?.macroprocesoId) {
-          // If process has no owner, try its parent macroproceso
-          const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
-          if (macroproceso?.ownerId) {
-            ownerId = macroproceso.ownerId;
-          }
-        }
-      }
-    }
-    // Try to get owner from process if not found in subproceso
-    else if (risk.processId) {
-      const process = processes.find((p: any) => p.id === risk.processId);
-      if (process?.ownerId) {
-        ownerId = process.ownerId;
-      } else if (process?.macroprocesoId) {
-        // If process has no owner, try its parent macroproceso
-        const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
-        if (macroproceso?.ownerId) {
-          ownerId = macroproceso.ownerId;
-        }
-      }
-    }
-    // Try to get owner from macroproceso if not found in process
-    else if (risk.macroprocesoId) {
-      const macroproceso = macroprocesos.find((m: any) => m.id === risk.macroprocesoId);
-      if (macroproceso?.ownerId) {
-        ownerId = macroproceso.ownerId;
-      }
-    }
-
-    // If we found an ownerId, get the process owner details
-    if (ownerId) {
-      const owner = processOwners.find((po: any) => po.id === ownerId);
-      if (owner) {
-        return {
-          name: owner.name,
-          position: owner.position || 'Sin cargo definido',
-          validationStatus: 'pending_validation'
-        };
-      }
-    }
-
-    return null;
-  }, [processOwners, subprocesos, processes, macroprocesos]);
+  }, [allRiskProcessLinks, processOwners, subprocesos, processes, macroprocesos, getProcessOwnerDetailsLegacy]);
 
   // Memoize helper function to get aggregated validation status for a risk
   const getAggregatedValidationStatus = useCallback((risk: Risk) => {
