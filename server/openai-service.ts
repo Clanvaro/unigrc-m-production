@@ -29,7 +29,17 @@ class OpenAIService {
 
     if (!apiKey) {
       console.warn('⚠️ OpenAI credentials not configured. AI features will be disabled.');
-      console.warn('Required: OPENAI_API_KEY');
+      console.warn('Required: OPENAI_API_KEY environment variable');
+      console.warn('To enable AI features, add OPENAI_API_KEY to your .env file');
+      this.isReady = false;
+      return;
+    }
+
+    // Validate API key format (should start with 'sk-')
+    if (!apiKey.startsWith('sk-')) {
+      console.warn('⚠️ OpenAI API key format appears invalid. Expected format: sk-...');
+      console.warn('Please verify your OPENAI_API_KEY in the .env file');
+      this.isReady = false;
       return;
     }
 
@@ -41,9 +51,14 @@ class OpenAIService {
       });
 
       this.isReady = true;
-      console.log(`✅ OpenAI Service initialized with model: ${model}`);
+      console.log(`✅ OpenAI Service initialized successfully`);
+      console.log(`   Model: ${model}`);
+      console.log(`   Provider: OpenAI`);
     } catch (error) {
       console.error('❌ Failed to initialize OpenAI Service:', error);
+      if (error instanceof Error) {
+        console.error(`   Error message: ${error.message}`);
+      }
       this.isReady = false;
     }
   }

@@ -2280,14 +2280,14 @@ export default function Risks() {
   );
 
   return (
-    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
+    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
 
       {/* Tabs for different risk views - lazy mounted */}
       <Tabs
         value={activeTab}
         onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
-        className="flex-1 flex flex-col overflow-hidden"
+        className="flex-1 flex flex-col min-h-0"
       >
         <div className="flex items-center justify-between gap-4 shrink-0 mb-0">
           <TabsList>
@@ -2314,17 +2314,17 @@ export default function Risks() {
         </div>
 
         {/* Tab: Básica - fast loading using optimized endpoint */}
-        <TabsContent value="basica" className="flex-1 flex flex-col mt-0 overflow-hidden">
+        <TabsContent value="basica" className="flex-1 flex flex-col mt-0 min-h-0">
           {isLoading ? (
-            <Card className="flex-1 flex flex-col overflow-hidden">
+            <Card className="flex-1 flex flex-col min-h-0">
               <CardContent className="p-4">
                 <RisksPageSkeleton />
               </CardContent>
             </Card>
           ) : (
-            <Card className="flex-1 flex flex-col overflow-hidden">
-              <CardContent className="p-0 h-full flex flex-col">
-                <div className="flex-1 overflow-hidden">
+            <Card className="flex-1 flex flex-col min-h-0">
+              <CardContent className="p-0 h-full flex flex-col min-h-0">
+                <div className="flex-1 overflow-hidden min-h-0">
                   <VirtualizedTable
                     data={displayData}
                     columns={columnsBasic}
@@ -2417,17 +2417,17 @@ export default function Risks() {
         </TabsContent>
 
         {/* Tab: Detalle - full data with batch-relations, complete table */}
-        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0 overflow-hidden">
+        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0 min-h-0">
           {isLoading ? (
-            <Card className="flex-1 flex flex-col overflow-hidden">
+            <Card className="flex-1 flex flex-col min-h-0">
               <CardContent className="p-4">
                 <RisksPageSkeleton />
               </CardContent>
             </Card>
           ) : (
-            <Card className="flex-1 flex flex-col overflow-hidden">
-              <CardContent className="p-0 h-full flex flex-col">
-                <div className="flex-1 overflow-hidden">
+            <Card className="flex-1 flex flex-col min-h-0">
+              <CardContent className="p-0 h-full flex flex-col min-h-0">
+                <div className="flex-1 overflow-hidden min-h-0">
                   <VirtualizedTable
                     data={displayData}
                     columns={columns}
