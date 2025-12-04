@@ -32,6 +32,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { getCSRFTokenFromCookie } from "@/lib/csrf-cache";
 import { useExcelExport } from "@/hooks/useExcelExport";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { usePermissions } from "@/hooks/usePermissions";
 import { pageTitles, UserMenu, type HeaderProps } from "@/components/layout/header-parts";
 import type { 
   Risk, 
@@ -50,6 +51,7 @@ import type {
 export default function Header({ isMobile = false, onToggleMobileSidebar, onToggleDesktopSidebar, isDesktopSidebarCollapsed }: HeaderProps) {
   const [location, setLocation] = useLocation();
   const { theme, toggleTheme } = useTheme();
+  const { canViewSection, currentUser } = usePermissions();
   
   // Handle dynamic routes
   let currentPage = pageTitles[location as keyof typeof pageTitles];
@@ -240,7 +242,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   const { data: roles = [] } = useQuery<Role[]>({
     queryKey: ["/api/roles"],
-    enabled: location === "/config/users",
+    enabled: location === "/config/users" && (canViewSection("config") || currentUser?.isPlatformAdmin || false),
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
     refetchOnWindowFocus: false,
   });

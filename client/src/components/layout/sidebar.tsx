@@ -150,140 +150,142 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
           </ul>
 
         {/* Módulo de Auditoría */}
-        <div className="mt-8">
-          {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
-            Auditoría
-          </h3>)}
-          <ul className="space-y-2">
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/audit-plan-list"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/audit-plan-list' || location === '/audit-plan-wizard' ? 'active' : ''
-                    }`}
-                    onClick={handleLinkClick}
-                  >
-                    <Calendar className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Planificación de Auditoría</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Planificación de Auditoría</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/audits"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/audits' ? 'active' : ''
-                    }`}
-                    onClick={handleLinkClick}
-                  >
-                    <Search className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Auditorías</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Auditorías</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/audit-tests"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/audit-tests' ? 'active' : ''
-                    }`}
-                    data-testid="nav-audit-tests"
-                    onClick={handleLinkClick}
-                  >
-                    <FileCheck className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Pruebas de auditoría</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Pruebas de auditoría</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/audit-findings"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/audit-findings' ? 'active' : ''
-                    }`}
-                    onClick={handleLinkClick}
-                  >
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Hallazgos</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Hallazgos</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/audit-reports"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/audit-reports' ? 'active' : ''
-                    }`}
-                    onClick={handleLinkClick}
-                  >
-                    <FileText className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Informes de Auditoría</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Informes de Auditoría</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-            <li>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PrefetchLink 
-                    href="/working-papers"
-                    className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
-                      location === '/working-papers' ? 'active' : ''
-                    }`}
-                    onClick={handleLinkClick}
-                  >
-                    <BookOpen className="w-4 h-4 shrink-0" />
-                    {!isCollapsed && <span>Papeles de Trabajo</span>}
-                  </PrefetchLink>
-                </TooltipTrigger>
-                {isCollapsed && (
-                  <TooltipContent side="right">
-                    <p>Papeles de Trabajo</p>
-                  </TooltipContent>
-                )}
-              </Tooltip>
-            </li>
-          </ul>
-        </div>
+        {canViewSection("audits") && (
+          <div className="mt-8">
+            {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
+              Auditoría
+            </h3>)}
+            <ul className="space-y-2">
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/audit-plan-list"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/audit-plan-list' || location === '/audit-plan-wizard' ? 'active' : ''
+                      }`}
+                      onClick={handleLinkClick}
+                    >
+                      <Calendar className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Planificación de Auditoría</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Planificación de Auditoría</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/audits"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/audits' ? 'active' : ''
+                      }`}
+                      onClick={handleLinkClick}
+                    >
+                      <Search className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Auditorías</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Auditorías</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/audit-tests"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/audit-tests' ? 'active' : ''
+                      }`}
+                      data-testid="nav-audit-tests"
+                      onClick={handleLinkClick}
+                    >
+                      <FileCheck className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Pruebas de auditoría</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Pruebas de auditoría</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/audit-findings"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/audit-findings' ? 'active' : ''
+                      }`}
+                      onClick={handleLinkClick}
+                    >
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Hallazgos</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Hallazgos</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/audit-reports"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/audit-reports' ? 'active' : ''
+                      }`}
+                      onClick={handleLinkClick}
+                    >
+                      <FileText className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Informes de Auditoría</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Informes de Auditoría</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+              <li>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <PrefetchLink 
+                      href="/working-papers"
+                      className={`sidebar-item flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md transition-colors ${
+                        location === '/working-papers' ? 'active' : ''
+                      }`}
+                      onClick={handleLinkClick}
+                    >
+                      <BookOpen className="w-4 h-4 shrink-0" />
+                      {!isCollapsed && <span>Papeles de Trabajo</span>}
+                    </PrefetchLink>
+                  </TooltipTrigger>
+                  {isCollapsed && (
+                    <TooltipContent side="right">
+                      <p>Papeles de Trabajo</p>
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              </li>
+            </ul>
+          </div>
+        )}
 
         {/* Módulo de Compliance */}
         <div className="mt-8">

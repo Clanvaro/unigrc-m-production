@@ -464,6 +464,76 @@ function getAuthenticatedUserId(req: any, options: { allowDevDemo?: boolean } = 
   throw new Error("User not authenticated");
 }
 
+// Authorization middleware that accepts multiple permissions (user needs at least one)
+function requireAnyPermission(permissions: string[]) {
+  return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
+    let userId: string;
+
+    // Use centralized helper to get authenticated user ID
+    try {
+      userId = getAuthenticatedUserId(req, { allowDevDemo: true });
+    } catch (error) {
+      return res.status(401).json({ message: "Autenticación requerida" });
+    }
+
+    // Set development mock user if not already set (development only)
+    if (process.env.NODE_ENV === 'development' && !req.user) {
+      const activeTenantId = 'single-tenant';
+      let userPermissions: string[] = [];
+
+      try {
+        userPermissions = (await storage.getUserPermissions(userId)) ?? [];
+      } catch (error) {
+        console.error("[requireAnyPermission] Error getting user permissions:", error);
+      }
+
+      (req as any).user = {
+        id: userId,
+        username: 'admin',
+        email: 'admin@riskmatrix.com',
+        activeTenantId,
+        permissions: userPermissions
+      };
+    }
+
+    // SINGLE-TENANT ADMIN BYPASS: Admins have all permissions
+    if (req.user?.isAdmin || req.user?.isPlatformAdmin) {
+      return next();
+    }
+
+    try {
+      // Check if user has any of the required permissions
+      for (const permission of permissions) {
+        const hasExactPermission = await storage.hasPermission(userId, permission);
+        if (hasExactPermission) {
+          return next();
+        }
+
+        // Check for wildcard permissions
+        if (permission.startsWith('view_')) {
+          const hasViewAll = await storage.hasPermission(userId, 'view_all');
+          if (hasViewAll) {
+            return next();
+          }
+        }
+
+        if (permission.startsWith('manage_') || permission.startsWith('create_') ||
+          permission.startsWith('edit_') || permission.startsWith('delete_')) {
+          const hasEditAll = await storage.hasPermission(userId, 'edit_all');
+          if (hasEditAll) {
+            return next();
+          }
+        }
+      }
+
+      // If no permission match found, deny access
+      return res.status(403).json({ message: "Acceso denegado: permisos insuficientes" });
+    } catch (error) {
+      res.status(500).json({ message: "Error al verificar permisos" });
+    }
+  };
+}
+
 // Authorization middleware
 function requirePermission(permission: string) {
   return async (req: Request & { user?: any }, res: Response, next: NextFunction) => {
@@ -13179,7 +13249,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Users - with 60s distributed cache (admin-only endpoint)
-  app.get("/api/users", noCacheMiddleware, isAuthenticated, requirePermission("users:manage"), async (req, res) => {
+  app.get("/api/users", noCacheMiddleware, isAuthenticated, requireAnyPermission(["view_users", "users:manage", "manage_users"]), async (req, res) => {
     try {
       // Try distributed cache first (60s TTL)
       const cacheKey = `users:all`;
@@ -15845,7 +15915,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Cache miss - query database
-      const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, tenantId, limit, offset);
+      // Note: getAuditsPaginated doesn't use tenantId (single-tenant mode)
+      const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, limit, offset);
 
       // Prepare response
       const response = {
@@ -15865,7 +15936,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(response);
     } catch (error) {
       console.error("Get audits error:", error);
-      res.status(500).json({ message: "Failed to get audits" });
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error("Error details:", { errorMessage, errorStack, filters, limit, offset });
+      res.status(500).json({ 
+        message: "Failed to get audits",
+        error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      });
     }
   });
 

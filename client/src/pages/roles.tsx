@@ -16,6 +16,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Plus, Users, Shield, Eye, Trash2, Edit } from "lucide-react";
 import { RoleForm } from "../components/forms/role-form";
 import { PlatformAdminGuard, CreateGuard, EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
+import { usePermissions } from "@/hooks/usePermissions";
 import type { Role } from "@shared/schema";
 
 export default function RolesPage() {
@@ -23,9 +24,11 @@ export default function RolesPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { canViewSection, currentUser } = usePermissions();
 
   const { data: roles = [], isLoading } = useQuery<Role[]>({
     queryKey: ["/api/roles"],
+    enabled: canViewSection("config") || currentUser?.isPlatformAdmin || false,
   });
 
   const deleteMutation = useMutation({

@@ -28,6 +28,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Users, Mail, UserX, Edit, Shield, Calendar } from "lucide-react";
 import { UserForm } from "@/components/forms/user-form";
 import { PermissionGuard, EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
+import { usePermissions } from "@/hooks/usePermissions";
 import type { User, Role } from "@shared/schema";
 
 interface UserWithRoles extends User {
@@ -40,6 +41,7 @@ export default function UsersPage() {
   const [userToDeactivate, setUserToDeactivate] = useState<string | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { canViewSection, currentUser } = usePermissions();
 
   const { data: users = [], isLoading } = useQuery<User[]>({
     queryKey: ["/api/users"],
@@ -47,6 +49,7 @@ export default function UsersPage() {
 
   const { data: roles = [] } = useQuery<Role[]>({
     queryKey: ["/api/roles"],
+    enabled: canViewSection("config") || currentUser?.isPlatformAdmin || false,
   });
 
   const { data: userRoles = [] } = useQuery({
