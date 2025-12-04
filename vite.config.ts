@@ -12,21 +12,33 @@ console.log("   __dirname:", __dirname);
 console.log("   root:", path.resolve(__dirname, "client"));
 console.log("   input:", path.resolve(__dirname, "client/index.html"));
 
-export default defineConfig({
-  base: "/",
-  plugins: [
+export default defineConfig(async () => {
+  // Build plugins array
+  const plugins: any[] = [
     react(),
     runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-      process.env.REPL_ID !== undefined
-      ? [
-        await import("@replit/vite-plugin-cartographer").then((m) =>
-          m.cartographer(),
-        ),
-      ]
-      : []),
-  ],
-  resolve: {
+  ];
+
+  // Only load Replit plugin in development when REPL_ID is set
+  // Skip in production/Docker builds to avoid Socket.emit errors
+  if (process.env.NODE_ENV !== "production" && process.env.REPL_ID !== undefined && process.env.REPL_ID !== "") {
+    try {
+      // Use dynamic import for the Replit plugin
+      const cartographer = await import("@replit/vite-plugin-cartographer");
+      if (cartographer && cartographer.cartographer) {
+        plugins.push(cartographer.cartographer());
+      }
+    } catch (error) {
+      // Silently ignore if plugin is not available (e.g., in Docker build)
+      // This is expected in production builds
+      console.warn("⚠️ Replit cartographer plugin not available, skipping...");
+    }
+  }
+
+  return {
+    base: "/",
+    plugins,
+    resolve: {
     alias: {
       "@": path.resolve(__dirname, "client", "src"),
       "@shared": path.resolve(__dirname, "shared"),
@@ -73,10 +85,11 @@ export default defineConfig({
       },
     },
   },
-  server: {
-    fs: {
-      strict: true,
-      deny: ["**/.*"],
+    server: {
+      fs: {
+        strict: true,
+        deny: ["**/.*"],
+      },
     },
-  },
+  };
 });

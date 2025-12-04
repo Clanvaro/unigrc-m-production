@@ -41,12 +41,11 @@ COPY . .
 
 # Build the frontend application
 # This runs: vite build -> outputs to dist/public
-# Build the frontend application
-# This runs: vite build -> outputs to dist/public
-# Debug: List files to verify config existence
-RUN ls -la
-# Rename config to JS to avoid TS loading issues in Docker
-RUN mv vite.config.ts vite.config.js
+# Set NODE_ENV to production to prevent Replit plugin from loading
+ENV NODE_ENV=production
+# Remove REPL_ID if set to prevent Replit plugin from loading
+ENV REPL_ID=
+# Build the frontend
 RUN npx vite build
 
 # Verify build output exists
