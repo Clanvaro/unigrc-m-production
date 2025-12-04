@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useOptimisticMutation } from "@/hooks/useOptimisticMutation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -158,10 +158,22 @@ export default function RiskEvents() {
     setFilters(viewFilters);
   };
 
-  // Register search handler
+  // Debounced search state - prevents excessive API calls while typing
+  const [searchInput, setSearchInput] = useState("");
+  
+  // Debounce search term (300ms delay) to reduce API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters(prev => ({ ...prev, search: searchInput }));
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // Register search handler with debouncing
   useEffect(() => {
     setSearchHandler((term: string) => {
-      setFilters(prev => ({ ...prev, search: term }));
+      setSearchInput(term);
     });
   }, [setSearchHandler]);
 
@@ -249,26 +261,30 @@ export default function RiskEvents() {
     };
   }
   
-  // Prefetch catalog data with long TTL (10 min cache on server)
+  // Prefetch catalog data with long TTL (30-60 min cache - static catalogs rarely change)
   const { data: macroprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/macroprocesos/basic"],
-    staleTime: 10 * 60 * 1000, // 10 min client cache
+    staleTime: 30 * 60 * 1000, // 30 min client cache - static organizational structure
+    refetchOnWindowFocus: false,
   });
   
   const { data: processesCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/processes/basic"],
-    staleTime: 10 * 60 * 1000,
+    staleTime: 30 * 60 * 1000, // 30 min - static organizational structure
+    refetchOnWindowFocus: false,
   });
   
   const { data: subprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/subprocesos/basic"],
-    staleTime: 10 * 60 * 1000,
+    staleTime: 30 * 60 * 1000, // 30 min - static organizational structure
+    refetchOnWindowFocus: false,
   });
   
   // Fetch risks catalog for risk name lookups (needed for description column)
   const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/risks-basic"],
-    staleTime: 5 * 60 * 1000, // 5 min - risks change more often
+    staleTime: 15 * 60 * 1000, // 15 min - risks change more often than processes
+    refetchOnWindowFocus: false,
   });
   
   // Build lookup maps for O(1) client-side joins
@@ -340,19 +356,20 @@ export default function RiskEvents() {
     toast({ title: "Evento actualizado", description: "El evento de riesgo ha sido actualizado exitosamente." });
   };
 
-  const handleDelete = (id: string) => {
+  // Memoize delete handler
+  const handleDelete = useCallback((id: string) => {
     setDeletingEventId(id);
-  };
+  }, []);
 
-  const confirmDelete = () => {
+  const confirmDelete = useCallback(() => {
     if (deletingEventId) {
       deleteMutation.mutate(deletingEventId);
       setDeletingEventId(null);
     }
-  };
+  }, [deletingEventId, deleteMutation]);
 
-  // Handle sorting
-  const handleSort = (column: "code" | "lossAmount" | "status") => {
+  // Handle sorting - memoized to prevent re-renders
+  const handleSort = useCallback((column: "code" | "lossAmount" | "status") => {
     if (sortColumn === column) {
       // Si es la misma columna, alternar el orden
       if (sortOrder === "none" || sortOrder === "desc") {
@@ -365,12 +382,13 @@ export default function RiskEvents() {
       setSortColumn(column);
       setSortOrder("asc");
     }
-  };
+  }, [sortColumn, sortOrder]);
 
   // Filter and sort events with enriched type
   type EnrichedEvent = typeof riskEvents[number];
   
-  const filteredEvents = riskEvents.filter((event: EnrichedEvent) => {
+  // Memoize filtered and sorted events to prevent recalculation on every render
+  const filteredEvents = useMemo(() => riskEvents.filter((event: EnrichedEvent) => {
     // Filter by search term
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
@@ -444,7 +462,16 @@ export default function RiskEvents() {
     } else {
       return bValue > aValue ? 1 : bValue < aValue ? -1 : 0;
     }
-  });
+  }), [
+    riskEvents,
+    searchTerm,
+    eventTypeFilter,
+    statusFilter,
+    severityFilter,
+    processFilter,
+    sortColumn,
+    sortOrder,
+  ]);
 
   // Display data - switch between mock and real data
   const displayData = testMode50k ? (generateMockEvents(50000) as any[]) : filteredEvents;
@@ -516,8 +543,8 @@ export default function RiskEvents() {
     });
   };
 
-  // Define columns for VirtualizedTable using enriched event type
-  const columns: VirtualizedTableColumn<EnrichedEvent>[] = [
+  // Memoize columns to prevent recreation on every render
+  const columns: VirtualizedTableColumn<EnrichedEvent>[] = useMemo(() => [
     {
       id: 'code',
       header: (
@@ -881,7 +908,19 @@ export default function RiskEvents() {
       ),
       cellClassName: 'items-center',
     },
-  ];
+  ], [
+    handleSort,
+    sortColumn,
+    sortOrder,
+    setViewingEvent,
+    setEditingEvent,
+    handleDelete,
+    deleteMutation,
+    risks,
+    processes,
+    getSeverityColor,
+    getStatusColor,
+  ]);
 
   if (isLoading) {
     return <RiskEventsPageSkeleton />;

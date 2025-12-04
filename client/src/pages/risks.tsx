@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../lib/queryKeys";
 import { useOptimisticMutation } from "@/hooks/useOptimisticMutation";
@@ -189,10 +189,22 @@ export default function Risks() {
     setFilters(viewFilters);
   };
 
-  // Register search handler
+  // Debounced search state - prevents excessive API calls while typing
+  const [searchInput, setSearchInput] = useState("");
+  
+  // Debounce search term (300ms delay) to reduce API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters(prev => ({ ...prev, search: searchInput }));
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // Register search handler with debouncing
   useEffect(() => {
     setSearchHandler((term: string) => {
-      setFilters(prev => ({ ...prev, search: term }));
+      setSearchInput(term);
     });
   }, [setSearchHandler]);
 
@@ -253,6 +265,7 @@ export default function Risks() {
     staleTime: 1000 * 60 * 5, // 5 minutes - invalidated on mutations
     gcTime: 1000 * 60 * 15, // 15 minutes cache retention
     refetchOnWindowFocus: false,
+    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   // Extract data from bootstrap response
@@ -854,8 +867,8 @@ export default function Risks() {
   });
 
 
-  // Handle sorting
-  const handleSort = (column: "code" | "probability" | "impact" | "inherent" | "residual") => {
+  // Handle sorting - memoized to prevent re-renders
+  const handleSort = useCallback((column: "code" | "probability" | "impact" | "inherent" | "residual") => {
     if (sortColumn === column) {
       // Si es la misma columna, alternar el orden
       if (sortOrder === "none" || sortOrder === "desc") {
@@ -868,11 +881,12 @@ export default function Risks() {
       setSortColumn(column);
       setSortOrder("asc");
     }
-  };
+  }, [sortColumn, sortOrder]);
 
   // Note: With pagination, complex filtering is limited to current page only
   // TODO: Move filters to backend for proper pagination with filtering
-  const filteredRisks = risks.filter((risk: Risk) => {
+  // Memoize filtered and sorted risks to prevent recalculation on every render
+  const filteredRisks = useMemo(() => risks.filter((risk: Risk) => {
     // Filter by search term
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
@@ -1174,12 +1188,33 @@ export default function Risks() {
     } else {
       return bValue - aValue;
     }
-  });
+  }), [
+    risks,
+    searchTerm,
+    macroprocesoFilter,
+    processFilter,
+    subprocesoFilter,
+    validationFilter,
+    inherentRiskLevelFilter,
+    residualRiskLevelFilter,
+    ownerFilter,
+    gerenciaFilter,
+    sortColumn,
+    sortOrder,
+    allRiskProcessLinks,
+    allRiskControls,
+    processes,
+    subprocesos,
+    macroprocesos,
+    processGerencias,
+    macroprocesoGerencias,
+  ]);
 
-  const handleDelete = (risk: Risk) => {
+  // Memoize delete handler
+  const handleDelete = useCallback((risk: Risk) => {
     setDeleteConfirmRisk(risk);
     setDeletionReason("");
-  };
+  }, []);
 
   const confirmDelete = () => {
     if (deleteConfirmRisk) {
@@ -1257,7 +1292,8 @@ export default function Risks() {
   };
 
 
-  const getResidualRisk = (risk: Risk) => {
+  // Memoize helper functions to prevent recalculation
+  const getResidualRisk = useCallback((risk: Risk) => {
     // Use pre-calculated residual from optimized endpoint if available
     if ((risk as any).calculatedResidual !== undefined) {
       return (risk as any).calculatedResidual;
@@ -1269,15 +1305,15 @@ export default function Risks() {
       effectTarget: rc.control?.effectTarget || 'both'
     }));
     return calculateResidualRiskFromControls(risk.probability, risk.impact, controls);
-  };
+  }, [allRiskControls]);
 
   // Get control count - uses pre-calculated from endpoint or from batch-relations
-  const getControlCount = (risk: Risk) => {
+  const getControlCount = useCallback((risk: Risk) => {
     if ((risk as any).controlCount !== undefined) {
       return (risk as any).controlCount;
     }
     return allRiskControls.filter((rc: any) => rc.riskId === risk.id).length;
-  };
+  }, [allRiskControls]);
 
   // getAvailableControls now returns pre-filtered, pre-calculated data from the optimized endpoint
   const getAvailableControls = () => {
@@ -1314,8 +1350,8 @@ export default function Risks() {
   // Note: With pagination, filters are applied only to the current page
   const displayData = testMode50k ? generateMockRisks(50000) as any[] : filteredRisks;
 
-  // Define columns for virtualized table
-  const columns: VirtualizedTableColumn<Risk>[] = [
+  // Memoize columns to prevent recreation on every render
+  const columns: VirtualizedTableColumn<Risk>[] = useMemo(() => [
     {
       id: 'code',
       header: (
@@ -2211,7 +2247,29 @@ export default function Risks() {
       cellClassName: 'items-center justify-center',
       visible: visibleColumns.actions,
     },
-  ];
+  ], [
+    sortColumn,
+    sortOrder,
+    handleSort,
+    setViewingRisk,
+    setEditingRisk,
+    handleDelete,
+    deleteMutation,
+    getResidualRisk,
+    getControlCount,
+    getValidationBadge,
+    getRiskControls,
+    getRiskActionPlans,
+    riskCategories,
+    allRiskProcessLinks,
+    allRiskControls,
+    allActionPlans,
+    processes,
+    subprocesos,
+    macroprocesos,
+    processOwners,
+    visibleColumns,
+  ]);
 
   // Columnas para vista básica - excluye proceso, responsable, cargo y validación
   // (esos datos requieren APIs adicionales que no se cargan en vista básica)

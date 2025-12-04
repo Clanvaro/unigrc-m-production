@@ -91,15 +91,37 @@ if (databaseUrl) {
     ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
     : (isProduction ? { rejectUnauthorized: false } : false);
 
-  // Optimized pool settings for Render PostgreSQL Basic-1gb (1 GB RAM, 0.5 CPU)
-  // - Higher max connections to leverage upgraded DB capacity
+  // Optimized pool settings for different environments
+  // Cloud Run + Cloud SQL: max = (concurrency × max_replicas) vs Cloud SQL max_connections
+  // - Default Cloud Run concurrency: 80 (can be reduced to 20-40 for better experience)
+  // - Cloud SQL max_connections: varies by instance type
+  // - Formula: max should be < (Cloud SQL max_connections / max_replicas)
+  // - Example: If Cloud SQL has 100 max_connections and max_replicas=5, max should be < 20
+  // Render PostgreSQL: Higher max connections to leverage upgraded DB capacity
   // - Min connections for warm pool readiness
   // - Shorter idle timeout to recycle connections before Render closes them
   // - Aggressive keep-alive to maintain connection health
+  
+  // Calculate pool max for Cloud SQL based on environment
+  let poolMax: number;
+  if (isCloudSql) {
+    // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
+    // Default: Conservative 10 connections (adjust based on Cloud SQL instance size)
+    // Review Cloud SQL logs to detect too many connections and adjust accordingly
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '10', 10);
+    poolMax = cloudSqlMax;
+  } else if (isRenderDb) {
+    poolMax = 20; // Render Basic-1gb can handle ~50-100
+  } else {
+    poolMax = isPooled ? 10 : 6; // Neon pooled vs direct
+  }
+  
+  const poolMin = isCloudSql ? 2 : (isRenderDb ? 5 : 2);
+  
   pool = new Pool({
     connectionString: normalizedDatabaseUrl,
-    max: isRenderDb ? 20 : (isPooled ? 10 : 6),  // Increased to 20 for Render Basic-1gb (can handle ~50-100)
-    min: isRenderDb ? 5 : 2,  // Keep 5 warm connections for faster response
+    max: poolMax,
+    min: poolMin,
     idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
@@ -110,9 +132,10 @@ if (databaseUrl) {
   });
   db = drizzle(pool, { schema, logger: true });
 
-  const poolMax = isRenderDb ? 20 : (isPooled ? 10 : 6);
-  const poolMin = isRenderDb ? 5 : 2;
   console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
+  if (isCloudSql) {
+    console.log(`📊 Cloud SQL pool config: max=${poolMax} (adjust DB_POOL_MAX env var if needed). Review Cloud SQL logs to detect connection bottlenecks.`);
+  }
 
   if (isRenderDb) {
     console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');

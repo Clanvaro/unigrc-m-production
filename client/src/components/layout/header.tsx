@@ -191,7 +191,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
     enabled: needsProcessData || location === "/risks", // Also needed for risks page exports
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: 30 * 60 * 1000, // 30 minutes - process owners change infrequently
     refetchOnWindowFocus: false,
   });
 

@@ -64,16 +64,23 @@ export class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
+      // Check if it's a module loading error
+      const isModuleError = this.state.error?.message?.includes('Failed to fetch dynamically imported module') ||
+                           this.state.error?.message?.includes('Loading chunk') ||
+                           this.state.error?.message?.includes('Loading CSS chunk');
+
       return (
         <div className="min-h-[400px] flex items-center justify-center p-6">
           <Alert variant="destructive" className="max-w-2xl">
             <AlertTriangle className="h-5 w-5" />
             <AlertTitle className="text-lg font-semibold mb-2">
-              Algo salió mal
+              {isModuleError ? 'Error al cargar el módulo' : 'Algo salió mal'}
             </AlertTitle>
             <AlertDescription className="space-y-4">
               <p className="text-sm">
-                Ha ocurrido un error inesperado. Por favor, intenta recargar la página.
+                {isModuleError 
+                  ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red o a que el archivo no está disponible. Por favor, recarga la página.'
+                  : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
               </p>
               
               {process.env.NODE_ENV === 'development' && this.state.error && (

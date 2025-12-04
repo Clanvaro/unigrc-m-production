@@ -157,11 +157,13 @@ const shouldSkipSession = (path: string): boolean => {
   // - Node modules served by Vite
   // - Static assets (images, fonts, etc.)
   // - Source files served by Vite dev server
+  // - Assets directory (Vite build output)
   return (
     path.startsWith('/@') ||
     path.startsWith('/node_modules/') ||
     path.startsWith('/@fs/') ||
     path.startsWith('/src/') ||
+    path.startsWith('/assets/') ||
     path.endsWith('.tsx') ||
     path.endsWith('.ts') ||
     path.endsWith('.css') ||

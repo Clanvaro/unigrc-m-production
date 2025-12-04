@@ -1258,8 +1258,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 60 seconds (L1: 30s, L2: 60s)
-      await twoTierCache.set(cacheKey, basicProcesses, 60);
+      // Cache for 30 minutes (L1: 5min, L2: 30min) - static organizational structure
+      await twoTierCache.set(cacheKey, basicProcesses, 1800);
 
       res.json(basicProcesses);
     } catch (error) {
@@ -6492,10 +6492,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = parseInt(req.query.limit as string) || 100; // Default 100 events
       const offset = parseInt(req.query.offset as string) || 0;
 
-      // Fetch events with pagination (basic data only for list view)
+      // OPTIMIZED: Fetch events with pagination - SELECT specific columns only (not SELECT *)
       // Single-tenant mode: no tenantId filtering needed
       const [events, totalCount] = await Promise.all([
-        requireDb().select().from(riskEvents)
+        requireDb().select({
+          id: riskEvents.id,
+          code: riskEvents.code,
+          eventType: riskEvents.eventType,
+          eventDate: riskEvents.eventDate,
+          status: riskEvents.status,
+          severity: riskEvents.severity,
+          description: riskEvents.description,
+          estimatedLoss: riskEvents.estimatedLoss,
+          actualLoss: riskEvents.actualLoss,
+          riskId: riskEvents.riskId,
+          processId: riskEvents.processId,
+          createdAt: riskEvents.createdAt,
+          updatedAt: riskEvents.updatedAt,
+        })
+          .from(riskEvents)
           .where(isNull(riskEvents.deletedAt))
           .orderBy(desc(riskEvents.eventDate))
           .limit(limit)
@@ -6505,52 +6520,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(isNull(riskEvents.deletedAt))
       ]);
 
-      // Load related entities for all events in parallel
-      const eventsForList = await Promise.all(events.map(async (event) => {
-        // Get related macroprocesos
-        const relatedMacroprocesos = await requireDb()
-          .select({
-            id: macroprocesos.id,
-            name: macroprocesos.name,
-            code: macroprocesos.code
-          })
-          .from(riskEventMacroprocesos)
-          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
-          .where(eq(riskEventMacroprocesos.riskEventId, event.id));
+      // OPTIMIZED: Batch load all relations in parallel (eliminates N+1 queries)
+      const eventIds = events.map(e => e.id);
+      
+      const [allMacroprocesoRelations, allProcessRelations, allSubprocesoRelations] = await Promise.all([
+        eventIds.length > 0
+          ? requireDb()
+            .select({
+              riskEventId: riskEventMacroprocesos.riskEventId,
+              id: macroprocesos.id,
+              name: macroprocesos.name,
+              code: macroprocesos.code
+            })
+            .from(riskEventMacroprocesos)
+            .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+            .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
+          : Promise.resolve([]),
+        eventIds.length > 0
+          ? requireDb()
+            .select({
+              riskEventId: riskEventProcesses.riskEventId,
+              id: processes.id,
+              name: processes.name,
+              code: processes.code
+            })
+            .from(riskEventProcesses)
+            .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+            .where(inArray(riskEventProcesses.riskEventId, eventIds))
+          : Promise.resolve([]),
+        eventIds.length > 0
+          ? requireDb()
+            .select({
+              riskEventId: riskEventSubprocesos.riskEventId,
+              id: subprocesos.id,
+              name: subprocesos.name,
+              code: subprocesos.code
+            })
+            .from(riskEventSubprocesos)
+            .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+            .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+          : Promise.resolve([])
+      ]);
 
-        // Get related processes
-        const relatedProcesses = await requireDb()
-          .select({
-            id: processes.id,
-            name: processes.name,
-            code: processes.code
-          })
-          .from(riskEventProcesses)
-          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
-          .where(eq(riskEventProcesses.riskEventId, event.id));
+      // Build maps for O(1) lookup
+      const macroprocesoMap = new Map<string, Array<{ id: string; name: string; code: string }>>();
+      const processMap = new Map<string, Array<{ id: string; name: string; code: string }>>();
+      const subprocesoMap = new Map<string, Array<{ id: string; name: string; code: string }>>();
 
-        // Get related subprocesos
-        const relatedSubprocesos = await requireDb()
-          .select({
-            id: subprocesos.id,
-            name: subprocesos.name,
-            code: subprocesos.code
-          })
-          .from(riskEventSubprocesos)
-          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
-          .where(eq(riskEventSubprocesos.riskEventId, event.id));
+      for (const rel of allMacroprocesoRelations) {
+        if (!macroprocesoMap.has(rel.riskEventId)) macroprocesoMap.set(rel.riskEventId, []);
+        if (rel.id) macroprocesoMap.get(rel.riskEventId)!.push({ id: rel.id, name: rel.name, code: rel.code });
+      }
+      for (const rel of allProcessRelations) {
+        if (!processMap.has(rel.riskEventId)) processMap.set(rel.riskEventId, []);
+        if (rel.id) processMap.get(rel.riskEventId)!.push({ id: rel.id, name: rel.name, code: rel.code });
+      }
+      for (const rel of allSubprocesoRelations) {
+        if (!subprocesoMap.has(rel.riskEventId)) subprocesoMap.set(rel.riskEventId, []);
+        if (rel.id) subprocesoMap.get(rel.riskEventId)!.push({ id: rel.id, name: rel.name, code: rel.code });
+      }
 
-        return {
-          ...event,
-          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
-          relatedMacroprocesos: relatedMacroprocesos.map(m => ({ id: m.id, name: m.name, code: m.code })),
-          relatedProcesses: relatedProcesses.map(p => ({ id: p.id, name: p.name, code: p.code })),
-          relatedSubprocesos: relatedSubprocesos.map(s => ({ id: s.id, name: s.name, code: s.code })),
-          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
-          selectedRisks: event.riskId ? [event.riskId] : []
-        };
+      // Map events with relations (O(n) instead of O(n*m) queries)
+      const eventsForList = events.map((event) => ({
+        ...event,
+        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+        relatedMacroprocesos: macroprocesoMap.get(event.id) || [],
+        relatedProcesses: processMap.get(event.id) || [],
+        relatedSubprocesos: subprocesoMap.get(event.id) || [],
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
       }));
 
       res.json({
@@ -13791,12 +13831,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Dashboard stats (existing general dashboard)
   app.get("/api/dashboard/stats", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
+      // Try cache first (5-15 min TTL for dashboard data)
+      const cacheKey = `dashboard-stats:single-tenant`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] dashboard-stats`);
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] dashboard-stats`);
+      
       // Get basic stats first
       const baseStats = await storage.getDashboardStats();
 
-      // Calculate organizational risk metrics including residual risk
-      const allRisks = await requireDb().select().from(risks);
-      const allRiskControls = await requireDb().select().from(riskControls);
+      // OPTIMIZED: Calculate organizational risk metrics - SELECT specific columns only
+      const [allRisks, allRiskControls] = await Promise.all([
+        requireDb().select({
+          id: risks.id,
+          inherentRisk: risks.inherentRisk,
+          processId: risks.processId,
+        }).from(risks).where(isNull(risks.deletedAt)),
+        requireDb().select({
+          riskId: riskControls.riskId,
+          residualRisk: riskControls.residualRisk,
+        }).from(riskControls)
+      ]);
 
       if (allRisks.length > 0) {
         // Calculate residual risk for each risk
@@ -13855,8 +13914,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         };
 
+        // Cache for 5 minutes - dashboard data changes moderately
+        await distributedCache.set(cacheKey, enhancedStats, 300);
         res.json(enhancedStats);
       } else {
+        // Cache for 5 minutes
+        await distributedCache.set(cacheKey, baseStats, 300);
         res.json(baseStats);
       }
     } catch (error) {
@@ -14327,8 +14390,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(macroprocesos)
         .where(isNull(macroprocesos.deletedAt));
 
-      // Cache for 10 minutes
-      await distributedCache.set(cacheKey, data, 600);
+      // Cache for 30 minutes - static organizational structure rarely changes
+      await distributedCache.set(cacheKey, data, 1800);
 
       res.json(data);
     } catch (error) {
@@ -14977,8 +15040,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(subprocesos)
         .where(isNull(subprocesos.deletedAt));
 
-      // Cache for 10 minutes
-      await distributedCache.set(cacheKey, data, 600);
+      // Cache for 30 minutes - static organizational structure rarely changes
+      await distributedCache.set(cacheKey, data, 1800);
 
       res.json(data);
     } catch (error) {
