@@ -2287,9 +2287,9 @@ export default function Risks() {
       <Tabs
         value={activeTab}
         onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
-        className="flex-1 flex flex-col"
+        className="flex-1 flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center justify-between gap-4 shrink-0 mb-0">
           <TabsList>
             <TabsTrigger value="basica" data-testid="tab-basica">Básica</TabsTrigger>
             <TabsTrigger value="detalle" data-testid="tab-detalle">Detalle</TabsTrigger>
