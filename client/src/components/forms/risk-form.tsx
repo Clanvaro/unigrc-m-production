@@ -676,6 +676,14 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       queryClient.invalidateQueries({ queryKey: queryKeys.risks.processes(riskId) });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-associations"] });
       
+      // CRITICAL: Invalidate bootstrap endpoint used by risks page (matches any params)
+      // This ensures the risks list updates immediately after creating/updating a risk
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks/bootstrap"],
+        exact: false,
+        refetchType: 'active' // Force immediate refetch of active queries only
+      });
+      
       // CRITICAL: Invalidate ALL paginated risks queries (matches any params) to update main risks table immediately
       // Using exact:false ensures we match all queries starting with ["/api/risks", "paginated", ...]
       queryClient.invalidateQueries({ 

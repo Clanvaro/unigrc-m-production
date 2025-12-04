@@ -620,7 +620,7 @@ export default function Risks() {
       };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -733,7 +733,7 @@ export default function Risks() {
       // Invalidate risk-controls-with-details (used in table) - single endpoint
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
 
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
@@ -831,7 +831,7 @@ export default function Risks() {
       // Invalidate risk-controls-with-details (used in table) - single endpoint
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
 
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
