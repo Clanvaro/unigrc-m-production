@@ -6367,7 +6367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
 
       // OPTIMIZED: Fetch only essential columns for table display
-      // Removed: description, resolution_notes (large text fields)
+      // Note: description is needed for table display, resolution_notes removed (large text field)
       const [eventsData, totalCountResult] = await Promise.all([
         requireDb().select({
           id: riskEvents.id,
@@ -6376,6 +6376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eventDate: riskEvents.eventDate,
           status: riskEvents.status,
           severity: riskEvents.severity,
+          description: riskEvents.description,
           estimatedLoss: riskEvents.estimatedLoss,
           actualLoss: riskEvents.actualLoss,
           riskId: riskEvents.riskId,

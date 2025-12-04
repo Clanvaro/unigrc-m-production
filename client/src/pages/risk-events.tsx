@@ -224,24 +224,22 @@ export default function RiskEvents() {
   interface LightweightRiskEvent {
     id: string;
     code: string;
-    title: string;
+    eventType: string;
     eventDate: string;
     status: string;
     severity: string;
-    lossAmount: string | null;
-    currency: string | null;
+    description: string;
+    estimatedLoss: string | null;
+    actualLoss: string | null;
     riskId: string | null;
-    processId: number | null;
+    processId: string | null;
     createdAt: string;
     createdBy: string | null;
     updatedAt: string;
     macroprocesoIds: string[];
-    processIds: number[];
+    processIds: string[];
     subprocesoIds: string[];
     selectedRisks: string[];
-    // Added for compatibility with display components
-    description?: string;
-    estimatedLoss?: string | null;
   }
 
   interface RiskEventsPageData {
@@ -291,9 +289,9 @@ export default function RiskEvents() {
     const events = pageData?.riskEvents?.data || [];
     return events.map(event => ({
       ...event,
-      // Use title as description for display compatibility
-      description: event.title || '',
-      estimatedLoss: event.lossAmount,
+      // Use description from backend (now included in the response)
+      description: event.description || '',
+      // estimatedLoss comes directly from backend, no mapping needed
       // Client-side resolve names from cached catalogs
       relatedMacroprocesos: (event.macroprocesoIds || [])
         .map(id => catalogMaps.macroprocesos.get(id))
@@ -673,20 +671,34 @@ export default function RiskEvents() {
       width: '150px',
       minWidth: '150px',
       hideOnMobile: true,
-      cell: (event) => (
-        <span data-testid={`cell-loss-amount-${event.id}`}>
-          {event.estimatedLoss ? (
-            <span className="font-medium">
-              ${parseFloat(event.estimatedLoss).toLocaleString('es-CO', {
-                minimumFractionDigits: 0,
-                maximumFractionDigits: 0
-              })}
+      cell: (event) => {
+        const lossValue = event.estimatedLoss;
+        if (!lossValue) {
+          return (
+            <span className="text-muted-foreground" data-testid={`cell-loss-amount-${event.id}`}>
+              N/A
             </span>
-          ) : (
-            <span className="text-muted-foreground">N/A</span>
-          )}
-        </span>
-      ),
+          );
+        }
+        
+        const numericValue = typeof lossValue === 'string' ? parseFloat(lossValue) : lossValue;
+        if (isNaN(numericValue)) {
+          return (
+            <span className="text-muted-foreground" data-testid={`cell-loss-amount-${event.id}`}>
+              N/A
+            </span>
+          );
+        }
+        
+        return (
+          <span className="font-medium" data-testid={`cell-loss-amount-${event.id}`}>
+            ${numericValue.toLocaleString('es-CO', {
+              minimumFractionDigits: 0,
+              maximumFractionDigits: 0
+            })}
+          </span>
+        );
+      },
       cellClassName: 'items-center',
     },
     {

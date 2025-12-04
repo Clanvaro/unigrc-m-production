@@ -2527,7 +2527,7 @@ function GerenciasContent() {
                   Crear Gerencia
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg" data-testid="dialog-create-gerencia">
+              <DialogContent className="max-w-2xl" data-testid="dialog-create-gerencia">
                 <DialogHeader>
                   <DialogTitle>Crear Nueva Gerencia</DialogTitle>
                   <DialogDescription>
@@ -2680,7 +2680,7 @@ function GerenciasContent() {
       )}
 
       <Dialog open={!!editingGerencia} onOpenChange={(open) => !open && setEditingGerencia(null)}>
-        <DialogContent className="max-w-lg" data-testid="dialog-edit-gerencia">
+        <DialogContent className="max-w-2xl" data-testid="dialog-edit-gerencia">
           <DialogHeader>
             <DialogTitle>Editar Gerencia</DialogTitle>
             <DialogDescription>
