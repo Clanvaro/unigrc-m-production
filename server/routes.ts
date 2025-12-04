@@ -2775,8 +2775,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ riskProcessLinks: [], riskControls: [] });
       }
 
+      // Filter out invalid riskIds (null, undefined, empty strings)
+      const validRiskIds = riskIds.filter(id => id && typeof id === 'string' && id.trim().length > 0);
+      
+      if (validRiskIds.length === 0) {
+        return res.json({ riskProcessLinks: [], riskControls: [] });
+      }
+
       // Limit batch size to prevent abuse
-      const limitedIds = riskIds.slice(0, 100);
+      const limitedIds = validRiskIds.slice(0, 100);
       const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}`;
 
       // Try cache first (15 second TTL)
@@ -2789,8 +2796,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
       const [filteredLinks, filteredControls] = await Promise.all([
-        storage.getRiskProcessLinksByRiskIds(limitedIds),
-        storage.getRiskControlsByRiskIds(limitedIds)
+        storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
+          console.error("[batch-relations] Error fetching risk process links:", err);
+          return [];
+        }),
+        storage.getRiskControlsByRiskIds(limitedIds).catch(err => {
+          console.error("[batch-relations] Error fetching risk controls:", err);
+          return [];
+        })
       ]);
 
       const duration = Date.now() - startTime;
@@ -2806,7 +2819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(response);
     } catch (error) {
-      console.error("Error fetching batch relations:", error);
+      console.error("[ERROR] /api/risks/batch-relations failed:", error);
       res.status(500).json({ message: "Failed to fetch risk relations" });
     }
   });
@@ -6989,18 +7002,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const offset = parseInt(req.query.offset as string) || 0;
       const paginate = req.query.paginate === 'true';
 
-      // Build filters object
+      // Build filters object (filter out 'undefined' string values)
       const filters: import('./storage').ControlFilters = {
         search: req.query.search as string,
-        type: req.query.type as string,
-        frequency: req.query.frequency as string,
-        status: req.query.status as string,
-        validationStatus: req.query.validationStatus as string,
-        ownerId: req.query.ownerId as string,
+        type: req.query.type && req.query.type !== 'undefined' ? req.query.type as string : undefined,
+        frequency: req.query.frequency && req.query.frequency !== 'undefined' ? req.query.frequency as string : undefined,
+        status: req.query.status && req.query.status !== 'undefined' ? req.query.status as string : undefined,
+        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' ? req.query.validationStatus as string : undefined,
+        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' ? req.query.ownerId as string : undefined,
         minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
         maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
       };
 
+      // Build cache key
+      const cacheKey = `controls:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
+
+      // Try cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/controls key=${cacheKey.slice(0, 50)}...`);
+        res.setHeader('X-Cache', 'HIT');
+        return res.json(cached);
+      }
+
+      // Fetch controls from database
+      const { controls: paginatedControls, total } = await storage.getControlsPaginated(filters, limit, offset);
 
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;
@@ -7030,8 +7056,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache for 15 seconds (invalidated automatically on mutations)
       await distributedCache.set(cacheKey, response, 15);
 
+      res.setHeader('X-Cache', 'MISS');
       res.json(response);
     } catch (error) {
+      console.error("[ERROR] /api/controls failed:", error);
       res.status(500).json({ message: "Failed to fetch controls" });
     }
   });
@@ -13734,6 +13762,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // SINGLE-TENANT MODE: Stub endpoints for backward compatibility
   app.get("/api/user/tenants", isAuthenticated, async (req, res) => {
+    // Return a single virtual tenant
+    res.json([{
+      id: 'single-tenant',
+      tenantId: 'single-tenant',
+      name: 'Organization',
+      isActive: true
+    }]);
+  });
+
+  // Alias for /api/user/tenants for backward compatibility
+  app.get("/api/tenants", isAuthenticated, async (req, res) => {
     // Return a single virtual tenant
     res.json([{
       id: 'single-tenant',
