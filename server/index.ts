@@ -1,5 +1,9 @@
-import express, { type Request, Response, NextFunction } from "express";
+// Load environment variables FIRST before any other imports
 import dotenv from "dotenv";
+dotenv.config();
+
+// Now import everything else after env vars are loaded
+import express, { type Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import { registerRoutes, warmCacheForAllTenants } from "./routes";
 import { serveStatic, log } from "./static";
@@ -21,9 +25,6 @@ import { responseSanitizer } from "./validation/output-sanitizer";
 import { applyPerformanceOptimizations } from "./performance";
 import { openAIService } from "./openai-service";
 import { initializeQueues } from "./services/queue";
-
-// Load environment variables from .env file
-dotenv.config();
 
 // Validate required secrets before starting server
 validateRequiredSecrets();

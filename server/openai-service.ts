@@ -13,12 +13,17 @@ class OpenAIService {
   private client: OpenAI | null = null;
   private config: OpenAIConfig | null = null;
   private isReady: boolean = false;
+  private initialized: boolean = false;
 
   constructor() {
-    this.initialize();
+    // Don't initialize here - wait for first use
+    // This allows dotenv.config() to run first
   }
 
   private initialize() {
+    if (this.initialized) return; // Already tried to initialize
+    this.initialized = true;
+
     const apiKey = process.env.OPENAI_API_KEY;
     const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
@@ -30,7 +35,7 @@ class OpenAIService {
 
     try {
       this.config = { apiKey, model };
-      
+
       this.client = new OpenAI({
         apiKey
       });
@@ -43,7 +48,14 @@ class OpenAIService {
     }
   }
 
+  private ensureInitialized() {
+    if (!this.initialized) {
+      this.initialize();
+    }
+  }
+
   getStatus() {
+    this.ensureInitialized();
     return {
       ready: this.isReady,
       deployment: this.config?.model || null,
@@ -59,24 +71,26 @@ class OpenAIService {
     this.client = null;
     this.config = null;
     this.isReady = false;
+    this.initialized = false;
     this.initialize();
   }
 
   async generateText(prompt: string, systemPrompt?: string): Promise<string> {
+    this.ensureInitialized();
     if (!this.isReady || !this.client || !this.config) {
       throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
 
     try {
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-      
+
       if (systemPrompt) {
         messages.push({
           role: "system",
           content: systemPrompt
         });
       }
-      
+
       messages.push({
         role: "user",
         content: prompt
@@ -97,20 +111,21 @@ class OpenAIService {
   }
 
   async *streamText(prompt: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    this.ensureInitialized();
     if (!this.isReady || !this.client || !this.config) {
       throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
 
     try {
       const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-      
+
       if (systemPrompt) {
         messages.push({
           role: "system",
           content: systemPrompt
         });
       }
-      
+
       messages.push({
         role: "user",
         content: prompt
@@ -144,6 +159,7 @@ class OpenAIService {
       stream?: boolean;
     }
   ): Promise<string | AsyncGenerator<string, void, unknown>> {
+    this.ensureInitialized();
     if (!this.isReady || !this.client || !this.config) {
       throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
     }
