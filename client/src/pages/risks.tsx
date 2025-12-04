@@ -2314,7 +2314,7 @@ export default function Risks() {
         </div>
 
         {/* Tab: Básica - fast loading using optimized endpoint */}
-        <TabsContent value="basica" className="flex-1 flex flex-col mt-0">
+        <TabsContent value="basica" className="flex-1 flex flex-col mt-0 overflow-hidden">
           {isLoading ? (
             <Card className="flex-1 flex flex-col overflow-hidden">
               <CardContent className="p-4">
@@ -2417,7 +2417,7 @@ export default function Risks() {
         </TabsContent>
 
         {/* Tab: Detalle - full data with batch-relations, complete table */}
-        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0">
+        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0 overflow-hidden">
           {isLoading ? (
             <Card className="flex-1 flex flex-col overflow-hidden">
               <CardContent className="p-4">
