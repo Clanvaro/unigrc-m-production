@@ -51,6 +51,17 @@ class OpenAIService {
     };
   }
 
+  /**
+   * Reinitialize the service (useful when API key is updated)
+   */
+  reinitialize() {
+    console.log('🔄 Reinitializing OpenAI Service...');
+    this.client = null;
+    this.config = null;
+    this.isReady = false;
+    this.initialize();
+  }
+
   async generateText(prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.isReady || !this.client || !this.config) {
       throw new Error('OpenAI Service is not initialized. Please configure OPENAI_API_KEY.');
