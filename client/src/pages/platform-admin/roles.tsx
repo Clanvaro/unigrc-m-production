@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Shield, Plus, Pencil, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,31 +34,78 @@ interface Role {
   createdAt: Date;
 }
 
+// Permisos por defecto necesarios para acceder al menú de configuración
+const DEFAULT_ROLE_PERMISSIONS = ["manage_users", "manage_roles", "view_users", "view_roles", "view_all"];
+
 const AVAILABLE_PERMISSIONS = [
   { value: "*", label: "Acceso Total (Wildcard)", category: "Sistema" },
+  // Permisos generales
   { value: "view_all", label: "Ver Todos los Datos", category: "General" },
+  { value: "create_all", label: "Crear Todo", category: "General" },
+  { value: "edit_all", label: "Editar Todo", category: "General" },
+  { value: "delete_all", label: "Eliminar Todo", category: "General" },
+  // Permisos de gestión de usuarios y roles
+  { value: "manage_users", label: "Gestionar Usuarios", category: "Administración" },
+  { value: "view_users", label: "Ver Usuarios", category: "Administración" },
+  { value: "create_users", label: "Crear Usuarios", category: "Administración" },
+  { value: "edit_users", label: "Editar Usuarios", category: "Administración" },
+  { value: "manage_roles", label: "Gestionar Roles", category: "Administración" },
+  { value: "view_roles", label: "Ver Roles", category: "Administración" },
+  { value: "create_roles", label: "Crear Roles", category: "Administración" },
+  { value: "edit_roles", label: "Editar Roles", category: "Administración" },
+  { value: "users:manage_roles", label: "Gestionar Roles de Usuarios", category: "Administración" },
+  // Permisos específicos de riesgos
+  { value: "view_risks", label: "Ver Riesgos", category: "Riesgos" },
   { value: "create_risks", label: "Crear Riesgos", category: "Riesgos" },
   { value: "edit_risks", label: "Editar Riesgos", category: "Riesgos" },
   { value: "delete_risks", label: "Eliminar Riesgos", category: "Riesgos" },
   { value: "risks:approve", label: "Aprobar Riesgos", category: "Riesgos" },
+  { value: "validate_risks", label: "Validar Riesgos", category: "Riesgos" },
+  // Permisos específicos de controles
+  { value: "view_controls", label: "Ver Controles", category: "Controles" },
   { value: "create_controls", label: "Crear Controles", category: "Controles" },
   { value: "edit_controls", label: "Editar Controles", category: "Controles" },
   { value: "delete_controls", label: "Eliminar Controles", category: "Controles" },
   { value: "controls:evaluate", label: "Evaluar Controles", category: "Controles" },
+  // Permisos específicos de procesos
+  { value: "view_processes", label: "Ver Procesos", category: "Procesos" },
+  { value: "create_processes", label: "Crear Procesos", category: "Procesos" },
+  { value: "edit_processes", label: "Editar Procesos", category: "Procesos" },
+  { value: "delete_processes", label: "Eliminar Procesos", category: "Procesos" },
+  // Permisos específicos de planes de acción
+  { value: "view_action_plans", label: "Ver Planes de Acción", category: "Acciones" },
   { value: "create_action_plans", label: "Crear Planes de Acción", category: "Acciones" },
-  { value: "audits:read", label: "Ver Auditorías", category: "Auditorías" },
-  { value: "audits:create", label: "Crear Auditorías", category: "Auditorías" },
+  { value: "edit_action_plans", label: "Editar Planes de Acción", category: "Acciones" },
+  { value: "delete_action_plans", label: "Eliminar Planes de Acción", category: "Acciones" },
+  // Permisos de reportes
+  { value: "view_reports", label: "Ver Reportes", category: "Reportes" },
+  { value: "export_data", label: "Exportar Datos", category: "Reportes" },
+  { value: "reports:generate", label: "Generar Reportes", category: "Reportes" },
+  // Permisos específicos de auditorías
+  { value: "view_audits", label: "Ver Auditorías", category: "Auditorías" },
+  { value: "audits:read", label: "Ver Auditorías (alternativo)", category: "Auditorías" },
+  { value: "create_audits", label: "Crear Auditorías", category: "Auditorías" },
+  { value: "audits:create", label: "Crear Auditorías (alternativo)", category: "Auditorías" },
+  { value: "edit_audits", label: "Editar Auditorías", category: "Auditorías" },
   { value: "audits:update", label: "Actualizar Auditorías", category: "Auditorías" },
+  { value: "delete_audits", label: "Eliminar Auditorías", category: "Auditorías" },
+  { value: "conduct_audits", label: "Ejecutar Auditorías", category: "Auditorías" },
+  { value: "supervise_audits", label: "Supervisar Auditorías", category: "Auditorías" },
   { value: "audit_tests:execute", label: "Ejecutar Pruebas de Auditoría", category: "Auditorías" },
   { value: "audit_tests:view", label: "Ver Pruebas de Auditoría", category: "Auditorías" },
-  { value: "compliance:read", label: "Ver Cumplimiento", category: "Cumplimiento" },
+  // Permisos específicos de cumplimiento
+  { value: "view_compliance", label: "Ver Cumplimiento", category: "Cumplimiento" },
+  { value: "compliance:read", label: "Ver Cumplimiento (alternativo)", category: "Cumplimiento" },
+  { value: "create_compliance", label: "Crear Cumplimiento", category: "Cumplimiento" },
   { value: "compliance:create", label: "Crear Registros de Cumplimiento", category: "Cumplimiento" },
+  { value: "edit_compliance", label: "Editar Cumplimiento", category: "Cumplimiento" },
   { value: "compliance:update", label: "Actualizar Cumplimiento", category: "Cumplimiento" },
-  { value: "compliance:delete", label: "Eliminar Cumplimiento", category: "Cumplimiento" },
-  { value: "compliance:manage", label: "Gestionar Cumplimiento", category: "Cumplimiento" },
+  { value: "delete_compliance", label: "Eliminar Cumplimiento", category: "Cumplimiento" },
+  { value: "compliance:delete", label: "Eliminar Cumplimiento (alternativo)", category: "Cumplimiento" },
+  { value: "manage_compliance", label: "Gestionar Cumplimiento", category: "Cumplimiento" },
+  { value: "compliance:manage", label: "Gestionar Cumplimiento (alternativo)", category: "Cumplimiento" },
+  // Permisos de administración
   { value: "team:manage", label: "Gestionar Equipo", category: "Administración" },
-  { value: "reports:generate", label: "Generar Reportes", category: "Reportes" },
-  { value: "users:manage_roles", label: "Gestionar Roles de Usuarios", category: "Administración" },
 ];
 
 export default function RolesManagementPage() {
@@ -288,6 +335,18 @@ function CreateRoleDialog({
   const [description, setDescription] = useState("");
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
 
+  // Preseleccionar permisos por defecto cuando se abre el diálogo
+  useEffect(() => {
+    if (open) {
+      setSelectedPermissions([...DEFAULT_ROLE_PERMISSIONS]);
+    } else {
+      // Resetear cuando se cierra
+      setName("");
+      setDescription("");
+      setSelectedPermissions([]);
+    }
+  }, [open]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({ name, description, permissions: selectedPermissions });
@@ -304,11 +363,13 @@ function CreateRoleDialog({
     );
   };
 
-  const groupedPermissions = AVAILABLE_PERMISSIONS.reduce((acc, perm) => {
-    if (!acc[perm.category]) acc[perm.category] = [];
-    acc[perm.category].push(perm);
-    return acc;
-  }, {} as Record<string, typeof AVAILABLE_PERMISSIONS>);
+  const groupedPermissions = useMemo(() => {
+    return AVAILABLE_PERMISSIONS.reduce((acc, perm) => {
+      if (!acc[perm.category]) acc[perm.category] = [];
+      acc[perm.category].push(perm);
+      return acc;
+    }, {} as Record<string, typeof AVAILABLE_PERMISSIONS>);
+  }, []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -419,11 +480,13 @@ function EditRoleDialog({
     );
   };
 
-  const groupedPermissions = AVAILABLE_PERMISSIONS.reduce((acc, perm) => {
-    if (!acc[perm.category]) acc[perm.category] = [];
-    acc[perm.category].push(perm);
-    return acc;
-  }, {} as Record<string, typeof AVAILABLE_PERMISSIONS>);
+  const groupedPermissions = useMemo(() => {
+    return AVAILABLE_PERMISSIONS.reduce((acc, perm) => {
+      if (!acc[perm.category]) acc[perm.category] = [];
+      acc[perm.category].push(perm);
+      return acc;
+    }, {} as Record<string, typeof AVAILABLE_PERMISSIONS>);
+  }, []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

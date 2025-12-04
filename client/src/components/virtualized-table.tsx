@@ -92,44 +92,6 @@ function VirtualizedTableInner<T>({
     }
   }, [data, onRowClick]);
 
-  if (isLoading) {
-    return (
-      <div 
-        className="flex items-center justify-center p-8" 
-        role="status" 
-        aria-live="polite" 
-        aria-busy="true"
-      >
-        <div className="text-muted-foreground">Cargando...</div>
-        <span className="sr-only">Cargando datos de la tabla</span>
-      </div>
-    );
-  }
-
-  if (data.length === 0) {
-    return (
-      <div 
-        className="flex items-center justify-center p-8" 
-        role="status"
-      >
-        <div className="text-muted-foreground">No hay datos para mostrar</div>
-      </div>
-    );
-  }
-
-  return (
-    <div 
-      ref={parentRef} 
-      className="@container overflow-auto border rounded-md w-full h-full"
-      role="grid"
-      aria-label={ariaLabel}
-      aria-describedby={ariaDescribedBy}
-      style={{ 
-        minHeight: '400px',
-        contain: 'strict',
-        WebkitOverflowScrolling: 'touch'
-      }}
-    >
   // Memoize grid template columns to prevent recalculation
   const gridTemplateColumns = useMemo(
     () => visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
