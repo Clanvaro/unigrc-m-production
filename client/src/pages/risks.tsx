@@ -191,13 +191,13 @@ export default function Risks() {
 
   // Debounced search state - prevents excessive API calls while typing
   const [searchInput, setSearchInput] = useState("");
-  
+
   // Debounce search term (300ms delay) to reduce API calls
   useEffect(() => {
     const timer = setTimeout(() => {
       setFilters(prev => ({ ...prev, search: searchInput }));
     }, 300);
-    
+
     return () => clearTimeout(timer);
   }, [searchInput]);
 
@@ -2280,7 +2280,7 @@ export default function Risks() {
   );
 
   return (
-    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
+    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
 
       {/* Tabs for different risk views - lazy mounted */}
@@ -2289,7 +2289,7 @@ export default function Risks() {
         onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
         className="flex-1 flex flex-col"
       >
-        <div className="flex items-center justify-between gap-4 mb-2 shrink-0">
+        <div className="flex items-center justify-between gap-4 shrink-0">
           <TabsList>
             <TabsTrigger value="basica" data-testid="tab-basica">Básica</TabsTrigger>
             <TabsTrigger value="detalle" data-testid="tab-detalle">Detalle</TabsTrigger>
