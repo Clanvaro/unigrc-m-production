@@ -175,7 +175,23 @@ if (pool) {
       console.log('🔄 Database connection recycled by server (normal for Neon)');
       return;
     }
-    console.error('❌ Database pool error:', err);
+    
+    // Handle "Connection terminated unexpectedly" errors
+    if (err.message?.includes('Connection terminated') || err.message?.includes('terminated unexpectedly')) {
+      console.warn('⚠️ Database connection terminated unexpectedly:', {
+        code: err.code,
+        message: err.message,
+        stack: err.stack?.substring(0, 200)
+      });
+      // Don't log as error - this is often recoverable
+      return;
+    }
+    
+    console.error('❌ Database pool error:', {
+      code: err.code,
+      message: err.message,
+      name: err.name
+    });
   });
 
   pool.on('connect', () => {

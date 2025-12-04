@@ -30,8 +30,31 @@ ENV PYTHON=/usr/bin/python3
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --legacy-peer-deps
+# Install dependencies (ignore scripts for canvas to patch it manually)
+RUN npm ci --legacy-peer-deps --ignore-scripts
+
+# Patch canvas source files to fix C++ compilation errors with Node.js 20
+# The issue is missing #include <cstdint> in CharData.h and FontParser files
+RUN if [ -d "node_modules/canvas/src" ]; then \
+    # Fix CharData.h - add cstdint include at the top \
+    if [ -f "node_modules/canvas/src/CharData.h" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/CharData.h; then \
+      echo '#include <cstdint>' | cat - node_modules/canvas/src/CharData.h > /tmp/CharData.h && \
+      mv /tmp/CharData.h node_modules/canvas/src/CharData.h; \
+    fi; \
+    # Fix FontParser.h - add cstdint include after first include \
+    if [ -f "node_modules/canvas/src/FontParser.h" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/FontParser.h; then \
+      awk 'NR==1{print; print "#include <cstdint>"; next}1' node_modules/canvas/src/FontParser.h > /tmp/FontParser.h && \
+      mv /tmp/FontParser.h node_modules/canvas/src/FontParser.h; \
+    fi; \
+    # Fix FontParser.cc - add cstdint include after first include \
+    if [ -f "node_modules/canvas/src/FontParser.cc" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/FontParser.cc; then \
+      awk 'NR==1{print; print "#include <cstdint>"; next}1' node_modules/canvas/src/FontParser.cc > /tmp/FontParser.cc && \
+      mv /tmp/FontParser.cc node_modules/canvas/src/FontParser.cc; \
+    fi; \
+    fi
+
+# Now build native modules
+RUN npm rebuild canvas --build-from-source
 
 # Copy source code
 COPY . .
@@ -90,9 +113,32 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
+# Install production dependencies only (ignore scripts for canvas to patch it manually)
 # Using npm install instead of npm ci to avoid package-lock issues in Docker
-RUN npm install --production --legacy-peer-deps
+RUN npm install --production --legacy-peer-deps --ignore-scripts
+
+# Patch canvas source files to fix C++ compilation errors with Node.js 20
+# The issue is missing #include <cstdint> in CharData.h and FontParser files
+RUN if [ -d "node_modules/canvas/src" ]; then \
+    # Fix CharData.h - add cstdint include at the top \
+    if [ -f "node_modules/canvas/src/CharData.h" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/CharData.h; then \
+      echo '#include <cstdint>' | cat - node_modules/canvas/src/CharData.h > /tmp/CharData.h && \
+      mv /tmp/CharData.h node_modules/canvas/src/CharData.h; \
+    fi; \
+    # Fix FontParser.h - add cstdint include after first include \
+    if [ -f "node_modules/canvas/src/FontParser.h" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/FontParser.h; then \
+      awk 'NR==1{print; print "#include <cstdint>"; next}1' node_modules/canvas/src/FontParser.h > /tmp/FontParser.h && \
+      mv /tmp/FontParser.h node_modules/canvas/src/FontParser.h; \
+    fi; \
+    # Fix FontParser.cc - add cstdint include after first include \
+    if [ -f "node_modules/canvas/src/FontParser.cc" ] && ! grep -q "#include <cstdint>" node_modules/canvas/src/FontParser.cc; then \
+      awk 'NR==1{print; print "#include <cstdint>"; next}1' node_modules/canvas/src/FontParser.cc > /tmp/FontParser.cc && \
+      mv /tmp/FontParser.cc node_modules/canvas/src/FontParser.cc; \
+    fi; \
+    fi
+
+# Now build native modules
+RUN npm rebuild canvas --build-from-source
 
 # Copy built backend from builder
 COPY --from=builder /app/dist ./dist

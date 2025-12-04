@@ -2096,8 +2096,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(response);
     } catch (error) {
-      console.error("[ERROR] /api/risks/bootstrap failed:", error);
-      res.status(500).json({ message: "Failed to fetch risks bootstrap data" });
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/risks/bootstrap failed after ${duration}ms:`, error);
+      
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+          return res.status(500).json({ 
+            message: "Database connection timeout. Please try again.",
+            error: "TIMEOUT"
+          });
+        }
+        if (error.message.includes('ECONNREFUSED') || error.message.includes('ENOTFOUND')) {
+          return res.status(500).json({ 
+            message: "Database connection error. Please try again.",
+            error: "CONNECTION_ERROR"
+          });
+        }
+      }
+      
+      res.status(500).json({ 
+        message: "Failed to fetch risks bootstrap data",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -2570,12 +2590,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // LOOKUPS endpoints: Cached catalogs that change rarely (5 min cache)
   app.get("/api/lookups/macroprocesos", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const cacheKey = `lookups:macroprocesos:single-tenant`;
       const cached = await getFromTieredCache(
         cacheKey,
         async () => {
+          const fetchStart = Date.now();
           const data = await storage.getMacroprocesos();
+          const fetchDuration = Date.now() - fetchStart;
+          console.log(`[PERF] getMacroprocesos() took ${fetchDuration}ms`);
+          
           return data.filter((m: any) => !m.deletedAt).map((m: any) => ({
             id: m.id,
             code: m.code,
@@ -2586,9 +2611,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         300 // 5 minutes in Redis
       );
+      
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.warn(`[SLOW] /api/lookups/macroprocesos took ${duration}ms`);
+      }
+      
       res.json(cached);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch macroprocesos" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/lookups/macroprocesos failed after ${duration}ms:`, error);
+      
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
+        return res.status(500).json({ 
+          message: "Database connection timeout. Please try again.",
+          error: "TIMEOUT"
+        });
+      }
+      
+      res.status(500).json({ 
+        message: "Failed to fetch macroprocesos",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -7709,32 +7753,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Update control effectiveness after evaluation
   app.post("/api/controls/:controlId/complete-evaluation", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
-      // Get active tenant ID for multi-tenant validation
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const controlId = req.params.controlId;
+      
+      if (!controlId) {
+        return res.status(400).json({ message: "Control ID is required" });
+      }
+
+      // Get active tenant ID for multi-tenant validation (single-tenant mode: optional)
+      let tenantId: string | undefined;
+      try {
+        const tenant = await resolveActiveTenant(req, { required: false });
+        tenantId = tenant?.tenantId;
+      } catch (error) {
+        // In single-tenant mode, tenant resolution may fail - continue without it
+        console.warn("Could not resolve tenant (single-tenant mode?):", error);
+      }
+
+      // Verify control exists first
+      const control = await storage.getControl(controlId);
+      if (!control) {
+        return res.status(404).json({ message: "Control not found" });
+      }
 
       // Calculate effectiveness based on evaluations
-      const effectiveness = await storage.calculateControlEffectiveness(req.params.controlId);
+      const effectiveness = await storage.calculateControlEffectiveness(controlId);
 
       // Update the control with calculated effectiveness
-      const updatedControl = await storage.updateControl(req.params.controlId, {
+      const updatedControl = await storage.updateControl(controlId, {
         effectiveness
       }, tenantId);
 
       if (!updatedControl) {
-        return res.status(404).json({ message: "Control not found" });
+        return res.status(404).json({ message: "Control not found or could not be updated" });
       }
+
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] /api/controls/${controlId}/complete-evaluation completed in ${duration}ms`);
 
       res.json({
         control: updatedControl,
         effectiveness
       });
     } catch (error) {
-      console.error("Error completing control evaluation:", error);
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/controls/${req.params.controlId}/complete-evaluation failed after ${duration}ms:`, error);
+      
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      res.status(500).json({ message: "Failed to complete control evaluation" });
+      
+      // Provide more specific error messages
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+          return res.status(500).json({ 
+            message: "Database connection timeout. Please try again.",
+            error: "TIMEOUT"
+          });
+        }
+        if (error.message.includes('not found')) {
+          return res.status(404).json({ message: error.message });
+        }
+      }
+      
+      res.status(500).json({ 
+        message: "Failed to complete control evaluation",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -15941,8 +16027,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Audits list endpoint (with 60s cache for performance optimization)
   app.get("/api/audits", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
-      const tenantId = await resolveActiveTenantId(req, { required: true });
+      // Single-tenant mode: tenantId not required
+      let tenantId: string | undefined;
+      try {
+        tenantId = await resolveActiveTenantId(req, { required: false });
+      } catch (error) {
+        // In single-tenant mode, continue without tenantId
+        console.warn("Could not resolve tenant (single-tenant mode?):", error);
+      }
+      
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
@@ -15957,17 +16052,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create cache key based on tenant and filters
       const filterKey = JSON.stringify({ limit, offset, filters });
-      const cacheKey = `audits:${tenantId}:${filterKey}`;
+      const cacheKey = `audits:${tenantId || 'single-tenant'}:${filterKey}`;
 
       // Try to get from cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE HIT] /api/audits in ${duration}ms`);
         return res.json(cached);
       }
 
       // Cache miss - query database
+      const queryStart = Date.now();
       // Note: getAuditsPaginated doesn't use tenantId (single-tenant mode)
       const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, limit, offset);
+      const queryDuration = Date.now() - queryStart;
+      if (queryDuration > 1000) {
+        console.warn(`[SLOW QUERY] getAuditsPaginated took ${queryDuration}ms`);
+      }
 
       // Prepare response
       const response = {
@@ -15986,10 +16088,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Return with pagination metadata
       res.json(response);
     } catch (error) {
-      console.error("Get audits error:", error);
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/audits failed after ${duration}ms:`, error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       const errorStack = error instanceof Error ? error.stack : undefined;
       console.error("Error details:", { errorMessage, errorStack, filters, limit, offset });
+      
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
+        return res.status(500).json({ 
+          message: "Database connection timeout. Please try again.",
+          error: "TIMEOUT"
+        });
+      }
+      
       res.status(500).json({ 
         message: "Failed to get audits",
         error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
@@ -21576,27 +21687,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get all process owners
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      // Single-tenant mode: tenantId not required
+      let tenantId: string | undefined;
+      try {
+        const tenant = await resolveActiveTenant(req, { required: false });
+        tenantId = tenant?.tenantId;
+      } catch (error) {
+        // In single-tenant mode, continue without tenantId
+        console.warn("Could not resolve tenant (single-tenant mode?):", error);
+      }
 
       // Use cache with 5 min TTL for process owners (low mutation frequency)
-      const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId}`;
+      const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
-        console.log(`[CACHE HIT] ${cacheKey}`);
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
         return res.json(cached);
       }
 
+      const queryStart = Date.now();
       const processOwners = await storage.getProcessOwners();
-      console.log("📝 [API] Fetching process owners. Count:", processOwners.length);
+      const queryDuration = Date.now() - queryStart;
+      console.log(`📝 [API] Fetching process owners. Count: ${processOwners.length}, Query took: ${queryDuration}ms`);
 
       // Cache for 5 minutes
       await distributedCache.set(cacheKey, processOwners, 300);
 
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
+      }
+
       res.json(processOwners);
     } catch (error) {
-      console.error("Error fetching process owners:", error);
-      res.status(500).json({ message: "Failed to fetch process owners" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
+      
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
+        return res.status(500).json({ 
+          message: "Database connection timeout. Please try again.",
+          error: "TIMEOUT"
+        });
+      }
+      
+      res.status(500).json({ 
+        message: "Failed to fetch process owners",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
