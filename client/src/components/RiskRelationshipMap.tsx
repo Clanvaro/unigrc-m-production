@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import ReactFlow, {
+import {
+  ReactFlow,
   Node,
   Edge,
   Background,
@@ -7,8 +8,8 @@ import ReactFlow, {
   MarkerType,
   Handle,
   Position,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import { Badge } from "@/components/ui/badge";
 import { getRiskColor, getRiskLevelText } from "@/lib/risk-calculations";
 import { RiskValue } from "@/components/RiskValue";
@@ -28,6 +29,7 @@ interface CustomNodeData {
   label: string;
   type: "risk" | "macroproceso" | "proceso" | "subproceso" | "control" | "event";
   details?: any;
+  [key: string]: unknown; // Index signature for @xyflow/react compatibility
 }
 
 const nodeTypes = {
@@ -77,11 +79,11 @@ const nodeTypes = {
     <div className="relative">
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <div className="px-2 bg-green-500 text-white shadow-md border-2 border-green-600 w-[140px] text-center overflow-hidden flex flex-col justify-end"
-           style={{ 
-             clipPath: "polygon(50% 0%, 0% 100%, 100% 100%)",
-             height: "140px",
-             paddingBottom: "1rem"
-           }}>
+        style={{
+          clipPath: "polygon(50% 0%, 0% 100%, 100% 100%)",
+          height: "140px",
+          paddingBottom: "1rem"
+        }}>
         <div className="text-[10px] font-semibold">Control</div>
         <div className="text-[9px] mt-1 font-medium px-1 line-clamp-2" style={{ wordBreak: "break-word" }}>{data.label}</div>
         {data.details && (
@@ -140,12 +142,12 @@ export function RiskRelationshipMap({
     const centerX = 450;
     const centerY = 350;
     const radius = 400;
-    
+
     // Get related entities using riskProcessLinks if available
     let relatedProcesses: any[] = [];
     let relatedMacroprocesos: any[] = [];
     let relatedSubprocesos: any[] = [];
-    
+
     if (riskProcessLinks.length > 0) {
       // Use riskProcessLinks to find related entities
       riskProcessLinks.forEach((link: any) => {
@@ -193,26 +195,26 @@ export function RiskRelationshipMap({
       // Fallback to legacy direct fields
       const process = processes.find((p: any) => p.id === risk.processId);
       if (process) relatedProcesses.push(process);
-      
+
       const macroproceso = process ? macroprocesos.find((m: any) => m.id === process.macroprocesoId) : null;
       if (macroproceso) relatedMacroprocesos.push(macroproceso);
-      
+
       const subproceso = subprocesos.find((s: any) => s.id === risk.subprocesoId);
       if (subproceso) relatedSubprocesos.push(subproceso);
     }
-    
+
     // Count nodes for each sector
     const leftNodes = [...relatedMacroprocesos, ...relatedProcesses, ...relatedSubprocesos].filter(Boolean);
     const rightNodes = riskControls;
     const bottomNodes = riskEvents;
-    
+
     // Left sector: processes and their hierarchies
     const leftBaseAngle = Math.PI; // 180°
-    
+
     // Add processes (directly connected to risk)
     relatedProcesses.forEach((process, index) => {
       const processAngle = leftBaseAngle + (index - (relatedProcesses.length - 1) / 2) * 0.3; // Spread if multiple
-      
+
       nodes.push({
         id: `proceso-${process.id}`,
         type: "proceso",
@@ -233,7 +235,7 @@ export function RiskRelationshipMap({
         style: { stroke: "#eab308", strokeWidth: 2 },
         markerEnd: { type: MarkerType.ArrowClosed, color: "#eab308" },
       });
-      
+
       // Add macroproceso for this process if exists
       if (process.macroprocesoId) {
         const macroproceso = macroprocesos.find((m: any) => m.id === process.macroprocesoId);
@@ -262,14 +264,14 @@ export function RiskRelationshipMap({
         }
       }
     });
-    
+
     // Add subprocesos connected to their parent processes
     relatedSubprocesos.forEach((subproceso, index) => {
       const parentProcess = processes.find((p: any) => p.id === subproceso.procesoId);
       if (parentProcess) {
         const parentNodeId = `proceso-${parentProcess.id}`;
         const subprocesoAngle = leftBaseAngle + (index - (relatedSubprocesos.length - 1) / 2) * 0.3 + Math.PI / 6;
-        
+
         nodes.push({
           id: `subproceso-${subproceso.id}`,
           type: "subproceso",
@@ -326,10 +328,10 @@ export function RiskRelationshipMap({
     const rightSpread = rightNodes.length > 1 ? Math.PI / 2.2 : 0; // 82° spread
     const rightStartAngle = rightBaseAngle - rightSpread / 2;
     const rightAngleIncrement = rightNodes.length > 1 ? rightSpread / (rightNodes.length - 1) : 0;
-    
+
     riskControls.forEach((rc: any, index: number) => {
       if (!rc.control) return; // Skip if control data is missing
-      
+
       const angle = rightStartAngle + rightAngleIncrement * index;
       nodes.push({
         id: `control-${rc.id}`,
@@ -362,7 +364,7 @@ export function RiskRelationshipMap({
     const bottomSpread = bottomNodes.length > 1 ? Math.PI / 2.5 : 0; // 72° spread
     const bottomStartAngle = bottomBaseAngle - bottomSpread / 2;
     const bottomAngleIncrement = bottomNodes.length > 1 ? bottomSpread / (bottomNodes.length - 1) : 0;
-    
+
     riskEvents.forEach((event: any, index: number) => {
       const angle = bottomStartAngle + bottomAngleIncrement * index;
       nodes.push({
