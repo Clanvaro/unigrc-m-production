@@ -1,4 +1,4 @@
-import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect } from "react";
+import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect, useMemo, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 export interface VirtualizedTableColumn<T> {
@@ -27,7 +27,7 @@ interface VirtualizedTableProps<T> {
   ariaDescribedBy?: string;
 }
 
-export function VirtualizedTable<T>({
+function VirtualizedTableInner<T>({
   data,
   columns,
   estimatedRowHeight = 65,
@@ -43,12 +43,14 @@ export function VirtualizedTable<T>({
   const parentRef = useRef<HTMLDivElement>(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-  // Filter visible columns based on viewport size
-  const visibleColumns = columns.filter(col => {
-    if (col.visible === false) return false;
-    // hideOnMobile is handled via CSS (@md:hidden) on the column itself
-    return true;
-  });
+  // Memoize visible columns to prevent recalculation on every render
+  const visibleColumns = useMemo(() => {
+    return columns.filter(col => {
+      if (col.visible === false) return false;
+      // hideOnMobile is handled via CSS (@md:hidden) on the column itself
+      return true;
+    });
+  }, [columns]);
 
   const virtualizer = useVirtualizer({
     count: data.length,
@@ -59,8 +61,8 @@ export function VirtualizedTable<T>({
 
   const items = virtualizer.getVirtualItems();
 
-  // Keyboard navigation handler - WCAG 2.1.1
-  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>, rowIndex: number) => {
+  // Memoize keyboard navigation handler to prevent recreation on every render
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>, rowIndex: number) => {
     switch(e.key) {
       case 'ArrowDown':
         e.preventDefault();
@@ -88,7 +90,56 @@ export function VirtualizedTable<T>({
         }
         break;
     }
-  };
+  }, [data, onRowClick]);
+
+  if (isLoading) {
+    return (
+      <div 
+        className="flex items-center justify-center p-8" 
+        role="status" 
+        aria-live="polite" 
+        aria-busy="true"
+      >
+        <div className="text-muted-foreground">Cargando...</div>
+        <span className="sr-only">Cargando datos de la tabla</span>
+      </div>
+    );
+  }
+
+  if (data.length === 0) {
+    return (
+      <div 
+        className="flex items-center justify-center p-8" 
+        role="status"
+      >
+        <div className="text-muted-foreground">No hay datos para mostrar</div>
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      ref={parentRef} 
+      className="@container overflow-auto border rounded-md w-full h-full"
+      role="grid"
+      aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
+      style={{ 
+        minHeight: '400px',
+        contain: 'strict',
+        WebkitOverflowScrolling: 'touch'
+      }}
+    >
+  // Memoize grid template columns to prevent recalculation
+  const gridTemplateColumns = useMemo(
+    () => visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
+    [visibleColumns]
+  );
+
+  // Memoize row click handler
+  const handleRowClick = useCallback((item: T, index: number) => {
+    onRowClick?.(item, index);
+  }, [onRowClick]);
 
   if (isLoading) {
     return (
@@ -134,7 +185,7 @@ export function VirtualizedTable<T>({
         className={`sticky top-0 z-10 bg-muted border-b ${headerClassName}`}
         style={{ 
           display: 'grid', 
-          gridTemplateColumns: visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
+          gridTemplateColumns: gridTemplateColumns,
           minWidth: 'max-content',
           width: '100%'
         }}
@@ -186,9 +237,9 @@ export function VirtualizedTable<T>({
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
                 display: 'grid',
-                gridTemplateColumns: visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
+                gridTemplateColumns: gridTemplateColumns,
               }}
-              onClick={() => onRowClick?.(item, virtualRow.index)}
+              onClick={() => handleRowClick(item, virtualRow.index)}
             >
               {visibleColumns.map((column) => (
                 <div
@@ -210,6 +261,9 @@ export function VirtualizedTable<T>({
     </div>
   );
 }
+
+// Memoize the component to prevent unnecessary re-renders
+export const VirtualizedTable = memo(VirtualizedTableInner) as typeof VirtualizedTableInner;
 
 // Utility function to generate mock data for testing
 export function generateMockRisks(count: number) {

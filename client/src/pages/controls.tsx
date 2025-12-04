@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../lib/queryKeys";
 import { useOptimisticMutation } from "@/hooks/useOptimisticMutation";
+import { useDebounce } from "@/hooks/useDebounce";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +27,6 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { getRiskColor, getRiskLevelText, calculateResidualRisk } from "@/lib/risk-calculations";
 import type { Control, Risk, RiskControl } from "@shared/schema";
-import ExcelJS from 'exceljs';
 import { EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { ExplanationPopover } from "@/components/ExplanationPopover";
@@ -159,6 +159,9 @@ export default function Controls() {
   const [filters, setFilters] = useState<Record<string, any>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [responsibleFilter, setResponsibleFilter] = useState<string | null>(null);
+  
+  // Debounced search term to prevent excessive API calls while typing
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -238,14 +241,14 @@ export default function Controls() {
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters, searchTerm, responsibleFilter]);
+  }, [filters, debouncedSearchTerm, responsibleFilter]);
 
   const { data: controlsResponse, isLoading, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: queryKeys.controls.paginated({
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
       paginate: true,
-      search: searchTerm,
+      search: debouncedSearchTerm,
       type: filters.typeFilter,
       effectiveness: filters.effectivenessFilter,
       status: filters.statusFilter,
@@ -265,7 +268,7 @@ export default function Controls() {
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
         paginate: "true",
-        search: searchTerm || "",
+        search: debouncedSearchTerm || "",
         type: filters.typeFilter !== "all" ? filters.typeFilter : "",
         status: filters.statusFilter !== "all" ? filters.statusFilter : "",
         validationStatus: filters.validationStatusFilter !== "all" ? filters.validationStatusFilter : "",
@@ -279,6 +282,7 @@ export default function Controls() {
     },
     staleTime: 30000,
     gcTime: 5 * 60 * 1000,
+    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
   const controls = controlsResponse?.data || [];
   const totalPages = controlsResponse?.pagination ? Math.ceil(controlsResponse.pagination.total / pageSize) : 0;
@@ -610,6 +614,8 @@ export default function Controls() {
   };
 
   const exportToExcel = async () => {
+    // Lazy load ExcelJS only when export is triggered (reduces initial bundle size)
+    const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Controles');
 

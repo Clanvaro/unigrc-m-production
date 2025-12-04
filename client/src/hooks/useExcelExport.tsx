@@ -1,4 +1,3 @@
-import ExcelJS from 'exceljs';
 import { useToast } from "@/hooks/use-toast";
 
 interface ExcelColumn {
@@ -26,6 +25,8 @@ export function useExcelExport() {
     successMessage
   }: ExcelExportOptions) => {
     try {
+      // Lazy load ExcelJS only when export is triggered (reduces initial bundle size)
+      const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet(sheetName);
 

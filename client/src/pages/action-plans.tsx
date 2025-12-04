@@ -18,7 +18,6 @@ import ActionPlanForm from "@/components/forms/action-plan-form";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Action, Risk, ProcessOwner, User as UserType } from "@shared/schema";
-import ExcelJS from 'exceljs';
 import { AuditHistory } from "@/components/AuditHistory";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UploadEvidenceModal } from "@/components/action-plans/UploadEvidenceModal";
@@ -539,6 +538,8 @@ export default function ActionPlans() {
   }, []);
 
   const exportToExcel = async () => {
+    // Lazy load ExcelJS only when export is triggered (reduces initial bundle size)
+    const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Planes de Acción');
 

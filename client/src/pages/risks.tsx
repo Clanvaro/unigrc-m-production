@@ -407,8 +407,9 @@ export default function Risks() {
     enabled: !!viewingRisk?.id,
   });
 
-  // Helper function to get all responsible owners for a risk from riskProcessLinks (MUST BE BEFORE getAggregatedValidationStatus)
-  const getRiskProcessResponsibles = (risk: Risk): ResponsibleWithValidation[] => {
+  // Memoize helper function to get all responsible owners for a risk from riskProcessLinks
+  // This function is called frequently in filters and columns, so memoization prevents recalculation
+  const getRiskProcessResponsibles = useCallback((risk: Risk): ResponsibleWithValidation[] => {
     const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
 
     if (riskLinks.length === 0) {
@@ -511,8 +512,8 @@ export default function Risks() {
     return Array.from(responsiblesMap.values());
   };
 
-  // Legacy helper function for backward compatibility
-  const getProcessOwnerDetailsLegacy = (risk: Risk): ResponsibleWithValidation | null => {
+  // Memoize legacy helper function for backward compatibility
+  const getProcessOwnerDetailsLegacy = useCallback((risk: Risk): ResponsibleWithValidation | null => {
     // First, try to use direct processOwner if exists
     if (risk.processOwner && risk.processOwner.trim() !== '') {
       // Extract just the name (before " - " if it exists)
@@ -592,10 +593,10 @@ export default function Risks() {
     }
 
     return null;
-  };
+  }, [processOwners, subprocesos, processes, macroprocesos]);
 
-  // Helper function to get aggregated validation status for a risk
-  const getAggregatedValidationStatus = (risk: Risk) => {
+  // Memoize helper function to get aggregated validation status for a risk
+  const getAggregatedValidationStatus = useCallback((risk: Risk) => {
     const responsibles = getRiskProcessResponsibles(risk);
 
     if (responsibles.length === 0) {
@@ -618,7 +619,7 @@ export default function Risks() {
 
     // Otherwise, pending validation
     return 'pending_validation';
-  };
+  }, [getRiskProcessResponsibles]);
 
   const deleteMutation = useOptimisticMutation({
     queryKey: "/api/risks",

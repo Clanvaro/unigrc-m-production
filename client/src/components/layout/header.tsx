@@ -31,7 +31,6 @@ import { AuditFindingsSearchAndFilterDialog } from "@/components/AuditFindingsSe
 import { useTheme } from "@/hooks/use-theme";
 import { getCSRFTokenFromCookie } from "@/lib/csrf-cache";
 import { useExcelExport } from "@/hooks/useExcelExport";
-import ExcelJS from 'exceljs';
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { pageTitles, UserMenu, type HeaderProps } from "@/components/layout/header-parts";
 import type { 
@@ -170,66 +169,88 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
-    enabled: needsProcessData
+    enabled: needsProcessData,
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: macroprocesos = [] } = useQuery<Macroproceso[]>({
     queryKey: ["/api/macroprocesos"],
-    enabled: needsProcessData
+    enabled: needsProcessData,
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: subprocesos = [] } = useQuery<Subproceso[]>({
     queryKey: ["/api/subprocesos"],
-    enabled: needsProcessData
+    enabled: needsProcessData,
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
-    enabled: location === "/validation"
+    enabled: location === "/validation",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: ["/api/process-owners"],
     enabled: needsProcessData || location === "/risks", // Also needed for risks page exports
-    staleTime: 30 * 60 * 1000, // 30 minutes - process owners change infrequently
+    staleTime: 15 * 60 * 1000, // 15 minutes - process owners change infrequently
     refetchOnWindowFocus: false,
   });
 
   const { data: gerencias = [] } = useQuery<any[]>({
     queryKey: ["/api/gerencias"],
-    enabled: location === "/matrix" // Only for matrix page - /risks uses page-data instead
+    enabled: location === "/matrix", // Only for matrix page - /risks uses page-data instead
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: auditPlans = [] } = useQuery<AuditPlan[]>({
     queryKey: ["/api/audit-plans"],
-    enabled: location === "/audits"
+    enabled: location === "/audits",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: audits = [] } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
     enabled: location === "/audits",
-    select: (data: any) => data.data || []
+    select: (data: any) => data.data || [],
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: regulations = [] } = useQuery<Regulation[]>({
     queryKey: ["/api/regulations"],
-    enabled: location === "/regulations"
+    enabled: location === "/regulations",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: riskEventProcesses = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
-    enabled: location === "/risk-events"
+    enabled: location === "/risk-events",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: roles = [] } = useQuery<Role[]>({
     queryKey: ["/api/roles"],
-    enabled: location === "/config/users"
+    enabled: location === "/config/users",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   // Risk Matrix data queries
   const { data: matrixGerencias = [] } = useQuery<any[]>({
     queryKey: ["/api/gerencias"],
-    enabled: location === "/matrix"
+    enabled: location === "/matrix",
+    staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
   });
 
   const { data: matrixMacroprocesos = [] } = useQuery<any[]>({
