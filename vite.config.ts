@@ -39,52 +39,52 @@ export default defineConfig(async () => {
     base: "/",
     plugins,
     resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "client", "src"),
-      "@shared": path.resolve(__dirname, "shared"),
-      "@assets": path.resolve(__dirname, "attached_assets"),
+      alias: {
+        "@": path.resolve(__dirname, "client", "src"),
+        "@shared": path.resolve(__dirname, "shared"),
+        "@assets": path.resolve(__dirname, "attached_assets"),
+      },
     },
-  },
-  root: path.resolve(__dirname, "client"),
-  build: {
-    outDir: path.resolve(__dirname, "dist/public"),
-    emptyOutDir: true,
-    rollupOptions: {
-      input: path.resolve(__dirname, "client/index.html"),
-      output: {
-        manualChunks: {
-          "react-vendor": ["react", "react-dom", "react-hook-form"],
-          routing: ["wouter"],
-          query: ["@tanstack/react-query", "@tanstack/react-virtual"],
-          "ui-core": [
-            "@radix-ui/react-dialog",
-            "@radix-ui/react-dropdown-menu",
-            "@radix-ui/react-select",
-            "@radix-ui/react-popover",
-            "@radix-ui/react-tooltip",
-          ],
-          "ui-form": [
-            "@radix-ui/react-label",
-            "@radix-ui/react-checkbox",
-            "@radix-ui/react-radio-group",
-            "@radix-ui/react-switch",
-            "@radix-ui/react-slider",
-          ],
-          "ui-misc": [
-            "@radix-ui/react-tabs",
-            "@radix-ui/react-accordion",
-            "@radix-ui/react-avatar",
-            "@radix-ui/react-toast",
-          ],
-          charts: ["recharts"],
-          flow: ["reactflow", "@xyflow/react"],
-          icons: ["lucide-react"],
-          date: ["date-fns", "react-day-picker"],
-          forms: ["zod", "zod-validation-error", "@hookform/resolvers"],
+    root: path.resolve(__dirname, "client"),
+    build: {
+      outDir: path.resolve(__dirname, "dist/public"),
+      emptyOutDir: true,
+      rollupOptions: {
+        input: path.resolve(__dirname, "client/index.html"),
+        output: {
+          manualChunks: {
+            "react-vendor": ["react", "react-dom", "react-hook-form"],
+            routing: ["wouter"],
+            query: ["@tanstack/react-query", "@tanstack/react-virtual"],
+            "ui-core": [
+              "@radix-ui/react-dialog",
+              "@radix-ui/react-dropdown-menu",
+              "@radix-ui/react-select",
+              "@radix-ui/react-popover",
+              "@radix-ui/react-tooltip",
+            ],
+            "ui-form": [
+              "@radix-ui/react-label",
+              "@radix-ui/react-checkbox",
+              "@radix-ui/react-radio-group",
+              "@radix-ui/react-switch",
+              "@radix-ui/react-slider",
+            ],
+            "ui-misc": [
+              "@radix-ui/react-tabs",
+              "@radix-ui/react-accordion",
+              "@radix-ui/react-avatar",
+              "@radix-ui/react-toast",
+            ],
+            charts: ["recharts"],
+            flow: ["@xyflow/react"],
+            icons: ["lucide-react"],
+            date: ["date-fns", "react-day-picker"],
+            forms: ["zod", "zod-validation-error", "@hookform/resolvers"],
+          },
         },
       },
     },
-  },
     server: {
       fs: {
         strict: true,
