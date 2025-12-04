@@ -41,6 +41,7 @@ interface EnrichedRiskEvent {
   lossAmount: string | null;
   currency: string | null;
   riskId: string | null;
+  controlId: string | null;
   processId: number | null;
   createdAt: string;
   createdBy: string | null;
@@ -54,6 +55,7 @@ interface EnrichedRiskEvent {
   relatedMacroprocesos: CatalogItem[];
   relatedProcesses: CatalogItem[];
   relatedSubprocesos: CatalogItem[];
+  failedControl: { id: string; code: string; name: string } | null;
   // Additional fields that may come from full event fetch
   eventType?: string;
   involvedPersons?: string;
@@ -84,6 +86,211 @@ function EditEventFormWrapper({ eventId, onSuccess }: { eventId: string; onSucce
   if (!fullEvent) return <div>Cargando...</div>;
   
   return <RiskEventForm event={fullEvent} onSuccess={onSuccess} />;
+}
+
+// Componente para tabs de detalle con lazy loading de relaciones
+function RiskEventDetailTabs({ 
+  event,
+  getEventTypeColor,
+  getSeverityColor,
+  getStatusColor,
+  formatDate,
+  risks,
+  processes,
+}: { 
+  event: EnrichedRiskEvent;
+  getEventTypeColor: (type: string) => string;
+  getSeverityColor: (severity: string) => string;
+  getStatusColor: (status: string) => string;
+  formatDate: (date: string | Date | null | undefined) => string;
+  risks: CatalogItem[];
+  processes: CatalogItem[];
+}) {
+  const { data: riskRelations, isLoading: isLoadingRelations } = useQuery<{
+    controls: Array<{ id: string; code: string; name: string; residualRisk: string }>;
+    actionPlans: Array<{ id: string; title: string; status: string; dueDate: string | null }>;
+  }>({
+    queryKey: [`/api/risk-events/${event.id}/risk-relations`],
+    enabled: !!event.id && !!event.riskId,
+    staleTime: 5 * 60 * 1000, // 5 min cache
+  });
+
+  return (
+    <Tabs defaultValue="details" className="flex-1 overflow-hidden flex flex-col">
+      <TabsList>
+        <TabsTrigger value="details">Detalles</TabsTrigger>
+        <TabsTrigger value="relations">Relaciones</TabsTrigger>
+        <TabsTrigger value="bowtie">Diagrama Bow Tie</TabsTrigger>
+        <TabsTrigger value="history">Historial</TabsTrigger>
+      </TabsList>
+      
+      <TabsContent value="details" className="flex-1 overflow-y-auto mt-4">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Fecha del Evento</label>
+              <p className="text-sm mt-1">{formatDate(event.eventDate)}</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Tipo</label>
+              <div className="text-sm mt-1">
+                <Badge className={getEventTypeColor(event.eventType || '')}>
+                  {event.eventType === "materializado" ? "Riesgo Materializado" :
+                   event.eventType === "fraude" ? "Fraude" : "Delito"}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Severidad</label>
+              <div className="text-sm mt-1">
+                <Badge className={getSeverityColor(event.severity)}>
+                  {event.severity.charAt(0).toUpperCase() + event.severity.slice(1)}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Estado</label>
+              <div className="text-sm mt-1">
+                <Badge className={getStatusColor(event.status)}>
+                  {event.status === "en_investigacion" ? "En Investigación" : 
+                   event.status.charAt(0).toUpperCase() + event.status.slice(1)}
+                </Badge>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-muted-foreground">Descripción</label>
+            <p className="text-sm mt-1 whitespace-pre-wrap">{event.description}</p>
+          </div>
+          {event.involvedPersons && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Personas Involucradas</label>
+              <p className="text-sm mt-1">{event.involvedPersons}</p>
+            </div>
+          )}
+          
+          {/* Bow Tie Analysis - Causas */}
+          {event.causas && event.causas.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Causas (Análisis Bow Tie)</label>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {event.causas.map((causa: string, index: number) => (
+                  <Badge key={index} variant="outline" className="text-xs">
+                    {causa}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Bow Tie Analysis - Consecuencias */}
+          {event.consecuencias && event.consecuencias.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Consecuencias (Análisis Bow Tie)</label>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {event.consecuencias.map((consecuencia: string, index: number) => (
+                  <Badge key={index} variant="outline" className="text-xs">
+                    {consecuencia}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Proceso</label>
+              <p className="text-sm mt-1">
+                {processes.find((p) => p.id === event.processId)?.name || "No asignado"}
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-muted-foreground">Riesgo Asociado</label>
+              <p className="text-sm mt-1">
+                {risks.find((r) => r.id === event.riskId)?.name || "No asignado"}
+              </p>
+            </div>
+          </div>
+        </div>
+      </TabsContent>
+      
+      <TabsContent value="relations" className="flex-1 overflow-y-auto mt-4">
+        <div className="space-y-6">
+          {/* Controles del Riesgo */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3">Controles del Riesgo</h3>
+            {isLoadingRelations ? (
+              <p className="text-sm text-muted-foreground">Cargando controles...</p>
+            ) : riskRelations?.controls && riskRelations.controls.length > 0 ? (
+              <div className="space-y-2">
+                {riskRelations.controls.map((control) => (
+                  <div key={control.id} className="border rounded-lg p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Badge variant="outline" className="font-mono text-xs mr-2">
+                          {control.code}
+                        </Badge>
+                        <span className="text-sm font-medium">{control.name}</span>
+                      </div>
+                      {control.residualRisk && (
+                        <Badge variant="secondary" className="text-xs">
+                          Riesgo Residual: {control.residualRisk}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No hay controles asociados a este riesgo</p>
+            )}
+          </div>
+
+          {/* Planes de Acción */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3">Planes de Acción</h3>
+            {isLoadingRelations ? (
+              <p className="text-sm text-muted-foreground">Cargando planes de acción...</p>
+            ) : riskRelations?.actionPlans && riskRelations.actionPlans.length > 0 ? (
+              <div className="space-y-2">
+                {riskRelations.actionPlans.map((plan) => (
+                  <div key={plan.id} className="border rounded-lg p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <span className="text-sm font-medium">{plan.title}</span>
+                        {plan.dueDate && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Vence: {formatDate(plan.dueDate)}
+                          </p>
+                        )}
+                      </div>
+                      <Badge className={getStatusColor(plan.status)}>
+                        {plan.status}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No hay planes de acción asociados a este riesgo</p>
+            )}
+          </div>
+        </div>
+      </TabsContent>
+      
+      <TabsContent value="bowtie" className="flex-1 overflow-y-auto mt-4">
+        <BowTieDiagramWrapper eventId={event.id} event={event} />
+      </TabsContent>
+      
+      <TabsContent value="history" className="flex-1 overflow-y-auto mt-4">
+        <AuditHistory 
+          entityType="risk_event" 
+          entityId={event.id} 
+          maxHeight="500px"
+        />
+      </TabsContent>
+    </Tabs>
+  );
 }
 
 // Hook para detectar tamaño de pantalla
@@ -120,6 +327,7 @@ export default function RiskEvents() {
       severity: true,
       status: true,
       process: true,
+      failedControl: true,
       lossAmount: true,
       actions: true,
     };
@@ -244,6 +452,7 @@ export default function RiskEvents() {
     estimatedLoss: string | null;
     actualLoss: string | null;
     riskId: string | null;
+    controlId: string | null;
     processId: string | null;
     createdAt: string;
     createdBy: string | null;
@@ -252,6 +461,7 @@ export default function RiskEvents() {
     processIds: string[];
     subprocesoIds: string[];
     selectedRisks: string[];
+    failedControl: { id: string; code: string; name: string } | null;
   }
 
   interface RiskEventsPageData {
@@ -308,6 +518,7 @@ export default function RiskEvents() {
       // Use description from backend (now included in the response)
       description: event.description || '',
       // estimatedLoss comes directly from backend, no mapping needed
+      // failedControl comes directly from backend (already resolved)
       // Client-side resolve names from cached catalogs
       relatedMacroprocesos: (event.macroprocesoIds || [])
         .map(id => catalogMaps.macroprocesos.get(id))
@@ -320,6 +531,11 @@ export default function RiskEvents() {
         .filter((item): item is CatalogItem => item !== undefined),
     }));
   }, [pageData, catalogMaps]);
+  
+  // Check if any event has a failed control to conditionally show column
+  const hasFailedControls = useMemo(() => {
+    return riskEvents.some(event => event.failedControl !== null);
+  }, [riskEvents]);
   
   // Lookup helpers for UI components
   const risks = risksCatalog;
@@ -683,6 +899,30 @@ export default function RiskEvents() {
       },
       cellClassName: 'items-center',
     },
+    ...(hasFailedControls ? [{
+      id: 'failedControl',
+      header: 'Control que Falló',
+      width: '180px',
+      minWidth: '180px',
+      hideOnMobile: true,
+      cell: (event) => {
+        const failedControl = (event as any).failedControl;
+        if (!failedControl) {
+          return <span className="text-muted-foreground text-sm">N/A</span>;
+        }
+        return (
+          <Badge 
+            variant="outline" 
+            className="text-xs font-mono"
+            data-testid={`cell-failed-control-${event.id}`}
+            title={`${failedControl.code} - ${failedControl.name}`}
+          >
+            <span className="line-clamp-1">{failedControl.code}</span>
+          </Badge>
+        );
+      },
+      cellClassName: 'items-center',
+    }] : []),
     {
       id: 'lossAmount',
       header: (
@@ -780,12 +1020,18 @@ export default function RiskEvents() {
                 </DialogDescription>
               </DialogHeader>
               {viewingEvent && (
-                <Tabs defaultValue="details" className="flex-1 overflow-hidden flex flex-col">
-                  <TabsList>
-                    <TabsTrigger value="details">Detalles</TabsTrigger>
-                    <TabsTrigger value="bowtie">Diagrama Bow Tie</TabsTrigger>
-                    <TabsTrigger value="history">Historial</TabsTrigger>
-                  </TabsList>
+                <RiskEventDetailTabs 
+                  event={viewingEvent}
+                  getEventTypeColor={getEventTypeColor}
+                  getSeverityColor={getSeverityColor}
+                  getStatusColor={getStatusColor}
+                  formatDate={formatDate}
+                  risks={risks}
+                  processes={processes}
+                />
+              )}
+            </DialogContent>
+          </Dialog>
                   
                   <TabsContent value="details" className="flex-1 overflow-y-auto mt-4">
                     <div className="space-y-4">
@@ -920,6 +1166,7 @@ export default function RiskEvents() {
     processes,
     getSeverityColor,
     getStatusColor,
+    hasFailedControls,
   ]);
 
   if (isLoading) {
@@ -987,6 +1234,7 @@ export default function RiskEvents() {
               { id: 'severity', label: 'Severidad' },
               { id: 'status', label: 'Estado' },
               { id: 'process', label: 'Proceso' },
+              { id: 'failedControl', label: 'Control que Falló' },
               { id: 'lossAmount', label: 'Monto de Pérdida' },
               { id: 'actions', label: 'Acciones' },
             ].map(col => (
@@ -1018,6 +1266,7 @@ export default function RiskEvents() {
                   severity: true,
                   status: true,
                   process: true,
+                  failedControl: true,
                   lossAmount: true,
                   actions: true,
                 });

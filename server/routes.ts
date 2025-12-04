@@ -6450,6 +6450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           estimatedLoss: riskEvents.estimatedLoss,
           actualLoss: riskEvents.actualLoss,
           riskId: riskEvents.riskId,
+          controlId: riskEvents.controlId,
           processId: riskEvents.processId,
           createdAt: riskEvents.createdAt,
           createdBy: riskEvents.createdBy,
@@ -6470,7 +6471,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Only fetch relation IDs (no JOINs with catalog tables)
       // Frontend will use cached catalogs to resolve names client-side
-      const [macroRelations, processRelations, subprocesoRelations] = await Promise.all([
+      // Also fetch failed control (controlId) with basic data for display
+      const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
+      const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
         eventIds.length > 0
           ? requireDb()
             .select({
@@ -6497,6 +6500,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             })
             .from(riskEventSubprocesos)
             .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+          : Promise.resolve([]),
+        controlIds.length > 0
+          ? requireDb()
+            .select({
+              id: controls.id,
+              code: controls.code,
+              name: controls.name,
+            })
+            .from(controls)
+            .where(inArray(controls.id, controlIds))
           : Promise.resolve([])
       ]);
 
@@ -6504,6 +6517,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const macroMap = new Map<string, string[]>();
       const processMap = new Map<string, string[]>();
       const subprocesoMap = new Map<string, string[]>();
+      const controlMap = new Map(controlRelations.map(c => [c.id, c]));
 
       for (const m of macroRelations) {
         if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
@@ -6519,6 +6533,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Build lightweight events list (IDs only, no names)
+      // Include failed control basic data (id, code, name) for display
       const eventsForList = eventsData.map(event => ({
         ...event,
         eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
@@ -6528,7 +6543,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         macroprocesoIds: macroMap.get(event.id) || [],
         processIds: processMap.get(event.id) || [],
         subprocesoIds: subprocesoMap.get(event.id) || [],
-        selectedRisks: event.riskId ? [event.riskId] : []
+        selectedRisks: event.riskId ? [event.riskId] : [],
+        // Include failed control basic data
+        failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
       }));
 
       const response = {
@@ -6734,6 +6751,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error fetching risk event with relationships:', error);
       res.status(500).json({ message: "Failed to fetch risk event" });
+    }
+  });
+
+  // Lazy loading endpoint for risk relations (controls and action plans)
+  app.get("/api/risk-events/:id/risk-relations", isAuthenticated, async (req, res) => {
+    try {
+      const event = await storage.getRiskEvent(req.params.id);
+      if (!event || !event.riskId) {
+        return res.json({ controls: [], actionPlans: [] });
+      }
+
+      // Batch load controls and action plans in parallel
+      const [controls, actionPlans] = await Promise.all([
+        storage.getRiskControls(event.riskId),
+        storage.getActionPlansByRisk(event.riskId)
+      ]);
+
+      res.json({
+        controls: controls.map(rc => ({
+          id: rc.control.id,
+          code: rc.control.code,
+          name: rc.control.name,
+          residualRisk: rc.residualRisk,
+        })),
+        actionPlans: actionPlans.map(ap => ({
+          id: ap.id,
+          title: ap.name || (ap as any).title,
+          status: ap.status,
+          dueDate: ap.dueDate instanceof Date ? ap.dueDate.toISOString() : ap.dueDate,
+        })),
+      });
+    } catch (error) {
+      console.error('Error fetching risk relations for event:', error);
+      res.status(500).json({ message: "Failed to fetch risk relations" });
     }
   });
 
