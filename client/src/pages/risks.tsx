@@ -28,6 +28,7 @@ import { EditGuard, DeleteGuard, CreateGuard } from "@/components/auth/permissio
 import { RiskRelationshipMap } from "@/components/RiskRelationshipMap";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { VirtualizedTable, VirtualizedTableColumn, generateMockRisks } from "@/components/virtualized-table";
+import SpecializedAIButton from "@/components/SpecializedAIButton";
 import { ExplanationPopover } from "@/components/ExplanationPopover";
 import { AuditHistory } from "@/components/AuditHistory";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -2400,10 +2401,20 @@ export default function Risks() {
                         </DialogTrigger>
                         <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
                           <DialogHeader>
-                            <DialogTitle>Nuevo Riesgo</DialogTitle>
-                            <DialogDescription>
-                              Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
-                            </DialogDescription>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <DialogTitle>Nuevo Riesgo</DialogTitle>
+                                <DialogDescription>
+                                  Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
+                                </DialogDescription>
+                              </div>
+                              <SpecializedAIButton 
+                                area="risk" 
+                                buttonText="Ayuda IA"
+                                buttonVariant="ghost"
+                                buttonSize="sm"
+                              />
+                            </div>
                           </DialogHeader>
                           <RiskForm onSuccess={handleCreateSuccess} />
                         </DialogContent>

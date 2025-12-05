@@ -1093,20 +1093,6 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           </div>
         )}
 
-        {/* Dialog Header with AI Button */}
-        <DialogHeader>
-          <div className="flex items-center justify-between">
-            <DialogTitle>{risk ? "Editar Riesgo" : "Nuevo Riesgo"}</DialogTitle>
-            <SpecializedAIButton 
-              area="risk" 
-              contextId={risk?.id}
-              buttonText="Ayuda IA"
-              buttonVariant="ghost"
-              buttonSize="sm"
-            />
-          </div>
-        </DialogHeader>
-
         {/* Multiple Process Associations - New System */}
         <FormField
           control={form.control}
