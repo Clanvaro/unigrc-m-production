@@ -91,7 +91,7 @@ export default function Risks() {
   const [pageSize, setPageSize] = useState(50);
 
   // Column visibility configuration
-  // Heavy columns (process, responsible, cargo, validation) are disabled by default for faster loading
+  // Heavy columns (process, cargo, validation) are disabled by default for faster loading
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const saved = localStorage.getItem('risksTableColumns');
     return saved ? JSON.parse(saved) : {
@@ -103,7 +103,6 @@ export default function Risks() {
       inherent: true,
       residual: true,
       process: false, // Disabled by default - requires batch-relations
-      responsible: false, // Disabled by default - requires batch-relations
       cargo: false, // Disabled by default - requires batch-relations
       validation: false, // Disabled by default - requires batch-relations
       status: true,
@@ -1769,46 +1768,7 @@ export default function Risks() {
       cellClassName: 'items-center',
       visible: visibleColumns.process,
     },
-    {
-      id: 'responsible',
-      header: 'Responsable',
-      width: '200px',
-      cell: (risk) => {
-        const responsibles = getRiskProcessResponsibles(risk);
 
-        if (responsibles.length === 0) {
-          return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
-        }
-
-        if (responsibles.length === 1) {
-          const responsible = responsibles[0];
-          if (!responsible) return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
-          return (
-            <div className="flex items-center gap-1.5 min-w-0">
-              <User className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-              <span className="text-xs font-medium line-clamp-1 flex-1" title={responsible.name}>
-                {responsible.name}
-              </span>
-            </div>
-          );
-        }
-
-        return (
-          <div className="space-y-1 min-w-0">
-            <div className="flex items-center gap-1">
-              <User className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-              <span className="text-xs font-medium">{responsibles.length} responsables</span>
-            </div>
-            <div className="text-xs text-muted-foreground line-clamp-2">
-              {responsibles.filter(r => r && r.name).map((r: ResponsibleWithValidation) => r.name).slice(0, 2).join(', ')}
-              {responsibles.length > 2 && ` +${responsibles.length - 2}`}
-            </div>
-          </div>
-        );
-      },
-      cellClassName: 'items-center',
-      visible: visibleColumns.responsible,
-    },
     {
       id: 'cargo',
       header: 'Cargo',
@@ -2291,110 +2251,110 @@ export default function Risks() {
 
       {/* Search term display */}
       <div className="flex items-center justify-between gap-4 shrink-0">
-          <div className="flex-1 flex justify-end">
+        <div className="flex-1 flex justify-end">
           {searchTerm && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Badge variant="secondary" className="gap-1">
-                  Búsqueda: "{searchTerm}"
-                  <button
-                    onClick={() => setFilters(prev => ({ ...prev, search: "" }))}
-                    className="ml-1 hover:text-foreground"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-                <span>({filteredRisks.length} resultados)</span>
-              </div>
-            )}
-          </div>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary" className="gap-1">
+                Búsqueda: "{searchTerm}"
+                <button
+                  onClick={() => setFilters(prev => ({ ...prev, search: "" }))}
+                  className="ml-1 hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+              <span>({filteredRisks.length} resultados)</span>
+            </div>
+          )}
         </div>
+      </div>
 
       {/* Optimized risk table - fast loading */}
-          {isLoading ? (
+      {isLoading ? (
         <Card className="flex-1 flex flex-col">
-              <CardContent className="p-4">
-                <RisksPageSkeleton />
-              </CardContent>
-            </Card>
-          ) : (
-            <Card className="flex-1 flex flex-col overflow-hidden">
-              <CardContent className="p-0 h-full flex flex-col">
+          <CardContent className="p-4">
+            <RisksPageSkeleton />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="flex-1 flex flex-col overflow-hidden">
+          <CardContent className="p-0 h-full flex flex-col">
             <div className="flex-1 overflow-hidden h-full">
-                  <VirtualizedTable
-                    data={displayData}
+              <VirtualizedTable
+                data={displayData}
                 columns={visibleColumnsList}
-                    estimatedRowHeight={65}
-                    overscan={5}
-                    getRowKey={(risk) => risk.id}
-                    isLoading={isLoading}
-                    ariaLabel="Tabla de riesgos"
-                    ariaDescribedBy="risks-table-description"
-                  />
-                  <div id="risks-table-description" className="sr-only">
-                    Tabla con {displayData.length} riesgos. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
-                  </div>
-                </div>
+                estimatedRowHeight={65}
+                overscan={5}
+                getRowKey={(risk) => risk.id}
+                isLoading={isLoading}
+                ariaLabel="Tabla de riesgos"
+                ariaDescribedBy="risks-table-description"
+              />
+              <div id="risks-table-description" className="sr-only">
+                Tabla con {displayData.length} riesgos. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
+              </div>
+            </div>
 
-                {/* Pagination controls */}
-                {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
+            {/* Pagination controls */}
+            {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
               <div className="border-t px-4 py-2 flex items-center justify-between text-[15px] shrink-0">
-                    <div className="text-sm text-muted-foreground">
-                      Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                        disabled={currentPage === 1}
-                      >
-                        Anterior
-                      </Button>
-                      <span className="text-sm">
-                        Página {currentPage} de {totalPages}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                        disabled={currentPage === totalPages}
-                      >
-                        Siguiente
-                      </Button>
-                    </div>
-                    <Select
-                      value={pageSize.toString()}
-                      onValueChange={(value) => {
-                        setPageSize(Number(value));
-                        setCurrentPage(1);
-                      }}
-                    >
-                      <SelectTrigger className="w-[180px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="10">10 por página</SelectItem>
-                        <SelectItem value="25">25 por página</SelectItem>
-                        <SelectItem value="50">50 por página</SelectItem>
-                        <SelectItem value="100">100 por página</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                <div className="text-sm text-muted-foreground">
+                  Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Anterior
+                  </Button>
+                  <span className="text-sm">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Siguiente
+                  </Button>
+                </div>
+                <Select
+                  value={pageSize.toString()}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value));
+                    setCurrentPage(1);
+                  }}
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10 por página</SelectItem>
+                    <SelectItem value="25">25 por página</SelectItem>
+                    <SelectItem value="50">50 por página</SelectItem>
+                    <SelectItem value="100">100 por página</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-                {displayData.length === 0 && !testMode50k && (
-                  <div className="text-center py-12">
-                    <p className="text-muted-foreground mb-4">No se encontraron riesgos</p>
-                    <CreateGuard itemType="risk" showFallback={false}>
-                      <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogOpen}>
-                        <DialogTrigger asChild>
-                          <Button data-testid="button-create-first-risk">
-                            <Plus className="mr-2 h-4 w-4" />
-                            Crear Primer Riesgo
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
-                          <DialogHeader>
+            {displayData.length === 0 && !testMode50k && (
+              <div className="text-center py-12">
+                <p className="text-muted-foreground mb-4">No se encontraron riesgos</p>
+                <CreateGuard itemType="risk" showFallback={false}>
+                  <Dialog open={isCreateDialogOpen} onOpenChange={handleCreateDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button data-testid="button-create-first-risk">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Crear Primer Riesgo
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+                      <DialogHeader>
                         <div className="flex items-center justify-between">
                           <div>
                             <DialogTitle>Nuevo Riesgo</DialogTitle>
@@ -2402,23 +2362,23 @@ export default function Risks() {
                               Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
                             </DialogDescription>
                           </div>
-                          <SpecializedAIButton 
-                            area="risk" 
+                          <SpecializedAIButton
+                            area="risk"
                             buttonText="Ayuda IA"
                             buttonVariant="ghost"
                             buttonSize="sm"
                           />
                         </div>
-                          </DialogHeader>
-                          <RiskForm onSuccess={handleCreateSuccess} />
-                        </DialogContent>
-                      </Dialog>
-                    </CreateGuard>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+                      </DialogHeader>
+                      <RiskForm onSuccess={handleCreateSuccess} />
+                    </DialogContent>
+                  </Dialog>
+                </CreateGuard>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Diálogo de detalles del riesgo */}
       <Dialog open={!!viewingRisk} onOpenChange={(open) => !open && setViewingRisk(null)}>
@@ -2967,21 +2927,7 @@ export default function Risks() {
               </label>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="col-responsible"
-                checked={visibleColumns.responsible}
-                onCheckedChange={(checked) =>
-                  setVisibleColumns({ ...visibleColumns, responsible: checked as boolean })
-                }
-              />
-              <label
-                htmlFor="col-responsible"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-              >
-                Responsable
-              </label>
-            </div>
+
 
             <div className="flex items-center space-x-2">
               <Checkbox
@@ -3059,7 +3005,6 @@ export default function Risks() {
                   inherent: true,
                   residual: true,
                   process: true,
-                  responsible: true,
                   cargo: true,
                   validation: true,
                   status: true,

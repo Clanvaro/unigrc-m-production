@@ -5338,7 +5338,7 @@ export class MemStorage implements IStorage {
         )),
       // Get ALL riskControls for ALL risks (not just validated ones)
       // so residual risk calculation works correctly even for non-validated risks
-      // OPTIMIZED: Drive from risks table to use status index
+      // OPTIMIZED: Drive from risks table to use deletedAt index
       db.select({
         id: riskControls.id,
         riskId: riskControls.riskId,
