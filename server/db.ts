@@ -22,7 +22,7 @@ const isRenderDb =
   false;
 
 // Detect if using Google Cloud SQL
-const isCloudSql = 
+const isCloudSql =
   process.env.IS_GCP_DEPLOYMENT === 'true' ||
   databaseUrl?.includes('.googleapis.com') ||
   databaseUrl?.includes('cloudsql') ||
@@ -74,11 +74,11 @@ if (databaseUrl) {
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
   // Increase timeout to handle occasional slow SSL negotiations
   // Cloud SQL Proxy (Unix socket) is much faster, so lower timeout is acceptable
-  const connectionTimeout = isRenderDb 
-    ? 30000 
-    : isCloudSql 
-    ? (isCloudSqlProxy ? 10000 : 20000) // Unix socket: 10s, IP pública: 20s
-    : (isProduction ? 60000 : 15000);
+  const connectionTimeout = isRenderDb
+    ? 30000
+    : isCloudSql
+      ? (isCloudSqlProxy ? 10000 : 20000) // Unix socket: 10s, IP pública: 20s
+      : (isProduction ? 60000 : 15000);
   // CRITICAL: Reduced from 45s to 10s to fail fast on slow queries (Nov 29, 2025)
   // This prevents 138s hangs when N+1 queries saturate the pool
   const statementTimeout = isRenderDb ? 10000 : (isProduction ? 15000 : 10000);
@@ -91,10 +91,10 @@ if (databaseUrl) {
   const sslConfig = isCloudSqlProxy
     ? false  // Cloud SQL Proxy doesn't need SSL
     : isRenderDb
-    ? { rejectUnauthorized: false }  // Render requires SSL
-    : isCloudSql
-    ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
-    : (isProduction ? { rejectUnauthorized: false } : false);
+      ? { rejectUnauthorized: false }  // Render requires SSL
+      : isCloudSql
+        ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
+        : (isProduction ? { rejectUnauthorized: false } : false);
 
   // Optimized pool settings for different environments
   // Cloud Run + Cloud SQL: max = (concurrency × max_replicas) vs Cloud SQL max_connections
@@ -106,23 +106,23 @@ if (databaseUrl) {
   // - Min connections for warm pool readiness
   // - Shorter idle timeout to recycle connections before Render closes them
   // - Aggressive keep-alive to maintain connection health
-  
+
   // Calculate pool max for Cloud SQL based on environment
   let poolMax: number;
   if (isCloudSql) {
     // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
     // Default: Conservative 10 connections (adjust based on Cloud SQL instance size)
     // Review Cloud SQL logs to detect too many connections and adjust accordingly
-    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '10', 10);
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '20', 10);
     poolMax = cloudSqlMax;
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
   } else {
     poolMax = isPooled ? 10 : 6; // Neon pooled vs direct
   }
-  
+
   const poolMin = isCloudSql ? 2 : (isRenderDb ? 5 : 2);
-  
+
   pool = new Pool({
     connectionString: normalizedDatabaseUrl,
     max: poolMax,
@@ -130,7 +130,7 @@ if (databaseUrl) {
     // Cloud SQL: Longer idle timeout to avoid frequent reconnections (Unix socket is stable)
     // Render: 1 min idle (recycle before server closes)
     idleTimeoutMillis: isCloudSql ? 60000 : (isRenderDb ? 60000 : 30000),
-    connectionTimeoutMillis: connectionTimeout,
+    connectionTimeoutMillis: isCloudSql ? 30000 : connectionTimeout,
     statement_timeout: statementTimeout,
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
@@ -183,7 +183,7 @@ if (pool) {
       console.log('🔄 Database connection recycled by server (normal for Neon)');
       return;
     }
-    
+
     // Handle "Connection terminated unexpectedly" errors
     if (err.message?.includes('Connection terminated') || err.message?.includes('terminated unexpectedly')) {
       console.warn('⚠️ Database connection terminated unexpectedly:', {
@@ -194,7 +194,7 @@ if (pool) {
       // Don't log as error - this is often recoverable
       return;
     }
-    
+
     console.error('❌ Database pool error:', {
       code: err.code,
       message: err.message,
@@ -754,15 +754,15 @@ if (pool) {
     } else {
       // Pool warming for Render PostgreSQL and Cloud SQL
       // Pre-establish connections respecting pool max to avoid SSL handshake latency during requests
-      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || 
-                       process.env.DATABASE_URL?.includes('render.com') || false;
+      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') ||
+        process.env.DATABASE_URL?.includes('render.com') || false;
       const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
       // Match actual pool config: Render max=20, Cloud SQL max=10 (configurable), Neon max=6
       const poolMax = isRender ? 20 : (isCloudSql ? parseInt(process.env.DB_POOL_MAX || '10', 10) : 6);
       // Warm up to min connections to ensure fast initial requests
       // Render: 8, Cloud SQL: 3, Neon: 3
       const warmCount = Math.min(
-        isRender ? 8 : (isCloudSql ? 3 : 3), 
+        isRender ? 8 : (isCloudSql ? 3 : 3),
         poolMax
       );
       console.log(`🔥 Starting aggressive pool warming (${warmCount} of ${poolMax} connections)...`);

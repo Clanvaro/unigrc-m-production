@@ -20746,13 +20746,41 @@ export class DatabaseStorage extends MemStorage {
     }
 
     // Get paginated results with LIMIT/OFFSET at DB level
+    // OPTIMIZED: Select only necessary columns to avoid fetching heavy unused data
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
-      risk: risks,
-      macroproceso: macroprocesos,
-      process: processes,
-      subproceso: subprocesos,
-      validatedByUser: users,
+      // Select only necessary risk fields
+      risk: {
+        id: risks.id,
+        code: risks.code,
+        name: risks.name,
+        description: risks.description,
+        status: risks.status
+      },
+      // Select only necessary macroproceso fields
+      macroproceso: {
+        id: macroprocesos.id,
+        code: macroprocesos.code,
+        name: macroprocesos.name
+      },
+      // Select only necessary process fields
+      process: {
+        id: processes.id,
+        code: processes.code,
+        name: processes.name
+      },
+      // Select only necessary subproceso fields
+      subproceso: {
+        id: subprocesos.id,
+        code: subprocesos.code,
+        name: subprocesos.name
+      },
+      // Select only necessary user fields
+      validatedByUser: {
+        id: users.id,
+        fullName: users.fullName,
+        email: users.email
+      },
       responsibleOwnerId: sql<string>`
         COALESCE(
           ${riskProcessLinks.responsibleOverrideId},
@@ -20792,12 +20820,12 @@ export class DatabaseStorage extends MemStorage {
     // Map results
     const data = baseResults.map((result) => ({
       ...result.riskProcessLink,
-      risk: result.risk!,
-      macroproceso: result.macroproceso || undefined,
-      process: result.process || undefined,
-      subproceso: result.subproceso || undefined,
+      risk: result.risk as any,
+      macroproceso: (result.macroproceso || undefined) as any,
+      process: (result.process || undefined) as any,
+      subproceso: (result.subproceso || undefined) as any,
       responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-      validatedByUser: result.validatedByUser || undefined,
+      validatedByUser: (result.validatedByUser || undefined) as any,
     }));
 
     return { data, total };
