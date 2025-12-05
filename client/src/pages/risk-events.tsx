@@ -960,10 +960,10 @@ export default function RiskEvents() {
         return (
           <span className="font-medium" data-testid={`cell-loss-amount-${event.id}`}>
             ${numericValue.toLocaleString('es-CO', {
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 0
-            })}
-          </span>
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+              })}
+            </span>
         );
       },
       cellClassName: 'items-center',
