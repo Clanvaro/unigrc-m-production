@@ -49,11 +49,38 @@ app.use('/api', createProxyMiddleware({
     }
 }));
 
-// Serve static files from 'public' directory
-app.use(express.static(path.join(__dirname, 'public')));
+import fs from 'fs';
 
-// Handle SPA routing - return index.html for all non-API requests
+// Serve static files from 'public' directory
+app.use(express.static(path.join(__dirname, 'public'), {
+    // Set proper MIME types for JavaScript modules
+    setHeaders: (res, filepath) => {
+        if (filepath.endsWith('.js') || filepath.endsWith('.mjs')) {
+            res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        } else if (filepath.endsWith('.css')) {
+            res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        }
+    }
+}));
+
+// Handle SPA routing - return index.html for all non-API, non-static requests
 app.get('*', (req, res) => {
+    // Check if this is a static asset request
+    const isStaticAsset = req.path.match(/\.(js|mjs|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|webp|ico|json|map)$/);
+    
+    if (isStaticAsset) {
+        // For static assets, check if file exists before serving index.html
+        const filePath = path.join(__dirname, 'public', req.path);
+        if (fs.existsSync(filePath)) {
+            // File exists, express.static should have served it, but if we're here, serve it manually
+            return res.sendFile(filePath);
+        } else {
+            // Static file not found - return 404 instead of index.html
+            return res.status(404).type('text/plain').send('File not found');
+        }
+    }
+    
+    // For SPA routes, serve index.html
     console.log(`Fallback to index.html for: ${req.url}`);
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
