@@ -256,17 +256,84 @@ gcloud sql ssl-certs describe unigrc-client-cert \
 
 ### 3.4 Build Connection String
 
-Your `DATABASE_URL` will be:
+**⚠️ IMPORTANTE: Para Cloud Run, usa Unix socket (Cloud SQL Proxy) en lugar de IP pública para mejor performance.**
+
+#### Opción A: Unix Socket (Recomendado para Cloud Run - Más rápido y seguro)
+
+**Formato:**
+```
+postgresql://unigrc_user:<SECURE_DB_PASSWORD>@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db
+```
+
+**Ejemplo:**
+```
+postgresql://unigrc_user:MySecurePass123@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db
+```
+
+**Ventajas:**
+- ✅ Latencia mucho menor (<10ms vs 100-1000ms con IP pública)
+- ✅ Más seguro (conexión interna, no expone IP)
+- ✅ No requiere SSL (conexión ya es segura)
+- ✅ Funciona automáticamente con `--add-cloudsql-instances` en Cloud Run
+
+**Requisitos:**
+- Cloud Run debe tener `--add-cloudsql-instances=unigrc-m:southamerica-west1:unigrc-db` configurado (ya está en `cloudbuild-backend.yaml`)
+
+#### Opción B: IP Pública (Alternativa - Más lento)
+
+**Formato:**
 ```
 postgresql://unigrc_user:<SECURE_DB_PASSWORD>@<PUBLIC_IP>:5432/unigrc_db?sslmode=require
 ```
 
-Example:
+**Ejemplo:**
 ```
 postgresql://unigrc_user:MySecurePass123@34.123.45.67:5432/unigrc_db?sslmode=require
 ```
 
-**Save this connection string - you'll need it for Cloud Run environment variables.**
+**Nota:** Esta opción es más lenta y menos segura. Solo úsala si no puedes usar Unix socket.
+
+**Para obtener la IP pública:**
+```bash
+gcloud sql instances describe unigrc-db \
+  --format="value(ipAddresses[0].ipAddress)"
+```
+
+**Guardar en Secret Manager:**
+```bash
+# Actualizar el secret DATABASE_URL con el formato Unix socket (recomendado)
+# Reemplaza MySecurePass123 con tu contraseña real
+echo -n "postgresql://unigrc_user:MySecurePass123@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db" | \
+  gcloud secrets versions add DATABASE_URL --data-file=-
+```
+
+**⚠️ IMPORTANTE - Actualizar DATABASE_URL existente:**
+
+Si ya tienes un secret `DATABASE_URL` con formato IP pública, actualízalo así:
+
+```bash
+# 1. Obtener la contraseña actual (si no la recuerdas)
+gcloud secrets versions access latest --secret=DATABASE_URL
+
+# 2. Actualizar el secret con formato Unix socket
+# Reemplaza <PASSWORD> con la contraseña obtenida en el paso 1
+echo -n "postgresql://unigrc_user:<PASSWORD>@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db" | \
+  gcloud secrets versions add DATABASE_URL --data-file=-
+
+# 3. Verificar que el secret se actualizó correctamente
+gcloud secrets versions access latest --secret=DATABASE_URL
+
+# 4. Redesplegar el backend para aplicar el cambio
+# Esto se hace automáticamente con el siguiente push a main, o manualmente:
+gcloud run services update unigrc-backend \
+  --region=southamerica-west1
+```
+
+**Beneficios del cambio:**
+- ✅ Latencia reducida de 100-1000ms a <10ms
+- ✅ Mejor estabilidad de conexiones
+- ✅ Más seguro (conexión interna)
+- ✅ No requiere certificados SSL de cliente
 
 ---
 
@@ -421,7 +488,7 @@ gcloud run deploy unigrc-backend \
   --max-instances=10 \
   --timeout=300 \
   --set-env-vars="NODE_ENV=production,PORT=8080,IS_GCP_DEPLOYMENT=true" \
-  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:<SECURE_DB_PASSWORD>@<PUBLIC_IP>:5432/unigrc_db?sslmode=require" \
+  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:<SECURE_DB_PASSWORD>@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db" \
   --set-env-vars="SESSION_SECRET=<GENERATED_SESSION_SECRET>" \
   --set-env-vars="CSRF_SECRET=<GENERATED_CSRF_SECRET>" \
   --set-env-vars="GCS_PROJECT_ID=<GCP_PROJECT_ID>" \
@@ -466,7 +533,7 @@ gcloud run deploy unigrc-backend \
   --update-secrets=CSRF_SECRET=csrf-secret:latest \
   --update-secrets=GCS_PRIVATE_KEY=storage-key:latest \
   --set-env-vars="NODE_ENV=production,PORT=8080" \
-  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:$(gcloud secrets versions access latest --secret=db-password)@<PUBLIC_IP>:5432/unigrc_db?sslmode=require"
+  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:$(gcloud secrets versions access latest --secret=db-password)@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db"
 ```
 
 ---
@@ -575,7 +642,7 @@ npx drizzle-kit push:pg
 gcloud run jobs create unigrc-migrate \
   --image=<REGION>-docker.pkg.dev/<GCP_PROJECT_ID>/unigrc/backend:latest \
   --region=<REGION> \
-  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:<SECURE_DB_PASSWORD>@<PUBLIC_IP>:5432/unigrc_db?sslmode=require" \
+  --set-env-vars="DATABASE_URL=postgresql://unigrc_user:<SECURE_DB_PASSWORD>@/unigrc_db?host=/cloudsql/unigrc-m:southamerica-west1:unigrc-db" \
   --command="npm" \
   --args="run,db:push"
 
@@ -669,7 +736,7 @@ gcloud storage ls gs://unigrc-uploads-<GCP_PROJECT_ID>/
 |----------|-------------|---------|
 | `NODE_ENV` | Node environment | `production` |
 | `PORT` | Server port | `8080` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db?sslmode=require` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@/db?host=/cloudsql/PROJECT:REGION:INSTANCE` (Unix socket) o `postgresql://user:pass@IP:5432/db?sslmode=require` (IP pública) |
 | `SESSION_SECRET` | Session encryption key | `<64-char-hex-string>` |
 | `CSRF_SECRET` | CSRF token secret | `<64-char-hex-string>` |
 | `GCS_PROJECT_ID` | GCP project ID | `my-project-123` |

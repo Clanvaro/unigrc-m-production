@@ -73,7 +73,12 @@ if (databaseUrl) {
 
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
   // Increase timeout to handle occasional slow SSL negotiations
-  const connectionTimeout = isRenderDb ? 30000 : (isProduction ? 60000 : 15000);
+  // Cloud SQL Proxy (Unix socket) is much faster, so lower timeout is acceptable
+  const connectionTimeout = isRenderDb 
+    ? 30000 
+    : isCloudSql 
+    ? (isCloudSqlProxy ? 10000 : 20000) // Unix socket: 10s, IP pública: 20s
+    : (isProduction ? 60000 : 15000);
   // CRITICAL: Reduced from 45s to 10s to fail fast on slow queries (Nov 29, 2025)
   // This prevents 138s hangs when N+1 queries saturate the pool
   const statementTimeout = isRenderDb ? 10000 : (isProduction ? 15000 : 10000);
@@ -122,11 +127,14 @@ if (databaseUrl) {
     connectionString: normalizedDatabaseUrl,
     max: poolMax,
     min: poolMin,
-    idleTimeoutMillis: isRenderDb ? 60000 : 30000,  // Render: 1 min idle (recycle before server closes)
+    // Cloud SQL: Longer idle timeout to avoid frequent reconnections (Unix socket is stable)
+    // Render: 1 min idle (recycle before server closes)
+    idleTimeoutMillis: isCloudSql ? 60000 : (isRenderDb ? 60000 : 30000),
     connectionTimeoutMillis: connectionTimeout,
     statement_timeout: statementTimeout,
     keepAlive: true,
-    keepAliveInitialDelayMillis: 5000,  // Start keep-alive sooner (was 10000)
+    // Cloud SQL Proxy: Start keep-alive sooner for better connection health
+    keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
     ssl: sslConfig,
     allowExitOnIdle: false,
   });
@@ -632,7 +640,10 @@ function startPoolWarming() {
 
   // Detect database type for appropriate ping interval
   const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
-  const PING_INTERVAL = isRender ? 15000 : 20000; // 15s for Render, 20s for Neon
+  const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
+  // Cloud SQL: More frequent pings to maintain Unix socket connections
+  // Render: 15s, Cloud SQL: 15s, Neon: 20s
+  const PING_INTERVAL = isRender || isCloudSql ? 15000 : 20000;
 
   poolWarmingInterval = setInterval(async () => {
     try {
@@ -641,7 +652,7 @@ function startPoolWarming() {
       // Detect transition from quiet hours to active hours (7:00 AM)
       if (wasInQuietHours && !currentlyQuiet) {
         console.log('🌅 Quiet hours ended - aggressive pool warming');
-        const warmCount = isRender ? 5 : 2;
+        const warmCount = isRender ? 5 : (isCloudSql ? 3 : 2);
         await warmPool(warmCount);
         wasInQuietHours = false;
         return;
@@ -741,14 +752,19 @@ if (pool) {
       console.log('🌙 Quiet hours (00:00-07:00 Chile time) - skipping initial pool warming');
       startPoolWarming(); // Start the interval anyway, it will skip pings during quiet hours
     } else {
-      // Pool warming for Render PostgreSQL
+      // Pool warming for Render PostgreSQL and Cloud SQL
       // Pre-establish connections respecting pool max to avoid SSL handshake latency during requests
       const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || 
                        process.env.DATABASE_URL?.includes('render.com') || false;
-      // Match actual pool config: max=20, min=5 for Render
-      const poolMax = isRender ? 20 : 6;
-      // Warm up to min connections (5 for Render) to ensure fast initial requests
-      const warmCount = Math.min(isRender ? 8 : 3, poolMax);
+      const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
+      // Match actual pool config: Render max=20, Cloud SQL max=10 (configurable), Neon max=6
+      const poolMax = isRender ? 20 : (isCloudSql ? parseInt(process.env.DB_POOL_MAX || '10', 10) : 6);
+      // Warm up to min connections to ensure fast initial requests
+      // Render: 8, Cloud SQL: 3, Neon: 3
+      const warmCount = Math.min(
+        isRender ? 8 : (isCloudSql ? 3 : 3), 
+        poolMax
+      );
       console.log(`🔥 Starting aggressive pool warming (${warmCount} of ${poolMax} connections)...`);
       await warmPool(warmCount);
       startPoolWarming();
