@@ -7338,7 +7338,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Fetch controls from database
       const { controls: paginatedControls, total } = await storage.getControlsPaginated(filters, limit, offset);
-      console.log(`[DEBUG] /api/controls: storage returned ${paginatedControls.length} controls, total=${total}`);
 
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;
