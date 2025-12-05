@@ -65,7 +65,7 @@ export default defineConfig({
             "@radix-ui/react-toast",
           ],
           charts: ["recharts"],
-          flow: ["reactflow", "@xyflow/react"],
+          flow: ["@xyflow/react"],
           icons: ["lucide-react"],
           date: ["date-fns", "react-day-picker"],
           forms: ["zod", "zod-validation-error", "@hookform/resolvers"],
