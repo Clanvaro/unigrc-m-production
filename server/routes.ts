@@ -31,6 +31,8 @@ import {
   CACHE_VERSION
 } from './cache-helpers';
 import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
+import { usingRealRedis } from "./services/redis";
+import { openAIService } from "./openai-service";
 import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
@@ -750,6 +752,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error('[DB LATENCY] Error:', error);
       res.status(500).json({
         error: 'Latency measurement failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // System diagnostics endpoint - shows Redis and OpenAI status
+  app.get("/api/system/diagnostics", isAuthenticated, async (req, res) => {
+    try {
+      // Redis status
+      const redisStatus = {
+        enabled: usingRealRedis,
+        type: usingRealRedis 
+          ? (process.env.UPSTASH_REDIS_REST_URL ? 'upstash' : 'redis')
+          : 'in-memory',
+        configured: !!(process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_URL),
+        stats: distributedCache.getStats()
+      };
+
+      // Test Redis connection
+      let redisTest = { success: false, error: null as string | null, latency: null as number | null };
+      if (usingRealRedis) {
+        try {
+          const testKey = `diagnostics:test:${Date.now()}`;
+          const startTime = Date.now();
+          await distributedCache.set(testKey, { test: true }, 10);
+          const value = await distributedCache.get(testKey);
+          const latency = Date.now() - startTime;
+          await distributedCache.invalidate(testKey);
+          
+          redisTest = {
+            success: value !== null,
+            error: null,
+            latency
+          };
+        } catch (error) {
+          redisTest = {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            latency: null
+          };
+        }
+      } else {
+        // For in-memory, test is always successful
+        redisTest = {
+          success: true,
+          error: null,
+          latency: 0
+        };
+      }
+
+      // OpenAI status
+      const aiStatus = openAIService.getStatus();
+      const openAIStatus = {
+        configured: !!process.env.OPENAI_API_KEY,
+        ready: aiStatus.ready,
+        model: aiStatus.deployment || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        provider: 'openai',
+        apiKeyFormat: process.env.OPENAI_API_KEY 
+          ? (process.env.OPENAI_API_KEY.startsWith('sk-') ? 'valid' : 'invalid')
+          : 'not-set'
+      };
+
+      // Environment variables (without sensitive values)
+      const envConfig = {
+        redis: {
+          upstashUrl: !!process.env.UPSTASH_REDIS_REST_URL,
+          upstashToken: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+          redisUrl: !!process.env.REDIS_URL
+        },
+        openai: {
+          apiKey: !!process.env.OPENAI_API_KEY,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini'
+        }
+      };
+
+      res.json({
+        timestamp: new Date().toISOString(),
+        redis: {
+          ...redisStatus,
+          test: redisTest
+        },
+        openai: openAIStatus,
+        environment: envConfig,
+        recommendations: [
+          ...(!usingRealRedis && process.env.UPSTASH_REDIS_REST_URL 
+            ? ['Redis: Upstash URL configured but not connecting. Check credentials.']
+            : []),
+          ...(!usingRealRedis && !process.env.UPSTASH_REDIS_REST_URL && !process.env.REDIS_URL
+            ? ['Redis: Using in-memory cache. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed caching.']
+            : []),
+          ...(!openAIStatus.ready && !process.env.OPENAI_API_KEY
+            ? ['OpenAI: API key not configured. Set OPENAI_API_KEY to enable AI features.']
+            : []),
+          ...(!openAIStatus.ready && process.env.OPENAI_API_KEY && openAIStatus.apiKeyFormat === 'invalid'
+            ? ['OpenAI: API key format appears invalid. Should start with "sk-".']
+            : [])
+        ]
+      });
+    } catch (error) {
+      console.error('[SYSTEM DIAGNOSTICS] Error:', error);
+      res.status(500).json({
+        error: 'Diagnostics failed',
         message: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
       });
@@ -6657,38 +6762,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [allMacroprocesoRelations, allProcessRelations, allSubprocesoRelations] = await Promise.all([
         eventIds.length > 0
           ? requireDb()
-            .select({
+          .select({
               riskEventId: riskEventMacroprocesos.riskEventId,
-              id: macroprocesos.id,
-              name: macroprocesos.name,
-              code: macroprocesos.code
-            })
-            .from(riskEventMacroprocesos)
-            .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+            id: macroprocesos.id,
+            name: macroprocesos.name,
+            code: macroprocesos.code
+          })
+          .from(riskEventMacroprocesos)
+          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
             .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-            .select({
+          .select({
               riskEventId: riskEventProcesses.riskEventId,
-              id: processes.id,
-              name: processes.name,
-              code: processes.code
-            })
-            .from(riskEventProcesses)
-            .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+            id: processes.id,
+            name: processes.name,
+            code: processes.code
+          })
+          .from(riskEventProcesses)
+          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
             .where(inArray(riskEventProcesses.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-            .select({
+          .select({
               riskEventId: riskEventSubprocesos.riskEventId,
-              id: subprocesos.id,
-              name: subprocesos.name,
-              code: subprocesos.code
-            })
-            .from(riskEventSubprocesos)
-            .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+            id: subprocesos.id,
+            name: subprocesos.name,
+            code: subprocesos.code
+          })
+          .from(riskEventSubprocesos)
+          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
             .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
           : Promise.resolve([])
       ]);
@@ -6713,15 +6818,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Map events with relations (O(n) instead of O(n*m) queries)
       const eventsForList = events.map((event) => ({
-        ...event,
-        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+          ...event,
+          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
         relatedMacroprocesos: macroprocesoMap.get(event.id) || [],
         relatedProcesses: processMap.get(event.id) || [],
         relatedSubprocesos: subprocesoMap.get(event.id) || [],
-        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
-        selectedRisks: event.riskId ? [event.riskId] : []
+          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+          selectedRisks: event.riskId ? [event.riskId] : []
       }));
 
       res.json({
@@ -21691,7 +21796,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;
-      try {
+    try {
         const tenant = await resolveActiveTenant(req, { required: false });
         tenantId = tenant?.tenantId;
       } catch (error) {
