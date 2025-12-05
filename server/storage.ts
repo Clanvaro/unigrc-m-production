@@ -5060,13 +5060,13 @@ export class MemStorage implements IStorage {
           : undefined
       )),
 
-      // Risk controls (lightweight)
+      // Risk controls (lightweight) - OPTIMIZED: Drive from risks table to use status index
       db.select({
         riskId: riskControls.riskId,
         residualRisk: riskControls.residualRisk
       })
-        .from(riskControls)
-        .innerJoin(risks, eq(riskControls.riskId, risks.id))
+        .from(risks)
+        .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
         .innerJoin(controls, eq(riskControls.controlId, controls.id))
         .where(and(
           isNull(risks.deletedAt),
@@ -5338,14 +5338,15 @@ export class MemStorage implements IStorage {
         )),
       // Get ALL riskControls for ALL risks (not just validated ones)
       // so residual risk calculation works correctly even for non-validated risks
+      // OPTIMIZED: Drive from risks table to use status index
       db.select({
         id: riskControls.id,
         riskId: riskControls.riskId,
         controlId: riskControls.controlId,
         residualRisk: riskControls.residualRisk,
       })
-        .from(riskControls)
-        .innerJoin(risks, eq(riskControls.riskId, risks.id))
+        .from(risks)
+        .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
         .where(isNull(risks.deletedAt)),
       // OPTIMIZED: Only select id (used as Map key) instead of all columns
       db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt)),
