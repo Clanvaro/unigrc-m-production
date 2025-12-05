@@ -20,7 +20,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Calendar, AlertTriangle, Sparkles, BarChart3, Clock, FileImage, Download, Building2, ArrowRight, Network, Layers, Building, Check, ChevronsUpDown, Printer, Sliders } from "lucide-react";
+import { Calendar, AlertTriangle, Sparkles, BarChart3, Clock, FileImage, Download, Building2, ArrowRight, Network, Layers, Building, Check, ChevronsUpDown, Printer, Sliders, List } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import CriticalityGapMatrix from "@/components/risk-matrix/criticality-gap-matrix";
 import { getRiskLevelText } from "@/lib/risk-calculations";
@@ -169,6 +169,7 @@ export default function RiskMatrix() {
   });
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [risksListDialogOpen, setRisksListDialogOpen] = useState(false);
   const heatmapRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   
@@ -261,6 +262,31 @@ export default function RiskMatrix() {
   const subprocesos = subprocesosData || [];
   const gerencias = gerenciasData || [];
   const riskCategories = riskCategoriesData || [];
+
+  // Performance: Create lookup maps for O(1) access instead of O(n) find() operations
+  const macroprocesoMap = useMemo(() => {
+    const map = new Map<string, string>();
+    macroprocesos.forEach((m: any) => {
+      if (m.id) map.set(m.id, m.name);
+    });
+    return map;
+  }, [macroprocesos]);
+
+  const processMap = useMemo(() => {
+    const map = new Map<string, string>();
+    processes.forEach((p: any) => {
+      if (p.id) map.set(p.id, p.name);
+    });
+    return map;
+  }, [processes]);
+
+  const subprocesoMap = useMemo(() => {
+    const map = new Map<string, string>();
+    subprocesos.forEach((s: any) => {
+      if (s.id) map.set(s.id, s.name);
+    });
+    return map;
+  }, [subprocesos]);
   
   // These are not needed for heatmap - only loaded if required by other features
   const processGerenciasAssoc: any[] = [];
@@ -382,6 +408,30 @@ export default function RiskMatrix() {
       return true;
     });
   }, [heatmapData, heatmapFilters, processes, subprocesos]);
+
+  // Performance: Prepare enriched risks data only when dialog is open
+  const enrichedRisks = useMemo(() => {
+    if (!risksListDialogOpen) return [];
+    
+    return filteredHeatmapData.map((risk: any) => {
+      const macroprocesoName = risk.macroprocesoId ? macroprocesoMap.get(risk.macroprocesoId) : null;
+      const processName = risk.processId ? processMap.get(risk.processId) : null;
+      const subprocesoName = risk.subprocesoId ? subprocesoMap.get(risk.subprocesoId) : null;
+      
+      // Calculate risk value based on mode
+      const riskValue = heatmapMode === 'inherent' 
+        ? risk.inherentRisk 
+        : (risk.residualProbability * risk.residualImpact);
+      
+      return {
+        ...risk,
+        macroprocesoName,
+        processName,
+        subprocesoName,
+        riskValue,
+      };
+    });
+  }, [filteredHeatmapData, risksListDialogOpen, heatmapMode, macroprocesoMap, processMap, subprocesoMap]);
 
   const handleExportPNG = async () => {
     if (!heatmapRef.current) return;
@@ -931,14 +981,28 @@ export default function RiskMatrix() {
                     <div className="text-center text-muted-foreground">Cargando heatmap de riesgos...</div>
                   </Card>
                 ) : (
-                  <div ref={heatmapRef} className="grid grid-cols-1 lg:grid-cols-4 gap-6 heatmap-container">
-                    <div ref={chartRef} className="lg:col-span-3">
-                      <RiskHeatmapRecharts data={filteredHeatmapData} mode={heatmapMode} />
+                  <>
+                    <div ref={heatmapRef} className="grid grid-cols-1 lg:grid-cols-4 gap-6 heatmap-container">
+                      <div ref={chartRef} className="lg:col-span-3">
+                        <RiskHeatmapRecharts data={filteredHeatmapData} mode={heatmapMode} />
+                      </div>
+                      <div>
+                        <RiskLegend />
+                      </div>
                     </div>
-                    <div>
-                      <RiskLegend />
-                    </div>
-                  </div>
+                    {filteredHeatmapData.length > 0 && (
+                      <div className="flex justify-center mt-4">
+                        <Button
+                          variant="outline"
+                          onClick={() => setRisksListDialogOpen(true)}
+                          className="gap-2"
+                        >
+                          <List className="h-4 w-4" />
+                          Ver riesgos asociados
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
           </div>
@@ -1051,6 +1115,101 @@ export default function RiskMatrix() {
                 </div>
               </div>
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Risks List Dialog - Optimized for performance */}
+      <Dialog open={risksListDialogOpen} onOpenChange={setRisksListDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>
+              Riesgos Asociados ({filteredHeatmapData.length})
+            </DialogTitle>
+            <DialogDescription>
+              {(() => {
+                const hasFilters = Object.values(heatmapFilters).some(v => v !== 'all');
+                return hasFilters 
+                  ? 'Listado de riesgos según los filtros aplicados'
+                  : 'Listado de todos los riesgos en el heatmap';
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="flex-1 overflow-y-auto mt-4">
+            {enrichedRisks.length > 0 ? (
+              <div className="space-y-3">
+                {enrichedRisks.map((risk: any) => (
+                  <Card key={risk.id} className="p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <h4 className="font-medium text-sm">{risk.code}</h4>
+                          <Badge variant="outline" className="text-xs">
+                            {getRiskLevelText(risk.riskValue)}
+                          </Badge>
+                        </div>
+                        <p className="text-sm font-medium mb-1">{risk.name}</p>
+                        
+                        {/* Process Information */}
+                        {(risk.macroprocesoName || risk.processName || risk.subprocesoName) && (
+                          <div className="text-xs text-muted-foreground mb-2 space-y-0.5">
+                            {risk.macroprocesoName && (
+                              <div><span className="font-medium">Macroproceso:</span> {risk.macroprocesoName}</div>
+                            )}
+                            {risk.processName && (
+                              <div><span className="font-medium">Proceso:</span> {risk.processName}</div>
+                            )}
+                            {risk.subprocesoName && (
+                              <div><span className="font-medium">Subproceso:</span> {risk.subprocesoName}</div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Risk Metrics */}
+                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                          <span>Probabilidad: {risk.probability}</span>
+                          <span>Impacto: {risk.impact}</span>
+                          <span>
+                            {heatmapMode === 'inherent' ? 'Riesgo Inherente' : 'Riesgo Residual'}:{' '}
+                            <RiskValue value={risk.riskValue} />
+                          </span>
+                        </div>
+
+                        {/* Category and Validation Status */}
+                        <div className="flex items-center gap-3 mt-2 text-xs">
+                          {risk.category && (
+                            <Badge variant="secondary" className="text-xs">
+                              {risk.category}
+                            </Badge>
+                          )}
+                          {risk.validationStatus && (
+                            <Badge 
+                              variant={
+                                risk.validationStatus === 'validated' ? 'default' :
+                                risk.validationStatus === 'rejected' ? 'destructive' :
+                                'outline'
+                              }
+                              className="text-xs"
+                            >
+                              {risk.validationStatus === 'validated' ? 'Validado' :
+                               risk.validationStatus === 'rejected' ? 'Rechazado' :
+                               risk.validationStatus === 'observed' ? 'Observado' :
+                               'Pendiente'}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <AlertTriangle className="mx-auto h-12 w-12 mb-4" />
+                <p>No hay riesgos para mostrar</p>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
