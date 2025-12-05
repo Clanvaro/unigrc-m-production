@@ -2280,7 +2280,7 @@ export default function Risks() {
   );
 
   return (
-    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
+    <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 overflow-hidden" data-testid="risks-content" role="region" aria-label="Gestión de Riesgos">
       <h1 id="risks-page-title" className="sr-only">Riesgos</h1>
 
       {/* Tabs for different risk views - lazy mounted */}
@@ -2322,7 +2322,7 @@ export default function Risks() {
               </CardContent>
             </Card>
           ) : (
-            <Card className="flex-1 flex flex-col min-h-0">
+            <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
               <CardContent className="p-0 h-full flex flex-col min-h-0">
                 <div className="flex-1 overflow-hidden min-h-0">
                   <VirtualizedTable
@@ -2342,7 +2342,7 @@ export default function Risks() {
 
                 {/* Pagination controls */}
                 {!testMode50k && bootstrapData?.risks?.pagination && bootstrapData.risks.pagination.total > 0 && (
-                  <div className="border-t px-4 py-2 flex items-center justify-between text-[15px]">
+                  <div className="border-t px-4 py-2 flex items-center justify-between text-[15px] shrink-0">
                     <div className="text-sm text-muted-foreground">
                       Mostrando {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, bootstrapData.risks.pagination.total)} de {bootstrapData.risks.pagination.total} riesgos
                     </div>
@@ -2425,7 +2425,7 @@ export default function Risks() {
               </CardContent>
             </Card>
           ) : (
-            <Card className="flex-1 flex flex-col min-h-0">
+            <Card className="flex-1 flex flex-col min-h-0 overflow-hidden">
               <CardContent className="p-0 h-full flex flex-col min-h-0">
                 <div className="flex-1 overflow-hidden min-h-0">
                   <VirtualizedTable
