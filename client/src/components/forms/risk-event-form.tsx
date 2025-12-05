@@ -210,9 +210,14 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
       return [optimisticEvent, ...oldData];
     },
     onSuccess: () => {
+      // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
+      
+      // Force immediate refetch of the active page-data query
+      queryClient.refetchQueries({ queryKey: ["/api/risk-events/page-data"], exact: true });
+      
       onSuccess();
       toast({
         title: "Evento creado",
@@ -274,9 +279,14 @@ export default function RiskEventForm({ event, onSuccess }: RiskEventFormProps) 
       );
     },
     onSuccess: () => {
+      // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
+      
+      // Force immediate refetch of the active page-data query
+      queryClient.refetchQueries({ queryKey: ["/api/risk-events/page-data"], exact: true });
+      
       onSuccess();
       toast({
         title: "Evento actualizado",
