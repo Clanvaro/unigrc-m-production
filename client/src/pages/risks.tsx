@@ -2290,7 +2290,7 @@ export default function Risks() {
         onValueChange={(value) => setActiveTab(value as "basica" | "detalle")}
         className="flex-1 flex flex-col"
       >
-        <div className="flex items-center justify-between gap-4 shrink-0 mb-0">
+        <div className="flex items-center justify-between gap-4 shrink-0 mb-0 pb-0">
           <TabsList>
             <TabsTrigger value="basica" data-testid="tab-basica">Básica</TabsTrigger>
             <TabsTrigger value="detalle" data-testid="tab-detalle">Detalle</TabsTrigger>
@@ -2428,7 +2428,7 @@ export default function Risks() {
         </TabsContent>
 
         {/* Tab: Detalle - full data with batch-relations, complete table */}
-        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0">
+        <TabsContent value="detalle" className="flex-1 flex flex-col mt-0 pt-0">
           {isLoading ? (
             <Card className="flex-1 flex flex-col">
               <CardContent className="p-4">

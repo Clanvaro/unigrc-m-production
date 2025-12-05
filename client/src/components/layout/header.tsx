@@ -807,6 +807,18 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     const eventsData = await eventsResponse.json();
     const events = eventsData.data || [];
 
+    // Fetch risks data to map riskId to risk name
+    const risksResponse = await fetch('/api/risks');
+    const risksData = await risksResponse.json();
+    const risks = risksData.data || [];
+    const risksMap = new Map(risks.map((r: any) => [r.id, r]));
+
+    // Fetch controls data to map controlId to control name
+    const controlsResponse = await fetch('/api/controls');
+    const controlsData = await controlsResponse.json();
+    const controls = controlsData.data || [];
+    const controlsMap = new Map(controls.map((c: any) => [c.id, c]));
+
     // Labels
     const typeLabels: Record<string, string> = {
       materializado: 'Materializado',
@@ -837,6 +849,26 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       if (event.relatedSubprocesos?.length > 0) {
         relatedProcesses.push(...event.relatedSubprocesos.map((s: any) => `S: ${s.name}`));
       }
+
+      // Get associated risk
+      let associatedRisk = 'N/A';
+      if (event.riskId) {
+        const risk = risksMap.get(event.riskId);
+        if (risk) {
+          associatedRisk = `${risk.code} - ${risk.name}`;
+        }
+      }
+
+      // Get associated control (prefer failedControl, fallback to controlId)
+      let associatedControl = 'N/A';
+      if (event.failedControl) {
+        associatedControl = `${event.failedControl.code} - ${event.failedControl.name}`;
+      } else if (event.controlId) {
+        const control = controlsMap.get(event.controlId);
+        if (control) {
+          associatedControl = `${control.code} - ${control.name}`;
+        }
+      }
       
       return {
         code: event.code,
@@ -847,6 +879,8 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
         lossAmount: event.actualLoss ? `$${Number(event.actualLoss).toLocaleString()}` : (event.estimatedLoss ? `$${Number(event.estimatedLoss).toLocaleString()}` : 'N/A'),
         status: statusLabels[event.status] || event.status,
         process: relatedProcesses.length > 0 ? relatedProcesses.join(', ') : 'N/A',
+        associatedRisk: associatedRisk,
+        associatedControl: associatedControl,
       };
     });
 
@@ -863,6 +897,8 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
         { header: 'Monto Pérdida', key: 'lossAmount', width: 20 },
         { header: 'Estado', key: 'status', width: 15 },
         { header: 'Proceso', key: 'process', width: 40 },
+        { header: 'Riesgo Asociado', key: 'associatedRisk', width: 30 },
+        { header: 'Control Asociado', key: 'associatedControl', width: 30 },
       ],
       data: exportData,
       successMessage: `Se exportaron ${events.length} eventos de riesgo a Excel.`

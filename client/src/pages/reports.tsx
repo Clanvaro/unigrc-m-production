@@ -17,6 +17,19 @@ export default function Reports() {
     queryKey: ["/api/risks-with-details"],
   });
 
+  // Load catalogs to map IDs to names
+  const { data: macroprocesos = [] } = useQuery<any[]>({
+    queryKey: ["/api/macroprocesos"],
+  });
+
+  const { data: processes = [] } = useQuery<any[]>({
+    queryKey: ["/api/processes"],
+  });
+
+  const { data: subprocesos = [] } = useQuery<any[]>({
+    queryKey: ["/api/subprocesos"],
+  });
+
   const { data: controlsResponse, isLoading: controlsLoading } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/controls"],
   });
@@ -38,6 +51,11 @@ export default function Reports() {
     return <div className="p-6">Error al cargar riesgos. Por favor intenta de nuevo.</div>;
   }
 
+  // Create lookup maps for process names
+  const macroprocesosMap = new Map(macroprocesos.map((m: any) => [m.id, m.name || m.code || 'Sin nombre']));
+  const processesMap = new Map(processes.map((p: any) => [p.id, p.name || p.code || 'Sin nombre']));
+  const subprocesosMap = new Map(subprocesos.map((s: any) => [s.id, s.name || s.code || 'Sin nombre']));
+
   // Risk distribution data for charts
   const riskDistributionData = [
     { name: "Bajo", value: risks.filter((r) => r.inherentRisk <= 6).length, color: "#22c55e" },
@@ -47,24 +65,50 @@ export default function Reports() {
   ];
 
   // Risks by process data - Group by macroproceso, process, or subproceso
-  // RiskWithProcess already includes resolved macroproceso, process, and subproceso objects
+  // Map IDs to names using catalogs
   const processCounts = new Map<string, { name: string; count: number }>();
   
-  risks.forEach((risk) => {
-    // Check macroproceso level (already resolved in RiskWithProcess)
+  risks.forEach((risk: any) => {
+    // Check macroproceso level - use macroproceso object if available, otherwise map from ID
     if (risk.macroproceso) {
-      const existing = processCounts.get(risk.macroproceso.id) || { name: risk.macroproceso.name, count: 0 };
-      processCounts.set(risk.macroproceso.id, { ...existing, count: existing.count + 1 });
+      const macroprocesoName = risk.macroproceso.name || macroprocesosMap.get(risk.macroproceso.id) || 'Sin nombre';
+      const macroprocesoId = risk.macroproceso.id || risk.macroprocesoId;
+      if (macroprocesoId) {
+        const existing = processCounts.get(macroprocesoId) || { name: macroprocesoName, count: 0 };
+        processCounts.set(macroprocesoId, { ...existing, count: existing.count + 1 });
+      }
+    } else if (risk.macroprocesoId) {
+      const macroprocesoName = macroprocesosMap.get(risk.macroprocesoId) || 'Sin nombre';
+      const existing = processCounts.get(risk.macroprocesoId) || { name: macroprocesoName, count: 0 };
+      processCounts.set(risk.macroprocesoId, { ...existing, count: existing.count + 1 });
     }
-    // Check process level (already resolved in RiskWithProcess)
+    
+    // Check process level - use process object if available, otherwise map from ID
     if (risk.process) {
-      const existing = processCounts.get(risk.process.id) || { name: risk.process.name, count: 0 };
-      processCounts.set(risk.process.id, { ...existing, count: existing.count + 1 });
+      const processName = risk.process.name || processesMap.get(risk.process.id) || 'Sin nombre';
+      const processId = risk.process.id || risk.processId;
+      if (processId) {
+        const existing = processCounts.get(String(processId)) || { name: processName, count: 0 };
+        processCounts.set(String(processId), { ...existing, count: existing.count + 1 });
+      }
+    } else if (risk.processId) {
+      const processName = processesMap.get(risk.processId) || 'Sin nombre';
+      const existing = processCounts.get(String(risk.processId)) || { name: processName, count: 0 };
+      processCounts.set(String(risk.processId), { ...existing, count: existing.count + 1 });
     }
-    // Check subproceso level (already resolved in RiskWithProcess)
+    
+    // Check subproceso level - use subproceso object if available, otherwise map from ID
     if (risk.subproceso) {
-      const existing = processCounts.get(risk.subproceso.id) || { name: risk.subproceso.name, count: 0 };
-      processCounts.set(risk.subproceso.id, { ...existing, count: existing.count + 1 });
+      const subprocesoName = risk.subproceso.name || subprocesosMap.get(risk.subproceso.id) || 'Sin nombre';
+      const subprocesoId = risk.subproceso.id || risk.subprocesoId;
+      if (subprocesoId) {
+        const existing = processCounts.get(subprocesoId) || { name: subprocesoName, count: 0 };
+        processCounts.set(subprocesoId, { ...existing, count: existing.count + 1 });
+      }
+    } else if (risk.subprocesoId) {
+      const subprocesoName = subprocesosMap.get(risk.subprocesoId) || 'Sin nombre';
+      const existing = processCounts.get(risk.subprocesoId) || { name: subprocesoName, count: 0 };
+      processCounts.set(risk.subprocesoId, { ...existing, count: existing.count + 1 });
     }
   });
   
@@ -337,22 +381,31 @@ export default function Reports() {
             <CardTitle>Riesgos por Proceso</CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={risksByProcessData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="name" 
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                  fontSize={12}
-                  interval={0}
-                />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="risks" fill="hsl(210, 85%, 40%)" />
-              </BarChart>
-            </ResponsiveContainer>
+            {risksByProcessData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={400}>
+                <BarChart data={risksByProcessData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="name" 
+                    angle={-45}
+                    textAnchor="end"
+                    height={80}
+                    fontSize={12}
+                    interval={0}
+                  />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="risks" fill="hsl(210, 85%, 40%)" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[400px] text-muted-foreground">
+                <div className="text-center">
+                  <p className="text-sm">No hay datos de procesos asociados a riesgos</p>
+                  <p className="text-xs mt-2">Los riesgos deben tener procesos, macroprocesos o subprocesos asociados para aparecer aquí</p>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
