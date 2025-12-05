@@ -103,32 +103,41 @@ export default function RiskValidationPage() {
   const notNotifiedActionPlansPagination = usePagination({ pageSize: 50 });
 
   // New queries for risk-process links instead of whole risks
-  // OPTIMIZATION: Only fetch when risks tab is active + 30s staleTime to reduce refetches
-  // refetchOnWindowFocus: false to prevent redundant background requests
+  // OPTIMIZATION: Only fetch when risks tab is active + cache optimization to prevent unnecessary refetches
   const { data: pendingRiskProcessLinks = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/pending"],
     enabled: activeTab === "risks",
     staleTime: 30000,
-    refetchOnWindowFocus: false,
-    gcTime: 1000 * 60 * 5, // Cache data for 5 minutes
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: validatedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
     enabled: activeTab === "risks",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: observedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/observed"],
     enabled: activeTab === "risks",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   // Shared catalog queries (always enabled) with 2-minute staleTime
@@ -244,11 +253,14 @@ export default function RiskValidationPage() {
   };
 
   // Risk-process-links notification status queries with pagination
-  // OPTIMIZATION: Only fetch when risks tab is active + 30s staleTime
+  // OPTIMIZATION: Only fetch when risks tab is active + cache optimization
   const { data: notifiedRiskProcessLinksResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/risk-processes/validation/notified/list", { limit: notifiedRisksPagination.limit, offset: notifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notifiedRiskProcessLinks = notifiedRiskProcessLinksResponse?.data || [];
@@ -258,17 +270,23 @@ export default function RiskValidationPage() {
     queryKey: ["/api/risk-processes/validation/not-notified/list", { limit: notNotifiedRisksPagination.limit, offset: notNotifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notNotifiedRiskProcessLinks = notNotifiedRiskProcessLinksResponse?.data || [];
   const notNotifiedRisksPaginationInfo = notNotifiedRiskProcessLinksResponse?.pagination;
 
   // Control validation queries with pagination
-  // OPTIMIZATION: Only fetch when controls tab is active + 30s staleTime
+  // OPTIMIZATION: Only fetch when controls tab is active + cache optimization
   const { data: notifiedControlsResponse } = useQuery<{ data: Control[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/controls/validation/notified", { limit: notifiedControlsPagination.limit, offset: notifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notifiedControls = notifiedControlsResponse?.data || [];
@@ -278,6 +296,9 @@ export default function RiskValidationPage() {
     queryKey: ["/api/controls/validation/not-notified", { limit: notNotifiedControlsPagination.limit, offset: notNotifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notNotifiedControls = notNotifiedControlsResponse?.data || [];
@@ -289,32 +310,47 @@ export default function RiskValidationPage() {
     queryKey: ["/api/controls/validation/validated"],
     enabled: activeTab === "controls",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: observedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/observed"],
     enabled: activeTab === "controls",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: rejectedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/rejected"],
     enabled: activeTab === "controls",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   // Action Plans validation queries
-  // OPTIMIZATION: Only fetch when action-plans tab is active + 60s staleTime
+  // OPTIMIZATION: Only fetch when action-plans tab is active + cache optimization
   const { data: pendingActionPlans = [], isLoading: isLoadingActionPlans } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/pending"],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: notifiedActionPlansResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/action-plans/validation/notified", { limit: notifiedActionPlansPagination.limit, offset: notifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notifiedActionPlans = notifiedActionPlansResponse?.data || [];
@@ -324,6 +360,9 @@ export default function RiskValidationPage() {
     queryKey: ["/api/action-plans/validation/not-notified", { limit: notNotifiedActionPlansPagination.limit, offset: notNotifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const notNotifiedActionPlans = notNotifiedActionPlansResponse?.data || [];
@@ -333,18 +372,27 @@ export default function RiskValidationPage() {
     queryKey: ["/api/action-plans/validation/validated"],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: rejectedActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/rejected"],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   const { data: observedActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans/validation/observed"],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   // Query for action plan details
@@ -371,6 +419,10 @@ export default function RiskValidationPage() {
 
   const { data: processValidationDashboard = [], isLoading: isLoadingProcessDashboard } = useQuery<ProcessValidationDashboard[]>({
     queryKey: ["/api/process-validations/dashboard"],
+    staleTime: 120000, // 2 minutos - datos del dashboard cambian menos frecuentemente
+    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
   // Reset pagination when filters change
@@ -392,10 +444,13 @@ export default function RiskValidationPage() {
       });
     },
     onSuccess: () => {
+      // Invalidate all validation queries to ensure fresh data
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/rejected"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/observed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/notified/list"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/not-notified/list"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks"] });
       toast({
@@ -461,10 +516,13 @@ export default function RiskValidationPage() {
       });
     },
     onSuccess: () => {
+      // Invalidate all control validation queries to ensure fresh data
       queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/validated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/rejected"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/observed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/notified"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/controls/validation/not-notified"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["/api/controls"] });
       toast({
         title: "Control validado",
@@ -493,10 +551,13 @@ export default function RiskValidationPage() {
       });
     },
     onSuccess: () => {
+      // Invalidate all action plan validation queries to ensure fresh data
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/validated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/rejected"] });
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/observed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/notified"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/action-plans/validation/not-notified"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       toast({

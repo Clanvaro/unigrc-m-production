@@ -4884,6 +4884,11 @@ export class MemStorage implements IStorage {
     };
   }
 
+  async getSubprocesos(): Promise<Subproceso[]> {
+    return await db.select().from(subprocesos)
+      .where(isNull(subprocesos.deletedAt));
+  }
+
   async getSubprocesosByProceso(procesoId: string): Promise<Subproceso[]> {
     return await db.select().from(subprocesos)
       .where(and(

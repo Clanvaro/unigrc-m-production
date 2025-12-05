@@ -4149,6 +4149,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/controls/validation/validated", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (validated data changes less frequently)
+      const cacheKey = `validation:controls:validated:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
@@ -4176,6 +4190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
+      let result;
       if (controlIds.length > 0) {
         if (!db) {
           return res.status(500).json({ message: "Database not available" });
@@ -4190,7 +4205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(inArray(riskControls.controlId, controlIds));
 
         // Map risks to controls
-        const controlsWithRisks = controlsWithOwner.map(control => ({
+        result = controlsWithOwner.map(control => ({
           ...control,
           associatedRisks: associatedRisks
             .filter(ar => ar.controlId === control.id && ar.risk)
@@ -4201,11 +4216,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-
-        res.json(controlsWithRisks);
       } else {
-        res.json(controlsWithOwner);
+        result = controlsWithOwner;
       }
+
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      res.json(result);
     } catch (error) {
       console.error("Failed to fetch validated controls:", error);
       res.status(500).json({ message: "Failed to fetch validated controls" });
@@ -4214,6 +4231,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/controls/validation/observed", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (observed data changes less frequently)
+      const cacheKey = `validation:controls:observed:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
@@ -4241,6 +4272,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
+      let result;
       if (controlIds.length > 0) {
         if (!db) {
           return res.status(500).json({ message: "Database not available" });
@@ -4255,7 +4287,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(inArray(riskControls.controlId, controlIds));
 
         // Map risks to controls
-        const controlsWithRisks = controlsWithOwner.map(control => ({
+        result = controlsWithOwner.map(control => ({
           ...control,
           associatedRisks: associatedRisks
             .filter(ar => ar.controlId === control.id && ar.risk)
@@ -4266,11 +4298,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-
-        res.json(controlsWithRisks);
       } else {
-        res.json(controlsWithOwner);
+        result = controlsWithOwner;
       }
+
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      res.json(result);
     } catch (error) {
       console.error("Failed to fetch observed controls:", error);
       res.status(500).json({ message: "Failed to fetch observed controls" });
@@ -4279,6 +4313,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/controls/validation/rejected", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (rejected data changes less frequently)
+      const cacheKey = `validation:controls:rejected:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       if (!db) {
         return res.status(500).json({ message: "Database not available" });
       }
@@ -4306,6 +4354,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Get associated risks for each control
       const controlIds = controlsWithOwner.map(c => c.id);
+      let result;
       if (controlIds.length > 0) {
         if (!db) {
           return res.status(500).json({ message: "Database not available" });
@@ -4320,7 +4369,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(inArray(riskControls.controlId, controlIds));
 
         // Map risks to controls
-        const controlsWithRisks = controlsWithOwner.map(control => ({
+        result = controlsWithOwner.map(control => ({
           ...control,
           associatedRisks: associatedRisks
             .filter(ar => ar.controlId === control.id && ar.risk)
@@ -4331,11 +4380,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               inherentRisk: ar.risk!.inherentRisk,
             }))
         }));
-
-        res.json(controlsWithRisks);
       } else {
-        res.json(controlsWithOwner);
+        result = controlsWithOwner;
       }
+
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, result, 60);
+      res.json(result);
     } catch (error) {
       console.error("Failed to fetch rejected controls:", error);
       res.status(500).json({ message: "Failed to fetch rejected controls" });
@@ -5552,7 +5603,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
 
-      // Cache for 15s (validation data needs fresher updates)
+      // Cache TTL: shorter for pending (15s), longer for validated/rejected/observed (60s)
+      const cacheTTL = actualStatus === 'pending_validation' ? 15 : 60;
       const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
@@ -5562,7 +5614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const riskProcessLinks = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
 
-      await distributedCache.set(cacheKey, riskProcessLinks, 15);
+      await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
 
       res.json(riskProcessLinks);
     } catch (error) {
@@ -9333,6 +9385,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/action-plans/validation/validated", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (validated data changes less frequently)
+      const cacheKey = `validation:action-plans:validated:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       // Get all action plans that have been validated
       const validatedPlans = await requireDb()
         .select()
@@ -9369,6 +9435,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, plansWithRisks, 60);
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch validated action plans:", error);
@@ -9378,6 +9446,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/action-plans/validation/observed", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (observed data changes less frequently)
+      const cacheKey = `validation:action-plans:observed:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       // Get all action plans that have been observed in validation
       const observedPlans = await requireDb()
         .select()
@@ -9414,6 +9496,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, plansWithRisks, 60);
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch observed action plans:", error);
@@ -9423,6 +9507,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/action-plans/validation/rejected", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      // Get active tenant ID for cache key
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      if (!tenantId) {
+        return res.status(400).json({ message: "No active tenant found" });
+      }
+
+      // Cache for 60s (rejected data changes less frequently)
+      const cacheKey = `validation:action-plans:rejected:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
+      }
+
       // Get all action plans that have been rejected in validation
       const rejectedPlans = await requireDb()
         .select()
@@ -9459,6 +9557,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, plansWithRisks, 60);
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch rejected action plans:", error);
@@ -17220,14 +17320,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get active tenant ID for tenant isolation
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
+      console.log(`[Audit Universe] Generating universe for tenant ${tenantId}`);
       const generatedItems = await storage.generateUniverseFromExistingProcesses();
+      console.log(`[Audit Universe] Successfully generated ${generatedItems.length} items`);
       res.status(201).json(generatedItems);
     } catch (error) {
       console.error("Error generating audit universe:", error);
+      if (error instanceof Error) {
+        console.error("Error stack:", error.stack);
+        console.error("Error message:", error.message);
+      }
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      res.status(500).json({ message: "Failed to generate audit universe from processes" });
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      res.status(500).json({ 
+        message: "Failed to generate audit universe from processes",
+        error: errorMessage
+      });
     }
   });
 
