@@ -764,7 +764,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Redis status
       const redisStatus = {
         enabled: usingRealRedis,
-        type: usingRealRedis 
+        type: usingRealRedis
           ? (process.env.UPSTASH_REDIS_REST_URL ? 'upstash' : 'redis')
           : 'in-memory',
         configured: !!(process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_URL),
@@ -781,7 +781,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const value = await distributedCache.get(testKey);
           const latency = Date.now() - startTime;
           await distributedCache.invalidate(testKey);
-          
+
           redisTest = {
             success: value !== null,
             error: null,
@@ -810,7 +810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ready: aiStatus.ready,
         model: aiStatus.deployment || process.env.OPENAI_MODEL || 'gpt-4o-mini',
         provider: 'openai',
-        apiKeyFormat: process.env.OPENAI_API_KEY 
+        apiKeyFormat: process.env.OPENAI_API_KEY
           ? (process.env.OPENAI_API_KEY.startsWith('sk-') ? 'valid' : 'invalid')
           : 'not-set'
       };
@@ -837,7 +837,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         openai: openAIStatus,
         environment: envConfig,
         recommendations: [
-          ...(!usingRealRedis && process.env.UPSTASH_REDIS_REST_URL 
+          ...(!usingRealRedis && process.env.UPSTASH_REDIS_REST_URL
             ? ['Redis: Upstash URL configured but not connecting. Check credentials.']
             : []),
           ...(!usingRealRedis && !process.env.UPSTASH_REDIS_REST_URL && !process.env.REDIS_URL
@@ -2203,23 +2203,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risks/bootstrap failed after ${duration}ms:`, error);
-      
+
       if (error instanceof Error) {
         if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Database connection timeout. Please try again.",
             error: "TIMEOUT"
           });
         }
         if (error.message.includes('ECONNREFUSED') || error.message.includes('ENOTFOUND')) {
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Database connection error. Please try again.",
             error: "CONNECTION_ERROR"
           });
         }
       }
-      
-      res.status(500).json({ 
+
+      res.status(500).json({
         message: "Failed to fetch risks bootstrap data",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -2705,7 +2705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const data = await storage.getMacroprocesos();
           const fetchDuration = Date.now() - fetchStart;
           console.log(`[PERF] getMacroprocesos() took ${fetchDuration}ms`);
-          
+
           return data.filter((m: any) => !m.deletedAt).map((m: any) => ({
             id: m.id,
             code: m.code,
@@ -2716,25 +2716,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         300 // 5 minutes in Redis
       );
-      
+
       const duration = Date.now() - startTime;
       if (duration > 1000) {
         console.warn(`[SLOW] /api/lookups/macroprocesos took ${duration}ms`);
       }
-      
+
       res.json(cached);
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/lookups/macroprocesos failed after ${duration}ms:`, error);
-      
+
       if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Database connection timeout. Please try again.",
           error: "TIMEOUT"
         });
       }
-      
-      res.status(500).json({ 
+
+      res.status(500).json({
         message: "Failed to fetch macroprocesos",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -2996,7 +2996,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Filter out invalid riskIds (null, undefined, empty strings)
       const validRiskIds = riskIds.filter(id => id && typeof id === 'string' && id.trim().length > 0);
-      
+
       if (validRiskIds.length === 0) {
         return res.json({ riskProcessLinks: [], riskControls: [] });
       }
@@ -6758,42 +6758,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Batch load all relations in parallel (eliminates N+1 queries)
       const eventIds = events.map(e => e.id);
-      
+
       const [allMacroprocesoRelations, allProcessRelations, allSubprocesoRelations] = await Promise.all([
         eventIds.length > 0
           ? requireDb()
-          .select({
+            .select({
               riskEventId: riskEventMacroprocesos.riskEventId,
-            id: macroprocesos.id,
-            name: macroprocesos.name,
-            code: macroprocesos.code
-          })
-          .from(riskEventMacroprocesos)
-          .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
+              id: macroprocesos.id,
+              name: macroprocesos.name,
+              code: macroprocesos.code
+            })
+            .from(riskEventMacroprocesos)
+            .leftJoin(macroprocesos, eq(riskEventMacroprocesos.macroprocesoId, macroprocesos.id))
             .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-          .select({
+            .select({
               riskEventId: riskEventProcesses.riskEventId,
-            id: processes.id,
-            name: processes.name,
-            code: processes.code
-          })
-          .from(riskEventProcesses)
-          .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
+              id: processes.id,
+              name: processes.name,
+              code: processes.code
+            })
+            .from(riskEventProcesses)
+            .leftJoin(processes, eq(riskEventProcesses.processId, processes.id))
             .where(inArray(riskEventProcesses.riskEventId, eventIds))
           : Promise.resolve([]),
         eventIds.length > 0
           ? requireDb()
-          .select({
+            .select({
               riskEventId: riskEventSubprocesos.riskEventId,
-            id: subprocesos.id,
-            name: subprocesos.name,
-            code: subprocesos.code
-          })
-          .from(riskEventSubprocesos)
-          .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
+              id: subprocesos.id,
+              name: subprocesos.name,
+              code: subprocesos.code
+            })
+            .from(riskEventSubprocesos)
+            .leftJoin(subprocesos, eq(riskEventSubprocesos.subprocesoId, subprocesos.id))
             .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
           : Promise.resolve([])
       ]);
@@ -6818,15 +6818,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Map events with relations (O(n) instead of O(n*m) queries)
       const eventsForList = events.map((event) => ({
-          ...event,
-          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-          updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
+        ...event,
+        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
         relatedMacroprocesos: macroprocesoMap.get(event.id) || [],
         relatedProcesses: processMap.get(event.id) || [],
         relatedSubprocesos: subprocesoMap.get(event.id) || [],
-          relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
-          selectedRisks: event.riskId ? [event.riskId] : []
+        relatedRisks: event.riskId ? [{ id: event.riskId }] : [],
+        selectedRisks: event.riskId ? [event.riskId] : []
       }));
 
       res.json({
@@ -7338,6 +7338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Fetch controls from database
       const { controls: paginatedControls, total } = await storage.getControlsPaginated(filters, limit, offset);
+      console.log(`[DEBUG] /api/controls: storage returned ${paginatedControls.length} controls, total=${total}`);
 
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;
@@ -7861,7 +7862,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const startTime = Date.now();
     try {
       const controlId = req.params.controlId;
-      
+
       if (!controlId) {
         return res.status(400).json({ message: "Control ID is required" });
       }
@@ -7904,15 +7905,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/controls/${req.params.controlId}/complete-evaluation failed after ${duration}ms:`, error);
-      
+
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      
+
       // Provide more specific error messages
       if (error instanceof Error) {
         if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Database connection timeout. Please try again.",
             error: "TIMEOUT"
           });
@@ -7921,8 +7922,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: error.message });
         }
       }
-      
-      res.status(500).json({ 
+
+      res.status(500).json({
         message: "Failed to complete control evaluation",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -14152,7 +14153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       console.log(`[CACHE MISS] dashboard-stats`);
-      
+
       // Get basic stats first
       const baseStats = await storage.getDashboardStats();
 
@@ -16142,7 +16143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // In single-tenant mode, continue without tenantId
         console.warn("Could not resolve tenant (single-tenant mode?):", error);
       }
-      
+
       // Parse query parameters for pagination and filters
       const limit = parseInt(req.query.limit as string) || 1000;
       const offset = parseInt(req.query.offset as string) || 0;
@@ -16198,15 +16199,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       const errorStack = error instanceof Error ? error.stack : undefined;
       console.error("Error details:", { errorMessage, errorStack, filters, limit, offset });
-      
+
       if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Database connection timeout. Please try again.",
           error: "TIMEOUT"
         });
       }
-      
-      res.status(500).json({ 
+
+      res.status(500).json({
         message: "Failed to get audits",
         error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
       });
@@ -21796,7 +21797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;
-    try {
+      try {
         const tenant = await resolveActiveTenant(req, { required: false });
         tenantId = tenant?.tenantId;
       } catch (error) {
@@ -21830,15 +21831,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
-      
+
       if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Database connection timeout. Please try again.",
           error: "TIMEOUT"
         });
       }
-      
-      res.status(500).json({ 
+
+      res.status(500).json({
         message: "Failed to fetch process owners",
         error: error instanceof Error ? error.message : "Unknown error"
       });

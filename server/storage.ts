@@ -7785,6 +7785,8 @@ export class DatabaseStorage extends MemStorage {
       .from(controls)
       .where(whereClause);
 
+    console.log(`[DEBUG] getControlsPaginated: count=${count}, limit=${limit}, offset=${offset}`);
+
     // Get paginated results
     const paginatedControls = await db
       .select()
@@ -7793,6 +7795,11 @@ export class DatabaseStorage extends MemStorage {
       .limit(limit)
       .offset(offset)
       .orderBy(controls.code);
+
+    console.log(`[DEBUG] getControlsPaginated: fetched ${paginatedControls.length} controls`);
+    if (paginatedControls.length > 0) {
+      console.log(`[DEBUG] First control: ${JSON.stringify(paginatedControls[0]).slice(0, 100)}...`);
+    }
 
     return {
       controls: paginatedControls,
