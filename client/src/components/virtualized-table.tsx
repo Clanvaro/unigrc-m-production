@@ -1,6 +1,5 @@
-import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect, useMemo, memo } from "react";
+import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import AutoSizer from "react-virtualized-auto-sizer";
 
 export interface VirtualizedTableColumn<T> {
   id: string;
@@ -28,7 +27,7 @@ interface VirtualizedTableProps<T> {
   ariaDescribedBy?: string;
 }
 
-function VirtualizedTableInner<T>({
+export function VirtualizedTable<T>({
   data,
   columns,
   estimatedRowHeight = 65,
@@ -44,14 +43,12 @@ function VirtualizedTableInner<T>({
   const parentRef = useRef<HTMLDivElement>(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState<number | null>(null);
 
-  // Memoize visible columns to prevent recalculation on every render
-  const visibleColumns = useMemo(() => {
-    return columns.filter(col => {
-      if (col.visible === false) return false;
-      // hideOnMobile is handled via CSS (@md:hidden) on the column itself
-      return true;
-    });
-  }, [columns]);
+  // Filter visible columns based on viewport size
+  const visibleColumns = columns.filter(col => {
+    if (col.visible === false) return false;
+    // hideOnMobile is handled via CSS (@md:hidden) on the column itself
+    return true;
+  });
 
   const virtualizer = useVirtualizer({
     count: data.length,
@@ -62,9 +59,9 @@ function VirtualizedTableInner<T>({
 
   const items = virtualizer.getVirtualItems();
 
-  // Memoize keyboard navigation handler to prevent recreation on every render
-  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>, rowIndex: number) => {
-    switch (e.key) {
+  // Keyboard navigation handler - WCAG 2.1.1
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>, rowIndex: number) => {
+    switch(e.key) {
       case 'ArrowDown':
         e.preventDefault();
         if (rowIndex < data.length - 1) {
@@ -91,25 +88,14 @@ function VirtualizedTableInner<T>({
         }
         break;
     }
-  }, [data, onRowClick]);
-
-  // Memoize grid template columns to prevent recalculation
-  const gridTemplateColumns = useMemo(
-    () => visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
-    [visibleColumns]
-  );
-
-  // Memoize row click handler
-  const handleRowClick = useCallback((item: T, index: number) => {
-    onRowClick?.(item, index);
-  }, [onRowClick]);
+  };
 
   if (isLoading) {
     return (
-      <div
-        className="flex items-center justify-center p-8"
-        role="status"
-        aria-live="polite"
+      <div 
+        className="flex items-center justify-center p-8" 
+        role="status" 
+        aria-live="polite" 
         aria-busy="true"
       >
         <div className="text-muted-foreground">Cargando...</div>
@@ -120,8 +106,8 @@ function VirtualizedTableInner<T>({
 
   if (data.length === 0) {
     return (
-      <div
-        className="flex items-center justify-center p-8"
+      <div 
+        className="flex items-center justify-center p-8" 
         role="status"
       >
         <div className="text-muted-foreground">No hay datos para mostrar</div>
@@ -130,117 +116,107 @@ function VirtualizedTableInner<T>({
   }
 
   return (
-    <div className="flex-1 w-full h-full min-h-0">
-      <AutoSizer>
-        {({ height, width }) => (
+    <div 
+      ref={parentRef} 
+      className="@container overflow-auto border rounded-md w-full h-full"
+      role="grid"
+      aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
+      style={{ 
+        minHeight: '400px',
+        contain: 'strict',
+        WebkitOverflowScrolling: 'touch'
+      }}
+    >
+      {/* Header */}
+      <div 
+        role="rowgroup"
+        className={`sticky top-0 z-10 bg-muted border-b ${headerClassName}`}
+        style={{ 
+          display: 'grid', 
+          gridTemplateColumns: visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
+          minWidth: 'max-content',
+          width: '100%'
+        }}
+      >
+        {visibleColumns.map((column) => (
           <div
-            ref={parentRef}
-            className="@container overflow-auto border rounded-md"
-            role="grid"
-            aria-label={ariaLabel}
-            aria-describedby={ariaDescribedBy}
-            style={{
-              height,
-              width,
-              contain: 'strict',
-              WebkitOverflowScrolling: 'touch'
-            }}
+            key={column.id}
+            role="columnheader"
+            className={`p-4 font-medium text-left ${column.hideOnMobile ? 'hidden @md:block' : ''} ${column.headerClassName || ''}`}
+            style={{ minWidth: column.minWidth }}
           >
-            {/* Header */}
+            {column.header}
+          </div>
+        ))}
+      </div>
+
+      {/* Virtual rows container */}
+      <div
+        role="rowgroup"
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {items.map((virtualRow) => {
+          const item = data[virtualRow.index];
+          const rowKey = getRowKey(item, virtualRow.index);
+          const rowClass = typeof rowClassName === 'function' 
+            ? rowClassName(item, virtualRow.index) 
+            : rowClassName;
+
+          return (
             <div
-              role="rowgroup"
-              className={`sticky top-0 z-10 bg-muted border-b ${headerClassName}`}
+              key={rowKey}
+              data-testid={`virtualized-row-${rowKey}`}
+              data-row-index={virtualRow.index}
+              role="row"
+              tabIndex={0}
+              aria-rowindex={virtualRow.index + 1}
+              onKeyDown={(e) => handleKeyDown(e, virtualRow.index)}
+              className={`border-b hover:bg-muted/50 transition-colors ${rowClass} ${onRowClick ? 'cursor-pointer' : ''}`}
               style={{
-                display: 'grid',
-                gridTemplateColumns: gridTemplateColumns,
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
                 minWidth: 'max-content',
-                width: '100%'
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+                display: 'grid',
+                gridTemplateColumns: visibleColumns.map(col => col.width || 'minmax(100px, 1fr)').join(' '),
               }}
+              onClick={() => onRowClick?.(item, virtualRow.index)}
             >
               {visibleColumns.map((column) => (
                 <div
                   key={column.id}
-                  role="columnheader"
-                  className={`p-4 font-medium text-left ${column.hideOnMobile ? 'hidden @md:block' : ''} ${column.headerClassName || ''}`}
-                  style={{ minWidth: column.minWidth }}
+                  role="gridcell"
+                  className={`p-4 flex overflow-hidden ${column.hideOnMobile ? 'hidden @md:flex' : ''} ${column.cellClassName || 'items-start'}`}
+                  style={{ 
+                    minWidth: 0,
+                    overflow: 'hidden'
+                  }}
                 >
-                  {column.header}
+                  {column.cell(item, virtualRow.index)}
                 </div>
               ))}
             </div>
-
-            {/* Virtual rows container */}
-            <div
-              role="rowgroup"
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
-            >
-              {items.map((virtualRow) => {
-                const item = data[virtualRow.index];
-                const rowKey = getRowKey(item, virtualRow.index);
-                const rowClass = typeof rowClassName === 'function'
-                  ? rowClassName(item, virtualRow.index)
-                  : rowClassName;
-
-                return (
-                  <div
-                    key={rowKey}
-                    data-testid={`virtualized-row-${rowKey}`}
-                    data-row-index={virtualRow.index}
-                    role="row"
-                    tabIndex={0}
-                    aria-rowindex={virtualRow.index + 1}
-                    onKeyDown={(e) => handleKeyDown(e, virtualRow.index)}
-                    className={`border-b hover:bg-muted/50 transition-colors ${rowClass} ${onRowClick ? 'cursor-pointer' : ''}`}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      minWidth: 'max-content',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      display: 'grid',
-                      gridTemplateColumns: gridTemplateColumns,
-                    }}
-                    onClick={() => handleRowClick(item, virtualRow.index)}
-                  >
-                    {visibleColumns.map((column) => (
-                      <div
-                        key={column.id}
-                        role="gridcell"
-                        className={`p-4 flex overflow-hidden ${column.hideOnMobile ? 'hidden @md:flex' : ''} ${column.cellClassName || 'items-start'}`}
-                        style={{
-                          minWidth: 0,
-                          overflow: 'hidden'
-                        }}
-                      >
-                        {column.cell(item, virtualRow.index)}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </AutoSizer>
+          );
+        })}
+      </div>
     </div>
   );
 }
-
-// Memoize the component to prevent unnecessary re-renders
-export const VirtualizedTable = memo(VirtualizedTableInner) as typeof VirtualizedTableInner;
 
 // Utility function to generate mock data for testing
 export function generateMockRisks(count: number) {
   const mockData = [];
   const categories = ['Operacional', 'Financiero', 'Estratégico', 'Tecnológico', 'Legal'];
   const processes = ['Ventas', 'Compras', 'RRHH', 'TI', 'Finanzas'];
-
+  
   for (let i = 0; i < count; i++) {
     mockData.push({
       id: `mock-risk-${i}`,
@@ -260,7 +236,7 @@ export function generateMockRisks(count: number) {
       updatedAt: new Date().toISOString(),
     });
   }
-
+  
   return mockData;
 }
 
@@ -268,7 +244,7 @@ export function generateMockControls(count: number) {
   const mockData = [];
   const types = ['preventive', 'detective', 'corrective'];
   const frequencies = ['daily', 'weekly', 'monthly', 'quarterly'];
-
+  
   for (let i = 0; i < count; i++) {
     mockData.push({
       id: `mock-control-${i}`,
@@ -286,7 +262,7 @@ export function generateMockControls(count: number) {
       updatedAt: new Date().toISOString(),
     });
   }
-
+  
   return mockData;
 }
 
@@ -295,7 +271,7 @@ export function generateMockEvents(count: number) {
   const eventTypes = ['materializado', 'fraude', 'delito'];
   const statuses = ['abierto', 'en_investigacion', 'cerrado', 'escalado'];
   const severities = ['baja', 'media', 'alta', 'critica'];
-
+  
   for (let i = 0; i < count; i++) {
     mockData.push({
       id: `mock-event-${i}`,
@@ -314,6 +290,6 @@ export function generateMockEvents(count: number) {
       updatedAt: new Date().toISOString(),
     });
   }
-
+  
   return mockData;
 }

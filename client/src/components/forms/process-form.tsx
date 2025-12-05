@@ -152,21 +152,10 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
         return result;
       }
     },
-    onSuccess: async () => {
-      // Invalidate all queries (both active and inactive)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'all' }),
-        queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"], refetchType: 'all' }),
-        queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'all' }),
-      ]);
-      
-      // Force immediate refetch of active queries to ensure UI updates immediately
-      await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["/api/processes"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["/api/processes/basic"], type: 'active' }),
-        queryClient.refetchQueries({ queryKey: ["/api/macroprocesos"], type: 'active' }),
-      ]);
-      
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'all' });
       toast({
         title: process ? "Proceso actualizado" : "Proceso creado",
         description: `El proceso ha sido ${process ? "actualizado" : "creado"} exitosamente.`,

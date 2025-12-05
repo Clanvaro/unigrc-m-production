@@ -298,6 +298,8 @@ export default function Risks() {
   }
 
   // Only load batch relations when needed (viewing details, editing, etc.)
+  // Note: Summary data (processesSummary, controlsSummary, actionPlansSummary) comes from bootstrap
+  // so we only need detailed relations when opening detail dialogs
   const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
     queryKey: ["/api/risks/batch-relations", riskIds],
     queryFn: async () => {
@@ -316,7 +318,9 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
-    enabled: (needsDetailedData || visibleColumns.process || visibleColumns.responsible || visibleColumns.cargo || visibleColumns.validation) && riskIds.length > 0, // Fetch only when details are actually needed
+    // Only fetch when detail dialogs are open or when columns that need full data are visible
+    // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
+    enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.cargo || visibleColumns.validation) && riskIds.length > 0,
     staleTime: 1000 * 15, // 15 seconds
     refetchOnMount: true, // Always refetch when component mounts or tab changes
   });
@@ -1326,6 +1330,40 @@ export default function Risks() {
     return availableControlsData;
   };
 
+  // Helper function to get action plan status badge variant
+  const getActionPlanStatusVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
+    switch (status?.toLowerCase()) {
+      case 'in_progress':
+      case 'pending':
+        return 'default'; // Green/primary for active
+      case 'completed':
+      case 'implemented':
+      case 'closed':
+        return 'secondary'; // Gray for completed
+      case 'overdue':
+        return 'destructive'; // Red for overdue
+      default:
+        return 'outline';
+    }
+  };
+
+  // Helper function to get action plan status color class
+  const getActionPlanStatusColor = (status: string): string => {
+    switch (status?.toLowerCase()) {
+      case 'in_progress':
+      case 'pending':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'completed':
+      case 'implemented':
+      case 'closed':
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+      case 'overdue':
+        return 'bg-red-100 text-red-800 border-red-200';
+      default:
+        return '';
+    }
+  };
+
   const getValidationBadge = (validationStatus: string) => {
     switch (validationStatus) {
       case "pending_validation":
@@ -1657,6 +1695,28 @@ export default function Risks() {
       header: 'Proceso',
       width: '200px',
       cell: (risk) => {
+        // Use processesSummary from bootstrap if available (optimized)
+        const processesSummary = (risk as any).processesSummary;
+        
+        if (processesSummary && processesSummary.length > 0) {
+          const displayed = processesSummary.slice(0, 2);
+          const remaining = processesSummary.length - displayed.length;
+          
+          return (
+            <div className="space-y-0.5 min-w-0">
+              {displayed.map((proc: any, idx: number) => (
+                <div key={idx} className="text-xs line-clamp-1" title={proc.name}>
+                  {proc.name}
+                </div>
+              ))}
+              {remaining > 0 && (
+                <Badge variant="outline" className="text-xs">+{remaining} más</Badge>
+              )}
+            </div>
+          );
+        }
+
+        // Fallback to legacy logic if summary not available
         const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
         let process: any = null;
         let subproceso: any = null;
@@ -1679,89 +1739,81 @@ export default function Risks() {
           macroproceso = macroprocesos.find((m: any) => m.id === risk.macroprocesoId);
         }
 
+        if (riskLinks.length === 0) {
+          if (macroproceso || process || subproceso) {
+            return (
+              <>
+                {macroproceso && (
+                  <div className="text-xs text-muted-foreground line-clamp-2" title={`M: ${macroproceso.name}`}>
+                    <span className="font-medium">M:</span> {macroproceso.name}
+                  </div>
+                )}
+                {process && (
+                  <div className="text-xs line-clamp-2" title={`P: ${process.name}`}>
+                    <span className="font-medium">P:</span> {process.name}
+                  </div>
+                )}
+                {subproceso && (
+                  <div className="text-xs text-blue-600 line-clamp-2" title={`S: ${subproceso.name}`}>
+                    <span className="font-medium">S:</span> {subproceso.name}
+                  </div>
+                )}
+              </>
+            );
+          }
+          return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
+        }
+
+        const processHierarchies: { macro?: string; proc?: string; sub?: string }[] = [];
+        riskLinks.forEach((link: any) => {
+          const hierarchy: { macro?: string; proc?: string; sub?: string } = {};
+
+          if (link.macroprocesoId) {
+            const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
+            if (macro) hierarchy.macro = macro.name;
+          }
+
+          if (link.processId) {
+            const proc = processes.find((p: any) => p.id === link.processId);
+            if (proc) hierarchy.proc = proc.name;
+          }
+
+          if (link.subprocesoId) {
+            const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
+            if (sub) hierarchy.sub = sub.name;
+          }
+
+          if (hierarchy.macro || hierarchy.proc || hierarchy.sub) {
+            processHierarchies.push(hierarchy);
+          }
+        });
+
+        if (processHierarchies.length === 0) {
+          return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
+        }
+
         return (
-          <div className="space-y-1 min-w-0">
-            {(() => {
-              if (riskLinks.length === 0) {
-                if (macroproceso || process || subproceso) {
-                  return (
-                    <>
-                      {macroproceso && (
-                        <div className="text-xs text-muted-foreground line-clamp-2" title={`M: ${macroproceso.name}`}>
-                          <span className="font-medium">M:</span> {macroproceso.name}
-                        </div>
-                      )}
-                      {process && (
-                        <div className="text-xs line-clamp-2" title={`P: ${process.name}`}>
-                          <span className="font-medium">P:</span> {process.name}
-                        </div>
-                      )}
-                      {subproceso && (
-                        <div className="text-xs text-blue-600 line-clamp-2" title={`S: ${subproceso.name}`}>
-                          <span className="font-medium">S:</span> {subproceso.name}
-                        </div>
-                      )}
-                    </>
-                  );
-                }
-                return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
-              }
-
-              const processHierarchies: { macro?: string; proc?: string; sub?: string }[] = [];
-              riskLinks.forEach((link: any) => {
-                const hierarchy: { macro?: string; proc?: string; sub?: string } = {};
-
-                // Build full hierarchy for this link (macroproceso → proceso → subproceso)
-                if (link.macroprocesoId) {
-                  const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
-                  if (macro) hierarchy.macro = macro.name;
-                }
-
-                if (link.processId) {
-                  const proc = processes.find((p: any) => p.id === link.processId);
-                  if (proc) hierarchy.proc = proc.name;
-                }
-
-                if (link.subprocesoId) {
-                  const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
-                  if (sub) hierarchy.sub = sub.name;
-                }
-
-                // Only add if we found at least one level
-                if (hierarchy.macro || hierarchy.proc || hierarchy.sub) {
-                  processHierarchies.push(hierarchy);
-                }
-              });
-
-              if (processHierarchies.length === 0) {
-                return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
-              }
+          <div className="space-y-0.5">
+            {processHierarchies.filter(h => h && (h.macro || h.proc || h.sub)).slice(0, 2).map((hierarchy, idx) => {
+              const parts: string[] = [];
+              if (hierarchy.macro) parts.push(`M: ${hierarchy.macro}`);
+              if (hierarchy.proc) parts.push(`P: ${hierarchy.proc}`);
+              if (hierarchy.sub) parts.push(`S: ${hierarchy.sub}`);
+              const fullPath = parts.join(' → ');
 
               return (
-                <div className="space-y-0.5">
-                  {processHierarchies.filter(h => h && (h.macro || h.proc || h.sub)).slice(0, 2).map((hierarchy, idx) => {
-                    const parts: string[] = [];
-                    if (hierarchy.macro) parts.push(`M: ${hierarchy.macro}`);
-                    if (hierarchy.proc) parts.push(`P: ${hierarchy.proc}`);
-                    if (hierarchy.sub) parts.push(`S: ${hierarchy.sub}`);
-                    const fullPath = parts.join(' → ');
-
-                    return (
-                      <div key={idx} className="text-xs line-clamp-2" title={fullPath}>
-                        {parts.filter(p => p).map((part, i) => (
-                          <div key={i} className={i === 0 ? 'text-muted-foreground' : ''}>
-                            {part}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })}
-                  {processHierarchies.length > 2 && (
-                    <Badge variant="outline" className="text-xs">+{processHierarchies.length - 2} más</Badge>
-                  )}
+                <div key={idx} className="text-xs line-clamp-2" title={fullPath}>
+                  {parts.filter(p => p).map((part, i) => (
+                    <div key={i} className={i === 0 ? 'text-muted-foreground' : ''}>
+                      {part}
+                    </div>
+                  ))}
                 </div>
               );
-            })()}
+            })}
+            {processHierarchies.length > 2 && (
+              <Badge variant="outline" className="text-xs">+{processHierarchies.length - 2} más</Badge>
+            )}
           </div>
         );
       },
@@ -1862,8 +1914,8 @@ export default function Risks() {
       minWidth: '250px',
       cell: (risk) => {
         const controlCount = getControlCount(risk);
-        const riskControls = getRiskControls(risk.id).filter((rc: any) => rc && rc.control);
-        const hasDetailedData = riskControls.length > 0;
+        // Use controlsSummary from bootstrap if available (optimized)
+        const controlsSummary = (risk as any).controlsSummary;
 
         if (controlCount === 0) {
           return (
@@ -1872,6 +1924,41 @@ export default function Risks() {
             </div>
           );
         }
+
+        // Use summary if available
+        if (controlsSummary && controlsSummary.length > 0) {
+          const displayed = controlsSummary.slice(0, 2);
+          const remaining = controlCount - displayed.length;
+
+          return (
+            <div className="flex flex-wrap gap-1 justify-center items-center">
+              {displayed.map((control: any, idx: number) => (
+                <Badge 
+                  key={idx}
+                  variant="secondary" 
+                  className="text-xs cursor-pointer hover:bg-accent transition-colors"
+                  onClick={() => setControlsDialogRisk(risk)}
+                  title={`Control ${control.code}`}
+                >
+                  {control.code}
+                </Badge>
+              ))}
+              {remaining > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="cursor-pointer hover:bg-accent transition-colors text-xs"
+                  onClick={() => setControlsDialogRisk(risk)}
+                >
+                  +{remaining}
+                </Badge>
+              )}
+            </div>
+          );
+        }
+
+        // Fallback to detailed data if available
+        const riskControls = getRiskControls(risk.id).filter((rc: any) => rc && rc.control);
+        const hasDetailedData = riskControls.length > 0;
 
         if (hasDetailedData && riskControls.length <= 2) {
           return (
@@ -1915,6 +2002,44 @@ export default function Risks() {
       width: '200px',
       minWidth: '150px',
       cell: (risk) => {
+        // Use actionPlansSummary from bootstrap if available (optimized)
+        const actionPlansSummary = (risk as any).actionPlansSummary;
+        
+        if (actionPlansSummary && actionPlansSummary.length > 0) {
+          const displayed = actionPlansSummary.slice(0, 2);
+          const totalCount = actionPlansSummary.length;
+          const remaining = totalCount - displayed.length;
+
+          return (
+            <div className="flex flex-wrap gap-1 justify-center">
+              {displayed.map((plan: any, idx: number) => {
+                const statusColor = getActionPlanStatusColor(plan.status);
+                return (
+                  <Badge
+                    key={idx}
+                    variant={getActionPlanStatusVariant(plan.status)}
+                    className={`cursor-pointer hover:opacity-80 transition-colors text-xs ${statusColor}`}
+                    onClick={() => setLocation(`/action-plans?riskId=${risk.id}`)}
+                    title={`${plan.code} - ${plan.status}`}
+                  >
+                    {plan.code}
+                  </Badge>
+                );
+              })}
+              {remaining > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="cursor-pointer hover:bg-accent transition-colors text-xs"
+                  onClick={() => setLocation(`/action-plans?riskId=${risk.id}`)}
+                >
+                  +{remaining}
+                </Badge>
+              )}
+            </div>
+          );
+        }
+
+        // Fallback to detailed data if available
         const actionPlans = getRiskActionPlans(risk.id);
 
         if (actionPlans.length === 0) {
@@ -1928,16 +2053,20 @@ export default function Risks() {
         if (actionPlans.length <= 2) {
           return (
             <div className="flex flex-wrap gap-1 justify-center">
-              {(actionPlans as any[]).filter(ap => ap && ap.code).map((ap: any) => (
-                <Badge
-                  key={ap.id}
-                  variant="outline"
-                  className="cursor-pointer hover:bg-accent transition-colors text-xs"
-                  onClick={() => setLocation(`/action-plans?id=${ap.id}`)}
-                >
-                  {ap.code}
-                </Badge>
-              ))}
+              {(actionPlans as any[]).filter(ap => ap && ap.code).map((ap: any) => {
+                const statusColor = getActionPlanStatusColor(ap.status);
+                return (
+                  <Badge
+                    key={ap.id}
+                    variant={getActionPlanStatusVariant(ap.status)}
+                    className={`cursor-pointer hover:opacity-80 transition-colors text-xs ${statusColor}`}
+                    onClick={() => setLocation(`/action-plans?id=${ap.id}`)}
+                    title={`${ap.code} - ${ap.status}`}
+                  >
+                    {ap.code}
+                  </Badge>
+                );
+              })}
             </div>
           );
         }

@@ -249,7 +249,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/risk-processes/validation/notified/list", { limit: notifiedRisksPagination.limit, offset: notifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notifiedRiskProcessLinks = notifiedRiskProcessLinksResponse?.data || [];
@@ -259,7 +258,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/risk-processes/validation/not-notified/list", { limit: notNotifiedRisksPagination.limit, offset: notNotifiedRisksPagination.offset }],
     enabled: activeTab === "risks",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notNotifiedRiskProcessLinks = notNotifiedRiskProcessLinksResponse?.data || [];
@@ -271,7 +269,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/controls/validation/notified", { limit: notifiedControlsPagination.limit, offset: notifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notifiedControls = notifiedControlsResponse?.data || [];
@@ -281,7 +278,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/controls/validation/not-notified", { limit: notNotifiedControlsPagination.limit, offset: notNotifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notNotifiedControls = notNotifiedControlsResponse?.data || [];
@@ -319,7 +315,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/action-plans/validation/notified", { limit: notifiedActionPlansPagination.limit, offset: notifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notifiedActionPlans = notifiedActionPlansResponse?.data || [];
@@ -329,7 +324,6 @@ export default function RiskValidationPage() {
     queryKey: ["/api/action-plans/validation/not-notified", { limit: notNotifiedActionPlansPagination.limit, offset: notNotifiedActionPlansPagination.offset }],
     enabled: activeTab === "action-plans",
     staleTime: 60000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 
   const notNotifiedActionPlans = notNotifiedActionPlansResponse?.data || [];

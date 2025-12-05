@@ -5060,13 +5060,13 @@ export class MemStorage implements IStorage {
           : undefined
       )),
 
-      // Risk controls (lightweight) - OPTIMIZED: Drive from risks table to use status index
+      // Risk controls (lightweight)
       db.select({
         riskId: riskControls.riskId,
         residualRisk: riskControls.residualRisk
       })
-        .from(risks)
-        .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
+        .from(riskControls)
+        .innerJoin(risks, eq(riskControls.riskId, risks.id))
         .innerJoin(controls, eq(riskControls.controlId, controls.id))
         .where(and(
           isNull(risks.deletedAt),
@@ -5338,15 +5338,14 @@ export class MemStorage implements IStorage {
         )),
       // Get ALL riskControls for ALL risks (not just validated ones)
       // so residual risk calculation works correctly even for non-validated risks
-      // OPTIMIZED: Drive from risks table to use deletedAt index
       db.select({
         id: riskControls.id,
         riskId: riskControls.riskId,
         controlId: riskControls.controlId,
         residualRisk: riskControls.residualRisk,
       })
-        .from(risks)
-        .innerJoin(riskControls, eq(risks.id, riskControls.riskId))
+        .from(riskControls)
+        .innerJoin(risks, eq(riskControls.riskId, risks.id))
         .where(isNull(risks.deletedAt)),
       // OPTIMIZED: Only select id (used as Map key) instead of all columns
       db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt)),
@@ -20244,42 +20243,18 @@ export class DatabaseStorage extends MemStorage {
   async getRiskProcessLinksByRiskIds(riskIds: string[]): Promise<RiskProcessLinkWithDetails[]> {
     if (riskIds.length === 0) return [];
 
-    // OPTIMIZED: Select only required columns to reduce data transfer
     const results = await db.select({
       riskProcessLink: riskProcessLinks,
-      // Only select required risk fields: id, code, name
-      risk: {
-        id: risks.id,
-        code: risks.code,
-        name: risks.name,
-      },
-      // Only select required macroproceso fields: id, name
-      macroproceso: {
-        id: macroprocesos.id,
-        name: macroprocesos.name,
-      },
-      // Only select required process fields: id, name
-      process: {
-        id: processes.id,
-        name: processes.name,
-      },
-      // Only select required subproceso fields: id, name
-      subproceso: {
-        id: subprocesos.id,
-        name: subprocesos.name,
-      },
-      // Only select required process owner fields: id, name (as fullName), email
+      risk: risks,
+      macroproceso: macroprocesos,
+      process: processes,
+      subproceso: subprocesos,
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
         email: processOwners.email
       },
-      // Only select required user fields: id, fullName, email
-      validatedByUser: {
-        id: users.id,
-        fullName: users.fullName,
-        email: users.email,
-      }
+      validatedByUser: users
     })
       .from(riskProcessLinks)
       .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
@@ -20296,33 +20271,12 @@ export class DatabaseStorage extends MemStorage {
       .filter(result => result.risk !== null)
       .map(result => ({
         ...result.riskProcessLink,
-        risk: {
-          id: result.risk!.id,
-          code: result.risk!.code,
-          name: result.risk!.name,
-        },
-        macroproceso: result.macroproceso?.id ? {
-          id: result.macroproceso.id,
-          name: result.macroproceso.name,
-        } : undefined,
-        process: result.process?.id ? {
-          id: result.process.id,
-          name: result.process.name,
-        } : undefined,
-        subproceso: result.subproceso?.id ? {
-          id: result.subproceso.id,
-          name: result.subproceso.name,
-        } : undefined,
-        responsibleUser: result.responsibleUser?.id ? {
-          id: result.responsibleUser.id,
-          fullName: result.responsibleUser.fullName,
-          email: result.responsibleUser.email,
-        } : undefined,
-        validatedByUser: result.validatedByUser?.id ? {
-          id: result.validatedByUser.id,
-          fullName: result.validatedByUser.fullName || '',
-          email: result.validatedByUser.email || '',
-        } : undefined,
+        risk: result.risk!,
+        macroproceso: result.macroproceso || undefined,
+        process: result.process || undefined,
+        subproceso: result.subproceso || undefined,
+        responsibleUser: result.responsibleUser || undefined,
+        validatedByUser: result.validatedByUser || undefined,
       }));
   }
 
@@ -20622,36 +20576,14 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]> {
-    // OPTIMIZED: Select only required columns to reduce data transfer
+    // First get the base data with process hierarchy
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
-      // Only select required risk fields: id, code, name
-      risk: {
-        id: risks.id,
-        code: risks.code,
-        name: risks.name,
-      },
-      // Only select required macroproceso fields: id, name
-      macroproceso: {
-        id: macroprocesos.id,
-        name: macroprocesos.name,
-      },
-      // Only select required process fields: id, name
-      process: {
-        id: processes.id,
-        name: processes.name,
-      },
-      // Only select required subproceso fields: id, name
-      subproceso: {
-        id: subprocesos.id,
-        name: subprocesos.name,
-      },
-      // Only select required user fields: id, fullName (name), email
-      validatedByUser: {
-        id: users.id,
-        fullName: users.fullName,
-        email: users.email,
-      },
+      risk: risks,
+      macroproceso: macroprocesos,
+      process: processes,
+      subproceso: subprocesos,
+      validatedByUser: users,
       // Get the responsible owner ID using COALESCE logic
       responsibleOwnerId: sql<string>`
         COALESCE(
@@ -20685,34 +20617,15 @@ export class DatabaseStorage extends MemStorage {
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
 
     // Map results with owner lookups
-    const results = baseResults
-      .filter(result => result.risk !== null) // Filter out orphaned links
-      .map((result) => ({
-        ...result.riskProcessLink,
-        risk: {
-          id: result.risk!.id,
-          code: result.risk!.code,
-          name: result.risk!.name,
-        },
-        macroproceso: result.macroproceso?.id ? {
-          id: result.macroproceso.id,
-          name: result.macroproceso.name,
-        } : undefined,
-        process: result.process?.id ? {
-          id: result.process.id,
-          name: result.process.name,
-        } : undefined,
-        subproceso: result.subproceso?.id ? {
-          id: result.subproceso.id,
-          name: result.subproceso.name,
-        } : undefined,
-        responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-        validatedByUser: result.validatedByUser?.id ? {
-          id: result.validatedByUser.id,
-          fullName: result.validatedByUser.fullName || '',
-          email: result.validatedByUser.email || '',
-        } : undefined,
-      }));
+    const results = baseResults.map((result) => ({
+      ...result.riskProcessLink,
+      risk: result.risk!,
+      macroproceso: result.macroproceso || undefined,
+      process: result.process || undefined,
+      subproceso: result.subproceso || undefined,
+      responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
+      validatedByUser: result.validatedByUser || undefined,
+    }));
 
     return results;
   }
@@ -20746,41 +20659,13 @@ export class DatabaseStorage extends MemStorage {
     }
 
     // Get paginated results with LIMIT/OFFSET at DB level
-    // OPTIMIZED: Select only necessary columns to avoid fetching heavy unused data
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
-      // Select only necessary risk fields
-      risk: {
-        id: risks.id,
-        code: risks.code,
-        name: risks.name,
-        description: risks.description,
-        status: risks.status
-      },
-      // Select only necessary macroproceso fields
-      macroproceso: {
-        id: macroprocesos.id,
-        code: macroprocesos.code,
-        name: macroprocesos.name
-      },
-      // Select only necessary process fields
-      process: {
-        id: processes.id,
-        code: processes.code,
-        name: processes.name
-      },
-      // Select only necessary subproceso fields
-      subproceso: {
-        id: subprocesos.id,
-        code: subprocesos.code,
-        name: subprocesos.name
-      },
-      // Select only necessary user fields
-      validatedByUser: {
-        id: users.id,
-        fullName: users.fullName,
-        email: users.email
-      },
+      risk: risks,
+      macroproceso: macroprocesos,
+      process: processes,
+      subproceso: subprocesos,
+      validatedByUser: users,
       responsibleOwnerId: sql<string>`
         COALESCE(
           ${riskProcessLinks.responsibleOverrideId},
@@ -20820,12 +20705,12 @@ export class DatabaseStorage extends MemStorage {
     // Map results
     const data = baseResults.map((result) => ({
       ...result.riskProcessLink,
-      risk: result.risk as any,
-      macroproceso: (result.macroproceso || undefined) as any,
-      process: (result.process || undefined) as any,
-      subproceso: (result.subproceso || undefined) as any,
+      risk: result.risk!,
+      macroproceso: result.macroproceso || undefined,
+      process: result.process || undefined,
+      subproceso: result.subproceso || undefined,
       responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-      validatedByUser: (result.validatedByUser || undefined) as any,
+      validatedByUser: result.validatedByUser || undefined,
     }));
 
     return { data, total };

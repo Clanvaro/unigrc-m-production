@@ -32,19 +32,19 @@ export default function ProcessMultiSelector({
 
   const { data: macroprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
-    staleTime: 0,
+    staleTime: 60000,
     refetchOnMount: "always",
   });
 
   const { data: processes = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
-    staleTime: 0,
+    staleTime: 60000,
     refetchOnMount: "always",
   });
 
   const { data: subprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 0,
+    staleTime: 60000,
     refetchOnMount: "always",
   });
 

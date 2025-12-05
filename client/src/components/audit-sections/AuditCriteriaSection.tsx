@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { usePermissions } from "@/hooks/usePermissions";
 import type { AuditCriterion } from "@shared/schema";
 import { cn } from "@/lib/utils";
 
@@ -377,11 +376,8 @@ function CriterionForm({
     }
   });
 
-  const { hasPermission } = usePermissions();
-  
   const { data: documents = [] } = useQuery<DocumentOption[]>({
     queryKey: ["/api/compliance-documents"],
-    enabled: hasPermission("documents:read") || false,
     queryFn: async () => {
       const response = await fetch("/api/compliance-documents");
       if (!response.ok) throw new Error("Failed to fetch documents");

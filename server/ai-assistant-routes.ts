@@ -236,26 +236,6 @@ export function registerAIAssistantRoutes(app: Express) {
     });
   });
 
-  // Endpoint to reinitialize OpenAI service (useful when API key is updated)
-  app.post("/api/ai/reinitialize", (req: Request, res: Response) => {
-    try {
-      openAIService.reinitialize();
-      const status = openAIService.getStatus();
-      res.json({
-        success: true,
-        message: status.ready 
-          ? 'OpenAI Service reinitialized successfully' 
-          : 'OpenAI Service reinitialized but not ready (check API key)',
-        status
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
   // ============ TEST ENDPOINTS ============
   
   app.post("/api/ai/test", openAIGenerationLimiter, async (req: Request, res: Response) => {

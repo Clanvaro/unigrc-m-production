@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../lib/queryKeys";
 import { useOptimisticMutation } from "@/hooks/useOptimisticMutation";
-import { useDebounce } from "@/hooks/useDebounce";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +26,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { getRiskColor, getRiskLevelText, calculateResidualRisk } from "@/lib/risk-calculations";
 import type { Control, Risk, RiskControl } from "@shared/schema";
+import ExcelJS from 'exceljs';
 import { EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { ExplanationPopover } from "@/components/ExplanationPopover";
@@ -160,9 +160,6 @@ export default function Controls() {
   const [searchTerm, setSearchTerm] = useState("");
   const [responsibleFilter, setResponsibleFilter] = useState<string | null>(null);
 
-  // Debounced search term to prevent excessive API calls while typing
-  const debouncedSearchTerm = useDebounce(searchTerm, 300);
-
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -241,14 +238,14 @@ export default function Controls() {
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters, debouncedSearchTerm, responsibleFilter]);
+  }, [filters, searchTerm, responsibleFilter]);
 
   const { data: controlsResponse, isLoading, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: queryKeys.controls.paginated({
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
       paginate: true,
-      search: debouncedSearchTerm,
+      search: searchTerm,
       type: filters.typeFilter,
       effectiveness: filters.effectivenessFilter,
       status: filters.statusFilter,
@@ -268,7 +265,7 @@ export default function Controls() {
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
         paginate: "true",
-        search: debouncedSearchTerm || "",
+        search: searchTerm || "",
         type: filters.typeFilter !== "all" ? filters.typeFilter : "",
         status: filters.statusFilter !== "all" ? filters.statusFilter : "",
         validationStatus: filters.validationStatusFilter !== "all" ? filters.validationStatusFilter : "",
@@ -282,7 +279,6 @@ export default function Controls() {
     },
     staleTime: 30000,
     gcTime: 5 * 60 * 1000,
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
   const controls = controlsResponse?.data || [];
   const totalPages = controlsResponse?.pagination ? Math.ceil(controlsResponse.pagination.total / pageSize) : 0;
@@ -539,46 +535,52 @@ export default function Controls() {
     }
   };
 
-  const sortedControls = [...(controls as Control[])].sort((a, b) => {
-    let aValue: any = a[sortField];
-    let bValue: any = b[sortField];
-
-    // Handle string comparison for code
-    if (sortField === 'code') {
-      aValue = aValue || '';
-      bValue = bValue || '';
+  const sortedControls = useMemo(() => {
+    if (!controls || controls.length === 0) {
+      return [];
     }
+    
+    return [...(controls as Control[])].sort((a, b) => {
+      let aValue: any = a[sortField];
+      let bValue: any = b[sortField];
 
-    // Handle string comparison for control name
-    if (sortField === 'control') {
-      aValue = a.name || '';
-      bValue = b.name || '';
-    }
+      // Handle string comparison for code
+      if (sortField === 'code') {
+        aValue = (aValue || '').toString().toLowerCase();
+        bValue = (bValue || '').toString().toLowerCase();
+      }
 
-    // Handle string comparison for responsible (controlOwner.fullName)
-    if (sortField === 'responsible') {
-      aValue = (a as any).controlOwner?.fullName || '';
-      bValue = (b as any).controlOwner?.fullName || '';
-    }
+      // Handle string comparison for control name
+      if (sortField === 'control') {
+        aValue = (a.name || '').toString().toLowerCase();
+        bValue = (b.name || '').toString().toLowerCase();
+      }
 
-    // Handle date comparison for validatedAt
-    if (sortField === 'validatedAt') {
-      aValue = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
-      bValue = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
-    }
+      // Handle string comparison for responsible (controlOwner.fullName)
+      if (sortField === 'responsible') {
+        aValue = ((a as any).controlOwner?.fullName || '').toString().toLowerCase();
+        bValue = ((b as any).controlOwner?.fullName || '').toString().toLowerCase();
+      }
 
-    // Handle number comparison for effectiveness
-    if (sortField === 'effectiveness') {
-      aValue = aValue || 0;
-      bValue = bValue || 0;
-    }
+      // Handle date comparison for validatedAt
+      if (sortField === 'validatedAt') {
+        aValue = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
+        bValue = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
+      }
 
-    if (sortDirection === 'asc') {
-      return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
-    } else {
-      return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
-    }
-  });
+      // Handle number comparison for effectiveness
+      if (sortField === 'effectiveness') {
+        aValue = Number(aValue) || 0;
+        bValue = Number(bValue) || 0;
+      }
+
+      if (sortDirection === 'asc') {
+        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
+      } else {
+        return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
+      }
+    });
+  }, [controls, sortField, sortDirection]);
 
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) return null;
@@ -614,8 +616,6 @@ export default function Controls() {
   };
 
   const exportToExcel = async () => {
-    // Lazy load ExcelJS only when export is triggered (reduces initial bundle size)
-    const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Controles');
 
@@ -1295,7 +1295,6 @@ export default function Controls() {
         <CardContent className="p-0 h-full flex flex-col">
           <div className="flex-1 overflow-hidden">
             <VirtualizedTable
-              key={`controls-table-${displayData.length}-${isLoading}`}
               data={displayData}
               columns={columns}
               estimatedRowHeight={70}

@@ -105,14 +105,13 @@ export function usePermissions() {
     }
     
     const sectionPermissions = {
-      dashboard: ["view_all", "view_risks", "view_controls", "view_action_plans", "view_reports"],
+      dashboard: ["view_all"],
       processes: ["view_processes", "view_all"],
       risks: ["view_risks", "view_all"],
       controls: ["view_controls", "view_all"],
       actions: ["view_action_plans", "view_all"],
       reports: ["view_reports", "view_all"],
       validation: ["validate_risks", "view_all"],
-      audits: ["view_audits", "audits:read", "view_all"],
       config: ["manage_users", "manage_roles", "view_users", "view_roles", "view_all"],
       users: ["manage_users", "view_users", "create_users", "edit_users", "view_all"],
       roles: ["manage_roles", "view_roles", "create_roles", "edit_roles", "view_all"],

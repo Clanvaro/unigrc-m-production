@@ -2111,16 +2111,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const risks = risksResult.rows as any[];
         const total = (countResult.rows[0] as any)?.total || 0;
 
-        // STEP 2: Batch query for control summaries (single query for ALL risks on this page)
+        // STEP 2: Batch queries for summaries (single query for ALL risks on this page)
         // Only if we have risks to process
-        let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number }>();
+        let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number; controlsSummary: { code: string }[] }>();
+        let processesSummaryMap = new Map<number, { name: string; type: 'macro' | 'process' | 'subproceso' }[]>();
+        let actionPlansSummaryMap = new Map<number, { code: string; status: string }[]>();
 
         if (risks.length > 0) {
           const riskIds = risks.map(r => r.id);
-
-          // Single batch query: get control count and avg effectiveness per risk
-          // Use sql.join to properly build the IN clause for UUID array
           const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
+
+          // Query 1: Control summaries (count, avg effectiveness, and codes)
           const controlSummary = await db.execute(sql`
             SELECT 
               rc.risk_id,
@@ -2132,12 +2133,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
             GROUP BY rc.risk_id
           `);
 
-          // Build lookup map for O(1) access
+          // Query 2: Control codes (limited to 3 per risk)
+          const controlCodes = await db.execute(sql`
+            WITH ranked_controls AS (
+              SELECT 
+                rc.risk_id,
+                c.code,
+                ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+              FROM risk_controls rc
+              INNER JOIN controls c ON rc.control_id = c.id
+              WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+            )
+            SELECT risk_id, code
+            FROM ranked_controls
+            WHERE rn <= 3
+            ORDER BY risk_id, rn
+          `);
+
+          // Query 3: Process summaries (limited to 3 per risk, prioritizing subproceso > process > macroproceso)
+          const processSummaries = await db.execute(sql`
+            WITH ranked_links AS (
+              SELECT 
+                rpl.risk_id,
+                COALESCE(s.name, p.name, m.name) as name,
+                CASE 
+                  WHEN rpl.subproceso_id IS NOT NULL THEN 'subproceso'
+                  WHEN rpl.process_id IS NOT NULL THEN 'process'
+                  WHEN rpl.macroproceso_id IS NOT NULL THEN 'macro'
+                END as type,
+                ROW_NUMBER() OVER (PARTITION BY rpl.risk_id ORDER BY 
+                  CASE 
+                    WHEN rpl.subproceso_id IS NOT NULL THEN 1
+                    WHEN rpl.process_id IS NOT NULL THEN 2
+                    WHEN rpl.macroproceso_id IS NOT NULL THEN 3
+                  END
+                ) as rn
+              FROM risk_process_links rpl
+              LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
+              LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
+              LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
+              WHERE rpl.risk_id IN (${riskIdsSql})
+            )
+            SELECT risk_id, name, type
+            FROM ranked_links
+            WHERE rn <= 3
+            ORDER BY risk_id, rn
+          `);
+
+          // Query 4: Action plans summaries (limited to 3 per risk)
+          const actionPlansSummaries = await db.execute(sql`
+            WITH ranked_actions AS (
+              SELECT 
+                a.risk_id,
+                a.code,
+                a.status,
+                ROW_NUMBER() OVER (PARTITION BY a.risk_id ORDER BY a.created_at DESC) as rn
+              FROM actions a
+              WHERE a.risk_id IN (${riskIdsSql}) 
+                AND a.origin = 'risk'
+                AND a.deleted_at IS NULL
+            )
+            SELECT risk_id, code, status
+            FROM ranked_actions
+            WHERE rn <= 3
+            ORDER BY risk_id, rn
+          `);
+
+          // Build lookup maps for O(1) access
           for (const row of controlSummary.rows as any[]) {
             controlSummaryMap.set(row.risk_id, {
               controlCount: row.control_count,
-              avgEffectiveness: row.avg_effectiveness
+              avgEffectiveness: row.avg_effectiveness,
+              controlsSummary: []
             });
+          }
+
+          // Group control codes by risk_id
+          for (const row of controlCodes.rows as any[]) {
+            const summary = controlSummaryMap.get(row.risk_id);
+            if (summary && summary.controlsSummary.length < 3) {
+              summary.controlsSummary.push({ code: row.code });
+            }
+          }
+
+          // Group processes by risk_id
+          for (const row of processSummaries.rows as any[]) {
+            if (!processesSummaryMap.has(row.risk_id)) {
+              processesSummaryMap.set(row.risk_id, []);
+            }
+            const processes = processesSummaryMap.get(row.risk_id)!;
+            if (processes.length < 3) {
+              processes.push({ name: row.name, type: row.type });
+            }
+          }
+
+          // Group action plans by risk_id
+          for (const row of actionPlansSummaries.rows as any[]) {
+            if (!actionPlansSummaryMap.has(row.risk_id)) {
+              actionPlansSummaryMap.set(row.risk_id, []);
+            }
+            const plans = actionPlansSummaryMap.get(row.risk_id)!;
+            if (plans.length < 3) {
+              plans.push({ code: row.code, status: row.status });
+            }
           }
         }
 
@@ -2171,11 +2269,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             category: row.category,
             createdAt: row.created_at,
             controlCount,
-            calculatedResidual
+            calculatedResidual,
+            // Add association summaries
+            processesSummary: processesSummaryMap.get(row.id) || [],
+            controlsSummary: summary?.controlsSummary || [],
+            actionPlansSummary: actionPlansSummaryMap.get(row.id) || []
           };
         });
 
-        console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls)`);
+        console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls, ${processesSummaryMap.size} with processes, ${actionPlansSummaryMap.size} with action plans)`);
 
         const result = {
           data,
@@ -7347,8 +7449,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
-      // Fetch controls from database
-      const { controls: paginatedControls, total } = await storage.getControlsPaginated(filters, limit, offset);
+      // Fetch controls from database with details (including controlOwner)
+      const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(filters, limit, offset);
 
       // Apply current maximum effectiveness limit dynamically
       let controlsWithEffectivenessLimit = paginatedControls;

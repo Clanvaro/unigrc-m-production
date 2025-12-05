@@ -8,7 +8,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import ComplianceDocumentForm from "@/components/forms/compliance-document-form.tsx";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { usePermissions } from "@/hooks/usePermissions";
 import type { ComplianceDocument, Macroproceso } from "@shared/schema";
 import { EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
 
@@ -52,11 +51,8 @@ export default function ComplianceDocuments() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { hasPermission } = usePermissions();
-  
   const { data: documents = [], isLoading } = useQuery<ComplianceDocument[]>({
     queryKey: ["/api/compliance-documents"],
-    enabled: hasPermission("documents:read") || false,
   });
 
   const { data: macroprocesos = [] } = useQuery<Macroproceso[]>({
