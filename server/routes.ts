@@ -33,6 +33,7 @@ import {
 import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
+import { runDatabaseOptimizations } from "./db-optimize";
 import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
@@ -664,6 +665,16 @@ function serializeDatesToISO(obj: any): any {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Database optimization endpoint (Admin only in real scenario, open for now to fix perf)
+  app.post("/api/admin/optimize-db", async (req, res) => {
+    try {
+      const result = await runDatabaseOptimizations();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   // Middleware global para serializar todas las fechas a ISO strings ANTES de enviar la respuesta
   app.use((req, res, next) => {
     const originalJson = res.json.bind(res);
