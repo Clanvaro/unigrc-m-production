@@ -159,7 +159,7 @@ export default function Controls() {
   const [filters, setFilters] = useState<Record<string, any>>({});
   const [searchTerm, setSearchTerm] = useState("");
   const [responsibleFilter, setResponsibleFilter] = useState<string | null>(null);
-  
+
   // Debounced search term to prevent excessive API calls while typing
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
@@ -1295,6 +1295,7 @@ export default function Controls() {
         <CardContent className="p-0 h-full flex flex-col">
           <div className="flex-1 overflow-hidden">
             <VirtualizedTable
+              key={`controls-table-${displayData.length}-${isLoading}`}
               data={displayData}
               columns={columns}
               estimatedRowHeight={70}
