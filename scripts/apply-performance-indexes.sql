@@ -150,6 +150,12 @@ ON objetivos_estrategicos(code) WHERE deleted_at IS NULL;
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_gerencias_deleted_at 
 ON gerencias(deleted_at);
 
+-- Índice compuesto para optimizar consultas de gerencias ordenadas
+-- Optimiza: WHERE deleted_at IS NULL ORDER BY level, order
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_gerencias_deleted_level_order 
+ON gerencias(deleted_at, level, "order") 
+WHERE deleted_at IS NULL;
+
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_objetivos_deleted_at 
 ON objetivos_estrategicos(deleted_at);
 

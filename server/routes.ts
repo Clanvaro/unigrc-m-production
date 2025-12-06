@@ -15899,22 +15899,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/gerencias", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const cacheKey = `gerencias:single-tenant`;
 
       // Try to get from cache first
+      const cacheStart = Date.now();
       const cached = await distributedCache.get(cacheKey);
+      const cacheDuration = Date.now() - cacheStart;
+      
       if (cached) {
+        console.log(`[PERFORMANCE] /api/gerencias: Cache hit in ${cacheDuration}ms`);
         return res.json(cached);
       }
 
+      console.log(`[PERFORMANCE] /api/gerencias: Cache miss (checked in ${cacheDuration}ms), fetching from DB...`);
+      
+      const dbStart = Date.now();
       const gerencias = await storage.getGerencias();
+      const dbDuration = Date.now() - dbStart;
+      console.log(`[PERFORMANCE] /api/gerencias: DB query completed in ${dbDuration}ms, fetched ${gerencias.length} gerencias`);
 
       // Cache for 60 seconds
+      const cacheSetStart = Date.now();
       await distributedCache.set(cacheKey, gerencias, 60);
+      const cacheSetDuration = Date.now() - cacheSetStart;
+      console.log(`[PERFORMANCE] /api/gerencias: Cache set completed in ${cacheSetDuration}ms`);
+
+      const totalDuration = Date.now() - startTime;
+      console.log(`[PERFORMANCE] /api/gerencias: Total request time: ${totalDuration}ms (cache check: ${cacheDuration}ms, DB: ${dbDuration}ms, cache set: ${cacheSetDuration}ms)`);
 
       res.json(gerencias);
     } catch (error) {
+      const totalDuration = Date.now() - startTime;
+      console.error(`[ERROR] /api/gerencias failed after ${totalDuration}ms:`, error);
+      if (error instanceof Error) {
+        console.error(`[ERROR] Stack:`, error.stack);
+      }
       res.status(500).json({ message: "Failed to fetch gerencias" });
     }
   });

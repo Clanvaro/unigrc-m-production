@@ -14313,19 +14313,32 @@ export class DatabaseStorage extends MemStorage {
     const cacheKey = 'gerencias:single-tenant';
 
     // Try cache first (60s TTL - catalog data changes infrequently)
+    const cacheStart = Date.now();
     const cached = await distributedCache.get(cacheKey);
+    const cacheDuration = Date.now() - cacheStart;
+    
     if (cached) {
+      console.log(`[DB] getGerencias: Cache hit in ${cacheDuration}ms`);
       return cached;
     }
 
+    console.log(`[DB] getGerencias: Cache miss (checked in ${cacheDuration}ms), querying database...`);
+    
+    const queryStart = Date.now();
     const result = await withRetry(async () => {
       return await db.select().from(gerencias)
         .where(isNull(gerencias.deletedAt))
         .orderBy(gerencias.level, gerencias.order);
     });
+    const queryDuration = Date.now() - queryStart;
+    console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
 
     // Cache for 60 seconds
+    const cacheSetStart = Date.now();
     await distributedCache.set(cacheKey, result, 60);
+    const cacheSetDuration = Date.now() - cacheSetStart;
+    console.log(`[DB] getGerencias: Cache set completed in ${cacheSetDuration}ms`);
+
     return result;
   }
 
