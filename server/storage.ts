@@ -187,7 +187,7 @@ import {
 } from "@shared/schema";
 import { expandScopeEntities } from "@shared/scope-expansion";
 import { randomUUID, createHash } from "crypto";
-import { db as dbNullable, pool as poolNullable, withRetry } from "./db";
+import { db as dbNullable, pool as poolNullable, withRetry, batchQueries } from "./db";
 import { eq, ne, and, or, desc, sql, inArray, like, isNull, isNotNull, aliasedTable } from "drizzle-orm";
 
 // Non-null aliases for use within DatabaseStorage (guarded by constructor check)
@@ -5047,11 +5047,12 @@ export class MemStorage implements IStorage {
 
     // PERFORMANCE OPTIMIZATION: Only fetch entities that are requested
     // AND only fetch necessary columns to reduce data transfer
-    const queries: Promise<any>[] = [
+    // Use batchQueries to limit concurrency and prevent pool saturation
+    const queryFunctions = [
       // Always need risks (lightweight)
       // PERFORMANCE: Filter by status='active' to match risk-matrix behavior and reduce volume
       // PERFORMANCE: Filter by entities if specific ones are requested
-      db.select({
+      () => db.select({
         id: risks.id,
         inherentRisk: risks.inherentRisk,
         processId: risks.processId,
@@ -5069,7 +5070,7 @@ export class MemStorage implements IStorage {
       )),
 
       // Risk controls (lightweight)
-      db.select({
+      () => db.select({
         riskId: riskControls.riskId,
         residualRisk: riskControls.residualRisk
       })
@@ -5088,22 +5089,24 @@ export class MemStorage implements IStorage {
 
       // Only fetch requested entities (lightweight - IDs only)
       needMacroprocesos
-        ? db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt))
-        : Promise.resolve([]),
+        ? () => db.select({ id: macroprocesos.id }).from(macroprocesos).where(isNull(macroprocesos.deletedAt))
+        : () => Promise.resolve([]),
       needProcesses || needMacroprocesos // Macroprocesos need processes for hierarchy
-        ? db.select({ id: processes.id, macroprocesoId: processes.macroprocesoId }).from(processes).where(isNull(processes.deletedAt))
-        : Promise.resolve([]),
+        ? () => db.select({ id: processes.id, macroprocesoId: processes.macroprocesoId }).from(processes).where(isNull(processes.deletedAt))
+        : () => Promise.resolve([]),
       needSubprocesos || needProcesses || needMacroprocesos // All higher levels need subprocesos
-        ? db.select({ id: subprocesos.id, procesoId: subprocesos.procesoId }).from(subprocesos).where(isNull(subprocesos.deletedAt))
-        : Promise.resolve([]),
+        ? () => db.select({ id: subprocesos.id, procesoId: subprocesos.procesoId }).from(subprocesos).where(isNull(subprocesos.deletedAt))
+        : () => Promise.resolve([]),
 
       // Always need configuration
-      this.getRiskAggregationMethod(),
-      this.getRiskAggregationWeights(),
-      this.getRiskLevelRanges()
+      () => this.getRiskAggregationMethod(),
+      () => this.getRiskAggregationWeights(),
+      () => this.getRiskLevelRanges()
     ];
 
-    const [allRisks, allRiskControls, allMacroprocesos, allProcesses, allSubprocesos, method, weights, ranges] = await Promise.all(queries);
+    // Execute in batches of 5 to limit concurrent connections
+    const results = await batchQueries(queryFunctions, 5);
+    const [allRisks, allRiskControls, allMacroprocesos, allProcesses, allSubprocesos, method, weights, ranges] = results;
 
     // Create risk-control mapping for quick lookup
     // Use a Map<string, number[]> to store just the residual risks
@@ -17758,9 +17761,53 @@ export class DatabaseStorage extends MemStorage {
   async getAdminDashboardMetrics() {
     console.time('getAdminDashboardMetrics');
     try {
-      // PERFORMANCE: Execute ALL independent queries in a single Promise.all
-      // This reduces sequential round-trips to the database from 3 to 1
+      // PERFORMANCE: Execute queries in batches of 5 to prevent pool saturation
+      // This prevents exhausting the connection pool (max 20 connections) when executing 16 queries
       console.time('db:admin-batch-1');
+      
+      // Convert queries to functions for batchQueries
+      const queryFunctions = [
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` }).from(auditTests),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` }).from(users),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` }).from(audits),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(auditTests)
+          .where(sql`status IN ('completed', 'approved')`),
+        () => db.select().from(macroprocesos),
+        () => db.select().from(roles).where(sql`name ILIKE '%executor%' OR name ILIKE '%auditor%'`).limit(1),
+        () => db.select().from(roles).where(sql`name ILIKE '%supervisor%' OR name ILIKE '%lead%'`).limit(1),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(auditFindings)
+          .where(sql`severity = 'critical'`),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(actions)
+          .where(sql`status != 'completed'`),
+        () => db.select({ count: sql<number>`cast(count(*) as integer)` }).from(risks),
+        () => db.select({ count: sql<number>`cast(count(DISTINCT risk_id) as integer)` })
+          .from(auditTests)
+          .where(sql`risk_id IS NOT NULL`),
+        () => this.getRiskAggregationMethod(),
+        () => this.getRiskAggregationWeights(),
+        () => this.getRiskLevelRanges(),
+        () => db.select({
+          macroprocesoId: risks.macroprocesoId,
+          totalTests: sql<number>`cast(count(*) as integer)`,
+          completedTests: sql<number>`cast(count(*) FILTER (WHERE audit_tests.status IN ('completed', 'approved')) as integer)`
+        })
+          .from(auditTests)
+          .innerJoin(risks, and(
+            eq(auditTests.riskId, risks.id),
+            sql`${risks.macroprocesoId} IS NOT NULL`
+          ))
+          .groupBy(risks.macroprocesoId),
+        () => db.select()
+          .from(risks)
+          .where(sql`${risks.macroprocesoId} IS NOT NULL`)
+      ];
+
+      // Execute in batches of 5 to limit concurrent connections
+      const results = await batchQueries(queryFunctions, 5);
+      
       const [
         totalTests,
         totalUsers,
@@ -17778,58 +17825,8 @@ export class DatabaseStorage extends MemStorage {
         riskRanges,
         deptTestsAggregated,
         allRisksData
-      ] = await Promise.all([
-        db.select({ count: sql<number>`cast(count(*) as integer)` }).from(auditTests),
-
-        // SINGLE-TENANT MODE: Count all users
-        db.select({ count: sql<number>`cast(count(*) as integer)` }).from(users),
-
-        db.select({ count: sql<number>`cast(count(*) as integer)` }).from(audits),
-
-        db.select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(auditTests)
-          .where(sql`status IN ('completed', 'approved')`),
-
-        db.select().from(macroprocesos),
-
-        db.select().from(roles).where(sql`name ILIKE '%executor%' OR name ILIKE '%auditor%'`).limit(1),
-
-        db.select().from(roles).where(sql`name ILIKE '%supervisor%' OR name ILIKE '%lead%'`).limit(1),
-
-        db.select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(auditFindings)
-          .where(sql`severity = 'critical'`),
-
-        db.select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(actions)
-          .where(sql`status != 'completed'`),
-
-        db.select({ count: sql<number>`cast(count(*) as integer)` }).from(risks),
-
-        db.select({ count: sql<number>`cast(count(DISTINCT risk_id) as integer)` })
-          .from(auditTests)
-          .where(sql`risk_id IS NOT NULL`),
-
-        this.getRiskAggregationMethod(),
-        this.getRiskAggregationWeights(),
-        this.getRiskLevelRanges(),
-
-        db.select({
-          macroprocesoId: risks.macroprocesoId,
-          totalTests: sql<number>`cast(count(*) as integer)`,
-          completedTests: sql<number>`cast(count(*) FILTER (WHERE audit_tests.status IN ('completed', 'approved')) as integer)`
-        })
-          .from(auditTests)
-          .innerJoin(risks, and(
-            eq(auditTests.riskId, risks.id),
-            sql`${risks.macroprocesoId} IS NOT NULL`
-          ))
-          .groupBy(risks.macroprocesoId),
-
-        db.select()
-          .from(risks)
-          .where(sql`${risks.macroprocesoId} IS NOT NULL`)
-      ]);
+      ] = results;
+      
       console.timeEnd('db:admin-batch-1');
 
       console.time('processing:admin-metrics');

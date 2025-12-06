@@ -79,9 +79,15 @@ if (databaseUrl) {
     : isCloudSql
       ? (isCloudSqlProxy ? 10000 : 20000) // Unix socket: 10s, IP pública: 20s
       : (isProduction ? 60000 : 15000);
-  // CRITICAL: Reduced from 45s to 10s to fail fast on slow queries (Nov 29, 2025)
-  // This prevents 138s hangs when N+1 queries saturate the pool
-  const statementTimeout = isRenderDb ? 10000 : (isProduction ? 15000 : 10000);
+  
+  // Statement timeout: Shorter than connection timeout to prevent queries from blocking the pool
+  // If a query takes longer than this, it will be cancelled, freeing the connection for other queries
+  // This prevents slow queries from exhausting the connection pool
+  // Cloud SQL: 30s (connection timeout is 60s, so queries have 30s before being cancelled)
+  // Render/Others: 10-15s (connection timeout is 30-60s)
+  const statementTimeout = isCloudSql 
+    ? 30000  // 30s for Cloud SQL (connection timeout is 60s)
+    : (isRenderDb ? 10000 : (isProduction ? 15000 : 10000));
 
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
@@ -130,19 +136,27 @@ if (databaseUrl) {
     // Cloud SQL: Longer idle timeout to avoid frequent reconnections (Unix socket is stable)
     // Render: 1 min idle (recycle before server closes)
     idleTimeoutMillis: isCloudSql ? 60000 : (isRenderDb ? 60000 : 30000),
-    connectionTimeoutMillis: isCloudSql ? 30000 : connectionTimeout,
+    // Increased connection timeout to 60s for Cloud SQL to handle pool saturation better
+    // This gives more time when pool is busy, reducing "Connection terminated due to connection timeout" errors
+    connectionTimeoutMillis: isCloudSql ? 60000 : connectionTimeout,
     statement_timeout: statementTimeout,
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
+    // Rotate connections every 1000 uses to prevent "zombie" connections that may have issues
+    // This helps prevent stale connections that can cause timeouts
+    maxUses: isCloudSql ? 1000 : undefined,
+    // Application name for better monitoring in Cloud SQL
+    application_name: 'unigrc-backend',
     ssl: sslConfig,
     allowExitOnIdle: false,
   });
   db = drizzle(pool, { schema, logger: true });
 
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${connectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, env=${isProduction ? 'production' : 'development'}`);
+  const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=${isCloudSql ? 1000 : 'unlimited'}, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
-    console.log(`📊 Cloud SQL pool config: max=${poolMax} (adjust DB_POOL_MAX env var if needed). Review Cloud SQL logs to detect connection bottlenecks.`);
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms (increased from 30s to handle saturation), maxUses=1000 (adjust DB_POOL_MAX env var if needed). Review Cloud SQL logs to detect connection bottlenecks.`);
   }
 
   if (isRenderDb) {
@@ -184,21 +198,52 @@ if (pool) {
       return;
     }
 
+    // Handle timeout errors specifically with detailed pool metrics
+    const isTimeoutError = err.message?.includes('timeout') || 
+                          err.code === 'ETIMEDOUT' || 
+                          err.message?.includes('Connection terminated due to connection timeout');
+    
+    if (isTimeoutError) {
+      const metrics = getPoolMetrics();
+      console.error('❌ Connection timeout error:', {
+        code: err.code || 'NO_CODE',
+        message: err.message?.substring(0, 200),
+        poolActive: metrics?.totalCount - metrics?.idleCount,
+        poolMax: metrics?.maxConnections,
+        poolWaiting: metrics?.waitingCount,
+        poolIdle: metrics?.idleCount,
+        poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown',
+        stack: err.stack?.substring(0, 300)
+      });
+      // Don't throw - let the pool handle reconnection
+      // The retry logic in withRetry will handle retries
+      return;
+    }
+
     // Handle "Connection terminated unexpectedly" errors
     if (err.message?.includes('Connection terminated') || err.message?.includes('terminated unexpectedly')) {
+      const metrics = getPoolMetrics();
       console.warn('⚠️ Database connection terminated unexpectedly:', {
         code: err.code,
-        message: err.message,
+        message: err.message?.substring(0, 200),
+        poolActive: metrics?.totalCount - metrics?.idleCount,
+        poolMax: metrics?.maxConnections,
+        poolWaiting: metrics?.waitingCount,
         stack: err.stack?.substring(0, 200)
       });
       // Don't log as error - this is often recoverable
       return;
     }
 
+    // Other database pool errors
+    const metrics = getPoolMetrics();
     console.error('❌ Database pool error:', {
       code: err.code,
       message: err.message,
-      name: err.name
+      name: err.name,
+      poolActive: metrics?.totalCount - metrics?.idleCount,
+      poolMax: metrics?.maxConnections,
+      poolWaiting: metrics?.waitingCount
     });
   });
 
@@ -269,22 +314,45 @@ process.on('SIGTERM', async () => {
 
 // Database operation wrapper with retry logic
 // Optimized for Render PostgreSQL (fast always-on) and Neon (serverless with cold starts)
+// Retry delays with exponential backoff for different database types
+// Cloud SQL: Exponential backoff (1s, 2s, 4s) - handles pool saturation better
 // Render: Faster retries since DB is always-on, just need to handle transient network issues
 // Neon: Longer delays to handle Scale to Zero wake-up time
+const RETRY_DELAYS_CLOUDSQL = [1000, 2000, 4000]; // Exponential backoff: 1s, 2s, 4s (max 4s cap)
 const RETRY_DELAYS_RENDER = [200, 500, 1000, 2000]; // ~4s total window for Render
 const RETRY_DELAYS_NEON = [300, 800, 2000, 5000];   // ~8s total window for Neon cold starts
 
 // Detect database type once at module load
 const isRenderDatabase = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
-const RETRY_DELAYS = isRenderDatabase ? RETRY_DELAYS_RENDER : RETRY_DELAYS_NEON;
+const isCloudSqlDatabase = process.env.IS_GCP_DEPLOYMENT === 'true' || 
+  process.env.DATABASE_URL?.includes('.googleapis.com') || 
+  process.env.DATABASE_URL?.includes('cloudsql') || false;
+
+const RETRY_DELAYS = isCloudSqlDatabase 
+  ? RETRY_DELAYS_CLOUDSQL 
+  : (isRenderDatabase ? RETRY_DELAYS_RENDER : RETRY_DELAYS_NEON);
+
+// Retryable error patterns - specifically for connection timeouts and transient errors
+const RETRYABLE_ERROR_PATTERNS = [
+  'Connection terminated',
+  'connection timeout',
+  'Connection terminated due to connection timeout',
+  'ETIMEDOUT',
+  'ECONNRESET',
+  'connection terminated unexpectedly'
+];
 
 export async function withRetry<T>(
   operation: () => Promise<T>,
-  maxRetries: number = 4  // Increased from 3 to 4 for better resilience
+  options: { maxRetries?: number; retryableErrors?: string[] } = {}
 ): Promise<T> {
   if (!db || !pool) {
     throw new Error('Database not configured - cannot perform operation');
   }
+
+  const maxRetries = options.maxRetries ?? 3;
+  const customRetryableErrors = options.retryableErrors ?? [];
+  const allRetryablePatterns = [...RETRYABLE_ERROR_PATTERNS, ...customRetryableErrors];
 
   let lastError: Error;
 
@@ -312,27 +380,53 @@ export async function withRetry<T>(
         error.code === 'EHOSTUNREACH' || // Host unreachable
         error.code === 'EAI_AGAIN' ||   // DNS temporary failure
         error.code === 'ENOTFOUND' ||   // DNS lookup failed
-        // Message-based detection for edge cases
+        // Message-based detection for edge cases (including timeout-specific patterns)
         error.message?.includes('connection') ||
         error.message?.includes('timeout') ||
         error.message?.includes('Connection terminated') ||
         error.message?.includes('ENETUNREACH') ||
         error.message?.includes('socket hang up') ||
         error.message?.includes('SSL') ||
-        error.message?.includes('ECONNRESET');
+        error.message?.includes('ECONNRESET') ||
+        // Check against retryable error patterns
+        allRetryablePatterns.some(pattern => 
+          error.message?.includes(pattern) || error.code === pattern
+        );
 
       if (!isRecoverable || attempt === maxRetries) {
-        console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
+        // Enhanced error logging with pool metrics for timeout errors
+        const isTimeoutError = error.message?.includes('timeout') || 
+                              error.code === 'ETIMEDOUT' || 
+                              error.message?.includes('Connection terminated due to connection timeout');
+        
+        if (isTimeoutError) {
+          const metrics = getPoolMetrics();
+          console.error(`❌ Database timeout error (attempt ${attempt}/${maxRetries}):`, {
+            code: error.code || 'NO_CODE',
+            message: error.message?.substring(0, 200),
+            poolActive: metrics?.totalCount - metrics?.idleCount,
+            poolMax: metrics?.maxConnections,
+            poolWaiting: metrics?.waitingCount,
+            poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown'
+          });
+        } else {
+          console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
+        }
         throw error;
       }
 
-      // Use delay from array based on attempt number
+      // Use exponential backoff delay
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
+      const cappedDelay = Math.min(delay, 4000); // Cap at 4 seconds
 
-      console.warn(`⚠️ Database retry (${attempt}/${maxRetries}) after ${delay}ms - ${error.code || 'ERROR'}: ${error.message?.substring(0, 100)}`);
+      console.warn(`⚠️ DB retry ${attempt}/${maxRetries} after ${cappedDelay}ms:`, {
+        error: error.code || 'ERROR',
+        message: error.message?.substring(0, 100),
+        isTimeout: error.message?.includes('timeout') || error.code === 'ETIMEDOUT'
+      });
 
       // On connection errors, try to warm the pool before retry
-      if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET')) {
+      if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET' || error.message?.includes('timeout'))) {
         console.log('🔄 Warming pool before retry...');
         try {
           await warmPool(2);
@@ -341,11 +435,39 @@ export async function withRetry<T>(
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(resolve => setTimeout(resolve, cappedDelay));
     }
   }
 
   throw lastError!;
+}
+
+/**
+ * Execute database queries in batches to limit concurrency and prevent pool saturation
+ * This prevents Promise.all from exhausting the connection pool when executing many queries
+ * 
+ * @param queries Array of query functions to execute
+ * @param batchSize Maximum number of concurrent queries per batch (default: 5)
+ * @returns Array of results in the same order as queries
+ */
+export async function batchQueries<T>(
+  queries: (() => Promise<T>)[],
+  batchSize: number = 5
+): Promise<T[]> {
+  if (queries.length === 0) {
+    return [];
+  }
+
+  const results: T[] = [];
+  
+  // Process queries in batches to limit concurrent connections
+  for (let i = 0; i < queries.length; i += batchSize) {
+    const batch = queries.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(q => q()));
+    results.push(...batchResults);
+  }
+  
+  return results;
 }
 
 // Health check function
@@ -523,13 +645,14 @@ function startPoolMonitoring() {
       `idle=${metrics.idleCount}, active=${activeConnections}, waiting=${metrics.waitingCount}`
     );
 
-    // Alert only on high ACTIVE connection saturation (not idle connections)
+    // Alert on high ACTIVE connection saturation (>80% threshold)
     // Idle connections are harmless - they're ready to serve new requests
-    // Adjusted thresholds for 1 CPU VM (lower pool size)
-    if (activeUtilizationPct >= 75) {
+    // 80% threshold provides early warning before pool exhaustion
+    if (activeUtilizationPct >= 80) {
       console.warn(
         `⚠️ HIGH POOL SATURATION: ${activeUtilizationPct}% active (${activeConnections}/${metrics.maxConnections}) - ` +
-        `Consider scaling or investigating slow queries`
+        `Pool is ${activeUtilizationPct >= 90 ? 'CRITICALLY' : 'highly'} saturated. ` +
+        `Consider: 1) Investigating slow queries, 2) Increasing DB_POOL_MAX, 3) Optimizing concurrent queries`
       );
     }
 
@@ -538,7 +661,15 @@ function startPoolMonitoring() {
     if (metrics.waitingCount > 3) {
       console.warn(
         `⚠️ CONNECTION QUEUE BUILD-UP: ${metrics.waitingCount} queries waiting - ` +
-        `Pool may be saturated, check for slow queries or increase max connections`
+        `Pool is saturated, queries are queuing. Check for slow queries or increase max connections`
+      );
+    }
+    
+    // Critical alert when pool is nearly exhausted (>90%)
+    if (activeUtilizationPct >= 90) {
+      console.error(
+        `🚨 CRITICAL POOL SATURATION: ${activeUtilizationPct}% active (${activeConnections}/${metrics.maxConnections}), ` +
+        `${metrics.waitingCount} waiting - Pool near exhaustion! Immediate action required.`
       );
     }
   }, 60000); // Every 60 seconds

@@ -727,6 +727,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Database health endpoint with detailed pool metrics
+  app.get("/api/health/db", async (req, res) => {
+    try {
+      const metrics = getPoolMetrics();
+      const health = await getHealthStatus();
+      
+      if (!metrics) {
+        return res.status(503).json({
+          status: 'unhealthy',
+          error: 'Pool not initialized',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const activeConnections = metrics.totalCount - metrics.idleCount;
+      const activeUtilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
+      const totalUtilizationPct = Math.round((metrics.totalCount / metrics.maxConnections) * 100);
+
+      // Determine health status based on pool saturation
+      let poolStatus: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+      if (activeUtilizationPct >= 90 || metrics.waitingCount > 5) {
+        poolStatus = 'unhealthy';
+      } else if (activeUtilizationPct >= 80 || metrics.waitingCount > 3) {
+        poolStatus = 'degraded';
+      }
+
+      res.json({
+        status: poolStatus,
+        database: health.database,
+        pool: {
+          total: metrics.totalCount,
+          active: activeConnections,
+          idle: metrics.idleCount,
+          waiting: metrics.waitingCount,
+          max: metrics.maxConnections,
+          activeUtilization: `${activeUtilizationPct}%`,
+          totalUtilization: `${totalUtilizationPct}%`,
+          timestamp: metrics.timestamp
+        },
+        alerts: {
+          highSaturation: activeUtilizationPct >= 80,
+          criticalSaturation: activeUtilizationPct >= 90,
+          queueBuildUp: metrics.waitingCount > 3,
+          recommendations: activeUtilizationPct >= 80 ? [
+            'Investigate slow queries in logs',
+            'Consider increasing DB_POOL_MAX environment variable',
+            'Review use of Promise.all with many concurrent queries',
+            'Check for connection leaks'
+          ] : []
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(503).json({
+        status: 'unhealthy',
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
   // Database latency diagnostic endpoint - measures network latency to Neon
   app.get("/api/db-latency", async (req, res) => {
     try {
