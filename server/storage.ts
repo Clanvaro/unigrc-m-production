@@ -20221,7 +20221,8 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
-        email: processOwners.email
+        email: processOwners.email,
+        position: processOwners.position
       },
       validatedByUser: users
     })
@@ -20257,7 +20258,8 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
-        email: processOwners.email
+        email: processOwners.email,
+        position: processOwners.position
       },
       validatedByUser: users
     })
@@ -20295,7 +20297,8 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
-        email: processOwners.email
+        email: processOwners.email,
+        position: processOwners.position
       },
       validatedByUser: users
     })
@@ -20342,7 +20345,8 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
-        email: processOwners.email
+        email: processOwners.email,
+        position: processOwners.position
       },
       validatedByUser: users
     })
@@ -20382,7 +20386,8 @@ export class DatabaseStorage extends MemStorage {
       responsibleUser: {
         id: processOwners.id,
         fullName: processOwners.name,
-        email: processOwners.email
+        email: processOwners.email,
+        position: processOwners.position
       },
       validatedByUser: users
     })

@@ -16338,8 +16338,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
+      // Log detailed error information for debugging
+      if (error instanceof z.ZodError) {
+        console.error("Audit creation validation error:", JSON.stringify(error.errors, null, 2));
+        console.error("Received data:", JSON.stringify(req.body, null, 2));
+        return res.status(400).json({ 
+          message: "Invalid audit data", 
+          errors: error.errors,
+          receivedData: req.body
+        });
+      }
       console.error("Audit creation error:", error);
-      res.status(400).json({ message: "Invalid audit data", error: error instanceof Error ? error.message : "Unknown error" });
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      console.error("Received data:", JSON.stringify(req.body, null, 2));
+      res.status(400).json({ 
+        message: "Invalid audit data", 
+        error: error instanceof Error ? error.message : "Unknown error",
+        details: error instanceof Error ? error.stack : undefined
+      });
     }
   });
 

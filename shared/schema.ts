@@ -6699,7 +6699,7 @@ export type RiskProcessLinkWithDetails = RiskProcessLink & {
   macroproceso?: { id: string; name: string; };
   process?: { id: string; name: string; };
   subproceso?: { id: string; name: string; };
-  responsibleUser?: { id: string; fullName: string; email: string; };
+  responsibleUser?: { id: string; fullName: string; email: string; position?: string | null; };
   validatedByUser?: { id: string; fullName: string; email: string; };
 };
 

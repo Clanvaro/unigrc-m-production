@@ -21,11 +21,31 @@ import { AuthBoundary } from "@/components/AuthBoundary";
 import { useAuth } from "@/hooks/useAuth";
 import { lazyWithRetry } from "@/lib/lazyWithRetry";
 
-// Silence html2canvas Web Worker errors (safe, non-critical errors)
+// Silence harmless browser extension and message port errors (safe, non-critical errors)
 if (typeof window !== "undefined") {
-  const originalErrorHandler = window.addEventListener("unhandledrejection", (event) => {
-    if (event.reason?.message?.includes("message port closed") && event.reason?.message?.includes("response")) {
+  window.addEventListener("unhandledrejection", (event) => {
+    const errorMessage = event.reason?.message || event.reason?.toString() || "";
+    
+    // Silence message port errors (usually from browser extensions or cancelled requests)
+    if (
+      errorMessage.includes("message port closed") ||
+      errorMessage.includes("The message port closed before a response was received") ||
+      errorMessage.includes("Failed to fetch") && errorMessage.includes("aborted")
+    ) {
       event.preventDefault();
+      console.debug("Silenced harmless error:", errorMessage);
+      return;
+    }
+    
+    // Silence React Query cancellation errors
+    if (
+      errorMessage.includes("queryClient") ||
+      errorMessage.includes("query was cancelled") ||
+      errorMessage.includes("AbortError")
+    ) {
+      event.preventDefault();
+      console.debug("Silenced query cancellation error:", errorMessage);
+      return;
     }
   });
 }

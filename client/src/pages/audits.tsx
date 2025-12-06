@@ -678,10 +678,13 @@ export default function Audits() {
       setShowAuditDialog(false);
       setEditingAudit(null);
     },
-    onError: () => {
+    onError: (error: any) => {
+      console.error("Error creating audit:", error);
+      const errorMessage = error?.message || error?.error || "No se pudo crear la auditoría";
+      const errorDetails = error?.errors ? JSON.stringify(error.errors, null, 2) : "";
       toast({
         title: "Error al crear",
-        description: "No se pudo crear la auditoría",
+        description: errorDetails ? `${errorMessage}\n\nDetalles: ${errorDetails}` : errorMessage,
         variant: "destructive"
       });
     }
@@ -1215,21 +1218,35 @@ export default function Audits() {
                   }
                 }
 
-                const auditData = {
-                  ...data,
+                // Validar que haya un leadAuditor disponible (es requerido en el schema)
+                if (!data.leadAuditor && auditTeamUsers.length === 0) {
+                  toast({
+                    title: "Error al crear",
+                    description: "No hay auditores disponibles. Por favor, asegúrate de que existan usuarios con roles de auditoría.",
+                    variant: "destructive"
+                  });
+                  return;
+                }
+
+                // Preparar datos de auditoría, excluyendo campos que no existen en el schema
+                // Solo incluir campos válidos según insertAuditSchema
+                const auditData: any = {
+                  name: data.name,
                   scope: generatedScope, // Usar scope generado o el proporcionado
                   type: data.type || "risk_based",
                   planId: null, // Auditoría emergente no tiene plan asociado
                   priority: "medium", // Prioridad por defecto
-                  leadAuditor: data.leadAuditor || (auditTeamUsers.length > 0 ? auditTeamUsers[0].id : "user-1"), // Usar el seleccionado o primer disponible
-                  auditTeam: auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : ["user-1"], // Primer auditor como equipo
-                  associatedRisks: data.selectedRisks || [], // Agregar riesgos seleccionados
+                  leadAuditor: data.leadAuditor || auditTeamUsers[0].id, // Usar el seleccionado o primer disponible (ya validado arriba)
+                  auditTeam: auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : [], // Primer auditor como equipo
                   regulationId: data.type === "compliance" ? (data.regulationId || null) : null,
-                  plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z") : null,
-                  plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z") : null,
+                  plannedStartDate: data.plannedStartDate ? new Date(data.plannedStartDate + "T00:00:00.000Z").toISOString() : null,
+                  plannedEndDate: data.plannedEndDate ? new Date(data.plannedEndDate + "T00:00:00.000Z").toISOString() : null,
                   objectives: data.objectives && data.objectives.length > 0 ? data.objectives : [
                     "Auditoría emergente - Objetivos a definir durante la planificación"
-                  ]
+                  ],
+                  // Campos opcionales del schema
+                  processId: data.selectedProcesses && data.selectedProcesses.length > 0 ? data.selectedProcesses[0] : null,
+                  subprocesoId: data.selectedSubprocesses && data.selectedSubprocesses.length > 0 ? data.selectedSubprocesses[0] : null,
                 };
 
                 createMutation.mutate(auditData, {
