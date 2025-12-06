@@ -684,11 +684,25 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
         refetchType: 'active' // Force immediate refetch of active queries only
       });
       
+      // CRITICAL: Invalidate page-data endpoint used by risks page
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks/page-data"],
+        exact: false,
+        refetchType: 'active'
+      });
+      
       // CRITICAL: Invalidate ALL paginated risks queries (matches any params) to update main risks table immediately
       // Using exact:false ensures we match all queries starting with ["/api/risks", "paginated", ...]
       queryClient.invalidateQueries({ 
         queryKey: ["/api/risks", "paginated"],
         exact: false
+      });
+      
+      // CRITICAL: Invalidate risks list query (used by risks page)
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks"],
+        exact: false,
+        refetchType: 'active'
       });
       
       // CRITICAL: Invalidate individual risk detail query to update detail view immediately (only if riskId exists)
@@ -1254,10 +1268,10 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           control={form.control}
           name="category"
           render={({ field }) => {
-            const { data: riskCategories = [] } = useQuery<any[]>({
+            const { data: riskCategories = [], isLoading: isLoadingCategories, isFetching: isFetchingCategories } = useQuery<any[]>({
               queryKey: ["/api/risk-categories"],
-              staleTime: 0, // Always fetch fresh data
-              refetchOnWindowFocus: true,
+              staleTime: 1000 * 60 * 5, // Cache for 5 minutes (catalog data changes infrequently)
+              refetchOnWindowFocus: false, // Don't refetch on window focus to improve performance
             });
             const availableCategories = riskCategories
               .filter((cat: any) => cat.isActive !== false)
@@ -1275,6 +1289,8 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
               field.onChange(currentCategories.filter((c: string) => c !== category));
             };
 
+            const isCategoriesLoading = isLoadingCategories || isFetchingCategories;
+
             return (
               <FormItem>
                 <FormLabel>Categorías</FormLabel>
@@ -1288,8 +1304,9 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
                           aria-expanded={openCategoryCombobox}
                           className="w-full justify-between"
                           data-testid="select-category-combobox"
+                          disabled={isCategoriesLoading}
                         >
-                          Buscar y seleccionar categorías...
+                          {isCategoriesLoading ? "Cargando categorías..." : "Buscar y seleccionar categorías..."}
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </FormControl>
@@ -1299,36 +1316,49 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
                         <CommandInput 
                           placeholder="Buscar categorías..." 
                           data-testid="input-search-categories"
+                          disabled={isCategoriesLoading}
                         />
-                        <CommandEmpty>No se encontraron categorías.</CommandEmpty>
+                        {isCategoriesLoading ? (
+                          <CommandEmpty>Cargando categorías...</CommandEmpty>
+                        ) : availableCategories.length === 0 ? (
+                          <CommandEmpty>No hay categorías disponibles. Crea una categoría primero.</CommandEmpty>
+                        ) : (
+                          <CommandEmpty>No se encontraron categorías con ese nombre.</CommandEmpty>
+                        )}
                         <CommandGroup>
                           <CommandList className="max-h-[200px] overflow-y-auto">
-                            {availableCategories
-                              .filter((cat: string) => !(field.value || []).includes(cat))
-                              .map((category: string) => {
-                                const categoryData = riskCategories.find((c: any) => c.name === category);
-                                return (
-                                  <CommandItem
-                                    key={category}
-                                    value={category}
-                                    onSelect={() => {
-                                      addCategory(category);
-                                      setOpenCategoryCombobox(false);
-                                    }}
-                                    data-testid={`option-category-${category}`}
-                                  >
-                                    <div className="flex items-center gap-2 w-full">
-                                      {categoryData?.color && (
-                                        <div 
-                                          className="w-3 h-3 rounded-full" 
-                                          style={{ backgroundColor: categoryData.color }}
-                                        />
-                                      )}
-                                      <span>{category}</span>
-                                    </div>
-                                  </CommandItem>
-                                );
-                              })}
+                            {isCategoriesLoading ? (
+                              <div className="p-4 text-center text-sm text-muted-foreground">
+                                Cargando categorías...
+                              </div>
+                            ) : (
+                              availableCategories
+                                .filter((cat: string) => !(field.value || []).includes(cat))
+                                .map((category: string) => {
+                                  const categoryData = riskCategories.find((c: any) => c.name === category);
+                                  return (
+                                    <CommandItem
+                                      key={category}
+                                      value={category}
+                                      onSelect={() => {
+                                        addCategory(category);
+                                        setOpenCategoryCombobox(false);
+                                      }}
+                                      data-testid={`option-category-${category}`}
+                                    >
+                                      <div className="flex items-center gap-2 w-full">
+                                        {categoryData?.color && (
+                                          <div 
+                                            className="w-3 h-3 rounded-full" 
+                                            style={{ backgroundColor: categoryData.color }}
+                                          />
+                                        )}
+                                        <span>{category}</span>
+                                      </div>
+                                    </CommandItem>
+                                  );
+                                })
+                            )}
                           </CommandList>
                         </CommandGroup>
                       </Command>
@@ -1371,10 +1401,10 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           control={form.control}
           name="regulations"
           render={({ field }) => {
-            const { data: regulations = [] } = useQuery<any[]>({
+            const { data: regulations = [], isLoading: isLoadingRegulations } = useQuery<any[]>({
               queryKey: ["/api/regulations"],
-              staleTime: 0,
-              refetchOnWindowFocus: true,
+              staleTime: 1000 * 60 * 5, // Cache for 5 minutes (catalog data changes infrequently)
+              refetchOnWindowFocus: false, // Don't refetch on window focus to improve performance
             });
             const availableRegulations = regulations
               .filter((reg: any) => reg.isActive !== false)

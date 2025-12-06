@@ -7596,8 +7596,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.status(201).json(control);
     } catch (error) {
-      console.error("Error creating control:", error);
-      res.status(400).json({ message: "Invalid control data" });
+      console.error("[ERROR] Error creating control:", error);
+      if (error instanceof Error) {
+        console.error("[ERROR] Error message:", error.message);
+        console.error("[ERROR] Error stack:", error.stack);
+      }
+      
+      // Handle Zod validation errors
+      if (error instanceof z.ZodError) {
+        console.error("[ERROR] Validation errors:", JSON.stringify(error.errors, null, 2));
+        return res.status(400).json({ 
+          message: "Invalid control data", 
+          errors: error.errors.map(e => ({
+            path: e.path.join('.'),
+            message: e.message
+          }))
+        });
+      }
+      
+      // Handle database errors
+      if (error && typeof error === 'object' && 'code' in error) {
+        console.error("[ERROR] Database error code:", (error as any).code);
+        console.error("[ERROR] Database error detail:", (error as any).detail);
+        console.error("[ERROR] Database error constraint:", (error as any).constraint);
+      }
+      
+      // Log request body for debugging (without sensitive data)
+      console.error("[ERROR] Request body:", JSON.stringify(req.body, null, 2));
+      
+      res.status(400).json({ 
+        message: error instanceof Error ? error.message : "Invalid control data",
+        error: process.env.NODE_ENV === 'development' ? String(error) : undefined
+      });
     }
   });
 

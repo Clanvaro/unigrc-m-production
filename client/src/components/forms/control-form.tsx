@@ -261,7 +261,11 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
             });
           }
         } catch (error) {
-          console.warn("Error managing control owner:", error);
+          // Silently handle owner assignment errors - control was created successfully
+          // Owner can be assigned later if needed
+          if (process.env.NODE_ENV === 'development') {
+            console.debug("Error managing control owner (non-critical):", error);
+          }
         }
       }
 
