@@ -1452,7 +1452,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      res.status(500).json({ message: "Failed to fetch basic processes" });
+      console.error("Error in /api/processes/basic:", error);
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      res.status(500).json({ 
+        message: "Failed to fetch basic processes",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -2316,6 +2321,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risks/bootstrap failed after ${duration}ms:`, error);
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      console.error("Error details:", {
+        message: error instanceof Error ? error.message : "Unknown error",
+        name: error instanceof Error ? error.name : "Unknown",
+        filters: req.query
+      });
 
       if (error instanceof Error) {
         if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
@@ -2883,6 +2894,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         cacheKey,
         async () => {
           const data = await storage.getSubprocesos();
+          // getSubprocesos already filters by deletedAt, but double-check for safety
           return data.filter((s: any) => !s.deletedAt).map((s: any) => ({
             id: s.id,
             code: s.code,
@@ -2894,7 +2906,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       res.json(cached);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch subprocesos" });
+      console.error("Error in /api/lookups/subprocesos:", error);
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      res.status(500).json({ 
+        message: "Failed to fetch subprocesos",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -6882,7 +6899,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(response);
     } catch (error) {
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
-      res.status(500).json({ message: "Failed to fetch risk events page data" });
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      res.status(500).json({ 
+        message: "Failed to fetch risk events page data",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -22744,7 +22765,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Crime category deleted successfully" });
     } catch (error) {
       console.error("Error deleting crime category:", error);
-      res.status(500).json({ message: "Failed to delete crime category" });
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      console.error("Category ID:", req.params.id);
+      res.status(500).json({ 
+        message: "Failed to delete crime category",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 

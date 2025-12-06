@@ -4885,6 +4885,9 @@ export class MemStorage implements IStorage {
   }
 
   async getSubprocesos(): Promise<Subproceso[]> {
+    if (!db) {
+      throw new Error("Database connection not available");
+    }
     return await db.select().from(subprocesos)
       .where(isNull(subprocesos.deletedAt));
   }
