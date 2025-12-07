@@ -177,6 +177,34 @@ ON process_objetivos_estrategicos(objetivo_estrategico_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id 
 ON risk_process_links(risk_id);
 
+-- Composite index to optimize ORDER BY created_at in the same query
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id_created_at 
+ON risk_process_links(risk_id, created_at);
+
+-- Index for responsibleOverrideId join optimization
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_responsible_override_id 
+ON risk_process_links(responsible_override_id) 
+WHERE responsible_override_id IS NOT NULL;
+
+-- Index for validatedBy join optimization
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_validated_by 
+ON risk_process_links(validated_by) 
+WHERE validated_by IS NOT NULL;
+
+-- Composite index to optimize ORDER BY created_at in the same query
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id_created_at 
+ON risk_process_links(risk_id, created_at);
+
+-- Index for responsibleOverrideId join optimization
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_responsible_override_id 
+ON risk_process_links(responsible_override_id) 
+WHERE responsible_override_id IS NOT NULL;
+
+-- Index for validatedBy join optimization
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_validated_by 
+ON risk_process_links(validated_by) 
+WHERE validated_by IS NOT NULL;
+
 -- Composite index to optimize ORDER BY created_at in batch queries
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id_created_at 
 ON risk_process_links(risk_id, created_at);
@@ -208,6 +236,8 @@ ANALYZE audit_findings;
 ANALYZE users;
 ANALYZE gerencias;
 ANALYZE objetivos_estrategicos;
+ANALYZE risk_process_links;
+ANALYZE risk_process_links;
 ANALYZE risk_process_links;
 
 -- ============= SUCCESS MESSAGE =============

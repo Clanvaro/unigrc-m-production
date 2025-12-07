@@ -3179,7 +3179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // OPTIMIZED: Uses WHERE IN queries instead of loading ALL data and filtering in memory
   app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
     try {
-      const { riskIds } = req.body;
+      const { riskIds, limitPerRisk } = req.body;
 
       if (!Array.isArray(riskIds) || riskIds.length === 0) {
         return res.json({ riskProcessLinks: [], riskControls: [] });
@@ -3194,38 +3194,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Limit batch size to prevent abuse
       const limitedIds = validRiskIds.slice(0, 100);
-      const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}`;
+      
+      // Optional limit per risk (default: 50 for process links, 50 for controls)
+      // This prevents huge responses when risks have many relations
+      const maxLinksPerRisk = typeof limitPerRisk === 'number' && limitPerRisk > 0 
+        ? Math.min(limitPerRisk, 100) // Cap at 100
+        : 50; // Default limit
+      
+      const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}:limit${maxLinksPerRisk}`;
 
-      // Try cache first (15 second TTL)
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        return res.json(cached);
+      const requestStartTime = Date.now();
+
+      // OPTIMIZED: Use two-tier cache (memory + Redis) with 60s TTL for better performance
+      const response = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const dbStartTime = Date.now();
+
+          // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+          const [allLinks, allControls] = await Promise.all([
+            storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
+              console.error("[batch-relations] Error fetching risk process links:", err);
+              return [];
+            }),
+            storage.getRiskControlsByRiskIds(limitedIds).catch(err => {
+              console.error("[batch-relations] Error fetching risk controls:", err);
+              return [];
+            })
+          ]);
+
+          // Apply per-risk limits to prevent huge responses
+          // Group by riskId and limit each group
+          const linksByRisk = new Map<string, typeof allLinks>();
+          const controlsByRisk = new Map<string, typeof allControls>();
+
+          // Group process links by riskId
+          for (const link of allLinks) {
+            if (!linksByRisk.has(link.riskId)) {
+              linksByRisk.set(link.riskId, []);
+            }
+            const group = linksByRisk.get(link.riskId)!;
+            if (group.length < maxLinksPerRisk) {
+              group.push(link);
+            }
+          }
+
+          // Group controls by riskId
+          for (const control of allControls) {
+            if (!controlsByRisk.has(control.riskId)) {
+              controlsByRisk.set(control.riskId, []);
+            }
+            const group = controlsByRisk.get(control.riskId)!;
+            if (group.length < maxLinksPerRisk) {
+              group.push(control);
+            }
+          }
+
+          // Flatten back to arrays
+          const filteredLinks = Array.from(linksByRisk.values()).flat();
+          const filteredControls = Array.from(controlsByRisk.values()).flat();
+
+          const dbDuration = Date.now() - dbStartTime;
+          const totalLinks = filteredLinks.length;
+          const totalControls = filteredControls.length;
+          const truncatedLinks = allLinks.length > totalLinks;
+          const truncatedControls = allControls.length > totalControls;
+          
+          console.log(`[PERF] [batch-relations] DB query took ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
+
+          return {
+            riskProcessLinks: filteredLinks,
+            riskControls: filteredControls,
+            metadata: {
+              totalRisks: limitedIds.length,
+              linksPerRiskLimit: maxLinksPerRisk,
+              controlsPerRiskLimit: maxLinksPerRisk,
+              linksTruncated: truncatedLinks,
+              controlsTruncated: truncatedControls,
+              totalLinksAvailable: allLinks.length,
+              totalControlsAvailable: allControls.length
+            }
+          };
+        },
+        60 // Redis TTL: 60 seconds (increased from 15s)
+      );
+
+      const totalDuration = Date.now() - requestStartTime;
+      
+      // Log cache hit/miss for monitoring
+      const memCached = lookupMemoryCache.get(cacheKey);
+      const cacheStatus = memCached && (Date.now() - memCached.timestamp < MEMORY_CACHE_TTL) 
+        ? 'MEMORY_HIT' 
+        : 'DB_FETCH';
+      
+      if (cacheStatus === 'DB_FETCH') {
+        console.log(`[PERF] [batch-relations] Total request time: ${totalDuration}ms (${cacheStatus})`);
       }
-
-      const startTime = Date.now();
-
-      // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
-      const [filteredLinks, filteredControls] = await Promise.all([
-        storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
-          console.error("[batch-relations] Error fetching risk process links:", err);
-          return [];
-        }),
-        storage.getRiskControlsByRiskIds(limitedIds).catch(err => {
-          console.error("[batch-relations] Error fetching risk controls:", err);
-          return [];
-        })
-      ]);
-
-      const duration = Date.now() - startTime;
-      console.log(`[batch-relations] Fetched ${filteredLinks.length} links + ${filteredControls.length} controls for ${limitedIds.length} risks in ${duration}ms`);
-
-      const response = {
-        riskProcessLinks: filteredLinks,
-        riskControls: filteredControls
-      };
-
-      // Cache for 15 seconds
-      await distributedCache.set(cacheKey, response, 15);
 
       res.json(response);
     } catch (error) {

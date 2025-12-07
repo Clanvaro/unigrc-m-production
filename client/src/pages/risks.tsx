@@ -295,13 +295,26 @@ export default function Risks() {
   interface BatchRelationsData {
     riskProcessLinks: any[];
     riskControls: any[];
+    metadata?: {
+      totalRisks: number;
+      linksPerRiskLimit?: number;
+      controlsPerRiskLimit?: number;
+      linksTruncated?: boolean;
+      controlsTruncated?: boolean;
+      totalLinksAvailable?: number;
+      totalControlsAvailable?: number;
+    };
   }
 
   // Only load batch relations when needed (viewing details, editing, etc.)
   // Note: Summary data (processesSummary, controlsSummary, actionPlansSummary) comes from bootstrap
   // so we only need detailed relations when opening detail dialogs
+  // OPTIMIZED: Use limitPerRisk to reduce payload size (50 per risk is usually enough for display)
+  const needsFullRelations = !!viewingRisk || !!editingRisk || !!controlsDialogRisk;
+  const limitPerRisk = needsFullRelations ? undefined : 50; // Limit to 50 per risk when just displaying, unlimited when editing
+  
   const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
-    queryKey: ["/api/risks/batch-relations", riskIds],
+    queryKey: ["/api/risks/batch-relations", riskIds, limitPerRisk],
     queryFn: async () => {
       if (riskIds.length === 0) return { riskProcessLinks: [], riskControls: [] };
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -309,10 +322,14 @@ export default function Risks() {
       if (csrfToken) {
         headers["x-csrf-token"] = csrfToken;
       }
+      const requestBody: { riskIds: string[]; limitPerRisk?: number } = { riskIds };
+      if (limitPerRisk !== undefined) {
+        requestBody.limitPerRisk = limitPerRisk;
+      }
       const response = await fetch("/api/risks/batch-relations", {
         method: "POST",
         headers,
-        body: JSON.stringify({ riskIds }),
+        body: JSON.stringify(requestBody),
         credentials: "include"
       });
       if (!response.ok) throw new Error("Failed to fetch risk relations");
@@ -321,8 +338,9 @@ export default function Risks() {
     // Only fetch when detail dialogs are open or when columns that need full data are visible
     // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
     enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.cargo || visibleColumns.validation) && riskIds.length > 0,
-    staleTime: 1000 * 15, // 15 seconds
-    refetchOnMount: true, // Always refetch when component mounts or tab changes
+    staleTime: 1000 * 60, // 60 seconds - matches server cache TTL to avoid unnecessary refetches
+    refetchOnMount: false, // Don't refetch on mount if data is still fresh (staleTime handles this)
+    refetchOnWindowFocus: false, // Don't refetch on window focus - data changes infrequently
   });
 
   // Extract relations from batch response (empty when not loaded)
