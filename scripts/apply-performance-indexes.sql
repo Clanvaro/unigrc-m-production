@@ -172,12 +172,32 @@ ON process_objetivos_estrategicos(process_id);
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_process_objetivos_objetivo_id 
 ON process_objetivos_estrategicos(objetivo_estrategico_id);
 
+-- ============= RISK PROCESS LINKS (for batch-relations endpoint) =============
+-- Critical index for batch queries: WHERE risk_id IN (...)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id 
+ON risk_process_links(risk_id);
+
+-- Composite index to optimize ORDER BY created_at in batch queries
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_risk_id_created_at 
+ON risk_process_links(risk_id, created_at);
+
+-- Index for responsible override lookups (used in JOIN)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_responsible_override 
+ON risk_process_links(responsible_override_id) 
+WHERE responsible_override_id IS NOT NULL;
+
+-- Index for validation lookups (used in JOIN)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risk_process_links_validated_by 
+ON risk_process_links(validated_by) 
+WHERE validated_by IS NOT NULL;
+
 COMMIT;
 
 -- ============= UPDATE STATISTICS =============
 ANALYZE risks;
 ANALYZE controls;
 ANALYZE risk_controls;
+ANALYZE risk_process_links;
 ANALYZE processes;
 ANALYZE subprocesos;
 ANALYZE macroprocesos;
@@ -188,6 +208,7 @@ ANALYZE audit_findings;
 ANALYZE users;
 ANALYZE gerencias;
 ANALYZE objetivos_estrategicos;
+ANALYZE risk_process_links;
 
 -- ============= SUCCESS MESSAGE =============
 SELECT 'Performance indexes created successfully! ✅' AS status;
