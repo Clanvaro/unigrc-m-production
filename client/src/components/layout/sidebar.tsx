@@ -149,12 +149,13 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
             })}
           </ul>
 
-        {/* Módulo de Auditoría */}
-        <div className="mt-8">
-          {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
-            Auditoría
-          </h3>)}
-          <ul className="space-y-2">
+        {/* Módulo de Auditoría - Solo mostrar si el usuario tiene permisos */}
+        {canViewSection("audits") && (
+          <div className="mt-8">
+            {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
+              Auditoría
+            </h3>)}
+            <ul className="space-y-2">
             <li>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -284,13 +285,15 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
             </li>
           </ul>
         </div>
+        )}
 
-        {/* Módulo de Compliance */}
-        <div className="mt-8">
-          {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
-            Cumplimiento
-          </h3>)}
-          <ul className="space-y-2">
+        {/* Módulo de Compliance - Solo mostrar si el usuario tiene permisos */}
+        {canViewSection("compliance") && (
+          <div className="mt-8">
+            {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
+              Cumplimiento
+            </h3>)}
+            <ul className="space-y-2">
             <li>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -403,6 +406,7 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
             </li>
           </ul>
         </div>
+        )}
 
         {/* Módulo de Equipo de Auditoría */}
         <div className="mt-8">

@@ -211,16 +211,20 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     refetchOnWindowFocus: false,
   });
 
+  // Verificar permisos para optimizar carga de datos
+  const canViewAudits = canViewSection("audits");
+  const canViewCompliance = canViewSection("compliance");
+
   const { data: auditPlans = [] } = useQuery<AuditPlan[]>({
     queryKey: ["/api/audit-plans"],
-    enabled: location === "/audits",
+    enabled: location === "/audits" && canViewAudits, // Solo cargar si está en la página Y tiene permisos
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
     refetchOnWindowFocus: false,
   });
 
   const { data: audits = [] } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
-    enabled: location === "/audits",
+    enabled: location === "/audits" && canViewAudits, // Solo cargar si está en la página Y tiene permisos
     select: (data: any) => data.data || [],
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
     refetchOnWindowFocus: false,
@@ -228,7 +232,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
   const { data: regulations = [] } = useQuery<Regulation[]>({
     queryKey: ["/api/regulations"],
-    enabled: location === "/regulations",
+    enabled: (location === "/regulations" || location === "/compliance-audits" || location === "/compliance-tests" || location === "/compliance-documents") && canViewCompliance, // Solo cargar si está en página de compliance Y tiene permisos
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
     refetchOnWindowFocus: false,
   });

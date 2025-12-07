@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -36,7 +37,8 @@ import { AuditSectionContainer } from "@/components/audit-sections";
 import { getStatusColor, getStatusText, getTypeText } from "@/utils/audit-helpers";
 
 export default function Audits() {
-  const { hasPermission } = usePermissions();
+  const { hasPermission, canViewSection, isLoading: permissionsLoading } = usePermissions();
+  const canViewAudits = canViewSection("audits");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -273,8 +275,24 @@ export default function Audits() {
   }, [editingAudit, form]);
 
 
+  // Si no tiene permisos, mostrar mensaje sin cargar datos (aunque el guard debería prevenir esto)
+  if (!permissionsLoading && !canViewAudits) {
+    return (
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Acceso denegado</AlertTitle>
+          <AlertDescription>
+            No tienes permisos para acceder a la sección de Auditorías.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
   const { data: audits = [], isLoading } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
+    enabled: canViewAudits, // Solo ejecutar si tiene permisos
     staleTime: 0, // Asegurar que siempre se refresquen los datos
     refetchOnMount: "always", // Siempre refetch al montar el componente
     refetchOnWindowFocus: true, // Refetch cuando la ventana recupera el foco
@@ -301,30 +319,34 @@ export default function Audits() {
     queryKey: ["/api/user-roles"],
   });
 
-  // Regulations for compliance audits
+  // Regulations for compliance audits - solo cargar si tiene permisos
   const { data: regulations = [] } = useQuery<any[]>({
     queryKey: ["/api/regulations"],
+    enabled: canViewAudits, // Solo ejecutar si tiene permisos
   });
 
-  // Query para obtener compromisos de auditoría (actions con origin: 'audit')
+  // Query para obtener compromisos de auditoría (actions con origin: 'audit') - solo si tiene permisos
   const { data: auditCommitments = [] } = useQuery<Action[]>({
     queryKey: ["/api/actions", { origin: "audit" }],
+    enabled: canViewAudits, // Solo ejecutar si tiene permisos
   });
 
-  // Query para obtener hallazgos de auditoría para crear compromisos
+  // Query para obtener hallazgos de auditoría para crear compromisos - solo si tiene permisos
   const { data: auditFindings = [] } = useQuery<AuditFinding[]>({
     queryKey: ["/api/audit-findings"],
+    enabled: canViewAudits, // Solo ejecutar si tiene permisos
   });
 
   // Watch for regulation selection to load controls
   const selectedRegulationId = form.watch("regulationId");
   const { data: regulationControls = [] } = useQuery<any[]>({
     queryKey: ["/api/regulations", selectedRegulationId, "controls"],
-    enabled: !!selectedRegulationId && selectedRegulationId !== "",
+    enabled: canViewAudits && !!selectedRegulationId && selectedRegulationId !== "", // Solo si tiene permisos Y hay regulation seleccionada
   });
 
   const { data: auditPlans = [] } = useQuery<AuditPlan[]>({
     queryKey: ["/api/audit-plans"],
+    enabled: canViewAudits, // Solo ejecutar si tiene permisos
   });
 
   const { data: planItems = [] } = useQuery<AuditPlanItemWithDetails[]>({

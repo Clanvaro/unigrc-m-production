@@ -112,6 +112,8 @@ export function usePermissions() {
       actions: ["view_action_plans", "view_all"],
       reports: ["view_reports", "view_all"],
       validation: ["validate_risks", "view_all"],
+      audits: ["view_all", "manage_audits"], // Auditorías requieren view_all o manage_audits
+      compliance: ["view_all"], // Cumplimiento requiere view_all
       config: ["manage_users", "manage_roles", "view_users", "view_roles", "view_all"],
       users: ["manage_users", "view_users", "create_users", "edit_users", "view_all"],
       roles: ["manage_roles", "view_roles", "create_roles", "edit_roles", "view_all"],

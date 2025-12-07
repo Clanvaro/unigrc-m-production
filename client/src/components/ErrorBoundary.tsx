@@ -64,8 +64,14 @@ export class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
-      // Check if it's a module loading error
-      const isModuleError = this.state.error?.message?.includes('Failed to fetch dynamically imported module') ||
+      // Check if it's a module loading error (including 404 errors)
+      const isModule404Error = this.state.error?.message?.includes('Module not found') ||
+                               this.state.error?.message?.includes('404') ||
+                               (this.state.error?.message?.includes('Failed to fetch dynamically imported module') &&
+                                this.state.error?.message?.includes('not found'));
+      
+      const isModuleError = isModule404Error ||
+                           this.state.error?.message?.includes('Failed to fetch dynamically imported module') ||
                            this.state.error?.message?.includes('Loading chunk') ||
                            this.state.error?.message?.includes('Loading CSS chunk');
 
@@ -74,13 +80,15 @@ export class ErrorBoundary extends Component<Props, State> {
           <Alert variant="destructive" className="max-w-2xl">
             <AlertTriangle className="h-5 w-5" />
             <AlertTitle className="text-lg font-semibold mb-2">
-              {isModuleError ? 'Error al cargar el módulo' : 'Algo salió mal'}
+              {isModule404Error ? 'Módulo no encontrado' : isModuleError ? 'Error al cargar el módulo' : 'Algo salió mal'}
             </AlertTitle>
             <AlertDescription className="space-y-4">
               <p className="text-sm">
-                {isModuleError 
-                  ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red o a que el archivo no está disponible. Por favor, recarga la página.'
-                  : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
+                {isModule404Error
+                  ? 'El módulo solicitado no está disponible. Esto puede indicar un problema con el build o el deployment. Por favor, recarga la página o contacta al administrador si el problema persiste.'
+                  : isModuleError 
+                    ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red temporal. Por favor, recarga la página.'
+                    : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
               </p>
               
               {process.env.NODE_ENV === 'development' && this.state.error && (

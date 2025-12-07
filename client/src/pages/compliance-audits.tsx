@@ -21,11 +21,15 @@ import {
 import { Plus, Search, Calendar, Users, Clock, FileText, AlertTriangle, Edit, Trash2, Play, CheckCircle, Shield, Eye } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/usePermissions";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { Audit, User } from "@shared/schema";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 
 export default function ComplianceAudits() {
+  const { canViewSection, isLoading: permissionsLoading } = usePermissions();
+  const canViewCompliance = canViewSection("compliance");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showAuditDialog, setShowAuditDialog] = useState(false);
@@ -123,46 +127,69 @@ export default function ComplianceAudits() {
     }
   }, [editingAudit, form]);
 
-  // Data queries
+  // Si no tiene permisos, mostrar mensaje sin cargar datos (aunque el guard debería prevenir esto)
+  if (!permissionsLoading && !canViewCompliance) {
+    return (
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Acceso denegado</AlertTitle>
+          <AlertDescription>
+            No tienes permisos para acceder a la sección de Cumplimiento.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  // Data queries - solo ejecutar si tiene permisos
   const { data: audits = [], isLoading } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
     staleTime: 0,
     select: (data: any) => data.data || []
   });
 
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: roles = [] } = useQuery({
     queryKey: ["/api/roles"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: userRoles = [] } = useQuery({
     queryKey: ["/api/user-roles"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: regulations = [] } = useQuery({
     queryKey: ["/api/regulations"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: macroprocesos = [] } = useQuery({
     queryKey: ["/api/macroprocesos"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: processes = [] } = useQuery({
     queryKey: ["/api/processes"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   const { data: subprocesos = [] } = useQuery({
     queryKey: ["/api/subprocesos"],
+    enabled: canViewCompliance, // Solo ejecutar si tiene permisos
   });
 
   // Get selected regulation controls
   const selectedRegulationId = form.watch("regulationId");
   const { data: regulationControls = [] } = useQuery({
     queryKey: ["/api/regulations", selectedRegulationId, "controls"],
-    enabled: !!selectedRegulationId,
+    enabled: canViewCompliance && !!selectedRegulationId, // Solo si tiene permisos Y hay regulation seleccionada
   });
 
   // Filter audits to show only compliance audits

@@ -1,4 +1,4 @@
-import { Switch, Route, useLocation, Redirect } from "wouter";
+import { Switch, Route, useLocation, Redirect, Navigate } from "wouter";
 import { useState, Suspense, useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import AIAssistantLazy from "@/components/ai-assistant-lazy";
 import { AuthBoundary } from "@/components/AuthBoundary";
 import { useAuth } from "@/hooks/useAuth";
 import { lazyWithRetry } from "@/lib/lazyWithRetry";
+import { usePermissions } from "@/hooks/usePermissions";
 
 // Silence harmless browser extension and message port errors (safe, non-critical errors)
 if (typeof window !== "undefined") {
@@ -187,6 +188,60 @@ function PlatformAdminRolesGuarded() {
   return <PlatformAdminGuard><Suspense fallback={<PageLoader />}><PlatformAdminRoles /></Suspense></PlatformAdminGuard>;
 }
 
+// Audit Guard - only allows access to users with audit permissions
+function AuditGuard({ children }: { children: React.ReactNode }) {
+  const { canViewSection, isLoading } = usePermissions();
+  const [, setLocation] = useLocation();
+
+  // Redirect users without permissions using useEffect to avoid state updates during render
+  useEffect(() => {
+    if (!isLoading && !canViewSection("audits")) {
+      console.log("[AuditGuard] User doesn't have audit permissions, redirecting to /no-access");
+      setLocation("/no-access");
+    }
+  }, [isLoading, canViewSection, setLocation]);
+
+  // Show loading state while permissions are being checked
+  if (isLoading) {
+    return <PageLoader />;
+  }
+
+  // Once loaded, only render if user has audit permissions
+  if (!canViewSection("audits")) {
+    return <PageLoader />;
+  }
+
+  // User has audit permissions - allow access
+  return <>{children}</>;
+}
+
+// Compliance Guard - only allows access to users with compliance permissions
+function ComplianceGuard({ children }: { children: React.ReactNode }) {
+  const { canViewSection, isLoading } = usePermissions();
+  const [, setLocation] = useLocation();
+
+  // Redirect users without permissions using useEffect to avoid state updates during render
+  useEffect(() => {
+    if (!isLoading && !canViewSection("compliance")) {
+      console.log("[ComplianceGuard] User doesn't have compliance permissions, redirecting to /no-access");
+      setLocation("/no-access");
+    }
+  }, [isLoading, canViewSection, setLocation]);
+
+  // Show loading state while permissions are being checked
+  if (isLoading) {
+    return <PageLoader />;
+  }
+
+  // Once loaded, only render if user has compliance permissions
+  if (!canViewSection("compliance")) {
+    return <PageLoader />;
+  }
+
+  // User has compliance permissions - allow access
+  return <>{children}</>;
+}
+
 // Protected routes with sidebar/header
 function ProtectedRouter() {
   return (
@@ -209,24 +264,26 @@ function ProtectedRouter() {
       <Route path="/manual" component={Manual} />
       <Route path="/manual/shortcuts" component={Shortcuts} />
       <Route path="/trash" component={Trash} />
-      <Route path="/audits" component={Audits} />
-      <Route path="/audits/:auditId" component={AuditDetail} />
-      <Route path="/audit-tests" component={AuditTests} />
-      <Route path="/audit-test/:id" component={AuditTestDetails} />
-      <Route path="/audits/:auditId/create-test" component={AuditTestManual} />
-      <Route path="/audit-plan-list" component={AuditPlanList} />
-      <Route path="/audit-plan-wizard" component={AuditPlanWizard} />
-      <Route path="/audit-findings" component={AuditFindings} />
-      <Route path="/audit-reports" component={AuditReports} />
+      {/* Rutas de Auditoría - Protegidas con AuditGuard */}
+      <Route path="/audits" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><Audits /></Suspense></AuditGuard>} />
+      <Route path="/audits/:auditId" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditDetail /></Suspense></AuditGuard>} />
+      <Route path="/audit-tests" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditTests /></Suspense></AuditGuard>} />
+      <Route path="/audit-test/:id" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditTestDetails /></Suspense></AuditGuard>} />
+      <Route path="/audits/:auditId/create-test" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditTestManual /></Suspense></AuditGuard>} />
+      <Route path="/audit-plan-list" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditPlanList /></Suspense></AuditGuard>} />
+      <Route path="/audit-plan-wizard" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditPlanWizard /></Suspense></AuditGuard>} />
+      <Route path="/audit-findings" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditFindings /></Suspense></AuditGuard>} />
+      <Route path="/audit-reports" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditReports /></Suspense></AuditGuard>} />
       <Route path="/team" component={Team} />
       <Route path="/team/members" component={TeamMembers} />
       <Route path="/team/roles" component={TeamRoles} />
       <Route path="/team/availability" component={TeamAvailability} />
-      <Route path="/regulations" component={Regulations} />
-      <Route path="/compliance-audits" component={ComplianceAudits} />
-      <Route path="/compliance-tests" component={ComplianceTests} />
-      <Route path="/compliance-documents" component={ComplianceDocuments} />
-      <Route path="/compliance-officers" component={ComplianceOfficers} />
+      {/* Rutas de Cumplimiento - Protegidas con ComplianceGuard */}
+      <Route path="/regulations" component={() => <ComplianceGuard><Suspense fallback={<PageLoader />}><Regulations /></Suspense></ComplianceGuard>} />
+      <Route path="/compliance-audits" component={() => <ComplianceGuard><Suspense fallback={<PageLoader />}><ComplianceAudits /></Suspense></ComplianceGuard>} />
+      <Route path="/compliance-tests" component={() => <ComplianceGuard><Suspense fallback={<PageLoader />}><ComplianceTests /></Suspense></ComplianceGuard>} />
+      <Route path="/compliance-documents" component={() => <ComplianceGuard><Suspense fallback={<PageLoader />}><ComplianceDocuments /></Suspense></ComplianceGuard>} />
+      <Route path="/compliance-officers" component={() => <ComplianceGuard><Suspense fallback={<PageLoader />}><ComplianceOfficers /></Suspense></ComplianceGuard>} />
       <Route path="/setup-wizard" component={SetupWizard} />
       <Route path="/config" component={Config} />
       <Route path="/config/risks" component={RiskConfig} />
