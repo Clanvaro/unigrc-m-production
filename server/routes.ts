@@ -5792,6 +5792,117 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // OPTIMIZED: Single endpoint for validation counts (always needed for summary cards)
+  // Uses direct SQL COUNT queries for maximum performance
+  app.get("/api/validation/counts", isAuthenticated, async (req, res) => {
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const cacheKey = `validation:counts:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try cache first (30s TTL - counts change infrequently)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+
+      if (!db) {
+        return res.status(500).json({ message: "Database not available" });
+      }
+
+      const startTime = Date.now();
+
+      // Get counts in parallel using direct SQL COUNT queries (fastest approach)
+      // IMPORTANT: Filter out deleted risks by joining with risks table
+      const [risksNotifiedCount, risksNotNotifiedCount, controlsNotifiedCount, controlsNotNotifiedCount, actionPlansNotifiedCount, actionPlansNotNotifiedCount] = await Promise.all([
+        // Risks notified (pending_validation + notificationSent = true + risk not deleted)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(riskProcessLinks)
+          .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+          .where(and(
+            eq(riskProcessLinks.validationStatus, 'pending_validation'),
+            eq(riskProcessLinks.notificationSent, true),
+            isNull(risks.deletedAt)
+          )).then(r => r[0]?.count || 0),
+        
+        // Risks not notified (pending_validation + notificationSent = false + risk not deleted)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(riskProcessLinks)
+          .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+          .where(and(
+            eq(riskProcessLinks.validationStatus, 'pending_validation'),
+            eq(riskProcessLinks.notificationSent, false),
+            isNull(risks.deletedAt)
+          )).then(r => r[0]?.count || 0),
+        
+        // Controls notified (pending_validation + notifiedAt IS NOT NULL)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(controls)
+          .where(and(
+            isNull(controls.deletedAt),
+            eq(controls.validationStatus, 'pending_validation'),
+            isNotNull(controls.notifiedAt)
+          )).then(r => r[0]?.count || 0),
+        
+        // Controls not notified (pending_validation + notifiedAt IS NULL)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(controls)
+          .where(and(
+            isNull(controls.deletedAt),
+            or(
+              isNull(controls.validationStatus),
+              and(
+                eq(controls.validationStatus, 'pending_validation'),
+                isNull(controls.notifiedAt)
+              )
+            )
+          )).then(r => r[0]?.count || 0),
+        
+        // Action plans notified (pending_validation + notifiedAt IS NOT NULL)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(actions)
+          .where(and(
+            isNull(actions.deletedAt),
+            eq(actions.validationStatus, 'pending_validation'),
+            isNotNull(actions.notifiedAt)
+          )).then(r => r[0]?.count || 0),
+        
+        // Action plans not notified (pending_validation + notifiedAt IS NULL)
+        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(actions)
+          .where(and(
+            isNull(actions.deletedAt),
+            eq(actions.validationStatus, 'pending_validation'),
+            isNull(actions.notifiedAt)
+          )).then(r => r[0]?.count || 0),
+      ]);
+
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms`);
+
+      const response = {
+        risks: {
+          notified: risksNotifiedCount,
+          notNotified: risksNotNotifiedCount
+        },
+        controls: {
+          notified: controlsNotifiedCount,
+          notNotified: controlsNotNotifiedCount
+        },
+        actionPlans: {
+          notified: actionPlansNotifiedCount,
+          notNotified: actionPlansNotNotifiedCount
+        }
+      };
+
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, response, 30);
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching validation counts:", error);
+      res.status(500).json({ message: "Failed to fetch validation counts" });
+    }
+  });
+
   // Get not-notified risk-process links (pending_validation + notificationSent = false) with pagination
   // OPTIMIZED: Uses DB-level LIMIT/OFFSET and distributed cache (Nov 28, 2025)
   app.get("/api/risk-processes/validation/not-notified/list", noCacheMiddleware, isAuthenticated, async (req, res) => {

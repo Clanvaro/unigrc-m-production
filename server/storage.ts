@@ -20734,11 +20734,14 @@ export class DatabaseStorage extends MemStorage {
     offset: number = 0
   ): Promise<{ data: RiskProcessLinkWithDetails[], total: number }> {
     // First, get total count (fast with index)
+    // IMPORTANT: Filter out deleted risks by joining with risks table
     const countResult = await db.select({ count: sql<number>`cast(count(*) as integer)` })
       .from(riskProcessLinks)
+      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
       .where(and(
         eq(riskProcessLinks.validationStatus, 'pending_validation'),
-        eq(riskProcessLinks.notificationSent, notified)
+        eq(riskProcessLinks.notificationSent, notified),
+        isNull(risks.deletedAt)
       ));
     const total = countResult[0]?.count || 0;
 
@@ -20772,7 +20775,8 @@ export class DatabaseStorage extends MemStorage {
       .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
       .where(and(
         eq(riskProcessLinks.validationStatus, 'pending_validation'),
-        eq(riskProcessLinks.notificationSent, notified)
+        eq(riskProcessLinks.notificationSent, notified),
+        isNull(risks.deletedAt)
       ))
       .orderBy(riskProcessLinks.createdAt)
       .limit(limit)

@@ -252,6 +252,19 @@ export default function RiskValidationPage() {
     }));
   };
 
+  // OPTIMIZED: Always fetch validation counts for summary cards (not tab-dependent)
+  const { data: validationCounts } = useQuery<{
+    risks: { notified: number; notNotified: number };
+    controls: { notified: number; notNotified: number };
+    actionPlans: { notified: number; notNotified: number };
+  }>({
+    queryKey: ["/api/validation/counts"],
+    staleTime: 30000, // 30 seconds - matches server cache
+    refetchOnMount: true, // Refetch to get latest counts when page loads
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
+  });
+
   // Risk-process-links notification status queries with pagination
   // OPTIMIZATION: Only fetch when risks tab is active + cache optimization
   const { data: notifiedRiskProcessLinksResponse } = useQuery<{ data: any[], pagination: { total: number, limit: number, offset: number } }>({
@@ -276,7 +289,12 @@ export default function RiskValidationPage() {
   });
 
   const notNotifiedRiskProcessLinks = notNotifiedRiskProcessLinksResponse?.data || [];
-  const notNotifiedRisksPaginationInfo = notNotifiedRiskProcessLinksResponse?.pagination;
+  // Use counts from dedicated endpoint if available, fallback to pagination info
+  const notNotifiedRisksPaginationInfo = notNotifiedRiskProcessLinksResponse?.pagination || {
+    total: validationCounts?.risks.notNotified || 0,
+    limit: notNotifiedRisksPagination.limit,
+    offset: notNotifiedRisksPagination.offset
+  };
 
   // Control validation queries with pagination
   // OPTIMIZATION: Only fetch when controls tab is active + cache optimization
@@ -1915,7 +1933,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold mb-1" data-testid="stat-notified-risks">
-                  {notifiedRisksPaginationInfo?.total || 0}
+                  {validationCounts?.risks.notified ?? notifiedRisksPaginationInfo?.total ?? 0}
                 </div>
                 <p className="text-xs text-muted-foreground">Pendiente Respuesta</p>
               </CardContent>
@@ -1930,7 +1948,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold mb-1" data-testid="stat-not-notified-risks">
-                  {notNotifiedRisksPaginationInfo?.total || 0}
+                  {validationCounts?.risks.notNotified ?? notNotifiedRisksPaginationInfo?.total ?? 0}
                 </div>
                 <p className="text-xs text-muted-foreground">Por Enviar</p>
               </CardContent>
@@ -2932,7 +2950,7 @@ export default function RiskValidationPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold" data-testid="stat-control-notified">
-                      {notifiedControlsPaginationInfo?.total || 0}
+                      {validationCounts?.controls.notified ?? notifiedControlsPaginationInfo?.total ?? 0}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
                       Pendiente Respuesta
@@ -2950,7 +2968,7 @@ export default function RiskValidationPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold" data-testid="stat-control-not-notified">
-                      {notNotifiedControlsPaginationInfo?.total || 0}
+                      {validationCounts?.controls.notNotified ?? notNotifiedControlsPaginationInfo?.total ?? 0}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
                       Por Enviar
@@ -3792,7 +3810,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold" data-testid="stat-action-plan-notified">
-                  {notifiedActionPlansPaginationInfo?.total || 0}
+                  {validationCounts?.actionPlans.notified ?? notifiedActionPlansPaginationInfo?.total ?? 0}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   Pendiente Respuesta
@@ -3810,7 +3828,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold" data-testid="stat-action-plan-not-notified">
-                  {notNotifiedActionPlansPaginationInfo?.total || 0}
+                  {validationCounts?.actionPlans.notNotified ?? notNotifiedActionPlansPaginationInfo?.total ?? 0}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   Por Enviar
