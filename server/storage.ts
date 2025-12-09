@@ -5452,9 +5452,9 @@ export class MemStorage implements IStorage {
       // Determine risk level text based on residual risk
       const level = this.getRiskLevel(aggregatedResidualRisk, ranges);
       let riskLevel = 'Bajo';
-      if (level === 2) riskLevel = 'Medio';
-      else if (level === 3) riskLevel = 'Alto';
-      else if (level === 4) riskLevel = 'Crítico';
+      if (level === 'medium') riskLevel = 'Medio';
+      else if (level === 'high') riskLevel = 'Alto';
+      else if (level === 'critical') riskLevel = 'Crítico';
 
       return {
         validatedRiskCount: entityRisks.length,
