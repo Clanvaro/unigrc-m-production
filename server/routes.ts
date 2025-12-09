@@ -3002,7 +3002,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/lookups/risk-categories", isAuthenticated, async (req, res) => {
     try {
       const cacheKey = `lookups:risk-categories:single-tenant`;
-      const cached = await distributedCache.getOrSet(
+      // Use getFromTieredCache for consistency with other lookups and better performance
+      const cached = await getFromTieredCache(
         cacheKey,
         async () => {
           const data = await storage.getRiskCategories();
@@ -3012,7 +3013,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             color: c.color
           }));
         },
-        300 // 5 minutes
+        300 // 5 minutes - risk categories change infrequently
       );
       res.json(cached);
     } catch (error) {
@@ -14022,21 +14023,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Users - with 60s distributed cache (admin-only endpoint)
+  // Users - with two-tier cache (L1 memory + L2 Redis) for better performance
   app.get("/api/users", noCacheMiddleware, isAuthenticated, requireAnyPermission(["view_users", "users:manage", "manage_users"]), async (req, res) => {
     try {
-      // Try distributed cache first (60s TTL)
+      // Use two-tier cache: L1 memory (<1ms) + L2 Redis (~50ms) for optimal performance
+      // TTL increased to 300s (5 min) as users don't change frequently
       const cacheKey = `users:all`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        return res.json(cached);
-      }
-
-      const users = await storage.getUsers();
-      console.log(`✅ Successfully fetched ${users.length} users`);
-
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, users, 60);
+      const users = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const fetchedUsers = await storage.getUsers();
+          console.log(`✅ Successfully fetched ${fetchedUsers.length} users`);
+          return fetchedUsers;
+        },
+        300 // 5 minutes - users change infrequently
+      );
 
       res.json(users);
     } catch (error) {
@@ -14044,10 +14045,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get users by role (optimized single query)
+  // Get users by role (optimized single query with cache)
   app.get("/api/users/by-role/:roleName", isAuthenticated, requirePermission("view_all"), async (req, res) => {
     try {
-      const users = await storage.getUsersByRole(req.params.roleName);
+      const roleName = req.params.roleName;
+      // Use two-tier cache for better performance
+      // TTL 60s - role assignments change more frequently than user list
+      const cacheKey = `users:by-role:${roleName}`;
+      const users = await getFromTieredCache(
+        cacheKey,
+        async () => await storage.getUsersByRole(roleName),
+        60 // 60 seconds - role assignments change more frequently
+      );
       res.json(users);
     } catch (error) {
       console.error(`Error fetching users by role ${req.params.roleName}:`, error);
@@ -22376,26 +22385,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn("Could not resolve tenant (single-tenant mode?):", error);
       }
 
-      // Use cache with 5 min TTL for process owners (low mutation frequency)
+      // Use two-tier cache (L1 memory + L2 Redis) for better performance
+      // TTL 5 min - process owners change infrequently
       const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        const duration = Date.now() - startTime;
-        console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
-        return res.json(cached);
-      }
-
-      const queryStart = Date.now();
-      const processOwners = await storage.getProcessOwners();
-      const queryDuration = Date.now() - queryStart;
-      console.log(`📝 [API] Fetching process owners. Count: ${processOwners.length}, Query took: ${queryDuration}ms`);
-
-      // Cache for 5 minutes
-      await distributedCache.set(cacheKey, processOwners, 300);
+      const processOwners = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const queryStart = Date.now();
+          const owners = await storage.getProcessOwners();
+          const queryDuration = Date.now() - queryStart;
+          console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
+          return owners;
+        },
+        300 // 5 minutes - process owners change infrequently
+      );
 
       const duration = Date.now() - startTime;
       if (duration > 1000) {
         console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
+      } else if (duration < 10) {
+        console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
       }
 
       res.json(processOwners);
