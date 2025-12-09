@@ -17343,17 +17343,54 @@ export class DatabaseStorage extends MemStorage {
 
   async getExecutorDashboardMetrics(userId: string) {
     try {
-      // Get all tests assigned to this executor
-      const assignedTests = await db.select()
-        .from(auditTests)
-        .where(eq(auditTests.executorId, userId));
+      // Calculate dates upfront for parallel queries
+      const now = new Date();
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // Execute all independent queries in parallel for better performance
+      const [
+        assignedTests,
+        recentWorkLogs,
+        weeklyLogs,
+        monthlyLogs
+      ] = await Promise.all([
+        db.select()
+          .from(auditTests)
+          .where(eq(auditTests.executorId, userId)),
+        db.select()
+          .from(auditTestWorkLogs)
+          .where(
+            and(
+              eq(auditTestWorkLogs.createdBy, userId),
+              sql`${auditTestWorkLogs.createdAt} >= ${oneWeekAgo}`
+            )
+          )
+          .orderBy(desc(auditTestWorkLogs.createdAt))
+          .limit(10),
+        db.select()
+          .from(auditTestWorkLogs)
+          .where(
+            and(
+              eq(auditTestWorkLogs.createdBy, userId),
+              sql`${auditTestWorkLogs.entryDate} >= ${oneWeekAgo}`
+            )
+          ),
+        db.select()
+          .from(auditTestWorkLogs)
+          .where(
+            and(
+              eq(auditTestWorkLogs.createdBy, userId),
+              sql`${auditTestWorkLogs.entryDate} >= ${oneMonthAgo}`
+            )
+          )
+      ]);
 
       const assignedTestsCount = assignedTests.length;
       const inProgressTests = assignedTests.filter(t => t.status === 'in_progress').length;
       const completedTests = assignedTests.filter(t => ['completed', 'approved'].includes(t.status)).length;
 
       // Calculate overdue tests
-      const now = new Date();
       const overdueTests = assignedTests.filter(t =>
         t.plannedEndDate && t.plannedEndDate < now &&
         !['completed', 'approved', 'cancelled'].includes(t.status)
@@ -17378,19 +17415,6 @@ export class DatabaseStorage extends MemStorage {
         .sort((a, b) => a.deadline.getTime() - b.deadline.getTime())
         .slice(0, 5);
 
-      // Get recent activity (work logs, status changes)
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const recentWorkLogs = await db.select()
-        .from(auditTestWorkLogs)
-        .where(
-          and(
-            eq(auditTestWorkLogs.createdBy, userId),
-            sql`${auditTestWorkLogs.createdAt} >= ${oneWeekAgo}`
-          )
-        )
-        .orderBy(desc(auditTestWorkLogs.createdAt))
-        .limit(10);
-
       const recentActivity = recentWorkLogs.map(log => ({
         id: log.id,
         type: 'work_log',
@@ -17398,27 +17422,6 @@ export class DatabaseStorage extends MemStorage {
         timestamp: log.createdAt || new Date(),
         testId: log.auditTestId
       }));
-
-      // Calculate time worked (weekly and monthly)
-      const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-      const weeklyLogs = await db.select()
-        .from(auditTestWorkLogs)
-        .where(
-          and(
-            eq(auditTestWorkLogs.createdBy, userId),
-            sql`${auditTestWorkLogs.entryDate} >= ${oneWeekAgo}`
-          )
-        );
-
-      const monthlyLogs = await db.select()
-        .from(auditTestWorkLogs)
-        .where(
-          and(
-            eq(auditTestWorkLogs.createdBy, userId),
-            sql`${auditTestWorkLogs.entryDate} >= ${oneMonthAgo}`
-          )
-        );
 
       const weeklyHours = weeklyLogs.reduce((sum, log) =>
         sum + parseFloat(log.hoursWorked.toString()), 0

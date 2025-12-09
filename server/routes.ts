@@ -14862,8 +14862,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if user can view this activity feed
       if (userId !== authenticatedUserId) {
-        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_assignments') ||
-          await storage.hasPermission(authenticatedUserId, 'view_all');
+        // Execute permission checks in parallel for better performance
+        const [hasViewAuditAssignments, hasViewAll] = await Promise.all([
+          storage.hasPermission(authenticatedUserId, 'view_audit_assignments'),
+          storage.hasPermission(authenticatedUserId, 'view_all')
+        ]);
+        const hasViewPermission = hasViewAuditAssignments || hasViewAll;
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view user activity" });
         }
@@ -14896,8 +14900,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if user can view performance trends
       if (userId && userId !== authenticatedUserId) {
-        const hasViewPermission = await storage.hasPermission(authenticatedUserId, 'view_audit_teams') ||
-          await storage.hasPermission(authenticatedUserId, 'view_all');
+        // Execute permission checks in parallel for better performance
+        const [hasViewAuditTeams, hasViewAll] = await Promise.all([
+          storage.hasPermission(authenticatedUserId, 'view_audit_teams'),
+          storage.hasPermission(authenticatedUserId, 'view_all')
+        ]);
+        const hasViewPermission = hasViewAuditTeams || hasViewAll;
         if (!hasViewPermission) {
           return res.status(403).json({ message: "Access denied: Cannot view performance trends" });
         }
@@ -14917,8 +14925,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const days = parseInt(req.query.days as string) || 30;
 
       // Generate trend data based on current stats (simulated evolution)
-      const currentStats = await storage.getDashboardStats();
-      const allRisks = await requireDb().select().from(risks);
+      // Execute both queries in parallel for better performance
+      const [currentStats, allRisksResult] = await Promise.all([
+        storage.getDashboardStats(),
+        requireDb().select().from(risks)
+      ]);
+      const allRisks = allRisksResult;
 
       // Calculate current organizational risk
       const currentOrgRisk = allRisks.length > 0
