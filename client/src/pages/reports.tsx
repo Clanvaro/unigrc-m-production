@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,35 +14,56 @@ export default function Reports() {
   const { toast } = useToast();
   
   // Use the with-details endpoint to get full risk information including process associations
-  const { data: risks = [], isLoading: risksLoading, isError: risksError } = useQuery<RiskWithProcess[]>({
+  const { data: risksData, isLoading: risksLoading, isError: risksError } = useQuery<RiskWithProcess[]>({
     queryKey: ["/api/risks-with-details"],
+    staleTime: 30000, // Cache for 30 seconds
+    refetchOnWindowFocus: false,
   });
 
   // Load catalogs to map IDs to names
-  const { data: macroprocesos = [] } = useQuery<any[]>({
+  const { data: macroprocesosData } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
+    staleTime: 300000, // Cache for 5 minutes (catalogs don't change often)
+    refetchOnWindowFocus: false,
   });
 
-  const { data: processes = [] } = useQuery<any[]>({
+  const { data: processesData } = useQuery<any[]>({
     queryKey: ["/api/processes"],
+    staleTime: 300000,
+    refetchOnWindowFocus: false,
   });
 
-  const { data: subprocesos = [] } = useQuery<any[]>({
+  const { data: subprocesosData } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
+    staleTime: 300000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: controlsResponse, isLoading: controlsLoading } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/controls"],
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
   });
-  const controls = controlsResponse?.data || [];
 
-  const { data: actionPlans = [], isLoading: actionPlansLoading } = useQuery<Action[]>({
+  const { data: actionPlansData, isLoading: actionPlansLoading } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: stats } = useQuery({
     queryKey: ["/api/dashboard/stats"],
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
   });
+
+  // Defensive array normalization - ensure we always have arrays even if queries fail
+  const risks: RiskWithProcess[] = Array.isArray(risksData) ? risksData : [];
+  const macroprocesos: any[] = Array.isArray(macroprocesosData) ? macroprocesosData : [];
+  const processes: any[] = Array.isArray(processesData) ? processesData : [];
+  const subprocesos: any[] = Array.isArray(subprocesosData) ? subprocesosData : [];
+  const controls: Control[] = Array.isArray(controlsResponse?.data) ? controlsResponse.data : [];
+  const actionPlans: Action[] = Array.isArray(actionPlansData) ? actionPlansData : [];
 
   if (risksLoading || controlsLoading || actionPlansLoading) {
     return <div className="p-6">Cargando reportes...</div>;
@@ -51,90 +73,140 @@ export default function Reports() {
     return <div className="p-6">Error al cargar riesgos. Por favor intenta de nuevo.</div>;
   }
 
-  // Create lookup maps for process names
-  const macroprocesosMap = new Map(macroprocesos.map((m: any) => [m.id, m.name || m.code || 'Sin nombre']));
-  const processesMap = new Map(processes.map((p: any) => [p.id, p.name || p.code || 'Sin nombre']));
-  const subprocesosMap = new Map(subprocesos.map((s: any) => [s.id, s.name || s.code || 'Sin nombre']));
+  // Create lookup maps for process names - with defensive checks
+  const macroprocesosMap = new Map(
+    Array.isArray(macroprocesos) 
+      ? macroprocesos.map((m: any) => [m?.id, m?.name || m?.code || 'Sin nombre'])
+      : []
+  );
+  const processesMap = new Map(
+    Array.isArray(processes)
+      ? processes.map((p: any) => [p?.id, p?.name || p?.code || 'Sin nombre'])
+      : []
+  );
+  const subprocesosMap = new Map(
+    Array.isArray(subprocesos)
+      ? subprocesos.map((s: any) => [s?.id, s?.name || s?.code || 'Sin nombre'])
+      : []
+  );
 
-  // Risk distribution data for charts
-  const riskDistributionData = [
-    { name: "Bajo", value: risks.filter((r) => r.inherentRisk <= 6).length, color: "#22c55e" },
-    { name: "Medio", value: risks.filter((r) => r.inherentRisk >= 7 && r.inherentRisk <= 12).length, color: "#eab308" },
-    { name: "Alto", value: risks.filter((r) => r.inherentRisk >= 13 && r.inherentRisk <= 19).length, color: "#f97316" },
-    { name: "Crítico", value: risks.filter((r) => r.inherentRisk >= 20).length, color: "#ef4444" },
-  ];
+  // Risk distribution data for charts - memoized for performance
+  const riskDistributionData = useMemo(() => {
+    if (!Array.isArray(risks)) return [];
+    try {
+      return [
+        { name: "Bajo", value: risks.filter((r) => r?.inherentRisk <= 6).length, color: "#22c55e" },
+        { name: "Medio", value: risks.filter((r) => r?.inherentRisk >= 7 && r?.inherentRisk <= 12).length, color: "#eab308" },
+        { name: "Alto", value: risks.filter((r) => r?.inherentRisk >= 13 && r?.inherentRisk <= 19).length, color: "#f97316" },
+        { name: "Crítico", value: risks.filter((r) => r?.inherentRisk >= 20).length, color: "#ef4444" },
+      ];
+    } catch (error) {
+      console.error("Error calculating risk distribution:", error);
+      return [];
+    }
+  }, [risks]);
 
   // Risks by process data - Group by macroproceso, process, or subproceso
-  // Map IDs to names using catalogs
-  const processCounts = new Map<string, { name: string; count: number }>();
-  
-  risks.forEach((risk: any) => {
-    // Check macroproceso level - use macroproceso object if available, otherwise map from ID
-    if (risk.macroproceso) {
-      const macroprocesoName = risk.macroproceso.name || macroprocesosMap.get(risk.macroproceso.id) || 'Sin nombre';
-      const macroprocesoId = risk.macroproceso.id || risk.macroprocesoId;
-      if (macroprocesoId) {
-        const existing = processCounts.get(macroprocesoId) || { name: macroprocesoName, count: 0 };
-        processCounts.set(macroprocesoId, { ...existing, count: existing.count + 1 });
-      }
-    } else if (risk.macroprocesoId) {
-      const macroprocesoName = macroprocesosMap.get(risk.macroprocesoId) || 'Sin nombre';
-      const existing = processCounts.get(risk.macroprocesoId) || { name: macroprocesoName, count: 0 };
-      processCounts.set(risk.macroprocesoId, { ...existing, count: existing.count + 1 });
-    }
+  // Map IDs to names using catalogs - memoized for performance
+  const risksByProcessData = useMemo(() => {
+    if (!Array.isArray(risks)) return [];
     
-    // Check process level - use process object if available, otherwise map from ID
-    if (risk.process) {
-      const processName = risk.process.name || processesMap.get(risk.process.id) || 'Sin nombre';
-      const processId = risk.process.id || risk.processId;
-      if (processId) {
-        const existing = processCounts.get(String(processId)) || { name: processName, count: 0 };
-        processCounts.set(String(processId), { ...existing, count: existing.count + 1 });
-      }
-    } else if (risk.processId) {
-      const processName = processesMap.get(risk.processId) || 'Sin nombre';
-      const existing = processCounts.get(String(risk.processId)) || { name: processName, count: 0 };
-      processCounts.set(String(risk.processId), { ...existing, count: existing.count + 1 });
+    try {
+      const processCounts = new Map<string, { name: string; count: number }>();
+      
+      risks.forEach((risk: any) => {
+        // Check macroproceso level - use macroproceso object if available, otherwise map from ID
+        if (risk?.macroproceso) {
+          const macroprocesoName = risk.macroproceso.name || macroprocesosMap.get(risk.macroproceso.id) || 'Sin nombre';
+          const macroprocesoId = risk.macroproceso.id || risk.macroprocesoId;
+          if (macroprocesoId) {
+            const existing = processCounts.get(macroprocesoId) || { name: macroprocesoName, count: 0 };
+            processCounts.set(macroprocesoId, { ...existing, count: existing.count + 1 });
+          }
+        } else if (risk?.macroprocesoId) {
+          const macroprocesoName = macroprocesosMap.get(risk.macroprocesoId) || 'Sin nombre';
+          const existing = processCounts.get(risk.macroprocesoId) || { name: macroprocesoName, count: 0 };
+          processCounts.set(risk.macroprocesoId, { ...existing, count: existing.count + 1 });
+        }
+        
+        // Check process level - use process object if available, otherwise map from ID
+        if (risk?.process) {
+          const processName = risk.process.name || processesMap.get(risk.process.id) || 'Sin nombre';
+          const processId = risk.process.id || risk.processId;
+          if (processId) {
+            const existing = processCounts.get(String(processId)) || { name: processName, count: 0 };
+            processCounts.set(String(processId), { ...existing, count: existing.count + 1 });
+          }
+        } else if (risk?.processId) {
+          const processName = processesMap.get(risk.processId) || 'Sin nombre';
+          const existing = processCounts.get(String(risk.processId)) || { name: processName, count: 0 };
+          processCounts.set(String(risk.processId), { ...existing, count: existing.count + 1 });
+        }
+        
+        // Check subproceso level - use subproceso object if available, otherwise map from ID
+        if (risk?.subproceso) {
+          const subprocesoName = risk.subproceso.name || subprocesosMap.get(risk.subproceso.id) || 'Sin nombre';
+          const subprocesoId = risk.subproceso.id || risk.subprocesoId;
+          if (subprocesoId) {
+            const existing = processCounts.get(subprocesoId) || { name: subprocesoName, count: 0 };
+            processCounts.set(subprocesoId, { ...existing, count: existing.count + 1 });
+          }
+        } else if (risk?.subprocesoId) {
+          const subprocesoName = subprocesosMap.get(risk.subprocesoId) || 'Sin nombre';
+          const existing = processCounts.get(risk.subprocesoId) || { name: subprocesoName, count: 0 };
+          processCounts.set(risk.subprocesoId, { ...existing, count: existing.count + 1 });
+        }
+      });
+      
+      return Array.from(processCounts.values())
+        .map(({ name, count }) => ({ name, risks: count }))
+        .filter((item) => item.risks > 0)
+        .sort((a, b) => b.risks - a.risks); // Sort by risk count (highest first)
+    } catch (error) {
+      console.error("Error calculating risks by process:", error);
+      return [];
     }
-    
-    // Check subproceso level - use subproceso object if available, otherwise map from ID
-    if (risk.subproceso) {
-      const subprocesoName = risk.subproceso.name || subprocesosMap.get(risk.subproceso.id) || 'Sin nombre';
-      const subprocesoId = risk.subproceso.id || risk.subprocesoId;
-      if (subprocesoId) {
-        const existing = processCounts.get(subprocesoId) || { name: subprocesoName, count: 0 };
-        processCounts.set(subprocesoId, { ...existing, count: existing.count + 1 });
-      }
-    } else if (risk.subprocesoId) {
-      const subprocesoName = subprocesosMap.get(risk.subprocesoId) || 'Sin nombre';
-      const existing = processCounts.get(risk.subprocesoId) || { name: subprocesoName, count: 0 };
-      processCounts.set(risk.subprocesoId, { ...existing, count: existing.count + 1 });
+  }, [risks, macroprocesosMap, processesMap, subprocesosMap]);
+
+  // Control effectiveness data - memoized for performance
+  const controlEffectivenessData = useMemo(() => {
+    if (!Array.isArray(controls)) return [];
+    try {
+      return [
+        { name: "Excelente (>80%)", value: controls.filter((c) => c?.effectiveness > 80).length, color: "#22c55e" },
+        { name: "Bueno (60-80%)", value: controls.filter((c) => c?.effectiveness >= 60 && c?.effectiveness <= 80).length, color: "#eab308" },
+        { name: "Regular (<60%)", value: controls.filter((c) => c?.effectiveness < 60).length, color: "#ef4444" },
+      ];
+    } catch (error) {
+      console.error("Error calculating control effectiveness:", error);
+      return [];
     }
-  });
-  
-  const risksByProcessData = Array.from(processCounts.values())
-    .map(({ name, count }) => ({ name, risks: count }))
-    .filter((item) => item.risks > 0)
-    .sort((a, b) => b.risks - a.risks); // Sort by risk count (highest first)
+  }, [controls]);
 
-  // Control effectiveness data
-  const controlEffectivenessData = [
-    { name: "Excelente (>80%)", value: controls.filter((c) => c.effectiveness > 80).length, color: "#22c55e" },
-    { name: "Bueno (60-80%)", value: controls.filter((c) => c.effectiveness >= 60 && c.effectiveness <= 80).length, color: "#eab308" },
-    { name: "Regular (<60%)", value: controls.filter((c) => c.effectiveness < 60).length, color: "#ef4444" },
-  ];
-
-  // Action plan status data
-  const actionPlanStatusData = [
-    { name: "Completados", value: actionPlans.filter((ap) => ap.status === "completed").length, color: "#22c55e" },
-    { name: "En Progreso", value: actionPlans.filter((ap) => ap.status === "in_progress").length, color: "#eab308" },
-    { name: "Pendientes", value: actionPlans.filter((ap) => ap.status === "pending").length, color: "#6b7280" },
-    { name: "Vencidos", value: actionPlans.filter((ap) => {
-      const dueDate = new Date(ap.dueDate || "");
-      const now = new Date();
-      return ap.status !== "completed" && dueDate < now;
-    }).length, color: "#ef4444" },
-  ];
+  // Action plan status data - memoized for performance
+  const actionPlanStatusData = useMemo(() => {
+    if (!Array.isArray(actionPlans)) return [];
+    try {
+      return [
+        { name: "Completados", value: actionPlans.filter((ap) => ap?.status === "completed").length, color: "#22c55e" },
+        { name: "En Progreso", value: actionPlans.filter((ap) => ap?.status === "in_progress").length, color: "#eab308" },
+        { name: "Pendientes", value: actionPlans.filter((ap) => ap?.status === "pending").length, color: "#6b7280" },
+        { name: "Vencidos", value: actionPlans.filter((ap) => {
+          if (!ap?.dueDate) return false;
+          try {
+            const dueDate = new Date(ap.dueDate);
+            const now = new Date();
+            return ap.status !== "completed" && dueDate < now;
+          } catch {
+            return false;
+          }
+        }).length, color: "#ef4444" },
+      ];
+    } catch (error) {
+      console.error("Error calculating action plan status:", error);
+      return [];
+    }
+  }, [actionPlans]);
 
   const handleExport = async (reportType: string) => {
     try {
@@ -302,7 +374,7 @@ export default function Reports() {
           <CardContent>
             <div className="text-2xl font-bold">{risks.length}</div>
             <p className="text-xs text-muted-foreground">
-              {risks.filter((r) => r.inherentRisk >= 20).length} críticos
+              {Array.isArray(risks) ? risks.filter((r) => r?.inherentRisk >= 20).length : 0} críticos
             </p>
           </CardContent>
         </Card>
@@ -326,7 +398,7 @@ export default function Reports() {
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{controls.filter((c: Control) => c.isActive).length}</div>
+            <div className="text-2xl font-bold">{Array.isArray(controls) ? controls.filter((c: Control) => c?.isActive).length : 0}</div>
             <p className="text-xs text-muted-foreground">
               {Math.round(controls.reduce((sum, c) => sum + c.effectiveness, 0) / Math.max(controls.length, 1))}% efectividad promedio
             </p>
@@ -341,7 +413,7 @@ export default function Reports() {
           <CardContent>
             <div className="text-2xl font-bold">{actionPlans.length}</div>
             <p className="text-xs text-muted-foreground">
-              {Math.round((actionPlans.filter((ap: ActionPlan) => ap.status === "completed").length / Math.max(actionPlans.length, 1)) * 100)}% completados
+              {Math.round((actionPlans.filter((ap: Action) => ap.status === "completed").length / Math.max(actionPlans.length, 1)) * 100)}% completados
             </p>
           </CardContent>
         </Card>
@@ -469,36 +541,45 @@ export default function Reports() {
             <div>
               <h4 className="font-semibold mb-2">Controles Menos Efectivos</h4>
               <div className="space-y-2">
-                {controls
-                  .filter((control) => control.effectiveness < 70)
-                  .slice(0, 5)
-                  .map((control) => (
-                    <div key={control.id} className="text-sm p-2 bg-orange-50 rounded">
-                      <p className="font-medium">{control.name}</p>
-                      <p className="text-xs text-muted-foreground">Efectividad: {control.effectiveness}%</p>
-                    </div>
-                  ))}
+                {Array.isArray(controls)
+                  ? controls
+                      .filter((control) => control?.effectiveness < 70)
+                      .slice(0, 5)
+                      .map((control) => (
+                        <div key={control.id} className="text-sm p-2 bg-orange-50 rounded">
+                          <p className="font-medium">{control.name}</p>
+                          <p className="text-xs text-muted-foreground">Efectividad: {control.effectiveness}%</p>
+                        </div>
+                      ))
+                  : null}
               </div>
             </div>
 
             <div>
               <h4 className="font-semibold mb-2">Planes de Acción Vencidos</h4>
               <div className="space-y-2">
-                {actionPlans
-                  .filter((plan) => {
-                    const dueDate = new Date(plan.dueDate || "");
-                    const now = new Date();
-                    return plan.status !== "completed" && dueDate < now;
-                  })
-                  .slice(0, 5)
-                  .map((plan) => (
-                    <div key={plan.id} className="text-sm p-2 bg-red-50 rounded">
-                      <p className="font-medium">{plan.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        Vencido: {plan.dueDate ? new Date(plan.dueDate).toLocaleDateString() : "Sin fecha"}
-                      </p>
-                    </div>
-                  ))}
+                {Array.isArray(actionPlans)
+                  ? actionPlans
+                      .filter((plan) => {
+                        if (!plan?.dueDate) return false;
+                        try {
+                          const dueDate = new Date(plan.dueDate);
+                          const now = new Date();
+                          return plan.status !== "completed" && dueDate < now;
+                        } catch {
+                          return false;
+                        }
+                      })
+                      .slice(0, 5)
+                      .map((plan) => (
+                        <div key={plan.id} className="text-sm p-2 bg-red-50 rounded">
+                          <p className="font-medium">{plan.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Vencido: {plan.dueDate ? new Date(plan.dueDate).toLocaleDateString() : "Sin fecha"}
+                          </p>
+                        </div>
+                      ))
+                  : null}
               </div>
             </div>
           </div>

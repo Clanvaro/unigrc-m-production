@@ -8311,9 +8311,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update control effectiveness after evaluation
   app.post("/api/controls/:controlId/complete-evaluation", isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    const controlId = req.params.controlId;
+    
     try {
-      const controlId = req.params.controlId;
-
       if (!controlId) {
         return res.status(400).json({ message: "Control ID is required" });
       }
@@ -8325,22 +8325,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tenantId = tenant?.tenantId;
       } catch (error) {
         // In single-tenant mode, tenant resolution may fail - continue without it
-        console.warn("Could not resolve tenant (single-tenant mode?):", error);
+        console.warn(`[WARN] /api/controls/${controlId}/complete-evaluation: Could not resolve tenant (single-tenant mode?):`, error);
       }
 
       // Verify control exists first
-      const control = await storage.getControl(controlId);
+      let control;
+      try {
+        control = await storage.getControl(controlId);
+      } catch (error) {
+        console.error(`[ERROR] /api/controls/${controlId}/complete-evaluation: Failed to get control:`, error);
+        return res.status(500).json({
+          message: "Failed to retrieve control",
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      }
+
       if (!control) {
         return res.status(404).json({ message: "Control not found" });
       }
 
       // Calculate effectiveness based on evaluations
-      const effectiveness = await storage.calculateControlEffectiveness(controlId);
+      let effectiveness: number;
+      try {
+        effectiveness = await storage.calculateControlEffectiveness(controlId);
+      } catch (error) {
+        console.error(`[ERROR] /api/controls/${controlId}/complete-evaluation: Failed to calculate effectiveness:`, error);
+        console.error(`[ERROR] Stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        return res.status(500).json({
+          message: "Failed to calculate control effectiveness",
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      }
 
       // Update the control with calculated effectiveness
-      const updatedControl = await storage.updateControl(controlId, {
-        effectiveness
-      }, tenantId);
+      let updatedControl;
+      try {
+        updatedControl = await storage.updateControl(controlId, {
+          effectiveness
+        }, tenantId);
+      } catch (error) {
+        console.error(`[ERROR] /api/controls/${controlId}/complete-evaluation: Failed to update control:`, error);
+        console.error(`[ERROR] Stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        return res.status(500).json({
+          message: "Failed to update control",
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      }
 
       if (!updatedControl) {
         return res.status(404).json({ message: "Control not found or could not be updated" });
@@ -8355,7 +8385,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[ERROR] /api/controls/${req.params.controlId}/complete-evaluation failed after ${duration}ms:`, error);
+      console.error(`[ERROR] /api/controls/${controlId}/complete-evaluation failed after ${duration}ms:`, error);
+      console.error(`[ERROR] Stack:`, error instanceof Error ? error.stack : 'No stack trace');
+      console.error(`[ERROR] Request body:`, JSON.stringify(req.body, null, 2));
 
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
@@ -8363,7 +8395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Provide more specific error messages
       if (error instanceof Error) {
-        if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+        if (error.message.includes('timeout') || error.message.includes('Connection terminated') || error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT')) {
           return res.status(500).json({
             message: "Database connection timeout. Please try again.",
             error: "TIMEOUT"
