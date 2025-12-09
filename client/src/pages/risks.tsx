@@ -224,6 +224,7 @@ export default function Risks() {
       subprocesos: any[];
       processOwners: any[];
       processGerencias: any[];
+      riskCategories: any[];
     };
     _meta: {
       fetchedAt: string;
@@ -274,7 +275,7 @@ export default function Risks() {
   const subprocesos = bootstrapData?.catalogs?.subprocesos || [];
   const processes = bootstrapData?.catalogs?.processes || [];
   const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
-  const riskCategories: any[] = []; // Not included in bootstrap, loaded on demand if needed
+  const riskCategories = bootstrapData?.catalogs?.riskCategories || [];
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
 
   // Process owners from bootstrap (for basic display)

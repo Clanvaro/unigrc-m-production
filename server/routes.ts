@@ -2071,13 +2071,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // If catalogs not cached, fetch them in parallel with risks
       const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
-        const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations] = await Promise.all([
+        const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategories] = await Promise.all([
           storage.getGerencias(),
           storage.getMacroprocesos(),
           storage.getProcesses(),
           storage.getSubprocesosWithOwners(),
           storage.getProcessOwners(),
-          storage.getAllProcessGerenciasRelations()
+          storage.getAllProcessGerenciasRelations(),
+          storage.getRiskCategories()
         ]);
 
         // Filter out deleted records and map to minimal fields
@@ -2097,7 +2098,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           processOwners: processOwners.map((po: any) => ({
             id: po.id, name: po.name, position: po.position
           })),
-          processGerencias: processGerenciasRelations
+          processGerencias: processGerenciasRelations,
+          riskCategories: riskCategories.filter((c: any) => c.isActive).map((c: any) => ({
+            id: c.id, name: c.name, color: c.color || "#6b7280"
+          }))
         };
 
         // Cache catalogs for 5 minutes

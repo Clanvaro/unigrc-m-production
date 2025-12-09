@@ -577,21 +577,26 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           };
         });
 
-        // OPTIMIZED: Update bootstrap query optimistically for immediate table update
-        queryClient.setQueryData(["/api/risks/bootstrap"], (old: any) => {
-          if (!old?.risks?.data) return old;
-          return {
-            ...old,
-            risks: {
-              ...old.risks,
-              data: [...old.risks.data, newRisk],
-              pagination: {
-                ...old.risks.pagination,
-                total: (old.risks.pagination?.total || 0) + 1
+        // OPTIMIZED: Update ALL bootstrap queries optimistically (regardless of params) for immediate table update
+        // Note: Risks are ordered by createdAt DESC, so new risk should be at the beginning
+        queryClient.setQueriesData(
+          { queryKey: ["/api/risks/bootstrap"], exact: false },
+          (old: any) => {
+            if (!old?.risks?.data) return old;
+            // Add new risk at the beginning (since risks are ordered by createdAt DESC)
+            return {
+              ...old,
+              risks: {
+                ...old.risks,
+                data: [newRisk, ...old.risks.data],
+                pagination: {
+                  ...old.risks.pagination,
+                  total: (old.risks.pagination?.total || 0) + 1
+                }
               }
-            }
-          };
-        });
+            };
+          }
+        );
 
         // Return tempId in context for onSuccess to use
         return { previousRisks, previousRisksWithDetails, previousBootstrap, tempId };
@@ -685,34 +690,42 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
         }
       });
 
-      // OPTIMIZED: Update bootstrap query directly for immediate table update (instead of just invalidating)
-      queryClient.setQueryData(["/api/risks/bootstrap"], (old: any) => {
-        if (!old?.risks?.data) return old;
-        if (risk) {
-          // Update existing risk
-          return {
-            ...old,
-            risks: {
-              ...old.risks,
-              data: old.risks.data.map((r: any) => r.id === riskId ? createdOrUpdatedRisk : r)
-            }
-          };
-        } else {
-          // Replace temporary risk with real one from server
-          const hadTempRisk = old.risks.data.some((r: any) => r.id === tempId);
-          return {
-            ...old,
-            risks: {
-              ...old.risks,
-              data: old.risks.data.filter(filterTempRisks).concat(createdOrUpdatedRisk),
-              pagination: {
-                ...old.risks.pagination,
-                total: hadTempRisk ? old.risks.pagination?.total : (old.risks.pagination?.total || 0) + 1
+      // OPTIMIZED: Update ALL bootstrap queries directly (regardless of params) for immediate table update
+      queryClient.setQueriesData(
+        { queryKey: ["/api/risks/bootstrap"], exact: false },
+        (old: any) => {
+          if (!old?.risks?.data) return old;
+          if (risk) {
+            // Update existing risk
+            return {
+              ...old,
+              risks: {
+                ...old.risks,
+                data: old.risks.data.map((r: any) => r.id === riskId ? createdOrUpdatedRisk : r)
               }
-            }
-          };
+            };
+          } else {
+            // Replace temporary risk with real one from server
+            // Since risks are ordered by createdAt DESC, new risk should be at the beginning
+            const hadTempRisk = old.risks.data.some((r: any) => r.id === tempId);
+            const filteredData = old.risks.data.filter(filterTempRisks);
+            return {
+              ...old,
+              risks: {
+                ...old.risks,
+                data: [createdOrUpdatedRisk, ...filteredData], // Add at beginning (createdAt DESC order)
+                pagination: {
+                  ...old.risks.pagination,
+                  total: hadTempRisk ? old.risks.pagination?.total : (old.risks.pagination?.total || 0) + 1
+                }
+              }
+            };
+          }
         }
-      });
+      );
+
+      // Force immediate refetch of active bootstrap query to ensure data is fresh
+      queryClient.refetchQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, type: 'active' });
 
       // Invalidate related queries for background refresh (non-blocking, doesn't delay UI)
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
