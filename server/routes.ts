@@ -23470,21 +23470,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isDryRun,
       });
 
-      // Guardar archivo temporalmente
+      // Guardar archivo temporalmente (asíncrono para no bloquear el hilo principal)
       const tempPath = path.join('/tmp', `import_${sessionId}.xlsx`);
-      fs.writeFileSync(tempPath, req.file.buffer);
+      await fs.promises.writeFile(tempPath, req.file.buffer);
 
       // Procesar archivo de forma asíncrona
       importService.processExcelFile(sessionId, tempPath, isDryRun)
-        .then(() => {
-          // Limpiar archivo temporal
-          fs.unlinkSync(tempPath);
+        .then(async () => {
+          // Limpiar archivo temporal (asíncrono)
+          try {
+            await fs.promises.unlink(tempPath);
+          } catch (error) {
+            // Archivo ya eliminado o no existe - no es crítico
+            console.warn('Could not delete temp file (may already be deleted):', tempPath);
+          }
         })
-        .catch((error) => {
+        .catch(async (error) => {
           console.error('Error processing import file:', error);
-          // Limpiar archivo temporal en caso de error
-          if (fs.existsSync(tempPath)) {
-            fs.unlinkSync(tempPath);
+          // Limpiar archivo temporal en caso de error (asíncrono)
+          try {
+            await fs.promises.unlink(tempPath);
+          } catch (unlinkError) {
+            // Archivo ya eliminado o no existe - no es crítico
+            console.warn('Could not delete temp file after error (may already be deleted):', tempPath);
           }
         });
 

@@ -29,6 +29,9 @@ export function serveStatic(app: Express) {
 
   log(`Resolved distPath: ${distPath}`, "static");
   
+  // NOTE: Las operaciones síncronas de fs (existsSync, readdirSync) aquí son aceptables
+  // porque esta función solo se ejecuta UNA VEZ al inicio del servidor, no en rutas de API.
+  // No bloquean el hilo principal durante el procesamiento de requests.
   // List files in the dist directory for debugging
   if (isProduction) {
     try {
