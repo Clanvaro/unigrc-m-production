@@ -293,48 +293,64 @@ export default function Audits() {
   const { data: audits = [], isLoading } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
     enabled: canViewAudits, // Solo ejecutar si tiene permisos
-    staleTime: 0, // Asegurar que siempre se refresquen los datos
-    refetchOnMount: "always", // Siempre refetch al montar el componente
-    refetchOnWindowFocus: true, // Refetch cuando la ventana recupera el foco
+    staleTime: 60000, // Cache for 1 minute - avoid unnecessary refetches
+    refetchOnMount: false, // Don't refetch on mount if data is still fresh
+    refetchOnWindowFocus: false, // Don't refetch on window focus - data changes infrequently
     select: (data: any) => data.data || []
   });
 
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
+    staleTime: 300000, // Cache for 5 minutes - catalogs don't change often
+    refetchOnWindowFocus: false,
   });
 
   const { data: subprocesos = [] } = useQuery<Subproceso[]>({
     queryKey: ["/api/subprocesos"],
+    staleTime: 300000, // Cache for 5 minutes - catalogs don't change often
+    refetchOnWindowFocus: false,
   });
 
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
+    staleTime: 300000, // Cache for 5 minutes - users change infrequently
+    refetchOnWindowFocus: false,
   });
 
   const { data: roles = [] } = useQuery<any[]>({
     queryKey: ["/api/roles"],
+    staleTime: 300000, // Cache for 5 minutes - roles change infrequently
+    refetchOnWindowFocus: false,
   });
 
   const { data: userRoles = [] } = useQuery<any[]>({
     queryKey: ["/api/user-roles"],
+    staleTime: 300000, // Cache for 5 minutes - user roles change infrequently
+    refetchOnWindowFocus: false,
   });
 
   // Regulations for compliance audits - solo cargar si tiene permisos
   const { data: regulations = [] } = useQuery<any[]>({
     queryKey: ["/api/regulations"],
     enabled: canViewAudits, // Solo ejecutar si tiene permisos
+    staleTime: 300000, // Cache for 5 minutes - regulations change infrequently
+    refetchOnWindowFocus: false,
   });
 
   // Query para obtener compromisos de auditoría (actions con origin: 'audit') - solo si tiene permisos
   const { data: auditCommitments = [] } = useQuery<Action[]>({
     queryKey: ["/api/actions", { origin: "audit" }],
     enabled: canViewAudits, // Solo ejecutar si tiene permisos
+    staleTime: 60000, // Cache for 1 minute - actions change more frequently
+    refetchOnWindowFocus: false,
   });
 
   // Query para obtener hallazgos de auditoría para crear compromisos - solo si tiene permisos
   const { data: auditFindings = [] } = useQuery<AuditFinding[]>({
     queryKey: ["/api/audit-findings"],
     enabled: canViewAudits, // Solo ejecutar si tiene permisos
+    staleTime: 60000, // Cache for 1 minute - findings change more frequently
+    refetchOnWindowFocus: false,
   });
 
   // Watch for regulation selection to load controls

@@ -2690,22 +2690,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No active tenant" });
       }
 
-      // Use distributed cache with 30s TTL for performance
+      // Use two-tier cache for better performance (L1: memory <1ms, L2: Redis <100ms)
       // Versioned key matches invalidation in cache-helpers.ts
       const cacheKey = `risks-with-details:${CACHE_VERSION}:${tenantId}`;
-      const cachedData = await distributedCache.get(cacheKey);
-      if (cachedData) {
-        return res.json(cachedData);
-      }
+      const activeRisks = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          // Fetch basic risks only for list view - use paginated endpoint for performance (single-tenant mode)
+          const { risks: paginatedRisks, total } = await storage.getRisksPaginated({}, 1000, 0);
 
-      // Fetch basic risks only for list view - use paginated endpoint for performance (single-tenant mode)
-      const { risks: paginatedRisks, total } = await storage.getRisksPaginated({}, 1000, 0);
-
-      // Filter out soft-deleted records (only return active records)
-      const activeRisks = paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
-
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      await distributedCache.set(cacheKey, activeRisks, 900);
+          // Filter out soft-deleted records (only return active records)
+          return paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
+        },
+        900 // 15 minutes TTL - invalidated granularly on mutations
+      );
 
       res.json(activeRisks);
     } catch (error) {
@@ -16730,36 +16728,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const filterKey = JSON.stringify({ limit, offset, filters });
       const cacheKey = `audits:${tenantId || 'single-tenant'}:${filterKey}`;
 
-      // Try to get from cache first
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        const duration = Date.now() - startTime;
+      // Use two-tier cache for better performance (L1: memory <1ms, L2: Redis <100ms)
+      const response = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const queryStart = Date.now();
+          // Note: getAuditsPaginated doesn't use tenantId (single-tenant mode)
+          const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, limit, offset);
+          const queryDuration = Date.now() - queryStart;
+          if (queryDuration > 1000) {
+            console.warn(`[SLOW QUERY] getAuditsPaginated took ${queryDuration}ms`);
+          }
+
+          // Prepare response
+          return {
+            data: paginatedAudits,
+            pagination: {
+              limit,
+              offset,
+              total,
+              hasMore: offset + limit < total
+            }
+          };
+        },
+        300 // 5 minutes TTL - audits don't change frequently
+      );
+
+      const duration = Date.now() - startTime;
+      if (duration < 100) {
         console.log(`[CACHE HIT] /api/audits in ${duration}ms`);
-        return res.json(cached);
       }
-
-      // Cache miss - query database
-      const queryStart = Date.now();
-      // Note: getAuditsPaginated doesn't use tenantId (single-tenant mode)
-      const { audits: paginatedAudits, total } = await storage.getAuditsPaginated(filters, limit, offset);
-      const queryDuration = Date.now() - queryStart;
-      if (queryDuration > 1000) {
-        console.warn(`[SLOW QUERY] getAuditsPaginated took ${queryDuration}ms`);
-      }
-
-      // Prepare response
-      const response = {
-        data: paginatedAudits,
-        pagination: {
-          limit,
-          offset,
-          total,
-          hasMore: offset + limit < total
-        }
-      };
-
-      // Cache for 60 seconds (less frequently updated than controls)
-      await distributedCache.set(cacheKey, response, 60);
 
       // Return with pagination metadata
       res.json(response);
