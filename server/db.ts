@@ -410,7 +410,7 @@ export async function withRetry<T>(
             poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown'
           });
         } else {
-          console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
+        console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
         }
         throw error;
       }

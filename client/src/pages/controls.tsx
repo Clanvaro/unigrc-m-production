@@ -541,45 +541,45 @@ export default function Controls() {
     }
     
     return [...(controls as Control[])].sort((a, b) => {
-      let aValue: any = a[sortField];
-      let bValue: any = b[sortField];
+    let aValue: any = a[sortField];
+    let bValue: any = b[sortField];
 
-      // Handle string comparison for code
-      if (sortField === 'code') {
+    // Handle string comparison for code
+    if (sortField === 'code') {
         aValue = (aValue || '').toString().toLowerCase();
         bValue = (bValue || '').toString().toLowerCase();
-      }
+    }
 
-      // Handle string comparison for control name
-      if (sortField === 'control') {
+    // Handle string comparison for control name
+    if (sortField === 'control') {
         aValue = (a.name || '').toString().toLowerCase();
         bValue = (b.name || '').toString().toLowerCase();
-      }
+    }
 
-      // Handle string comparison for responsible (controlOwner.fullName)
-      if (sortField === 'responsible') {
+    // Handle string comparison for responsible (controlOwner.fullName)
+    if (sortField === 'responsible') {
         aValue = ((a as any).controlOwner?.fullName || '').toString().toLowerCase();
         bValue = ((b as any).controlOwner?.fullName || '').toString().toLowerCase();
-      }
+    }
 
-      // Handle date comparison for validatedAt
-      if (sortField === 'validatedAt') {
-        aValue = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
-        bValue = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
-      }
+    // Handle date comparison for validatedAt
+    if (sortField === 'validatedAt') {
+      aValue = a.validatedAt ? new Date(a.validatedAt).getTime() : 0;
+      bValue = b.validatedAt ? new Date(b.validatedAt).getTime() : 0;
+    }
 
-      // Handle number comparison for effectiveness
-      if (sortField === 'effectiveness') {
+    // Handle number comparison for effectiveness
+    if (sortField === 'effectiveness') {
         aValue = Number(aValue) || 0;
         bValue = Number(bValue) || 0;
-      }
+    }
 
-      if (sortDirection === 'asc') {
-        return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
-      } else {
-        return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
-      }
-    });
+    if (sortDirection === 'asc') {
+      return aValue > bValue ? 1 : aValue < bValue ? -1 : 0;
+    } else {
+      return aValue < bValue ? 1 : aValue > bValue ? -1 : 0;
+    }
+  });
   }, [controls, sortField, sortDirection]);
 
   const getSortIcon = (field: SortField) => {

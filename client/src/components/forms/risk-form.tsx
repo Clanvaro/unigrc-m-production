@@ -1333,30 +1333,30 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
                               </div>
                             ) : (
                               availableCategories
-                                .filter((cat: string) => !(field.value || []).includes(cat))
-                                .map((category: string) => {
-                                  const categoryData = riskCategories.find((c: any) => c.name === category);
-                                  return (
-                                    <CommandItem
-                                      key={category}
-                                      value={category}
-                                      onSelect={() => {
-                                        addCategory(category);
-                                        setOpenCategoryCombobox(false);
-                                      }}
-                                      data-testid={`option-category-${category}`}
-                                    >
-                                      <div className="flex items-center gap-2 w-full">
-                                        {categoryData?.color && (
-                                          <div 
-                                            className="w-3 h-3 rounded-full" 
-                                            style={{ backgroundColor: categoryData.color }}
-                                          />
-                                        )}
-                                        <span>{category}</span>
-                                      </div>
-                                    </CommandItem>
-                                  );
+                              .filter((cat: string) => !(field.value || []).includes(cat))
+                              .map((category: string) => {
+                                const categoryData = riskCategories.find((c: any) => c.name === category);
+                                return (
+                                  <CommandItem
+                                    key={category}
+                                    value={category}
+                                    onSelect={() => {
+                                      addCategory(category);
+                                      setOpenCategoryCombobox(false);
+                                    }}
+                                    data-testid={`option-category-${category}`}
+                                  >
+                                    <div className="flex items-center gap-2 w-full">
+                                      {categoryData?.color && (
+                                        <div 
+                                          className="w-3 h-3 rounded-full" 
+                                          style={{ backgroundColor: categoryData.color }}
+                                        />
+                                      )}
+                                      <span>{category}</span>
+                                    </div>
+                                  </CommandItem>
+                                );
                                 })
                             )}
                           </CommandList>

@@ -91,7 +91,7 @@ export default function Risks() {
   const [pageSize, setPageSize] = useState(50);
 
   // Column visibility configuration
-  // Heavy columns (process, cargo, validation) are disabled by default for faster loading
+  // Heavy columns (process, validation) are disabled by default for faster loading
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const saved = localStorage.getItem('risksTableColumns');
     return saved ? JSON.parse(saved) : {
@@ -103,7 +103,6 @@ export default function Risks() {
       inherent: true,
       residual: true,
       process: false, // Disabled by default - requires batch-relations
-      cargo: false, // Disabled by default - requires batch-relations
       validation: false, // Disabled by default - requires batch-relations
       status: true,
       actionPlans: true,
@@ -337,7 +336,7 @@ export default function Risks() {
     },
     // Only fetch when detail dialogs are open or when columns that need full data are visible
     // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
-    enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.cargo || visibleColumns.validation) && riskIds.length > 0,
+    enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.validation) && riskIds.length > 0,
     staleTime: 1000 * 60, // 60 seconds - matches server cache TTL to avoid unnecessary refetches
     refetchOnMount: false, // Don't refetch on mount if data is still fresh (staleTime handles this)
     refetchOnWindowFocus: false, // Don't refetch on window focus - data changes infrequently
@@ -372,10 +371,10 @@ export default function Risks() {
 
   // Activate detailed data loading when heavy columns are enabled
   useEffect(() => {
-    if (visibleColumns.process || visibleColumns.responsible || visibleColumns.cargo || visibleColumns.validation) {
+    if (visibleColumns.process || visibleColumns.responsible || visibleColumns.validation) {
       setNeedsDetailedData(true);
     }
-  }, [visibleColumns.process, visibleColumns.responsible, visibleColumns.cargo, visibleColumns.validation]);
+  }, [visibleColumns.process, visibleColumns.responsible, visibleColumns.validation]);
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
 
@@ -1757,126 +1756,86 @@ export default function Risks() {
           macroproceso = macroprocesos.find((m: any) => m.id === risk.macroprocesoId);
         }
 
-        if (riskLinks.length === 0) {
-          if (macroproceso || process || subproceso) {
-            return (
-              <>
-                {macroproceso && (
-                  <div className="text-xs text-muted-foreground line-clamp-2" title={`M: ${macroproceso.name}`}>
-                    <span className="font-medium">M:</span> {macroproceso.name}
-                  </div>
-                )}
-                {process && (
-                  <div className="text-xs line-clamp-2" title={`P: ${process.name}`}>
-                    <span className="font-medium">P:</span> {process.name}
-                  </div>
-                )}
-                {subproceso && (
-                  <div className="text-xs text-blue-600 line-clamp-2" title={`S: ${subproceso.name}`}>
-                    <span className="font-medium">S:</span> {subproceso.name}
-                  </div>
-                )}
-              </>
-            );
-          }
-          return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
-        }
+              if (riskLinks.length === 0) {
+                if (macroproceso || process || subproceso) {
+                  return (
+                    <>
+                      {macroproceso && (
+                        <div className="text-xs text-muted-foreground line-clamp-2" title={`M: ${macroproceso.name}`}>
+                          <span className="font-medium">M:</span> {macroproceso.name}
+                        </div>
+                      )}
+                      {process && (
+                        <div className="text-xs line-clamp-2" title={`P: ${process.name}`}>
+                          <span className="font-medium">P:</span> {process.name}
+                        </div>
+                      )}
+                      {subproceso && (
+                        <div className="text-xs text-blue-600 line-clamp-2" title={`S: ${subproceso.name}`}>
+                          <span className="font-medium">S:</span> {subproceso.name}
+                        </div>
+                      )}
+                    </>
+                  );
+                }
+                return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
+              }
 
-        const processHierarchies: { macro?: string; proc?: string; sub?: string }[] = [];
-        riskLinks.forEach((link: any) => {
-          const hierarchy: { macro?: string; proc?: string; sub?: string } = {};
+              const processHierarchies: { macro?: string; proc?: string; sub?: string }[] = [];
+              riskLinks.forEach((link: any) => {
+                const hierarchy: { macro?: string; proc?: string; sub?: string } = {};
 
-          if (link.macroprocesoId) {
-            const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
-            if (macro) hierarchy.macro = macro.name;
-          }
+                if (link.macroprocesoId) {
+                  const macro = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
+                  if (macro) hierarchy.macro = macro.name;
+                }
 
-          if (link.processId) {
-            const proc = processes.find((p: any) => p.id === link.processId);
-            if (proc) hierarchy.proc = proc.name;
-          }
+                if (link.processId) {
+                  const proc = processes.find((p: any) => p.id === link.processId);
+                  if (proc) hierarchy.proc = proc.name;
+                }
 
-          if (link.subprocesoId) {
-            const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
-            if (sub) hierarchy.sub = sub.name;
-          }
+                if (link.subprocesoId) {
+                  const sub = subprocesos.find((s: any) => s.id === link.subprocesoId);
+                  if (sub) hierarchy.sub = sub.name;
+                }
 
-          if (hierarchy.macro || hierarchy.proc || hierarchy.sub) {
-            processHierarchies.push(hierarchy);
-          }
-        });
+                if (hierarchy.macro || hierarchy.proc || hierarchy.sub) {
+                  processHierarchies.push(hierarchy);
+                }
+              });
 
-        if (processHierarchies.length === 0) {
-          return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
-        }
-
-        return (
-          <div className="space-y-0.5">
-            {processHierarchies.filter(h => h && (h.macro || h.proc || h.sub)).slice(0, 2).map((hierarchy, idx) => {
-              const parts: string[] = [];
-              if (hierarchy.macro) parts.push(`M: ${hierarchy.macro}`);
-              if (hierarchy.proc) parts.push(`P: ${hierarchy.proc}`);
-              if (hierarchy.sub) parts.push(`S: ${hierarchy.sub}`);
-              const fullPath = parts.join(' → ');
+              if (processHierarchies.length === 0) {
+                return <Badge variant="secondary" className="text-xs">Sin asignar</Badge>;
+              }
 
               return (
-                <div key={idx} className="text-xs line-clamp-2" title={fullPath}>
-                  {parts.filter(p => p).map((part, i) => (
-                    <div key={i} className={i === 0 ? 'text-muted-foreground' : ''}>
-                      {part}
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-            {processHierarchies.length > 2 && (
-              <Badge variant="outline" className="text-xs">+{processHierarchies.length - 2} más</Badge>
-            )}
+                <div className="space-y-0.5">
+                  {processHierarchies.filter(h => h && (h.macro || h.proc || h.sub)).slice(0, 2).map((hierarchy, idx) => {
+                    const parts: string[] = [];
+                    if (hierarchy.macro) parts.push(`M: ${hierarchy.macro}`);
+                    if (hierarchy.proc) parts.push(`P: ${hierarchy.proc}`);
+                    if (hierarchy.sub) parts.push(`S: ${hierarchy.sub}`);
+                    const fullPath = parts.join(' → ');
+
+                    return (
+                      <div key={idx} className="text-xs line-clamp-2" title={fullPath}>
+                        {parts.filter(p => p).map((part, i) => (
+                          <div key={i} className={i === 0 ? 'text-muted-foreground' : ''}>
+                            {part}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {processHierarchies.length > 2 && (
+                    <Badge variant="outline" className="text-xs">+{processHierarchies.length - 2} más</Badge>
+                  )}
           </div>
         );
       },
       cellClassName: 'items-center',
       visible: visibleColumns.process,
-    },
-
-    {
-      id: 'cargo',
-      header: 'Cargo',
-      width: '180px',
-      cell: (risk) => {
-        const responsibles = getRiskProcessResponsibles(risk);
-
-        if (responsibles.length === 0) {
-          return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
-        }
-
-        if (responsibles.length === 1) {
-          const responsible = responsibles[0];
-          if (!responsible) return <Badge variant="outline" className="text-xs">Sin asignar</Badge>;
-          return (
-            <div className="min-w-0">
-              <span className="text-xs text-muted-foreground truncate block" title={responsible.position || 'Sin cargo definido'}>
-                {responsible.position || 'Sin cargo definido'}
-              </span>
-            </div>
-          );
-        }
-
-        return (
-          <div className="space-y-0.5 min-w-0">
-            {responsibles.filter(r => r && r.position !== undefined).slice(0, 2).map((r: ResponsibleWithValidation, idx: number) => (
-              <div key={idx} className="text-xs text-muted-foreground truncate" title={r.position || 'Sin cargo definido'}>
-                {r.position || 'Sin cargo'}
-              </div>
-            ))}
-            {responsibles.length > 2 && (
-              <Badge variant="outline" className="text-xs">+{responsibles.length - 2} más</Badge>
-            )}
-          </div>
-        );
-      },
-      cellClassName: 'items-center',
-      visible: visibleColumns.cargo,
     },
     {
       id: 'validation',
@@ -2074,15 +2033,15 @@ export default function Risks() {
               {(actionPlans as any[]).filter(ap => ap && ap.code).map((ap: any) => {
                 const statusColor = getActionPlanStatusColor(ap.status);
                 return (
-                  <Badge
-                    key={ap.id}
+                <Badge
+                  key={ap.id}
                     variant={getActionPlanStatusVariant(ap.status)}
                     className={`cursor-pointer hover:opacity-80 transition-colors text-xs ${statusColor}`}
-                    onClick={() => setLocation(`/action-plans?id=${ap.id}`)}
+                  onClick={() => setLocation(`/action-plans?id=${ap.id}`)}
                     title={`${ap.code} - ${ap.status}`}
-                  >
-                    {ap.code}
-                  </Badge>
+                >
+                  {ap.code}
+                </Badge>
                 );
               })}
             </div>
@@ -2387,7 +2346,7 @@ export default function Risks() {
     visibleColumns,
   ]);
 
-  // Columnas para vista básica - excluye proceso, responsable, cargo y validación
+  // Columnas para vista básica - excluye proceso, responsable y validación
   // (esos datos requieren APIs adicionales que no se cargan en vista básica)
   // Filter columns based on visibility - heavy columns only shown if explicitly enabled
   const visibleColumnsList = columns.filter(col => col.visible !== false);
@@ -3078,22 +3037,6 @@ export default function Risks() {
 
             <div className="flex items-center space-x-2">
               <Checkbox
-                id="col-cargo"
-                checked={visibleColumns.cargo}
-                onCheckedChange={(checked) =>
-                  setVisibleColumns({ ...visibleColumns, cargo: checked as boolean })
-                }
-              />
-              <label
-                htmlFor="col-cargo"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-              >
-                Cargo
-              </label>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <Checkbox
                 id="col-validation"
                 checked={visibleColumns.validation}
                 onCheckedChange={(checked) =>
@@ -3152,7 +3095,6 @@ export default function Risks() {
                   inherent: true,
                   residual: true,
                   process: true,
-                  cargo: true,
                   validation: true,
                   status: true,
                   actions: true

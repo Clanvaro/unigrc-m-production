@@ -151,11 +151,11 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
 
         {/* Módulo de Auditoría - Solo mostrar si el usuario tiene permisos */}
         {canViewSection("audits") && (
-          <div className="mt-8">
-            {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
-              Auditoría
-            </h3>)}
-            <ul className="space-y-2">
+        <div className="mt-8">
+          {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
+            Auditoría
+          </h3>)}
+          <ul className="space-y-2">
             <li>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -289,11 +289,11 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
 
         {/* Módulo de Compliance - Solo mostrar si el usuario tiene permisos */}
         {canViewSection("compliance") && (
-          <div className="mt-8">
-            {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
-              Cumplimiento
-            </h3>)}
-            <ul className="space-y-2">
+        <div className="mt-8">
+          {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
+            Cumplimiento
+          </h3>)}
+          <ul className="space-y-2">
             <li>
               <Tooltip>
                 <TooltipTrigger asChild>

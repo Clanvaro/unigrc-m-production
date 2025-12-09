@@ -88,7 +88,7 @@ export class ErrorBoundary extends Component<Props, State> {
                   ? 'El módulo solicitado no está disponible. Esto puede indicar un problema con el build o el deployment. Por favor, recarga la página o contacta al administrador si el problema persiste.'
                   : isModuleError 
                     ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red temporal. Por favor, recarga la página.'
-                    : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
+                  : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
               </p>
               
               {process.env.NODE_ENV === 'development' && this.state.error && (
