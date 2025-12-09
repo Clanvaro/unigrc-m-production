@@ -1948,7 +1948,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold mb-1" data-testid="stat-not-notified-risks">
-                  {validationCounts?.risks.notNotified ?? notNotifiedRisksPaginationInfo?.total ?? 0}
+                  {notNotifiedRisksPaginationInfo?.total ?? validationCounts?.risks.notNotified ?? 0}
                 </div>
                 <p className="text-xs text-muted-foreground">Por Enviar</p>
               </CardContent>

@@ -5392,13 +5392,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get risk-process associations by risk ID
-  app.get("/api/risk-processes/risk/:riskId", isAuthenticated, noCacheMiddleware, async (req, res) => {
+  app.get("/api/risk-processes/risk/:riskId", isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      const riskProcesses = await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId);
+      const cacheKey = `risk-processes:risk:${req.params.riskId}:${tenantId}`;
+      const riskProcesses = await getFromTieredCache(
+        cacheKey,
+        async () => await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId),
+        60 // 1 minuto TTL - asociaciones no cambian frecuentemente
+      );
       res.json(riskProcesses);
     } catch (error) {
       console.error("Error fetching risk processes by risk:", error);
@@ -5436,6 +5441,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new risk-process association
   app.post("/api/risk-processes", isAuthenticated, async (req, res) => {
     try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
       const validatedData = insertRiskProcessLinkSchema.parse(req.body);
       const riskProcess = await storage.createRiskProcessLink(validatedData);
 
@@ -5445,6 +5451,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
+      // Invalidate specific risk cache for immediate update
+      if (validatedData.riskId && tenantId) {
+        await distributedCache.invalidate(`risk-processes:risk:${validatedData.riskId}:${tenantId}`);
+      }
 
       res.status(201).json(riskProcess);
     } catch (error) {
@@ -5459,6 +5469,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update risk-process association
   app.put("/api/risk-processes/:id", isAuthenticated, async (req, res) => {
     try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
       // Use specific update schema to prevent overposting
       const updateData = updateRiskProcessLinkSchema.parse(req.body);
       const riskProcess = await storage.updateRiskProcessLink(req.params.id, updateData);
@@ -5469,6 +5480,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
+      // Invalidate specific risk cache for immediate update
+      if (riskProcess.riskId && tenantId) {
+        await distributedCache.invalidate(`risk-processes:risk:${riskProcess.riskId}:${tenantId}`);
+      }
 
       res.json(riskProcess);
     } catch (error) {
@@ -5483,6 +5498,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete risk-process association
   app.delete("/api/risk-processes/:id", isAuthenticated, async (req, res) => {
     try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      // Get link before deleting to obtain riskId for cache invalidation
+      const existingLink = await storage.getRiskProcessLink(req.params.id);
       const success = await storage.deleteRiskProcessLink(req.params.id);
 
       if (!success) {
@@ -5491,6 +5509,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
       await invalidateRiskProcessLinkCaches();
+      // Invalidate specific risk cache for immediate update
+      if (existingLink?.riskId && tenantId) {
+        await distributedCache.invalidate(`risk-processes:risk:${existingLink.riskId}:${tenantId}`);
+      }
 
       res.status(204).send();
     } catch (error) {

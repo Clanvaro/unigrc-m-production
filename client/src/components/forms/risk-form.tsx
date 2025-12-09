@@ -21,7 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { calculateInherentRisk, getRiskLevelText } from "@/lib/risk-calculations";
 import { calculateProbability, type ProbabilityFactors, calculateDynamicProbability, type DynamicProbabilityFactors, type DynamicCriterion } from "@shared/probability-calculation";
 import { calculateImpact, type ImpactFactors } from "@shared/impact-calculation";
-import { X, ChevronsUpDown, Sparkles } from "lucide-react";
+import { X, ChevronsUpDown, Sparkles, Loader2 } from "lucide-react";
 import ProbabilityWheel from "@/components/probability/ProbabilityWheel";
 import ProbabilityWheelNew from "@/components/probability/ProbabilityWheelNew";
 import ImpactWheel from "@/components/probability/ImpactWheel";
@@ -96,9 +96,16 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
   });
 
   // Cargar asociaciones existentes si estamos editando un riesgo
-  const { data: existingRiskProcesses = [], isSuccess: riskProcessesLoaded } = useQuery<any[]>({
+  const { 
+    data: existingRiskProcesses = [], 
+    isSuccess: riskProcessesLoaded,
+    isLoading: isLoadingProcesses,
+    isFetching: isFetchingProcesses
+  } = useQuery<any[]>({
     queryKey: queryKeys.risks.processes(risk?.id),
     enabled: !!risk?.id,
+    staleTime: 30000, // 30 segundos - reutilizar datos recientes
+    refetchOnWindowFocus: false, // No refetch al cambiar de ventana
   });
 
 
@@ -1183,6 +1190,13 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
                     Selecciona múltiples procesos que se asocien con este riesgo
                   </FormDescription>
                 </div>
+
+                {(isLoadingProcesses || isFetchingProcesses) && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground mb-3">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Cargando procesos asociados...</span>
+                  </div>
+                )}
 
                 <FormControl>
                   <ProcessMultiSelector
