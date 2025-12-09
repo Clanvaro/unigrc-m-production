@@ -2701,20 +2701,6 @@ export class MemStorage implements IStorage {
 
     this.risks.set(id, risk);
 
-    // Auto-create action plan for high residual risks
-    if (finalInherentRisk >= 15) {
-      await this.createActionPlan({
-        riskId: id,
-        name: `Plan de acción para ${insertRisk.name}`,
-        description: "Plan de acción generado automáticamente para riesgo alto",
-        responsible: "",
-        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
-        priority: finalInherentRisk >= 20 ? "critical" : "high",
-        status: "pending",
-        progress: 0,
-      });
-    }
-
     return risk;
   }
 

@@ -3407,7 +3407,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         // Try dynamic criteria system first, fallback to legacy system
         try {
-          const activeCriteria = await storage.getActiveProbabilityCriteria();
+          // OPTIMIZED: Cache active criteria with 5 minute TTL (they change infrequently)
+          const cacheKey = `active-probability-criteria:${CACHE_VERSION}`;
+          const cachedCriteria = await distributedCache.get(cacheKey);
+          let activeCriteria;
+          
+          if (cachedCriteria) {
+            activeCriteria = cachedCriteria;
+          } else {
+            activeCriteria = await storage.getActiveProbabilityCriteria();
+            await distributedCache.set(cacheKey, activeCriteria, 300); // 5 minutes
+          }
 
           if (activeCriteria && activeCriteria.length > 0) {
             // Use dynamic criteria system
@@ -3463,26 +3473,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Calculate inherent risk
       const inherentRisk = finalProbability * (riskData.impact ?? 1);
 
-      // Auto-assign processOwner based on hierarchy if not provided
+      // OPTIMIZED: Auto-assign processOwner - execute all searches in parallel
       let processOwner = riskData.processOwner; // Keep if provided manually
 
       if (!processOwner) {
-        // Search owner automatically based on hierarchy: subproceso > proceso > macroproceso
-        if (riskData.subprocesoId) {
-          const subprocesoWithOwner = await storage.getSubprocesoWithOwner(riskData.subprocesoId);
-          if (subprocesoWithOwner?.owner) {
-            processOwner = `${subprocesoWithOwner.owner.name} - ${subprocesoWithOwner.owner.email}`;
-          }
-        } else if (riskData.processId) {
-          const processWithOwner = await storage.getProcessWithOwner(riskData.processId);
-          if (processWithOwner?.owner) {
-            processOwner = `${processWithOwner.owner.name} - ${processWithOwner.owner.email}`;
-          }
-        } else if (riskData.macroprocesoId) {
-          const macroprocesoWithOwner = await storage.getMacroprocesoWithOwner(riskData.macroprocesoId);
-          if (macroprocesoWithOwner?.owner) {
-            processOwner = `${macroprocesoWithOwner.owner.name} - ${macroprocesoWithOwner.owner.email}`;
-          }
+        // OPTIMIZED: Execute all owner searches in parallel instead of sequentially
+        const [subprocesoWithOwner, processWithOwner, macroprocesoWithOwner] = await Promise.all([
+          riskData.subprocesoId ? storage.getSubprocesoWithOwner(riskData.subprocesoId).catch(() => null) : Promise.resolve(null),
+          riskData.processId ? storage.getProcessWithOwner(riskData.processId).catch(() => null) : Promise.resolve(null),
+          riskData.macroprocesoId ? storage.getMacroprocesoWithOwner(riskData.macroprocesoId).catch(() => null) : Promise.resolve(null)
+        ]);
+
+        // Use first available owner (priority: subproceso > proceso > macroproceso)
+        if (subprocesoWithOwner?.owner) {
+          processOwner = `${subprocesoWithOwner.owner.name} - ${subprocesoWithOwner.owner.email}`;
+        } else if (processWithOwner?.owner) {
+          processOwner = `${processWithOwner.owner.name} - ${processWithOwner.owner.email}`;
+        } else if (macroprocesoWithOwner?.owner) {
+          processOwner = `${macroprocesoWithOwner.owner.name} - ${macroprocesoWithOwner.owner.email}`;
         }
       }
 
@@ -3538,10 +3546,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Failed to log audit for risk creation:', auditError);
       }
 
-      // OPTIMIZED: Use granular cache invalidation for risk creation
-      await invalidateRiskDataCaches();
-
+      // OPTIMIZED: Send response immediately, invalidate cache asynchronously (non-blocking)
       res.status(201).json(risk);
+
+      // OPTIMIZED: Invalidate cache asynchronously after response (doesn't block user)
+      invalidateRiskDataCaches().catch(err => {
+        console.error('Error invalidating risk data caches (non-critical):', err);
+      });
     } catch (error) {
       console.error("Risk creation validation error:", error);
       if (error instanceof z.ZodError) {

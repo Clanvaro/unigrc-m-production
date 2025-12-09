@@ -527,10 +527,12 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       // Cancel outgoing refetches to prevent race conditions
       await queryClient.cancelQueries({ queryKey: ["/api/risks"] });
       await queryClient.cancelQueries({ queryKey: ["/api/risks-with-details"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/risks/bootstrap"] });
 
       // Snapshot previous values for rollback
       const previousRisks = queryClient.getQueryData(["/api/risks"]);
       const previousRisksWithDetails = queryClient.getQueryData(["/api/risks-with-details"]);
+      const previousBootstrap = queryClient.getQueryData(["/api/risks/bootstrap"]);
 
       // Optimistically update cache for immediate UI feedback
       if (risk) {
@@ -575,11 +577,27 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           };
         });
 
+        // OPTIMIZED: Update bootstrap query optimistically for immediate table update
+        queryClient.setQueryData(["/api/risks/bootstrap"], (old: any) => {
+          if (!old?.risks?.data) return old;
+          return {
+            ...old,
+            risks: {
+              ...old.risks,
+              data: [...old.risks.data, newRisk],
+              pagination: {
+                ...old.risks.pagination,
+                total: (old.risks.pagination?.total || 0) + 1
+              }
+            }
+          };
+        });
+
         // Return tempId in context for onSuccess to use
-        return { previousRisks, previousRisksWithDetails, tempId };
+        return { previousRisks, previousRisksWithDetails, previousBootstrap, tempId };
       }
 
-      return { previousRisks, previousRisksWithDetails, tempId: null };
+      return { previousRisks, previousRisksWithDetails, previousBootstrap, tempId: null };
     },
     onError: (err: any, variables, context: any) => {
       // Rollback on error
@@ -588,6 +606,9 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       }
       if (context?.previousRisksWithDetails) {
         queryClient.setQueryData(["/api/risks-with-details"], context.previousRisksWithDetails);
+      }
+      if (context?.previousBootstrap) {
+        queryClient.setQueryData(["/api/risks/bootstrap"], context.previousBootstrap);
       }
 
       // Extract specific error message from server response
@@ -660,6 +681,35 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           return {
             ...old,
             data: old.data.filter(filterTempRisks).concat(createdOrUpdatedRisk)
+          };
+        }
+      });
+
+      // OPTIMIZED: Update bootstrap query directly for immediate table update (instead of just invalidating)
+      queryClient.setQueryData(["/api/risks/bootstrap"], (old: any) => {
+        if (!old?.risks?.data) return old;
+        if (risk) {
+          // Update existing risk
+          return {
+            ...old,
+            risks: {
+              ...old.risks,
+              data: old.risks.data.map((r: any) => r.id === riskId ? createdOrUpdatedRisk : r)
+            }
+          };
+        } else {
+          // Replace temporary risk with real one from server
+          const hadTempRisk = old.risks.data.some((r: any) => r.id === tempId);
+          return {
+            ...old,
+            risks: {
+              ...old.risks,
+              data: old.risks.data.filter(filterTempRisks).concat(createdOrUpdatedRisk),
+              pagination: {
+                ...old.risks.pagination,
+                total: hadTempRisk ? old.risks.pagination?.total : (old.risks.pagination?.total || 0) + 1
+              }
+            }
           };
         }
       });
