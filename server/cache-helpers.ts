@@ -49,6 +49,9 @@ export async function invalidateRiskProcessLinkCaches() {
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      // CRITICAL: Invalidate batch-relations cache so risk list shows updated validation status
+      // Pattern matches all batch-relations cache keys (they include riskIds in the key)
+      distributedCache.invalidatePattern(`risks-batch-relations:${CACHE_VERSION}:*`),
     ]);
     console.log(`[GRANULAR] Risk-process link caches invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {

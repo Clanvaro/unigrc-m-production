@@ -70,6 +70,9 @@ export function serveStatic(app: Express) {
   // Serve static assets with appropriate cache headers
   app.use(express.static(distPath, {
     setHeaders: (res, filepath) => {
+      // Log para debugging de errores 403
+      console.log(`[STATIC] Serving file: ${filepath}`);
+      
       // For index.html: always revalidate to get latest version
       if (filepath.endsWith('index.html')) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -94,7 +97,10 @@ export function serveStatic(app: Express) {
   }));
 
   // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  app.use("*", (req, res) => {
+    // Log para debugging de rutas no encontradas
+    console.log(`[STATIC] Fallback to index.html for: ${req.path}`);
+    
     // Always send fresh index.html for SPA routing
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
