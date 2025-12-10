@@ -23,7 +23,8 @@ import {
 } from "./validation/input-sanitizer";
 import { responseSanitizer } from "./validation/output-sanitizer";
 import { applyPerformanceOptimizations } from "./performance";
-import { openAIService } from "./openai-service";
+// OPTIMIZED: Lazy load openAIService - only needed for status check at startup
+// import { openAIService } from "./openai-service";
 import { initializeQueues } from "./services/queue";
 
 // Validate required secrets before starting server
@@ -190,12 +191,17 @@ app.use((req, res, next) => {
   }, () => {
     log(`serving on port ${port} (host: ${host})`);
 
-    // Check OpenAI Service status
-    const aiStatus = openAIService.getStatus();
-    if (aiStatus.ready) {
-      console.log(`✅ OpenAI Service ready with model: ${aiStatus.deployment}`);
-    } else {
-      console.warn('⚠️ OpenAI Service not configured. AI features will be disabled.');
+    // OPTIMIZED: Lazy load OpenAI Service - only check status if needed
+    try {
+      const { openAIService } = await import("./openai-service");
+      const aiStatus = openAIService.getStatus();
+      if (aiStatus.ready) {
+        console.log(`✅ OpenAI Service ready with model: ${aiStatus.deployment}`);
+      } else {
+        console.warn('⚠️ OpenAI Service not configured. AI features will be disabled.');
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not load OpenAI Service:', error);
     }
 
     // OPTIMIZED: Cache warming is now lazy - triggered by getFromTieredCache on first access

@@ -37,10 +37,11 @@ import { runDatabaseOptimizations } from "./db-optimize";
 import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
-import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+// OPTIMIZED: Lazy load heavy dependencies to reduce startup time
+// import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
-import approvalRoutes from "./approval-routes";
-import setupRevalidationRoutes from "./revalidation-routes";
+// import approvalRoutes from "./approval-routes";
+// import setupRevalidationRoutes from "./revalidation-routes";
 import { calculateProbability, type ProbabilityFactors, type ProbabilityWeights, calculateDynamicProbability, type DynamicProbabilityFactors, type DynamicCriterion } from "@shared/probability-calculation";
 import {
   insertMacroprocesoSchema,
@@ -19587,7 +19588,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               continue;
             }
 
-            // Upload file to object storage
+            // OPTIMIZED: Lazy load ObjectStorageService
+            const { ObjectStorageService } = await import("./objectStorage");
             const objectStorage = new ObjectStorageService();
             const uploadResult = await objectStorage.uploadObjectFromBuffer(
               file.buffer,
@@ -21080,6 +21082,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Endpoint for serving document files
   app.get("/objects/:objectPath(*)", requirePermission("documents:read"), async (req, res) => {
     const userId = (req as any).user?.claims?.sub || 'user-1'; // Usuario autenticado (fallback para desarrollo)
+    // OPTIMIZED: Lazy load ObjectStorageService
+    const { ObjectStorageService } = await import("./objectStorage");
     const objectStorageService = new ObjectStorageService();
     try {
       // Add /objects/ prefix since Express strips it from params
@@ -21098,6 +21102,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       objectStorageService.downloadObject(objectFile, res);
     } catch (error) {
       console.error("Error checking object access:", error);
+      // OPTIMIZED: Lazy load ObjectNotFoundError
+      const { ObjectNotFoundError } = await import("./objectStorage");
       if (error instanceof ObjectNotFoundError) {
         return res.sendStatus(404);
       }
@@ -21108,6 +21114,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Endpoint for getting upload URL for document files
   app.post("/api/objects/upload", requirePermission("documents:write"), async (req, res) => {
     try {
+      // OPTIMIZED: Lazy load ObjectStorageService
+      const { ObjectStorageService } = await import("./objectStorage");
       const objectStorageService = new ObjectStorageService();
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       res.json({ uploadURL });
@@ -21211,7 +21219,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req as any).user?.claims?.sub || 'user-1';
 
       try {
-        // Upload file to Object Storage using buffer
+        // OPTIMIZED: Lazy load ObjectStorageService
+        const { ObjectStorageService } = await import("./objectStorage");
         const objectStorageService = new ObjectStorageService();
         const { objectPath, storageUrl } = await objectStorageService.uploadObjectFromBuffer(
           file.buffer,
@@ -21306,6 +21315,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Access denied. Must be executor, supervisor, or have edit_all permission" });
         }
 
+        // OPTIMIZED: Lazy load ObjectStorageService
+        const { ObjectStorageService } = await import("./objectStorage");
         const objectStorageService = new ObjectStorageService();
         const uploadedAttachments = [];
 
@@ -23204,12 +23215,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============= APPROVAL SYSTEM ROUTES =============
-  // Mount approval routes with authentication
+  // OPTIMIZED: Lazy load approval routes
+  const approvalRoutes = (await import("./approval-routes")).default;
   app.use('/api/approval', isAuthenticated, approvalRoutes);
   console.log('🎯 Approval system routes mounted successfully');
 
   // ============= REVALIDATION SYSTEM ROUTES =============
-  // Register revalidation routes for control owners, revalidations, and policies
+  // OPTIMIZED: Lazy load revalidation routes
+  const setupRevalidationRoutes = (await import("./revalidation-routes")).default;
   setupRevalidationRoutes(app);
   console.log('🔄 Revalidation system routes registered successfully');
 

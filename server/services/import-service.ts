@@ -1,4 +1,5 @@
-import ExcelJS from 'exceljs';
+// OPTIMIZED: Lazy load ExcelJS - only load when processing Excel files
+// import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { db } from '../db';
 import { storage } from '../storage';
@@ -26,7 +27,7 @@ import {
 } from '@shared/schema';
 import { eq, sql, and, isNull } from 'drizzle-orm';
 
-// Tipos para el resultado de la importación
+// Tipos para el resultado de la importaciรณn
 export interface ImportResult {
   sheet: string;
   created: number;
@@ -52,28 +53,28 @@ export interface ImportSummary {
 
 // Esquemas para validar los datos de cada hoja
 const fiscalEntityImportSchema = insertFiscalEntitySchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   type: z.enum(["matriz", "filial", "otra"]),
 });
 
 const processOwnerImportSchema = insertProcessOwnerSchema.extend({
   name: z.string().min(1, "Nombre es requerido"),
-  email: z.string().email("Email inválido"),
+  email: z.string().email("Email invรกlido"),
   position: z.string().optional(),
   company: z.string().optional(),
   isActive: z.boolean().optional(),
 });
 
 const macroprocesoImportSchema = insertMacroprocesoSchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   type: z.enum(["clave", "apoyo"]),
   order: z.number().int().positive("Orden debe ser positivo"),
 });
 
 const riskImportSchema = baseInsertRiskSchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   description: z.string().optional(),
   category: z.string().optional().transform(val => val ? val.split(',').map(c => c.trim()) : []),
@@ -90,7 +91,7 @@ const riskImportSchema = baseInsertRiskSchema.extend({
 });
 
 const controlImportSchema = insertControlSchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   description: z.string().optional(),
   type: z.enum(["preventive", "detective", "corrective"]),
@@ -102,28 +103,28 @@ const controlImportSchema = insertControlSchema.extend({
 });
 
 const processImportSchema = insertProcessSchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   description: z.string().optional(),
   ownerCode: z.string().optional().transform(val => val || undefined), // Email del propietario del proceso
-  macroprocesoCode: z.string().optional().transform(val => val || undefined), // Código del macroproceso
-  fiscalEntityCode: z.string().optional().transform(val => val || undefined), // Código de entidad fiscal
+  macroprocesoCode: z.string().optional().transform(val => val || undefined), // Cรณdigo del macroproceso
+  fiscalEntityCode: z.string().optional().transform(val => val || undefined), // Cรณdigo de entidad fiscal
   entityScope: z.enum(["specific", "transversal", "selective"]).default("transversal"),
 });
 
 const subprocesoImportSchema = insertSubprocesoSchema.extend({
-  code: z.string().min(1, "Código es requerido"),
+  code: z.string().min(1, "Cรณdigo es requerido"),
   name: z.string().min(1, "Nombre es requerido"),
   description: z.string().optional(),
   ownerCode: z.string().optional().transform(val => val || undefined), // Email del propietario
-  processCode: z.string().min(1, "Código del proceso padre es requerido"), // Código del proceso padre
+  processCode: z.string().min(1, "Cรณdigo del proceso padre es requerido"), // Cรณdigo del proceso padre
 });
 
 // Import schema for action plans (based on unified actions table)
 // Uses 'name' field which will be mapped to 'title' when inserting into actions table
 const actionPlanImportSchema = z.object({
-  code: z.string().min(1, "Código es requerido"),
-  name: z.string().min(1, "Nombre/Título es requerido"), // Will map to 'title' in actions table
+  code: z.string().min(1, "Cรณdigo es requerido"),
+  name: z.string().min(1, "Nombre/Tรญtulo es requerido"), // Will map to 'title' in actions table
   description: z.string().optional().nullable(),
   origin: z.enum(["risk", "audit", "compliance"]).default("risk"),
   riskCode: z.string().optional().transform(val => val || undefined),
@@ -136,7 +137,7 @@ const actionPlanImportSchema = z.object({
 
 export class ImportService {
   
-  // Crear nueva sesión de importación
+  // Crear nueva sesiรณn de importaciรณn
   async createImportSession(data: {
     fileName: string;
     originalFileName: string;
@@ -155,14 +156,14 @@ export class ImportService {
     return session[0].id;
   }
 
-  // Actualizar sesión de importación
+  // Actualizar sesiรณn de importaciรณn
   async updateImportSession(id: string, data: Partial<ImportSession>): Promise<void> {
     await db.update(importSessions)
       .set({ ...data, updatedAt: new Date() })
       .where(eq(importSessions.id, id));
   }
 
-  // Obtener sesión de importación
+  // Obtener sesiรณn de importaciรณn
   async getImportSession(id: string): Promise<ImportSession | null> {
     const sessions = await db.select()
       .from(importSessions)
@@ -174,6 +175,8 @@ export class ImportService {
 
   // Procesar archivo Excel
   async processExcelBuffer(sessionId: string, fileBuffer: Buffer, isDryRun: boolean = true): Promise<void> {
+    // OPTIMIZED: Lazy load ExcelJS
+    const ExcelJS = (await import('exceljs')).default;
     let workbook: ExcelJS.Workbook;
     
     try {
@@ -213,7 +216,7 @@ export class ImportService {
       // Calcular resumen
       const summary = this.calculateSummary(results);
 
-      // Actualizar sesión con resultados
+      // Actualizar sesiรณn con resultados
       await this.updateImportSession(sessionId, {
         status: "completed",
         progress: 100,
@@ -237,6 +240,8 @@ export class ImportService {
   }
 
   async processExcelFile(sessionId: string, filePath: string, isDryRun: boolean = true): Promise<void> {
+    // OPTIMIZED: Lazy load ExcelJS
+    const ExcelJS = (await import('exceljs')).default;
     let workbook: ExcelJS.Workbook;
     
     try {
@@ -276,7 +281,7 @@ export class ImportService {
       // Calcular resumen
       const summary = this.calculateSummary(results);
 
-      // Actualizar sesión con resultados
+      // Actualizar sesiรณn con resultados
       await this.updateImportSession(sessionId, {
         status: "completed",
         progress: 100,
@@ -316,7 +321,7 @@ export class ImportService {
       "ActionPlans"
     ];
 
-    // Verificar que al menos una hoja válida existe
+    // Verificar que al menos una hoja vรกlida existe
     const foundSheets = workbook.worksheets
       .map(ws => ws.name)
       .filter(name => supportedSheets.includes(name));
@@ -330,7 +335,7 @@ export class ImportService {
       });
     }
 
-    // Validar estructura básica de hojas encontradas
+    // Validar estructura bรกsica de hojas encontradas
     for (const sheetName of foundSheets) {
       const worksheet = workbook.getWorksheet(sheetName);
       if (worksheet && worksheet.rowCount < 1) {
@@ -338,7 +343,7 @@ export class ImportService {
           sheet: sheetName,
           row: 0,
           field: "structure",
-          message: `La hoja '${sheetName}' está vacía o no tiene fila de encabezados`,
+          message: `La hoja '${sheetName}' estรก vacรญa o no tiene fila de encabezados`,
         });
       }
     }
@@ -391,7 +396,7 @@ export class ImportService {
     return results;
   }
 
-  // Procesar hoja de Entidades Fiscales con patrón de dos fases
+  // Procesar hoja de Entidades Fiscales con patrรณn de dos fases
   private async processFiscalEntitiesSheet(worksheet: ExcelJS.Worksheet): Promise<ImportResult> {
     const result: ImportResult = {
       sheet: "FiscalEntities",
@@ -418,7 +423,7 @@ export class ImportService {
       return result;
     }
 
-    // FASE A: Validación completa y preparación de datos
+    // FASE A: Validaciรณn completa y preparaciรณn de datos
     const validRows: Array<{ rowNumber: number; data: any }> = [];
     const seenCodes = new Set<string>();
     
@@ -449,7 +454,7 @@ export class ImportService {
             sheet: "FiscalEntities",
             row: rowNumber,
             field: "code",
-            message: `Código duplicado en el archivo: ${validation.data.code}`,
+            message: `Cรณdigo duplicado en el archivo: ${validation.data.code}`,
             code: validation.data.code,
           });
           return;
@@ -466,7 +471,7 @@ export class ImportService {
           description: validation.data.description?.trim(),
         };
 
-        // Agregar a filas válidas para procesamiento
+        // Agregar a filas vรกlidas para procesamiento
         validRows.push({ rowNumber, data: normalizedData });
 
       } catch (error) {
@@ -479,7 +484,7 @@ export class ImportService {
       }
     });
 
-    // Si hay errores de validación, no procesar
+    // Si hay errores de validaciรณn, no procesar
     if (result.errors.length > 0) {
       return result;
     }
@@ -495,7 +500,7 @@ export class ImportService {
         
         const existingMap = new Map(existingEntities.map(e => [e.code, e.id]));
 
-        // Procesar cada fila válida
+        // Procesar cada fila vรกlida
         for (const { rowNumber, data } of validRows) {
           try {
             const existingId = existingMap.get(data.code);
@@ -540,7 +545,7 @@ export class ImportService {
 
         // Si es dry-run, forzar rollback
         if (this.isDryRunMode) {
-          throw new Error("DRY_RUN_ROLLBACK"); // Esto causará rollback
+          throw new Error("DRY_RUN_ROLLBACK"); // Esto causarรก rollback
         }
       });
     } catch (error) {
@@ -553,7 +558,7 @@ export class ImportService {
           sheet: "FiscalEntities",
           row: 0,
           field: "transaction",
-          message: `Error de transacción: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+          message: `Error de transacciรณn: ${error instanceof Error ? error.message : 'Error desconocido'}`,
         });
         result.created = 0;
         result.updated = 0;
@@ -563,7 +568,7 @@ export class ImportService {
     return result;
   }
 
-  // Procesar hoja de Process Owners (Dueños de Procesos)
+  // Procesar hoja de Process Owners (Dueรฑos de Procesos)
   private async processProcessOwnersSheet(worksheet: ExcelJS.Worksheet): Promise<ImportResult> {
     const result: ImportResult = {
       sheet: "ProcessOwners",
@@ -589,7 +594,7 @@ export class ImportService {
       return result;
     }
 
-    // FASE A: Validación completa y preparación de datos
+    // FASE A: Validaciรณn completa y preparaciรณn de datos
     const validRows: Array<{ rowNumber: number; data: any }> = [];
     const seenEmails = new Set<string>();
     
@@ -636,7 +641,7 @@ export class ImportService {
           company: validation.data.company?.trim(),
         };
 
-        // Agregar a filas válidas para procesamiento
+        // Agregar a filas vรกlidas para procesamiento
         validRows.push({ rowNumber, data: normalizedData });
 
       } catch (error) {
@@ -649,7 +654,7 @@ export class ImportService {
       }
     });
 
-    // Si hay errores de validación, no procesar
+    // Si hay errores de validaciรณn, no procesar
     if (result.errors.length > 0) {
       return result;
     }
@@ -657,7 +662,7 @@ export class ImportService {
     // FASE B: Persistencia transaccional
     try {
       await db.transaction(async (tx) => {
-        // Cargar dueños existentes para detectar updates vs creates
+        // Cargar dueรฑos existentes para detectar updates vs creates
         const existingOwners = await tx.select({
           id: processOwners.id,
           email: processOwners.email,
@@ -665,13 +670,13 @@ export class ImportService {
         
         const existingMap = new Map(existingOwners.map(o => [o.email, o.id]));
 
-        // Procesar cada fila válida
+        // Procesar cada fila vรกlida
         for (const { rowNumber, data } of validRows) {
           try {
             const existingId = existingMap.get(data.email);
             
             if (existingId) {
-              // Actualizar dueño existente
+              // Actualizar dueรฑo existente
               await tx.update(processOwners)
                 .set({
                   name: data.name,
@@ -684,7 +689,7 @@ export class ImportService {
               
               result.updated++;
             } else {
-              // Crear nuevo dueño
+              // Crear nuevo dueรฑo
               await tx.insert(processOwners).values({
                 name: data.name,
                 email: data.email,
@@ -708,7 +713,7 @@ export class ImportService {
 
         // Si es dry-run, forzar rollback
         if (this.isDryRunMode) {
-          throw new Error("DRY_RUN_ROLLBACK"); // Esto causará rollback
+          throw new Error("DRY_RUN_ROLLBACK"); // Esto causarรก rollback
         }
       });
     } catch (error) {
@@ -721,7 +726,7 @@ export class ImportService {
           sheet: "ProcessOwners",
           row: 0,
           field: "transaction",
-          message: `Error de transacción: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+          message: `Error de transacciรณn: ${error instanceof Error ? error.message : 'Error desconocido'}`,
         });
         result.created = 0;
         result.updated = 0;
@@ -757,7 +762,7 @@ export class ImportService {
       return result;
     }
 
-    // FASE A: Validación completa y preparación de datos
+    // FASE A: Validaciรณn completa y preparaciรณn de datos
     const validRows: Array<{ rowNumber: number; data: any }> = [];
     const seenCodes = new Set<string>();
     
@@ -788,7 +793,7 @@ export class ImportService {
             sheet: "Macroprocesos",
             row: rowNumber,
             field: "code",
-            message: `Código duplicado en el archivo: ${validation.data.code}`,
+            message: `Cรณdigo duplicado en el archivo: ${validation.data.code}`,
             code: validation.data.code,
           });
           return;
@@ -804,7 +809,7 @@ export class ImportService {
           description: validation.data.description?.trim(),
         };
 
-        // Agregar a filas válidas para procesamiento
+        // Agregar a filas vรกlidas para procesamiento
         validRows.push({ rowNumber, data: normalizedData });
 
       } catch (error) {
@@ -817,7 +822,7 @@ export class ImportService {
       }
     });
 
-    // Si hay errores de validación, no procesar
+    // Si hay errores de validaciรณn, no procesar
     if (result.errors.length > 0) {
       return result;
     }
@@ -833,7 +838,7 @@ export class ImportService {
         
         const existingMap = new Map(existingMacroprocesos.map(m => [m.code, m.id]));
 
-        // Procesar cada fila válida
+        // Procesar cada fila vรกlida
         for (const { rowNumber, data } of validRows) {
           try {
             const existingId = existingMap.get(data.code);
@@ -877,7 +882,7 @@ export class ImportService {
 
         // Si es dry-run, forzar rollback
         if (this.isDryRunMode) {
-          throw new Error("DRY_RUN_ROLLBACK"); // Esto causará rollback
+          throw new Error("DRY_RUN_ROLLBACK"); // Esto causarรก rollback
         }
       });
     } catch (error) {
@@ -890,7 +895,7 @@ export class ImportService {
           sheet: "Macroprocesos",
           row: 0,
           field: "transaction",
-          message: `Error de transacción: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+          message: `Error de transacciรณn: ${error instanceof Error ? error.message : 'Error desconocido'}`,
         });
         result.created = 0;
         result.updated = 0;
@@ -926,7 +931,7 @@ export class ImportService {
       return result;
     }
 
-    // FASE A: Validación completa y preparación de datos
+    // FASE A: Validaciรณn completa y preparaciรณn de datos
     const validRows: Array<{ rowNumber: number; data: any }> = [];
     const seenCodes = new Set<string>();
     
@@ -957,7 +962,7 @@ export class ImportService {
             sheet: "Risks",
             row: rowNumber,
             field: "code",
-            message: `Código duplicado en el archivo: ${validation.data.code}`,
+            message: `Cรณdigo duplicado en el archivo: ${validation.data.code}`,
             code: validation.data.code,
           });
           return;
@@ -990,11 +995,11 @@ export class ImportService {
         // Agregar campos calculados
         const finalData = {
           ...normalizedData,
-          probability: Math.max(1, Math.min(5, probability)), // Asegurar que esté entre 1-5
+          probability: Math.max(1, Math.min(5, probability)), // Asegurar que estรฉ entre 1-5
           inherentRisk,
         };
 
-        // Agregar a filas válidas para procesamiento
+        // Agregar a filas vรกlidas para procesamiento
         validRows.push({ rowNumber, data: finalData });
 
       } catch (error) {
@@ -1007,7 +1012,7 @@ export class ImportService {
       }
     });
 
-    // Si hay errores de validación, no procesar
+    // Si hay errores de validaciรณn, no procesar
     if (result.errors.length > 0) {
       return result;
     }
@@ -1023,7 +1028,7 @@ export class ImportService {
         
         const existingMap = new Map(existingRisks.map(r => [r.code, r.id]));
 
-        // Procesar cada fila válida
+        // Procesar cada fila vรกlida
         for (const { rowNumber, data } of validRows) {
           try {
             const existingId = existingMap.get(data.code);
@@ -1087,7 +1092,7 @@ export class ImportService {
 
         // Si es dry-run, forzar rollback
         if (this.isDryRunMode) {
-          throw new Error("DRY_RUN_ROLLBACK"); // Esto causará rollback
+          throw new Error("DRY_RUN_ROLLBACK"); // Esto causarรก rollback
         }
       });
     } catch (error) {
@@ -1100,7 +1105,7 @@ export class ImportService {
           sheet: "Risks",
           row: 0,
           field: "transaction",
-          message: `Error de transacción: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+          message: `Error de transacciรณn: ${error instanceof Error ? error.message : 'Error desconocido'}`,
         });
         result.created = 0;
         result.updated = 0;
@@ -1127,12 +1132,14 @@ export class ImportService {
     const session = await this.getImportSession(sessionId);
 
     try {
+      // OPTIMIZED: Lazy load ExcelJS
+      const ExcelJS = (await import('exceljs')).default;
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(file.buffer);
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       // Definir campos esperados para procesos
@@ -1166,7 +1173,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación y preparación de datos
+      // Primera fase: Validaciรณn y preparaciรณn de datos
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -1216,7 +1223,7 @@ export class ImportService {
         }
       }
 
-      // Detectar duplicados por código
+      // Detectar duplicados por cรณdigo
       const codeMap = new Map<string, number[]>();
       validItems.forEach(({ data, rowNumber }) => {
         const existing = codeMap.get(data.code) || [];
@@ -1231,7 +1238,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -1249,7 +1256,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un proceso con código: ${data.code}`);
+            result.errors.push(`Ya existe un proceso con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -1290,7 +1297,7 @@ export class ImportService {
         }
       }
 
-      // Actualizar sesión con resultados finales
+      // Actualizar sesiรณn con resultados finales
       const successCount = validationResults.filter(r => r.isValid && !r.isDuplicate).length;
       const errorCount = validationResults.filter(r => !r.isValid).length;
       const duplicateCount = validationResults.filter(r => r.isDuplicate).length;
@@ -1346,7 +1353,7 @@ export class ImportService {
       return result;
     }
 
-    // FASE A: Validación completa y preparación de datos
+    // FASE A: Validaciรณn completa y preparaciรณn de datos
     const validRows: Array<{ rowNumber: number; data: any }> = [];
     const seenCodes = new Set<string>();
     
@@ -1377,7 +1384,7 @@ export class ImportService {
             sheet: "Processes",
             row: rowNumber,
             field: "code",
-            message: `Código duplicado en el archivo: ${validation.data.code}`,
+            message: `Cรณdigo duplicado en el archivo: ${validation.data.code}`,
             code: validation.data.code,
           });
           return;
@@ -1394,7 +1401,7 @@ export class ImportService {
           ownerEmail: validation.data.ownerEmail.trim().toLowerCase(),
         };
 
-        // Agregar a filas válidas para procesamiento
+        // Agregar a filas vรกlidas para procesamiento
         validRows.push({ rowNumber, data: normalizedData });
 
       } catch (error) {
@@ -1408,7 +1415,7 @@ export class ImportService {
       }
     });
 
-    // Si hay errores de validación, no proceder con la persistencia
+    // Si hay errores de validaciรณn, no proceder con la persistencia
     if (result.errors.length > 0) {
       return result;
     }
@@ -1431,7 +1438,7 @@ export class ImportService {
 
           for (const { rowNumber, data } of validRows) {
             try {
-              // Resolver referencias foráneas
+              // Resolver referencias forรกneas
               const macroprocesoId = macroprocesoLookup.get(data.macroprocesoCode);
               const ownerId = ownerLookup.get(data.ownerEmail);
 
@@ -1519,7 +1526,7 @@ export class ImportService {
     } else {
       // En modo dry-run, solo simular las operaciones
       result.created = validRows.length;
-      result.updated = 0; // En dry-run no sabemos cuáles se actualizarían
+      result.updated = 0; // En dry-run no sabemos cuรกles se actualizarรญan
     }
 
     return result;
@@ -1546,7 +1553,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       // Definir campos esperados para subprocesos
@@ -1578,7 +1585,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación
+      // Primera fase: Validaciรณn
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -1632,7 +1639,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -1650,7 +1657,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un subproceso con código: ${data.code}`);
+            result.errors.push(`Ya existe un subproceso con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -1690,7 +1697,7 @@ export class ImportService {
         }
       }
 
-      // Actualizar sesión
+      // Actualizar sesiรณn
       const successCount = validationResults.filter(r => r.isValid && !r.isDuplicate).length;
       const errorCount = validationResults.filter(r => !r.isValid).length;
       const duplicateCount = validationResults.filter(r => r.isDuplicate).length;
@@ -1762,7 +1769,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación y preparación de datos
+      // Primera fase: Validaciรณn y preparaciรณn de datos
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -1781,15 +1788,15 @@ export class ImportService {
             processCode: row.getCell(headerMap['codigo_proceso'])?.text?.trim()
           };
 
-          // Validaciones básicas
+          // Validaciones bรกsicas
           if (!rawData.code) {
-            throw new Error('Código es requerido');
+            throw new Error('Cรณdigo es requerido');
           }
           if (!rawData.name) {
             throw new Error('Nombre es requerido');
           }
           if (!rawData.processCode) {
-            throw new Error('Código de proceso es requerido');
+            throw new Error('Cรณdigo de proceso es requerido');
           }
 
           validItems.push({ data: rawData, rowNumber: rowIndex });
@@ -1806,13 +1813,13 @@ export class ImportService {
             rowNumber: rowIndex,
             data: null,
             isValid: false,
-            errors: [error instanceof Error ? error.message : 'Error de validación'],
+            errors: [error instanceof Error ? error.message : 'Error de validaciรณn'],
             isDuplicate: false
           });
         }
       }
 
-      // Detectar duplicados por código
+      // Detectar duplicados por cรณdigo
       const codeMap = new Map<string, number[]>();
       validItems.forEach(({ data, rowNumber }) => {
         const existing = codeMap.get(data.code) || [];
@@ -1827,27 +1834,27 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
         }
       });
 
-      // Obtener procesos y process owners existentes para resolución de foreign keys
+      // Obtener procesos y process owners existentes para resoluciรณn de foreign keys
       const existingProcesses = await this.storage.getProcesses();
       const existingProcessOwners = await this.storage.getProcessOwners();
       
       const processCodeMap = new Map(existingProcesses.map(p => [p.code, p.id]));
       const ownerEmailMap = new Map(existingProcessOwners.map(o => [o.email, o.id]));
 
-      // Segunda fase: Resolución de foreign keys y persistencia
+      // Segunda fase: Resoluciรณn de foreign keys y persistencia
       let created = 0;
       let updated = 0;
       let skipped = 0;
       const errors: Array<{ row: number; field: string; message: string }> = [];
 
-      // Solo procesar items válidos
+      // Solo procesar items vรกlidos
       const validOnlyItems = validItems.filter(({ rowNumber }) => {
         const result = validationResults.find(r => r.rowNumber === rowNumber);
         return result?.isValid && !result?.isDuplicate;
@@ -1861,7 +1868,7 @@ export class ImportService {
             errors.push({
               row: rowNumber,
               field: 'codigo_proceso',
-              message: `Proceso con código '${data.processCode}' no encontrado`
+              message: `Proceso con cรณdigo '${data.processCode}' no encontrado`
             });
             skipped++;
             continue;
@@ -1918,7 +1925,7 @@ export class ImportService {
         }
       }
 
-      // Agregar errores de validación a los errores finales
+      // Agregar errores de validaciรณn a los errores finales
       validationResults.forEach(result => {
         if (!result.isValid) {
           result.errors.forEach(errorMsg => {
@@ -1999,7 +2006,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación y preparación de datos
+      // Primera fase: Validaciรณn y preparaciรณn de datos
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -2022,9 +2029,9 @@ export class ImportService {
             isActive: this.parseBooleanValue(row.getCell(headerMap['activo'])?.text)
           };
 
-          // Validaciones básicas
+          // Validaciones bรกsicas
           if (!rawData.code) {
-            throw new Error('Código es requerido');
+            throw new Error('Cรณdigo es requerido');
           }
           if (!rawData.name) {
             throw new Error('Nombre es requerido');
@@ -2050,7 +2057,7 @@ export class ImportService {
 
           // Validar efectividad
           if (isNaN(rawData.effectiveness) || rawData.effectiveness < 0 || rawData.effectiveness > 100) {
-            throw new Error('Efectividad debe ser un número entre 0 y 100');
+            throw new Error('Efectividad debe ser un nรบmero entre 0 y 100');
           }
 
           // Validar objetivo de efecto
@@ -2073,13 +2080,13 @@ export class ImportService {
             rowNumber: rowIndex,
             data: null,
             isValid: false,
-            errors: [error instanceof Error ? error.message : 'Error de validación'],
+            errors: [error instanceof Error ? error.message : 'Error de validaciรณn'],
             isDuplicate: false
           });
         }
       }
 
-      // Detectar duplicados por código
+      // Detectar duplicados por cรณdigo
       const codeMap = new Map<string, number[]>();
       validItems.forEach(({ data, rowNumber }) => {
         const existing = codeMap.get(data.code) || [];
@@ -2094,7 +2101,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -2107,7 +2114,7 @@ export class ImportService {
       let skipped = 0;
       const errors: Array<{ row: number; field: string; message: string }> = [];
 
-      // Solo procesar items válidos
+      // Solo procesar items vรกlidos
       const validOnlyItems = validItems.filter(({ rowNumber }) => {
         const result = validationResults.find(r => r.rowNumber === rowNumber);
         return result?.isValid && !result?.isDuplicate;
@@ -2156,7 +2163,7 @@ export class ImportService {
         }
       }
 
-      // Agregar errores de validación a los errores finales
+      // Agregar errores de validaciรณn a los errores finales
       validationResults.forEach(result => {
         if (!result.isValid) {
           result.errors.forEach(errorMsg => {
@@ -2192,7 +2199,7 @@ export class ImportService {
     }
   }
 
-  // ======================== PLANES DE ACCIÓN ========================
+  // ======================== PLANES DE ACCIร�N ========================
   async processActionPlansImport(
     file: Express.Multer.File,
     userId: string,
@@ -2213,10 +2220,10 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
-      // Definir campos esperados para planes de acción
+      // Definir campos esperados para planes de acciรณn
       const expectedFields = [
         'codigo',
         'titulo', 
@@ -2250,7 +2257,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación
+      // Primera fase: Validaciรณn
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -2316,7 +2323,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -2339,7 +2346,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un plan de acción con código: ${data.code}`);
+            result.errors.push(`Ya existe un plan de acciรณn con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -2387,7 +2394,7 @@ export class ImportService {
         }
       }
 
-      // Actualizar sesión
+      // Actualizar sesiรณn
       const successCount = validationResults.filter(r => r.isValid && !r.isDuplicate).length;
       const errorCount = validationResults.filter(r => !r.isValid).length;
       const duplicateCount = validationResults.filter(r => r.isDuplicate).length;
@@ -2464,7 +2471,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación y preparación de datos
+      // Primera fase: Validaciรณn y preparaciรณn de datos
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -2488,12 +2495,12 @@ export class ImportService {
             progress: parseInt(row.getCell(headerMap['progreso'])?.text?.trim() || '0')
           };
 
-          // Validaciones básicas
+          // Validaciones bรกsicas
           if (!rawData.code) {
-            throw new Error('Código es requerido');
+            throw new Error('Cรณdigo es requerido');
           }
           if (!rawData.name) {
-            throw new Error('Título es requerido');
+            throw new Error('Tรญtulo es requerido');
           }
 
           // Validar origen
@@ -2514,16 +2521,16 @@ export class ImportService {
             throw new Error(`Estado debe ser uno de: ${validStatuses.join(', ')}`);
           }
 
-          // Validar progreso (manejar NaN explícitamente)
+          // Validar progreso (manejar NaN explรญcitamente)
           const progressValue = parseInt(row.getCell(headerMap['progreso'])?.text?.trim() || '0');
           if (isNaN(progressValue) || progressValue < 0 || progressValue > 100) {
-            throw new Error('Progreso debe ser un número válido entre 0 y 100');
+            throw new Error('Progreso debe ser un nรบmero vรกlido entre 0 y 100');
           }
           rawData.progress = progressValue;
 
-          // Para acciones de riesgo, el código de riesgo es requerido
+          // Para acciones de riesgo, el cรณdigo de riesgo es requerido
           if (rawData.origin === 'risk' && !rawData.riskCode) {
-            throw new Error('Código de riesgo es requerido para acciones de origen "risk"');
+            throw new Error('Cรณdigo de riesgo es requerido para acciones de origen "risk"');
           }
 
           // Validar fecha de vencimiento si se proporciona (manejar formato Excel)
@@ -2543,7 +2550,7 @@ export class ImportService {
             }
             
             if (isNaN(parsedDate.getTime())) {
-              throw new Error('Fecha de vencimiento debe tener un formato válido (YYYY-MM-DD o fecha Excel)');
+              throw new Error('Fecha de vencimiento debe tener un formato vรกlido (YYYY-MM-DD o fecha Excel)');
             }
             rawData.dueDate = parsedDate.toISOString();
           }
@@ -2562,13 +2569,13 @@ export class ImportService {
             rowNumber: rowIndex,
             data: null,
             isValid: false,
-            errors: [error instanceof Error ? error.message : 'Error de validación'],
+            errors: [error instanceof Error ? error.message : 'Error de validaciรณn'],
             isDuplicate: false
           });
         }
       }
 
-      // Detectar duplicados por código
+      // Detectar duplicados por cรณdigo
       const codeMap = new Map<string, number[]>();
       validItems.forEach(({ data, rowNumber }) => {
         const existing = codeMap.get(data.code) || [];
@@ -2583,27 +2590,27 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
         }
       });
 
-      // Obtener referencias para resolución de foreign keys
+      // Obtener referencias para resoluciรณn de foreign keys
       const existingRisks = await this.storage.getRisks();
       const existingProcessOwners = await this.storage.getProcessOwners();
       
       const riskCodeMap = new Map(existingRisks.map(r => [r.code, r.id]));
       const ownerEmailMap = new Map(existingProcessOwners.map(o => [o.email, o.id]));
 
-      // Segunda fase: Resolución de foreign keys y persistencia
+      // Segunda fase: Resoluciรณn de foreign keys y persistencia
       let created = 0;
       let updated = 0;
       let skipped = 0;
       const errors: Array<{ row: number; field: string; message: string }> = [];
 
-      // Solo procesar items válidos
+      // Solo procesar items vรกlidos
       const validOnlyItems = validItems.filter(({ rowNumber }) => {
         const result = validationResults.find(r => r.rowNumber === rowNumber);
         return result?.isValid && !result?.isDuplicate;
@@ -2619,7 +2626,7 @@ export class ImportService {
               errors.push({
                 row: rowNumber,
                 field: 'codigo_riesgo',
-                message: `Riesgo con código '${data.riskCode}' no encontrado`
+                message: `Riesgo con cรณdigo '${data.riskCode}' no encontrado`
               });
               skipped++;
               continue;
@@ -2643,7 +2650,7 @@ export class ImportService {
 
           // Solo persistir si no es dry run
           if (!this.isDryRunMode) {
-            // Verificar si el plan de acción ya existe
+            // Verificar si el plan de acciรณn ya existe
             const existing = await this.storage.getActionByCode(data.code);
             
             const actionData = {
@@ -2660,11 +2667,11 @@ export class ImportService {
             };
 
             if (existing) {
-              // Actualizar plan de acción existente
+              // Actualizar plan de acciรณn existente
               await this.storage.updateAction(existing.id, actionData);
               updated++;
             } else {
-              // Crear nuevo plan de acción
+              // Crear nuevo plan de acciรณn
               await this.storage.createAction(actionData);
               created++;
             }
@@ -2677,13 +2684,13 @@ export class ImportService {
           errors.push({
             row: rowNumber,
             field: 'general',
-            message: error instanceof Error ? error.message : 'Error al procesar plan de acción'
+            message: error instanceof Error ? error.message : 'Error al procesar plan de acciรณn'
           });
           skipped++;
         }
       }
 
-      // Agregar errores de validación a los errores finales
+      // Agregar errores de validaciรณn a los errores finales
       validationResults.forEach(result => {
         if (!result.isValid) {
           result.errors.forEach(errorMsg => {
@@ -2713,7 +2720,7 @@ export class ImportService {
         errors: [{ 
           row: 0, 
           field: "general", 
-          message: error instanceof Error ? error.message : "Error procesando planes de acción" 
+          message: error instanceof Error ? error.message : "Error procesando planes de acciรณn" 
         }],
       };
     }
@@ -2769,7 +2776,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       // Definir campos esperados para controles
@@ -2805,7 +2812,7 @@ export class ImportService {
         return acc;
       }, {} as Record<string, number>);
 
-      // Primera fase: Validación y preparación de datos
+      // Primera fase: Validaciรณn y preparaciรณn de datos
       const validationResults: ImportResult<any>[] = [];
       const validItems: Array<{ data: any; rowNumber: number }> = [];
 
@@ -2859,7 +2866,7 @@ export class ImportService {
         }
       }
 
-      // Detectar duplicados por código
+      // Detectar duplicados por cรณdigo
       const codeMap = new Map<string, number[]>();
       validItems.forEach(({ data, rowNumber }) => {
         const existing = codeMap.get(data.code) || [];
@@ -2874,7 +2881,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -2892,7 +2899,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un control con código: ${data.code}`);
+            result.errors.push(`Ya existe un control con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -2909,7 +2916,7 @@ export class ImportService {
           await db.transaction(async (tx) => {
             for (const { data, rowNumber } of validItemsForInsert) {
               try {
-                // Generar código automático si no se proporcionó
+                // Generar cรณdigo automรกtico si no se proporcionรณ
                 if (!data.code) {
                   data.code = await this.generateControlCode(tx);
                 }
@@ -2935,7 +2942,7 @@ export class ImportService {
         }
       }
 
-      // Actualizar sesión con resultados finales
+      // Actualizar sesiรณn con resultados finales
       const successCount = validationResults.filter(r => r.isValid && !r.isDuplicate).length;
       const errorCount = validationResults.filter(r => !r.isValid).length;
       const duplicateCount = validationResults.filter(r => r.isDuplicate).length;
@@ -2977,7 +2984,7 @@ export class ImportService {
   private parseBooleanValue(value?: string): boolean {
     if (!value || value.trim() === '') return true;
     const normalized = value.trim().toLowerCase();
-    return normalized === 'true' || normalized === '1' || normalized === 'sí' || normalized === 'si' || normalized === 'yes';
+    return normalized === 'true' || normalized === '1' || normalized === 'sรญ' || normalized === 'si' || normalized === 'yes';
   }
 
   private formatZodErrors(error: any): string[] {
@@ -2987,7 +2994,7 @@ export class ImportService {
         return `${path}${err.message}`;
       });
     }
-    return [error?.message || 'Error de validación desconocido'];
+    return [error?.message || 'Error de validaciรณn desconocido'];
   }
 
   private normalizeControlType(type?: string): 'preventive' | 'detective' | 'corrective' {
@@ -3025,7 +3032,7 @@ export class ImportService {
   }
 
   private async generateControlCode(tx: any): Promise<string> {
-    // Obtener todos los códigos de controles existentes
+    // Obtener todos los cรณdigos de controles existentes
     const allControls = await tx.select({ code: controls.code })
       .from(controls)
       .where(sql`${controls.code} LIKE 'C-%'`);
@@ -3066,11 +3073,11 @@ export class ImportService {
       if (owner.length > 0) {
         processData.ownerId = owner[0].id;
       } else {
-        throw new Error(`No se encontró propietario con email: ${data.ownerCode}`);
+        throw new Error(`No se encontrรณ propietario con email: ${data.ownerCode}`);
       }
     }
 
-    // Resolver macroproceso por código
+    // Resolver macroproceso por cรณdigo
     if (data.macroprocesoCode) {
       const macroproceso = await tx.select({ id: macroprocesos.id })
         .from(macroprocesos)
@@ -3080,11 +3087,11 @@ export class ImportService {
       if (macroproceso.length > 0) {
         processData.macroprocesoId = macroproceso[0].id;
       } else {
-        throw new Error(`No se encontró macroproceso con código: ${data.macroprocesoCode}`);
+        throw new Error(`No se encontrรณ macroproceso con cรณdigo: ${data.macroprocesoCode}`);
       }
     }
 
-    // Resolver entidad fiscal por código
+    // Resolver entidad fiscal por cรณdigo
     if (data.fiscalEntityCode) {
       const fiscalEntity = await tx.select({ id: fiscalEntities.id })
         .from(fiscalEntities)
@@ -3094,11 +3101,11 @@ export class ImportService {
       if (fiscalEntity.length > 0) {
         processData.fiscalEntityId = fiscalEntity[0].id;
       } else {
-        throw new Error(`No se encontró entidad fiscal con código: ${data.fiscalEntityCode}`);
+        throw new Error(`No se encontrรณ entidad fiscal con cรณdigo: ${data.fiscalEntityCode}`);
       }
     }
 
-    // Eliminar campos temporales de códigos
+    // Eliminar campos temporales de cรณdigos
     delete processData.ownerCode;
     delete processData.macroprocesoCode;
     delete processData.fiscalEntityCode;
@@ -3119,11 +3126,11 @@ export class ImportService {
       if (owner.length > 0) {
         subprocesoData.ownerId = owner[0].id;
       } else {
-        throw new Error(`No se encontró propietario con email: ${data.ownerCode}`);
+        throw new Error(`No se encontrรณ propietario con email: ${data.ownerCode}`);
       }
     }
 
-    // Resolver proceso por código
+    // Resolver proceso por cรณdigo
     if (data.processCode) {
       const process = await tx.select({ id: processes.id })
         .from(processes)
@@ -3133,11 +3140,11 @@ export class ImportService {
       if (process.length > 0) {
         subprocesoData.procesoId = process[0].id;
       } else {
-        throw new Error(`No se encontró proceso con código: ${data.processCode}`);
+        throw new Error(`No se encontrรณ proceso con cรณdigo: ${data.processCode}`);
       }
     }
 
-    // Eliminar campos temporales de códigos
+    // Eliminar campos temporales de cรณdigos
     delete subprocesoData.ownerCode;
     delete subprocesoData.processCode;
 
@@ -3147,7 +3154,7 @@ export class ImportService {
   private async resolveActionPlanReferences(data: any, tx: any): Promise<any> {
     const actionPlanData = { ...data };
 
-    // Resolver riesgo por código
+    // Resolver riesgo por cรณdigo
     if (data.riskCode) {
       const risk = await tx.select({ id: risks.id })
         .from(risks)
@@ -3157,7 +3164,7 @@ export class ImportService {
       if (risk.length > 0) {
         actionPlanData.riskId = risk[0].id;
       } else {
-        throw new Error(`No se encontró riesgo con código: ${data.riskCode}`);
+        throw new Error(`No se encontrรณ riesgo con cรณdigo: ${data.riskCode}`);
       }
     }
 
@@ -3212,7 +3219,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       const expectedFields = [
@@ -3296,7 +3303,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -3313,7 +3320,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe una entidad fiscal con código: ${data.code}`);
+            result.errors.push(`Ya existe una entidad fiscal con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -3401,7 +3408,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       const expectedFields = [
@@ -3588,7 +3595,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       const expectedFields = [
@@ -3668,7 +3675,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -3685,7 +3692,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un macroproceso con código: ${data.code}`);
+            result.errors.push(`Ya existe un macroproceso con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -3773,7 +3780,7 @@ export class ImportService {
       const worksheet = workbook.worksheets[0];
 
       if (!worksheet) {
-        throw new Error('No se encontró una hoja de trabajo válida en el archivo');
+        throw new Error('No se encontrรณ una hoja de trabajo vรกlida en el archivo');
       }
 
       const expectedFields = [
@@ -3857,7 +3864,7 @@ export class ImportService {
             const result = validationResults.find(r => r.rowNumber === rowNumber);
             if (result) {
               result.isDuplicate = true;
-              result.errors.push(`Código duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
+              result.errors.push(`Cรณdigo duplicado: ${code} encontrado en filas ${rowNumbers.join(', ')}`);
               result.isValid = false;
             }
           });
@@ -3874,7 +3881,7 @@ export class ImportService {
           const result = validationResults.find(r => r.rowNumber === rowNumber);
           if (result) {
             result.isDuplicate = true;
-            result.errors.push(`Ya existe un riesgo con código: ${data.code}`);
+            result.errors.push(`Ya existe un riesgo con cรณdigo: ${data.code}`);
             result.isValid = false;
           }
         }
@@ -3943,6 +3950,8 @@ export class ImportService {
 
   // Generar plantilla de Excel
   async generateTemplate(): Promise<Buffer> {
+    // OPTIMIZED: Lazy load ExcelJS
+    const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
 
     // Hoja de Entidades Fiscales
@@ -3954,13 +3963,13 @@ export class ImportService {
     // Hoja de Propietarios de Procesos
     const processOwnersSheet = workbook.addWorksheet("ProcessOwners");
     processOwnersSheet.addRow(["nombre", "email", "cargo", "empresa", "activo"]);
-    processOwnersSheet.addRow(["Juan Pérez", "juan.perez@empresa.com", "Gerente de Finanzas", "Empresa ABC S.A.", "true"]);
+    processOwnersSheet.addRow(["Juan Pรฉrez", "juan.perez@empresa.com", "Gerente de Finanzas", "Empresa ABC S.A.", "true"]);
     processOwnersSheet.getRow(1).font = { bold: true };
 
     // Hoja de Macroprocesos
     const macroprocesoSheet = workbook.addWorksheet("Macroprocesos");
     macroprocesoSheet.addRow(["codigo", "nombre", "tipo", "orden"]);
-    macroprocesoSheet.addRow(["MACRO-01", "Gestión Financiera", "clave", "1"]);
+    macroprocesoSheet.addRow(["MACRO-01", "Gestiรณn Financiera", "clave", "1"]);
     macroprocesoSheet.getRow(1).font = { bold: true };
 
     // Hoja de Procesos
@@ -3972,7 +3981,7 @@ export class ImportService {
     // Hoja de Subprocesos
     const subprocesosSheet = workbook.addWorksheet("Subprocesos");
     subprocesosSheet.addRow(["codigo", "nombre", "descripcion", "propietario_email", "codigo_proceso"]);
-    subprocesosSheet.addRow(["SUB-01", "Conciliación Bancaria", "Subproceso de conciliación bancaria", "juan.perez@empresa.com", "PROC-01"]);
+    subprocesosSheet.addRow(["SUB-01", "Conciliaciรณn Bancaria", "Subproceso de conciliaciรณn bancaria", "juan.perez@empresa.com", "PROC-01"]);
     subprocesosSheet.getRow(1).font = { bold: true };
 
     // Hoja de Riesgos
@@ -3984,13 +3993,13 @@ export class ImportService {
     // Hoja de Controles
     const controlsSheet = workbook.addWorksheet("Controls");
     controlsSheet.addRow(["codigo", "nombre", "descripcion", "tipo", "frecuencia", "evidencia", "efectividad", "objetivo_efecto", "activo"]);
-    controlsSheet.addRow(["CTRL-01", "Revisión de conciliaciones", "Control de revisión mensual de conciliaciones bancarias", "detective", "monthly", "Reporte de conciliación firmado", "80", "both", "true"]);
+    controlsSheet.addRow(["CTRL-01", "Revisiรณn de conciliaciones", "Control de revisiรณn mensual de conciliaciones bancarias", "detective", "monthly", "Reporte de conciliaciรณn firmado", "80", "both", "true"]);
     controlsSheet.getRow(1).font = { bold: true };
 
-    // Hoja de Planes de Acción
+    // Hoja de Planes de Acciรณn
     const actionPlansSheet = workbook.addWorksheet("ActionPlans");
     actionPlansSheet.addRow(["codigo", "titulo", "descripcion", "origen", "codigo_riesgo", "responsable_email", "fecha_vencimiento", "prioridad", "estado", "progreso"]);
-    actionPlansSheet.addRow(["AP-01", "Implementar control de segregación", "Implementar control de segregación de funciones en el proceso contable", "risk", "RISK-01", "juan.perez@empresa.com", "2025-12-31", "high", "pending", "0"]);
+    actionPlansSheet.addRow(["AP-01", "Implementar control de segregaciรณn", "Implementar control de segregaciรณn de funciones en el proceso contable", "risk", "RISK-01", "juan.perez@empresa.com", "2025-12-31", "high", "pending", "0"]);
     actionPlansSheet.getRow(1).font = { bold: true };
 
     return await workbook.xlsx.writeBuffer() as Buffer;
