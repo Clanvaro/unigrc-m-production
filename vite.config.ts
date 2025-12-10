@@ -37,9 +37,19 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
+    // OPTIMIZED: Use esbuild minifier (faster than terser, default in Vite)
+    minify: 'esbuild',
+    // OPTIMIZED: Disable sourcemaps in production to reduce bundle size
+    sourcemap: false,
+    // OPTIMIZED: Enable CSS code splitting for better caching
+    cssCodeSplit: true,
+    // OPTIMIZED: Warn if chunks exceed 1MB (helps identify optimization opportunities)
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       input: path.resolve(__dirname, "client/index.html"),
       output: {
+        // OPTIMIZED: Manual chunks for better code splitting and caching
+        // Separates vendor code from app code, improving cache hit rates
         manualChunks: {
           "react-vendor": ["react", "react-dom", "react-hook-form"],
           routing: ["wouter"],
