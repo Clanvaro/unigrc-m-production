@@ -188,7 +188,7 @@ app.use((req, res, next) => {
   server.listen({
     port,
     host,
-  }, () => {
+  }, async () => {
     log(`serving on port ${port} (host: ${host})`);
 
     // OPTIMIZED: Lazy load OpenAI Service - only check status if needed

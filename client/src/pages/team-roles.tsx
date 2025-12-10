@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -68,8 +68,10 @@ export default function TeamRolesPage() {
   // Definir roles que pertenecen al equipo auditor
   const auditRoles = ['Supervisor de Auditoría', 'Auditor', 'Auditor Junior'];
   
-  // Filtrar roles de auditoría
-  const auditRoleObjects = roles.filter(role => auditRoles.includes(role.name));
+  // FIXED: Filtrar roles de auditoría - usar useMemo para evitar problemas de importación
+  const auditRoleObjects = useMemo(() => {
+    return roles.filter(role => auditRoles.includes(role.name));
+  }, [roles]);
 
   // Crear mapa de usuarios por rol
   const usersByRole = new Map();

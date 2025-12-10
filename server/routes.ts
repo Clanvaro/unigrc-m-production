@@ -20310,30 +20310,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         createdBy: user?.claims?.sub || req.body.createdBy || 'user-1',
         effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
+        promulgationDate: req.body.promulgationDate ? new Date(req.body.promulgationDate) : undefined,
         lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
+        // Ensure required fields have defaults if not provided
+        status: req.body.status || 'active',
+        criticality: req.body.criticality || 'medium',
+        isActive: req.body.isActive !== undefined ? req.body.isActive : true,
       };
 
-      const validatedData = insertRegulationSchema.parse(processedData);
+      // FIXED: Better error logging for debugging
+      try {
+        const validatedData = insertRegulationSchema.parse(processedData);
 
-      // Inject tenantId from session (throws ActiveTenantError if not found)
-      const regulation = await storage.createRegulation(await withTenantId(req, validatedData));
+        // Inject tenantId from session (throws ActiveTenantError if not found)
+        const regulation = await storage.createRegulation(await withTenantId(req, validatedData));
 
-      // Si se especificó aplicabilidad, crearla
-      if (req.body.applicabilityEntities) {
-        await storage.setRegulationApplicability(regulation.id, req.body.applicabilityEntities);
+        // Si se especificó aplicabilidad, crearla
+        if (req.body.applicabilityEntities) {
+          await storage.setRegulationApplicability(regulation.id, req.body.applicabilityEntities);
+        }
+
+        res.status(201).json(regulation);
+      } catch (validationError) {
+        if (validationError instanceof z.ZodError) {
+          console.error("[ERROR] Regulation validation failed:", JSON.stringify(validationError.errors, null, 2));
+          console.error("[ERROR] Received data:", JSON.stringify(processedData, null, 2));
+          return res.status(400).json({ 
+            message: "Invalid regulation data", 
+            errors: validationError.errors,
+            receivedData: processedData
+          });
+        }
+        throw validationError;
       }
-
-      res.status(201).json(regulation);
     } catch (error) {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ message: "Invalid regulation data", errors: error.errors });
-      } else {
-        console.error("Error creating regulation:", error);
-        res.status(400).json({ message: "Invalid regulation data" });
-      }
+      console.error("[ERROR] Error creating regulation:", error);
+      console.error("[ERROR] Request body:", JSON.stringify(req.body, null, 2));
+      res.status(400).json({ 
+        message: "Invalid regulation data",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 

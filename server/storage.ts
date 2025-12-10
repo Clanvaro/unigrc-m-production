@@ -10163,47 +10163,61 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async createAuditPlanWithUniqueCode(plan: InsertAuditPlan, year: number): Promise<AuditPlan> {
-    // Retry up to 5 times in case of code conflicts
+    // OPTIMIZED: Use a faster approach without FOR UPDATE lock
+    // Get the next sequence number using a simpler query
     const maxAttempts = 5;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        // Use a transaction to atomically get the next code number and insert
-        const result = await db.transaction(async (tx) => {
-          // Get the latest plan code for this year with row lock
-          const latestPlan = await tx.execute(sql`
-            SELECT code
-            FROM audit_plans
-            WHERE year = ${year}
-              AND code ~ '^PLAN-[0-9]{4}-[0-9]{3}$'
-            ORDER BY code DESC
-            LIMIT 1
-            FOR UPDATE
-          `);
+        // OPTIMIZED: Get max number without row lock (faster, less blocking)
+        const latestPlan = await db.execute(sql`
+          SELECT code
+          FROM audit_plans
+          WHERE year = ${year}
+            AND code ~ '^PLAN-[0-9]{4}-[0-9]{3}$'
+          ORDER BY code DESC
+          LIMIT 1
+        `);
 
-          let maxNumber = 0;
-          if (latestPlan.rows.length > 0) {
-            const latestCode = latestPlan.rows[0].code as string;
-            const match = latestCode.match(/PLAN-\d{4}-(\d{3})/);
-            if (match) {
-              maxNumber = parseInt(match[1], 10);
-            }
+        let maxNumber = 0;
+        if (latestPlan.rows.length > 0) {
+          const latestCode = latestPlan.rows[0].code as string;
+          const match = latestCode.match(/PLAN-\d{4}-(\d{3})/);
+          if (match) {
+            maxNumber = parseInt(match[1], 10);
           }
+        }
 
-          const nextNumber = (maxNumber + 1).toString().padStart(3, '0');
-          const generatedCode = `PLAN-${year}-${nextNumber}`;
+        const nextNumber = (maxNumber + 1).toString().padStart(3, '0');
+        const generatedCode = `PLAN-${year}-${nextNumber}`;
 
-          // Insert with the generated code
-          const [created] = await tx.insert(auditPlans).values({
+        // OPTIMIZED: Insert directly without transaction (faster)
+        // If there's a conflict, we'll retry with the next number
+        try {
+          const [created] = await db.insert(auditPlans).values({
             ...plan,
             code: generatedCode
           } as any).returning();
 
           return created;
-        });
+        } catch (insertError: any) {
+          // If duplicate code error, increment and retry
+          if (insertError.code === '23505' && insertError.constraint === 'audit_plans_code_unique') {
+            // Increment the number and try again in the same attempt
+            maxNumber++;
+            const retryNumber = (maxNumber + 1).toString().padStart(3, '0');
+            const retryCode = `PLAN-${year}-${retryNumber}`;
+            
+            const [created] = await db.insert(auditPlans).values({
+              ...plan,
+              code: retryCode
+            } as any).returning();
 
-        return result;
+            return created;
+          }
+          throw insertError;
+        }
       } catch (error: any) {
         // If duplicate code error (23505 = unique_violation), retry
         if (error.code === '23505' && error.constraint === 'audit_plans_code_unique') {
