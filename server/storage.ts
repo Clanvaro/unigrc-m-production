@@ -9916,13 +9916,16 @@ export class DatabaseStorage extends MemStorage {
       let maxEffectivenessLimit = 100; // Default
       try {
         maxEffectivenessLimit = await this.getMaxEffectivenessLimit();
+        console.log(`[DEBUG] calculateControlEffectiveness for control ${controlId}: baseEffectiveness=${baseEffectiveness}%, maxEffectivenessLimit=${maxEffectivenessLimit}%`);
       } catch (error) {
         console.error(`[ERROR] calculateControlEffectiveness: Failed to get max effectiveness limit:`, error);
         // Continue with default value
       }
 
       // Apply the maximum effectiveness limit
-      return Math.min(baseEffectiveness, maxEffectivenessLimit);
+      const finalEffectiveness = Math.min(baseEffectiveness, maxEffectivenessLimit);
+      console.log(`[DEBUG] calculateControlEffectiveness for control ${controlId}: finalEffectiveness=${finalEffectiveness}%`);
+      return finalEffectiveness;
     } catch (error) {
       console.error(`[ERROR] calculateControlEffectiveness: Unexpected error for control ${controlId}:`, error);
       // Try to return current effectiveness as fallback

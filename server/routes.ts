@@ -7941,11 +7941,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
             const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
 
+            // FIXED: Validate maxEffectivenessLimit to prevent it from being 0 or invalid
+            // If the limit is 0 or invalid, use 100 as default (no limit applied)
+            const validMaxLimit = (maxEffectivenessLimit > 0 && maxEffectivenessLimit <= 100) ? maxEffectivenessLimit : 100;
+            
+            if (validMaxLimit < 100) {
+              console.log(`[INFO] /api/controls: Applying max effectiveness limit of ${validMaxLimit}%`);
+            }
+
             controlsWithEffectivenessLimit = paginatedControls.map(control => ({
               ...control,
-              effectiveness: Math.min(control.effectiveness, maxEffectivenessLimit)
+              effectiveness: validMaxLimit < 100 ? Math.min(control.effectiveness, validMaxLimit) : control.effectiveness
             }));
           } catch (configError) {
+            console.warn(`[WARN] /api/controls: Failed to get max effectiveness limit config:`, configError);
             // Continue with original effectiveness values if config fetch fails
           }
 
@@ -8556,8 +8565,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Control not found or could not be updated" });
       }
 
+      // Invalidate controls cache to ensure fresh data is returned
+      try {
+        await invalidateControlDataCaches();
+        console.log(`[CACHE] Invalidated controls cache after effectiveness update for control ${controlId}`);
+      } catch (cacheError) {
+        console.warn(`[WARN] Failed to invalidate controls cache:`, cacheError);
+        // Don't fail the request if cache invalidation fails
+      }
+
       const duration = Date.now() - startTime;
       console.log(`[PERF] /api/controls/${controlId}/complete-evaluation completed in ${duration}ms`);
+      console.log(`[INFO] Control ${controlId} effectiveness updated to ${effectiveness}%`);
 
       res.json({
         control: updatedControl,
