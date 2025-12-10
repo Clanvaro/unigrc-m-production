@@ -357,11 +357,18 @@ function ProcessMapContent() {
   };
 
   const handleCreateProcessSuccess = () => {
+    // Force immediate refetch to show new process immediately
+    queryClient.refetchQueries({ queryKey: ["/api/processes/basic"] });
+    queryClient.refetchQueries({ queryKey: ["/api/processes"] });
+    queryClient.refetchQueries({ queryKey: ["/api/macroprocesos"] });
     setIsCreateProcessDialogOpen(false);
     setSelectedMacroprocesoId(null);
   };
 
   const handleCreateSubprocessSuccess = () => {
+    // Force immediate refetch to show new subprocess immediately
+    queryClient.refetchQueries({ queryKey: ["/api/subprocesos"] });
+    queryClient.refetchQueries({ queryKey: ["/api/processes/basic"] });
     setIsCreateSubprocessDialogOpen(false);
     setSelectedProcesoId(null);
   };
