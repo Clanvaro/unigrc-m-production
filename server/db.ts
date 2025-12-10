@@ -143,9 +143,10 @@ if (databaseUrl) {
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
-    // Rotate connections every 1000 uses to prevent "zombie" connections that may have issues
-    // This helps prevent stale connections that can cause timeouts
-    maxUses: isCloudSql ? 1000 : undefined,
+    // Rotate connections more frequently to prevent "zombie" connections that may have issues
+    // Reduced from 1000 to 200 to recycle connections more aggressively and prevent stale connections
+    // This helps prevent slow pings and connection timeouts
+    maxUses: isCloudSql ? 200 : undefined,
     // Application name for better monitoring in Cloud SQL
     application_name: 'unigrc-backend',
     ssl: sslConfig,
@@ -154,9 +155,9 @@ if (databaseUrl) {
   db = drizzle(pool, { schema, logger: true });
 
   const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=${isCloudSql ? 1000 : 'unlimited'}, env=${isProduction ? 'production' : 'development'}`);
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=${isCloudSql ? 200 : 'unlimited'}, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
-    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms (increased from 30s to handle saturation), maxUses=1000 (adjust DB_POOL_MAX env var if needed). Review Cloud SQL logs to detect connection bottlenecks.`);
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms (increased from 30s to handle saturation), maxUses=200 (reduced from 1000 to recycle stale connections faster), pingInterval=10s (adjust DB_POOL_MAX env var if needed). Review Cloud SQL logs to detect connection bottlenecks.`);
   }
 
   if (isRenderDb) {
@@ -772,9 +773,10 @@ function startPoolWarming() {
   // Detect database type for appropriate ping interval
   const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
   const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
-  // Cloud SQL: More frequent pings to maintain Unix socket connections
-  // Render: 15s, Cloud SQL: 15s, Neon: 20s
-  const PING_INTERVAL = isRender || isCloudSql ? 15000 : 20000;
+  // Cloud SQL: More frequent pings to maintain Unix socket connections and detect stale connections faster
+  // Reduced intervals to detect and fix connection issues more quickly
+  // Render: 10s, Cloud SQL: 10s, Neon: 15s
+  const PING_INTERVAL = isRender || isCloudSql ? 10000 : 15000;
 
   poolWarmingInterval = setInterval(async () => {
     try {
@@ -808,30 +810,57 @@ function startPoolWarming() {
         }
         await warmPool(minWarm);
       } else {
-        // Lightweight ping to keep connections active and detect stale connections
-        const pingStart = Date.now();
-        await pool!.query('SELECT 1');
-        const pingDuration = Date.now() - pingStart;
+        // IMPROVED: Use a specific connection for ping to detect stale connections
+        // SAFE APPROACH: Don't close connections immediately - let pool recycle naturally via maxUses
+        // This prevents reducing pool capacity when at minimum connections
+        let client: any = null;
+        try {
+          const pingStart = Date.now();
+          client = await pool!.connect();
+          await client.query('SELECT 1');
+          const pingDuration = Date.now() - pingStart;
 
-        // Log slow pings (indicates connection issues)
-        if (pingDuration > 500) {
-          console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue`);
-          // If ping is very slow, proactively warm the pool
-          if (pingDuration > 2000) {
-            console.log('🔄 Very slow ping detected, warming pool...');
+          // Log slow pings (indicates connection issues)
+          if (pingDuration > 500) {
+            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue`);
+            
+            // If ping is very slow, mark connection for recycling and warm the pool
+            // SAFE: We don't close the connection - maxUses (200) will recycle it naturally
+            // This ensures we don't reduce pool capacity when at minimum
+            if (pingDuration > 2000) {
+              console.log(`🔄 Very slow ping detected (${pingDuration}ms) - connection will be recycled naturally (maxUses=200), warming pool...`);
+              // Warm pool to ensure fresh connections are available
+              await warmPool(3);
+            } else if (pingDuration > 1000) {
+              // For moderately slow pings, just warm the pool without aggressive action
+              await warmPool(2);
+            }
+          }
+        } catch (error: any) {
+          console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
+          // If ping fails, try to warm the pool to recover
+          try {
+            console.log('🔄 Recovering pool after ping failure...');
             await warmPool(3);
+          } catch (warmError) {
+            console.error('❌ Pool warming failed during recovery:', warmError);
+          }
+        } finally {
+          // Always release the client back to the pool
+          // The connection will be recycled naturally when it reaches maxUses (200)
+          if (client) {
+            try {
+              client.release();
+            } catch (e) {
+              // Ignore release errors - connection may already be closed
+            }
           }
         }
       }
     } catch (error: any) {
-      console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
-      // On ping failure, try to warm the pool
-      try {
-        console.log('🔄 Recovering pool after ping failure...');
-        await warmPool(3);
-      } catch (warmError) {
-        console.error('❌ Pool warming failed during recovery:', warmError);
-      }
+      // This catch block should rarely be hit now since we handle errors in the inner try-catch
+      // But keep it as a safety net for interval-level errors
+      console.warn('⚠️ Pool keep-alive interval error:', error?.message || error);
     }
   }, PING_INTERVAL);
 
