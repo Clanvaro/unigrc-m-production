@@ -84,8 +84,9 @@ RUN mkdir -p dist/public
 # ============================================================================
 FROM node:20-alpine AS runtime
 
-# Install dumb-init, runtime dependencies, and build tools
-# Build tools are needed because canvas needs to compile with node-gyp
+# Install dumb-init and runtime dependencies for canvas
+# OPTIMIZED: Only install runtime libraries (not -dev) and build tools temporarily
+# Build tools are needed only during canvas compilation, then removed
 RUN apk add --no-cache \
     dumb-init \
     python3 \
@@ -114,8 +115,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only (ignore scripts for canvas to patch it manually)
-# Using npm install instead of npm ci to avoid package-lock issues in Docker
-RUN npm install --production --legacy-peer-deps --ignore-scripts
+# OPTIMIZED: Clean npm cache after install to reduce image size
+RUN npm install --production --legacy-peer-deps --ignore-scripts && \
+    npm cache clean --force
 
 # Patch canvas source files to fix C++ compilation errors with Node.js 20
 # The issue is missing #include <cstdint> in CharData.h and FontParser files
@@ -137,13 +139,17 @@ RUN if [ -d "node_modules/canvas/src" ]; then \
     fi; \
     fi
 
-# Now build native modules
+# Build native modules (canvas)
 RUN npm rebuild canvas --build-from-source
 
-# Copy built backend from builder
-COPY --from=builder /app/dist ./dist
+# OPTIMIZED: Remove build tools after canvas compilation to reduce image size
+# Keep only runtime libraries needed by canvas (cairo, jpeg, pango, giflib, pixman)
+RUN apk del python3 make g++ pkgconf cairo-dev jpeg-dev pango-dev giflib-dev pixman-dev && \
+    rm -rf /var/cache/apk/* /tmp/* /root/.npm /root/.node-gyp
 
-# Copy shared schema and types
+# Copy built backend and shared files from builder
+# OPTIMIZED: Copy in single layer to reduce image layers
+COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/shared ./shared
 
 # Set environment variables

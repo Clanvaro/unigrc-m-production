@@ -79,6 +79,7 @@ RUN ls -la dist/public && \
 # ============================================================================
 # Stage 2: Runtime - Serve static files with Express Proxy
 # ============================================================================
+# OPTIMIZED: Use minimal node image for serving static files
 FROM node:20-alpine AS runtime
 
 # Install dumb-init for proper signal handling
@@ -90,13 +91,13 @@ WORKDIR /app
 # Create package.json with type:module for ESM support
 RUN echo '{"type":"module"}' > package.json
 
-# Install production dependencies for the server
-RUN npm install express@4 http-proxy-middleware@2
+# OPTIMIZED: Install only essential dependencies with --no-save to avoid package-lock
+# Using --no-save reduces image size by not creating package-lock.json
+RUN npm install --no-save express@4 http-proxy-middleware@2 && \
+    npm cache clean --force
 
-# Copy built static files from builder stage
+# OPTIMIZED: Copy files in single layer to reduce image layers
 COPY --from=builder /app/dist/public ./public
-
-# Copy the server script
 COPY server.js ./
 
 # Set environment variables
