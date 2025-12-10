@@ -1393,7 +1393,7 @@ export default function Risks() {
       case "rejected":
         return <Badge variant="outline" className="text-red-600 border-red-600">❌ Rechazado</Badge>;
       default:
-        return <Badge variant="secondary">N/A</Badge>;
+        return <Badge variant="outline" className="text-yellow-600 border-yellow-600">⏳ Pendiente</Badge>;
     }
   };
 
@@ -1843,42 +1843,40 @@ export default function Risks() {
       header: <div className="text-center">Validación</div>,
       width: '140px',
       cell: (risk) => {
+        // Usar función memoizada que ya tiene la lógica de agregación y fallback
+        const aggregatedStatus = getAggregatedValidationStatus(risk);
+        
+        // Para mostrar múltiples estados cuando hay varios responsibles, obtener responsibles solo una vez
         const responsibles = getRiskProcessResponsibles(risk);
-
-        if (responsibles.length === 0) {
-          return (
-            <div className="flex justify-center">
-              <Badge variant="secondary" className="text-xs">N/A</Badge>
-            </div>
-          );
-        }
-
-        if (responsibles.length === 1) {
-          const responsible = responsibles[0];
-          if (!responsible) {
+        
+        // Si hay múltiples responsibles con estados diferentes, mostrar los primeros 2
+        if (responsibles.length > 1) {
+          const statuses = responsibles
+            .filter(r => r && r.validationStatus !== undefined)
+            .map(r => r.validationStatus)
+            .slice(0, 2);
+          
+          if (statuses.length > 1 && new Set(statuses).size > 1) {
+            // Hay estados diferentes, mostrar múltiples badges
             return (
-              <div className="flex justify-center">
-                <Badge variant="secondary" className="text-xs">N/A</Badge>
+              <div className="flex flex-col gap-1 items-center">
+                {statuses.map((status, idx) => (
+                  <div key={idx}>
+                    {getValidationBadge(status)}
+                  </div>
+                ))}
+                {responsibles.length > 2 && (
+                  <Badge variant="outline" className="text-xs">+{responsibles.length - 2}</Badge>
+                )}
               </div>
             );
           }
-          return (
-            <div className="flex justify-center">
-              {getValidationBadge(responsible.validationStatus)}
-            </div>
-          );
         }
-
+        
+        // Caso simple: un solo estado (agregado o único responsable)
         return (
-          <div className="flex flex-col gap-1 items-center">
-            {responsibles.filter(r => r && r.validationStatus !== undefined).slice(0, 2).map((r: ResponsibleWithValidation, idx: number) => (
-              <div key={idx}>
-                {getValidationBadge(r.validationStatus)}
-              </div>
-            ))}
-            {responsibles.length > 2 && (
-              <Badge variant="outline" className="text-xs">+{responsibles.length - 2}</Badge>
-            )}
+          <div className="flex justify-center">
+            {getValidationBadge(aggregatedStatus)}
           </div>
         );
       },

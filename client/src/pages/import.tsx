@@ -6,6 +6,21 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 
+// Neomorphic button styles
+const neoButtonStyles = `
+  .neo-button {
+    transition: all 0.3s ease !important;
+  }
+  .neo-button:hover {
+    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.15), -6px -6px 12px rgba(255, 255, 255, 0.9) !important;
+    transform: translateY(-1px);
+  }
+  .neo-button:active {
+    box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.2), inset -2px -2px 4px rgba(255, 255, 255, 0.6) !important;
+    transform: translateY(0);
+  }
+`;
+
 interface ImportSession {
   id: string;
   status: "uploading" | "validating" | "processing" | "completed" | "failed";
@@ -30,6 +45,68 @@ export default function Import() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importSession, setImportSession] = useState<ImportSession | null>(null);
   const [isDryRun, setIsDryRun] = useState(true);
+
+  // Neomorphic styles
+  const neomorphicCardStyle: React.CSSProperties = {
+    boxShadow: '8px 8px 16px rgba(0, 0, 0, 0.1), -8px -8px 16px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #f0f0f0, #ffffff)',
+    borderRadius: '20px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicDropzoneNormal: React.CSSProperties = {
+    boxShadow: 'inset 6px 6px 12px rgba(0, 0, 0, 0.1), inset -6px -6px 12px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #e8e8e8, #f5f5f5)',
+    borderRadius: '20px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicDropzoneDrag: React.CSSProperties = {
+    boxShadow: '8px 8px 16px rgba(0, 0, 0, 0.1), -8px -8px 16px rgba(255, 255, 255, 0.9)',
+    background: 'linear-gradient(145deg, #f5f5f5, #ffffff)',
+    borderRadius: '20px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicButtonStyle: React.CSSProperties = {
+    boxShadow: '4px 4px 8px rgba(0, 0, 0, 0.1), -4px -4px 8px rgba(255, 255, 255, 0.8)',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicCounterStyle: React.CSSProperties = {
+    boxShadow: 'inset 4px 4px 8px rgba(0, 0, 0, 0.1), inset -4px -4px 8px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #f5f5f5, #ffffff)',
+    borderRadius: '16px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicFileCardStyle: React.CSSProperties = {
+    boxShadow: '6px 6px 12px rgba(0, 0, 0, 0.1), -6px -6px 12px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #f5f5f5, #ffffff)',
+    borderRadius: '16px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicBadgeStyle: React.CSSProperties = {
+    boxShadow: '2px 2px 4px rgba(0, 0, 0, 0.1), -2px -2px 4px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #f5f5f5, #ffffff)',
+    borderRadius: '12px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicAlertStyle: React.CSSProperties = {
+    boxShadow: 'inset 3px 3px 6px rgba(0, 0, 0, 0.1), inset -3px -3px 6px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #f8f8f8, #ffffff)',
+    borderRadius: '16px',
+    transition: 'all 0.3s ease',
+  };
+
+  const neomorphicErrorStyle: React.CSSProperties = {
+    boxShadow: 'inset 2px 2px 4px rgba(0, 0, 0, 0.1), inset -2px -2px 4px rgba(255, 255, 255, 0.8)',
+    background: 'linear-gradient(145deg, #fef0f0, #ffffff)',
+    borderRadius: '12px',
+    transition: 'all 0.3s ease',
+  };
 
   const handleFileSelect = (file: File) => {
     if (file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || 
@@ -174,8 +251,9 @@ export default function Import() {
 
   return (
     <div className="space-y-6">
+      <style>{neoButtonStyles}</style>
       {/* Template Download */}
-      <Card data-testid="card-template-download">
+      <Card data-testid="card-template-download" style={neomorphicCardStyle}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Download className="h-5 w-5" />
@@ -189,19 +267,21 @@ export default function Import() {
                 Descargue la plantilla oficial con las hojas y columnas requeridas
               </p>
               <div className="flex flex-wrap gap-2">
-                <Badge variant="outline">Entidades Fiscales</Badge>
-                <Badge variant="outline">Propietarios de Procesos</Badge>
-                <Badge variant="outline">Macroprocesos</Badge>
-                <Badge variant="outline">Procesos</Badge>
-                <Badge variant="outline">Subprocesos</Badge>
-                <Badge variant="outline">Riesgos</Badge>
-                <Badge variant="outline">Controles</Badge>
-                <Badge variant="outline">Planes de Acción</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Entidades Fiscales</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Propietarios de Procesos</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Macroprocesos</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Procesos</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Subprocesos</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Riesgos</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Controles</Badge>
+                <Badge variant="outline" style={neomorphicBadgeStyle}>Planes de Acción</Badge>
               </div>
             </div>
             <Button 
               onClick={downloadTemplate}
               data-testid="button-download-template"
+              style={neomorphicButtonStyle}
+              className="neo-button"
             >
               <Download className="mr-2 h-4 w-4" />
               Descargar Plantilla
@@ -211,7 +291,7 @@ export default function Import() {
       </Card>
 
       {/* File Upload */}
-      <Card data-testid="card-file-upload">
+      <Card data-testid="card-file-upload" style={neomorphicCardStyle}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
@@ -221,11 +301,12 @@ export default function Import() {
         <CardContent>
           {!selectedFile && !importSession && (
             <div
-              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+              className={`border-2 border-dashed rounded-lg p-8 text-center ${
                 isDragOver 
-                  ? "border-primary bg-primary/5" 
+                  ? "border-primary/30" 
                   : "border-muted-foreground/25"
               }`}
+              style={isDragOver ? neomorphicDropzoneDrag : neomorphicDropzoneNormal}
               onDrop={handleDrop}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -250,7 +331,7 @@ export default function Import() {
                 data-testid="input-file"
               />
               <label htmlFor="file-input">
-                <Button asChild data-testid="button-select-file">
+                <Button asChild data-testid="button-select-file" style={neomorphicButtonStyle} className="neo-button">
                   <span>Seleccionar Archivo</span>
                 </Button>
               </label>
@@ -259,7 +340,7 @@ export default function Import() {
 
           {selectedFile && !importSession && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 border rounded-lg">
+              <div className="flex items-center justify-between p-4 border rounded-lg" style={neomorphicFileCardStyle}>
                 <div className="flex items-center gap-3">
                   <FileSpreadsheet className="h-8 w-8 text-green-600" />
                   <div>
@@ -274,12 +355,14 @@ export default function Import() {
                   size="sm"
                   onClick={() => setSelectedFile(null)}
                   data-testid="button-remove-file"
+                  className="neo-button"
+                  style={neomorphicButtonStyle}
                 >
                   <X className="h-4 w-4" />
                 </Button>
               </div>
 
-              <Alert>
+              <Alert style={neomorphicAlertStyle}>
                 <AlertCircle className="h-4 w-4" />
                 <AlertDescription>
                   <div className="flex items-center gap-2">
@@ -301,8 +384,9 @@ export default function Import() {
               <div className="flex gap-3">
                 <Button
                   onClick={() => handleUpload(isDryRun)}
-                  className="flex-1"
+                  className="flex-1 neo-button"
                   data-testid="button-start-import"
+                  style={neomorphicButtonStyle}
                 >
                   {isDryRun ? "Validar Datos" : "Importar Datos"}
                 </Button>
@@ -310,6 +394,8 @@ export default function Import() {
                   variant="outline"
                   onClick={() => setSelectedFile(null)}
                   data-testid="button-cancel"
+                  className="neo-button"
+                  style={neomorphicButtonStyle}
                 >
                   Cancelar
                 </Button>
@@ -321,7 +407,7 @@ export default function Import() {
 
       {/* Import Progress */}
       {importSession && (
-        <Card data-testid="card-import-progress">
+        <Card data-testid="card-import-progress" style={neomorphicCardStyle}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               {importSession.status === "completed" ? (
@@ -338,6 +424,7 @@ export default function Import() {
               <Badge 
                 variant={importSession.status === "completed" ? "default" : "secondary"}
                 data-testid={`status-${importSession.status}`}
+                style={neomorphicBadgeStyle}
               >
                 {importSession.status === "uploading" && "Subiendo"}
                 {importSession.status === "validating" && "Validando"}
@@ -351,19 +438,19 @@ export default function Import() {
 
             {importSession.summary && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
-                <div className="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                <div className="text-center p-3 rounded-lg" style={{...neomorphicCounterStyle, background: 'linear-gradient(145deg, #f0f9f0, #ffffff)'}}>
                   <div className="text-2xl font-bold text-green-600">{importSession.summary.created}</div>
                   <div className="text-sm text-muted-foreground">Creados</div>
                 </div>
-                <div className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                <div className="text-center p-3 rounded-lg" style={{...neomorphicCounterStyle, background: 'linear-gradient(145deg, #f0f4f9, #ffffff)'}}>
                   <div className="text-2xl font-bold text-blue-600">{importSession.summary.updated}</div>
                   <div className="text-sm text-muted-foreground">Actualizados</div>
                 </div>
-                <div className="text-center p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                <div className="text-center p-3 rounded-lg" style={{...neomorphicCounterStyle, background: 'linear-gradient(145deg, #fef9f0, #ffffff)'}}>
                   <div className="text-2xl font-bold text-yellow-600">{importSession.summary.skipped}</div>
                   <div className="text-sm text-muted-foreground">Omitidos</div>
                 </div>
-                <div className="text-center p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <div className="text-center p-3 rounded-lg" style={{...neomorphicCounterStyle, background: 'linear-gradient(145deg, #fef0f0, #ffffff)'}}>
                   <div className="text-2xl font-bold text-red-600">{importSession.summary.errors}</div>
                   <div className="text-sm text-muted-foreground">Errores</div>
                 </div>
@@ -375,7 +462,7 @@ export default function Import() {
                 <h4 className="font-medium text-red-600">Errores encontrados:</h4>
                 <div className="max-h-40 overflow-y-auto space-y-1">
                   {importSession.errors.map((error, index) => (
-                    <div key={index} className="text-sm p-2 bg-red-50 dark:bg-red-900/20 rounded border-l-4 border-red-500">
+                    <div key={index} className="text-sm p-2 rounded border-l-4 border-red-500" style={neomorphicErrorStyle}>
                       <span className="font-medium">{error.sheet}</span> - Fila {error.row}, Campo {error.field}: {error.message}
                     </div>
                   ))}
@@ -391,6 +478,8 @@ export default function Import() {
                     variant="outline"
                     disabled={!importSession.errors || importSession.errors.length === 0}
                     data-testid="button-download-errors"
+                    className="neo-button"
+                    style={neomorphicButtonStyle}
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Descargar Reporte de Errores
@@ -398,6 +487,8 @@ export default function Import() {
                   <Button
                     onClick={resetImport}
                     data-testid="button-new-import"
+                    className="neo-button"
+                    style={neomorphicButtonStyle}
                   >
                     Nueva Importación
                   </Button>
