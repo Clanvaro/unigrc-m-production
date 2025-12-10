@@ -2737,99 +2737,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const cacheKey = `risk-matrix-lite:${CACHE_VERSION}:single-tenant`;
 
-      const cachedData = await distributedCache.get(cacheKey);
-      if (cachedData) {
-        console.log(`[CACHE HIT] /api/risk-matrix/lite in ${Date.now() - startTime}ms`);
-        return res.json(cachedData);
-      }
+      // OPTIMIZED: Use 2-tier cache (memory + Redis) for better performance
+      const result = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          // Single optimized SQL query for heatmap data
+          // Uses CTE for control effectiveness calculation
+          const heatmapData = await requireDb().execute(sql`
+            WITH risk_control_factors AS (
+              SELECT 
+                rc.risk_id,
+                EXP(SUM(CASE 
+                  WHEN c.effect_target IN ('probability', 'both') 
+                  THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+                  ELSE 0 
+                END)) as prob_factor,
+                EXP(SUM(CASE 
+                  WHEN c.effect_target IN ('impact', 'both') 
+                  THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+                  ELSE 0 
+                END)) as impact_factor,
+                COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count
+              FROM risk_controls rc
+              JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+              GROUP BY rc.risk_id
+            ),
+            risk_validation_status AS (
+              SELECT 
+                rpl.risk_id,
+                CASE 
+                  WHEN COUNT(*) = 0 THEN 'pending'
+                  WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
+                  WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
+                  WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
+                  ELSE 'pending'
+                END as aggregated_status
+              FROM risk_process_links rpl
+              GROUP BY rpl.risk_id
+            ),
+            risk_process_primary AS (
+              SELECT DISTINCT ON (rpl.risk_id)
+                rpl.risk_id,
+                rpl.macroproceso_id,
+                rpl.process_id,
+                rpl.subproceso_id
+              FROM risk_process_links rpl
+              ORDER BY rpl.risk_id, rpl.created_at
+            )
+            SELECT 
+              r.id,
+              r.code,
+              r.name,
+              r.category,
+              r.probability,
+              r.impact,
+              r.inherent_risk,
+              COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
+              COALESCE(rpp.process_id, r.process_id) as process_id,
+              COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
+              COALESCE(rvs.aggregated_status, 'pending') as validation_status,
+              COALESCE(rcf.control_count, 0) as control_count,
+              -- Calculate residual probability/impact
+              GREATEST(0.1, LEAST(5, ROUND(
+                r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
+              ))) as residual_probability,
+              GREATEST(0.1, LEAST(5, ROUND(
+                r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
+              ))) as residual_impact
+            FROM risks r
+            LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
+            LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
+            LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
+            WHERE r.status = 'active' 
+              AND r.deleted_at IS NULL
+            ORDER BY r.inherent_risk DESC
+          `);
 
-      // Single optimized SQL query for heatmap data
-      // Uses CTE for control effectiveness calculation
-      const heatmapData = await requireDb().execute(sql`
-        WITH risk_control_factors AS (
-          SELECT 
-            rc.risk_id,
-            EXP(SUM(CASE 
-              WHEN c.effect_target IN ('probability', 'both') 
-              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
-              ELSE 0 
-            END)) as prob_factor,
-            EXP(SUM(CASE 
-              WHEN c.effect_target IN ('impact', 'both') 
-              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
-              ELSE 0 
-            END)) as impact_factor,
-            COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count
-          FROM risk_controls rc
-          JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
-          GROUP BY rc.risk_id
-        ),
-        risk_validation_status AS (
-          SELECT 
-            rpl.risk_id,
-            CASE 
-              WHEN COUNT(*) = 0 THEN 'pending'
-              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
-              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
-              WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
-              ELSE 'pending'
-            END as aggregated_status
-          FROM risk_process_links rpl
-          GROUP BY rpl.risk_id
-        ),
-        risk_process_primary AS (
-          SELECT DISTINCT ON (rpl.risk_id)
-            rpl.risk_id,
-            rpl.macroproceso_id,
-            rpl.process_id,
-            rpl.subproceso_id
-          FROM risk_process_links rpl
-          ORDER BY rpl.risk_id, rpl.created_at
-        )
-        SELECT 
-          r.id,
-          r.code,
-          r.name,
-          r.category,
-          r.probability,
-          r.impact,
-          r.inherent_risk,
-          COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
-          COALESCE(rpp.process_id, r.process_id) as process_id,
-          COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
-          COALESCE(rvs.aggregated_status, 'pending') as validation_status,
-          COALESCE(rcf.control_count, 0) as control_count,
-          -- Calculate residual probability/impact
-          GREATEST(0.1, LEAST(5, ROUND(
-            r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
-          ))) as residual_probability,
-          GREATEST(0.1, LEAST(5, ROUND(
-            r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
-          ))) as residual_impact
-        FROM risks r
-        LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
-        LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
-        LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
-        WHERE r.status = 'active' 
-          AND r.deleted_at IS NULL
-        ORDER BY r.inherent_risk DESC
-      `);
+          // Get risk level ranges config
+          const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
+            config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+          );
 
-      // Get risk level ranges config
-      const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
-        config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+          return {
+            risks: heatmapData.rows,
+            riskLevelRanges,
+            timestamp: new Date().toISOString()
+          };
+        },
+        300 // OPTIMIZED: Increased cache TTL from 60s to 300s (5 minutes) for better performance
       );
 
-      const result = {
-        risks: heatmapData.rows,
-        riskLevelRanges,
-        timestamp: new Date().toISOString()
-      };
-
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, result, 60);
-
-      console.log(`[CACHE MISS] /api/risk-matrix/lite computed in ${Date.now() - startTime}ms (${heatmapData.rows.length} risks)`);
+      const duration = Date.now() - startTime;
+      if (duration < 100) {
+        console.log(`[CACHE HIT] /api/risk-matrix/lite in ${duration}ms`);
+      } else {
+        console.log(`[CACHE MISS] /api/risk-matrix/lite computed in ${duration}ms (${result.risks.length} risks)`);
+      }
       res.json(result);
     } catch (error) {
       console.error("Error fetching risk matrix lite data:", error);
@@ -7772,6 +7775,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // SPRINT 3 OPTIMIZATION: Server-side Pagination & Filtering for Controls List
   // Replaced 'fetch all' with dynamic SQL queries to handle 10x data scale
   app.get("/api/controls", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const startTime = Date.now();
     try {
       // Get active tenant ID
       const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -7796,46 +7800,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Build cache key
       const cacheKey = `controls:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
 
-      // Try cache first
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/controls key=${cacheKey.slice(0, 50)}...`);
+      // OPTIMIZED: Use 2-tier cache (memory + Redis) for better performance
+      const response = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          // Fetch controls from database with details (including controlOwner)
+          const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(filters, limit, offset);
+
+          // Apply current maximum effectiveness limit dynamically
+          let controlsWithEffectivenessLimit = paginatedControls;
+          try {
+            const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
+            const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
+
+            controlsWithEffectivenessLimit = paginatedControls.map(control => ({
+              ...control,
+              effectiveness: Math.min(control.effectiveness, maxEffectivenessLimit)
+            }));
+          } catch (configError) {
+            // Continue with original effectiveness values if config fetch fails
+          }
+
+          return {
+            data: controlsWithEffectivenessLimit,
+            pagination: {
+              limit,
+              offset,
+              total,
+              hasMore: offset + limit < total
+            }
+          };
+        },
+        60 // OPTIMIZED: Increased cache TTL from 15s to 60s for better performance
+      );
+
+      const duration = Date.now() - startTime;
+      if (duration < 100) {
+        console.log(`[CACHE HIT] /api/controls in ${duration}ms`);
         res.setHeader('X-Cache', 'HIT');
-        return res.json(cached);
+      } else {
+        console.log(`[CACHE MISS] /api/controls computed in ${duration}ms`);
+        res.setHeader('X-Cache', 'MISS');
       }
-
-      // Fetch controls from database with details (including controlOwner)
-      const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(filters, limit, offset);
-
-      // Apply current maximum effectiveness limit dynamically
-      let controlsWithEffectivenessLimit = paginatedControls;
-      try {
-        const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
-        const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
-
-        controlsWithEffectivenessLimit = paginatedControls.map(control => ({
-          ...control,
-          effectiveness: Math.min(control.effectiveness, maxEffectivenessLimit)
-        }));
-      } catch (configError) {
-        // Continue with original effectiveness values if config fetch fails
-      }
-
-      // Prepare response
-      const response = {
-        data: controlsWithEffectivenessLimit,
-        pagination: {
-          limit,
-          offset,
-          total,
-          hasMore: offset + limit < total
-        }
-      };
-
-      // Cache for 15 seconds (invalidated automatically on mutations)
-      await distributedCache.set(cacheKey, response, 15);
-
-      res.setHeader('X-Cache', 'MISS');
       res.json(response);
     } catch (error) {
       console.error("[ERROR] /api/controls failed:", error);
