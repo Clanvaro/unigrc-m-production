@@ -30,7 +30,7 @@ import {
   invalidateMacroprocesoHierarchy,
   CACHE_VERSION
 } from './cache-helpers';
-import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded } from "./db";
+import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
@@ -2734,6 +2734,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Frontend loads catalogs separately via /api/lookups/* endpoints
   app.get("/api/risk-matrix/lite", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    let tConnect = 0;
+    let tQuery = 0;
+    
     try {
       const cacheKey = `risk-matrix-lite:${CACHE_VERSION}:single-tenant`;
 
@@ -2741,88 +2744,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await getFromTieredCache(
         cacheKey,
         async () => {
-          // Single optimized SQL query for heatmap data
-          // Uses CTE for control effectiveness calculation
-          const heatmapData = await requireDb().execute(sql`
-            WITH risk_control_factors AS (
-              SELECT 
-                rc.risk_id,
-                EXP(SUM(CASE 
-                  WHEN c.effect_target IN ('probability', 'both') 
-                  THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
-                  ELSE 0 
-                END)) as prob_factor,
-                EXP(SUM(CASE 
-                  WHEN c.effect_target IN ('impact', 'both') 
-                  THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
-                  ELSE 0 
-                END)) as impact_factor,
-                COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count
-              FROM risk_controls rc
-              JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
-              GROUP BY rc.risk_id
-            ),
-            risk_validation_status AS (
-              SELECT 
-                rpl.risk_id,
-                CASE 
-                  WHEN COUNT(*) = 0 THEN 'pending'
-                  WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
-                  WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
-                  WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
-                  ELSE 'pending'
-                END as aggregated_status
-              FROM risk_process_links rpl
-              GROUP BY rpl.risk_id
-            ),
-            risk_process_primary AS (
-              SELECT DISTINCT ON (rpl.risk_id)
-                rpl.risk_id,
-                rpl.macroproceso_id,
-                rpl.process_id,
-                rpl.subproceso_id
-              FROM risk_process_links rpl
-              ORDER BY rpl.risk_id, rpl.created_at
-            )
-            SELECT 
-              r.id,
-              r.code,
-              r.name,
-              r.category,
-              r.probability,
-              r.impact,
-              r.inherent_risk,
-              COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
-              COALESCE(rpp.process_id, r.process_id) as process_id,
-              COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
-              COALESCE(rvs.aggregated_status, 'pending') as validation_status,
-              COALESCE(rcf.control_count, 0) as control_count,
-              -- Calculate residual probability/impact
-              GREATEST(0.1, LEAST(5, ROUND(
-                r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
-              ))) as residual_probability,
-              GREATEST(0.1, LEAST(5, ROUND(
-                r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
-              ))) as residual_impact
-            FROM risks r
-            LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
-            LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
-            LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
-            WHERE r.status = 'active' 
-              AND r.deleted_at IS NULL
-            ORDER BY r.inherent_risk DESC
-          `);
+          if (!pool) {
+            throw new Error("Database pool not initialized");
+          }
 
-          // Get risk level ranges config
-          const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
-            config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
-          );
+          // INSTRUMENTED: Measure pool connection time vs query time
+          const t1 = Date.now();
+          const client = await pool.connect();
+          tConnect = Date.now() - t1;
 
-          return {
-            risks: heatmapData.rows,
-            riskLevelRanges,
-            timestamp: new Date().toISOString()
-          };
+          try {
+            // Single optimized SQL query for heatmap data
+            // Uses CTE for control effectiveness calculation
+            const queryString = `
+              WITH risk_control_factors AS (
+                SELECT 
+                  rc.risk_id,
+                  EXP(SUM(CASE 
+                    WHEN c.effect_target IN ('probability', 'both') 
+                    THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+                    ELSE 0 
+                  END)) as prob_factor,
+                  EXP(SUM(CASE 
+                    WHEN c.effect_target IN ('impact', 'both') 
+                    THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+                    ELSE 0 
+                  END)) as impact_factor,
+                  COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count
+                FROM risk_controls rc
+                JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+                GROUP BY rc.risk_id
+              ),
+              risk_validation_status AS (
+                SELECT 
+                  rpl.risk_id,
+                  CASE 
+                    WHEN COUNT(*) = 0 THEN 'pending'
+                    WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
+                    WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
+                    WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
+                    ELSE 'pending'
+                  END as aggregated_status
+                FROM risk_process_links rpl
+                GROUP BY rpl.risk_id
+              ),
+              risk_process_primary AS (
+                SELECT DISTINCT ON (rpl.risk_id)
+                  rpl.risk_id,
+                  rpl.macroproceso_id,
+                  rpl.process_id,
+                  rpl.subproceso_id
+                FROM risk_process_links rpl
+                ORDER BY rpl.risk_id, rpl.created_at
+              )
+              SELECT 
+                r.id,
+                r.code,
+                r.name,
+                r.category,
+                r.probability,
+                r.impact,
+                r.inherent_risk,
+                COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
+                COALESCE(rpp.process_id, r.process_id) as process_id,
+                COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
+                COALESCE(rvs.aggregated_status, 'pending') as validation_status,
+                COALESCE(rcf.control_count, 0) as control_count,
+                -- Calculate residual probability/impact
+                GREATEST(0.1, LEAST(5, ROUND(
+                  r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
+                ))) as residual_probability,
+                GREATEST(0.1, LEAST(5, ROUND(
+                  r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
+                ))) as residual_impact
+              FROM risks r
+              LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
+              LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
+              LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
+              WHERE r.status = 'active' 
+                AND r.deleted_at IS NULL
+              ORDER BY r.inherent_risk DESC
+            `;
+
+            const t2 = Date.now();
+            const heatmapData = await client.query(queryString);
+            tQuery = Date.now() - t2;
+
+            const total = Date.now() - startTime;
+            console.log('[PROFILE] /api/risk-matrix/lite', {
+              tConnect,
+              tQuery,
+              total,
+              riskCount: heatmapData.rows.length
+            });
+
+            // Get risk level ranges config
+            const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
+              config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+            );
+
+            return {
+              risks: heatmapData.rows,
+              riskLevelRanges,
+              timestamp: new Date().toISOString()
+            };
+          } finally {
+            client.release();
+          }
         },
         300 // OPTIMIZED: Increased cache TTL from 60s to 300s (5 minutes) for better performance
       );
@@ -2835,7 +2863,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.json(result);
     } catch (error) {
-      console.error("Error fetching risk matrix lite data:", error);
+      const total = Date.now() - startTime;
+      console.error(`[ERROR] /api/risk-matrix/lite failed after ${total}ms (tConnect: ${tConnect}ms, tQuery: ${tQuery}ms):`, error);
       res.status(500).json({ message: "Failed to fetch risk matrix data" });
     }
   });
