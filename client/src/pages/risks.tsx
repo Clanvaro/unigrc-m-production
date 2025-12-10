@@ -338,8 +338,8 @@ export default function Risks() {
     // Only fetch when detail dialogs are open or when columns that need full data are visible
     // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
     enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.validation) && riskIds.length > 0,
-    staleTime: 1000 * 60, // 60 seconds - matches server cache TTL to avoid unnecessary refetches
-    refetchOnMount: false, // Don't refetch on mount if data is still fresh (staleTime handles this)
+    staleTime: 1000 * 30, // 30 seconds - reduced to ensure validation status updates appear faster
+    refetchOnMount: true, // Refetch on mount to ensure fresh validation status after returning from validation center
     refetchOnWindowFocus: false, // Don't refetch on window focus - data changes infrequently
   });
 

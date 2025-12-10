@@ -471,6 +471,8 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/not-notified/list"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks"] });
+      // CRITICAL: Invalidate batch-relations cache so risk list shows updated validation status
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/batch-relations"], exact: false });
       toast({
         title: "Enlace proceso-riesgo validado",
         description: `El enlace ha sido ${validationAction === "validated" ? "aprobado" : validationAction === "observed" ? "observado" : "rechazado"} exitosamente.`,
@@ -508,6 +510,8 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/rejected"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/observed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
+      // CRITICAL: Invalidate batch-relations cache so risk list shows updated validation status
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/batch-relations"], exact: false });
       toast({
         title: "Riesgo validado",
         description: `El riesgo ha sido ${validationAction === "validated" ? "aprobado" : "rechazado"} exitosamente.`,
