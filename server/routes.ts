@@ -5048,6 +5048,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Process Validation Dashboard - Get all process validations (with 15s cache for validation center)
   app.get("/api/process-validations/dashboard", requirePermission("view_all"), async (req, res) => {
+    const startTime = Date.now();
     try {
       // Extract tenant ID for cache key (validation dashboard may not be strictly tenant-scoped in current impl)
       const tenantId = (req as any).user?.activeTenantId || 'global';
@@ -5059,16 +5060,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
-      // Cache miss - query database
-      const processValidations = await storage.getProcessValidationDashboard();
+      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
+      const dashboardPromise = storage.getProcessValidationDashboard();
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+      });
+
+      const processValidations = await Promise.race([dashboardPromise, timeoutPromise]);
 
       // Cache for 15 seconds (critical validation data needs fresher updates)
       await distributedCache.set(cacheKey, processValidations, 15);
 
       res.json(processValidations);
     } catch (error) {
-      console.error("Error fetching process validation dashboard:", error);
-      res.status(500).json({ message: "Failed to fetch process validation dashboard" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/process-validations/dashboard failed after ${duration}ms:`, error);
+      
+      // Return cached data if available as fallback
+      try {
+        const cached = await distributedCache.get(`validation:process-dashboard:${(req as any).user?.activeTenantId || 'global'}`);
+        if (cached) {
+          console.log(`[FALLBACK] Returning cached process validation dashboard`);
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        // Ignore cache errors
+      }
+
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT"
+        });
+      }
+
+      res.status(500).json({ 
+        message: "Failed to fetch process validation dashboard",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -5779,6 +5809,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get risk-process links by validation status (cached 15s for validation center)
   app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -5803,14 +5834,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
-      const riskProcessLinks = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
+      const queryPromise = storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+      });
+
+      const riskProcessLinks = await Promise.race([queryPromise, timeoutPromise]);
 
       await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
 
       res.json(riskProcessLinks);
     } catch (error) {
-      console.error("Error fetching risk processes by validation status:", error);
-      res.status(500).json({ message: "Failed to fetch risk processes by validation status" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/risk-processes/validation/:status failed after ${duration}ms:`, error);
+      
+      // Return cached data if available as fallback
+      try {
+        const { tenantId } = await resolveActiveTenant(req, { required: true });
+        const { status } = req.params;
+        const actualStatus = status === 'pending' ? 'pending_validation' : status;
+        const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+        const cached = await distributedCache.get(cacheKey);
+        if (cached) {
+          console.log(`[FALLBACK] Returning cached risk-processes validation data`);
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        // Ignore cache errors
+      }
+
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT"
+        });
+      }
+
+      res.status(500).json({ 
+        message: "Failed to fetch risk processes by validation status",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -5844,6 +5909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // OPTIMIZED: Single endpoint for validation counts (always needed for summary cards)
   // Uses direct SQL COUNT queries for maximum performance
   app.get("/api/validation/counts", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `validation:counts:${CACHE_VERSION}:${tenantId}`;
@@ -5858,11 +5924,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
-      const startTime = Date.now();
-
       // Get counts in parallel using direct SQL COUNT queries (fastest approach)
       // IMPORTANT: Filter out deleted risks by joining with risks table
-      const [risksNotifiedCount, risksNotNotifiedCount, controlsNotifiedCount, controlsNotNotifiedCount, actionPlansNotifiedCount, actionPlansNotNotifiedCount] = await Promise.all([
+      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
+      const countsPromise = Promise.all([
         // Risks notified (pending_validation + notificationSent = true + risk not deleted)
         requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
           .from(riskProcessLinks)
@@ -5925,6 +5990,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           )).then(r => r[0]?.count || 0),
       ]);
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+      });
+
+      const [risksNotifiedCount, risksNotNotifiedCount, controlsNotifiedCount, controlsNotNotifiedCount, actionPlansNotifiedCount, actionPlansNotNotifiedCount] = await Promise.race([
+        countsPromise,
+        timeoutPromise
+      ]);
+
       const duration = Date.now() - startTime;
       console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms`);
 
@@ -5947,8 +6021,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await distributedCache.set(cacheKey, response, 30);
       res.json(response);
     } catch (error) {
-      console.error("Error fetching validation counts:", error);
-      res.status(500).json({ message: "Failed to fetch validation counts" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/validation/counts failed after ${duration}ms:`, error);
+      
+      // Return cached data if available as fallback
+      try {
+        const cached = await distributedCache.get(`validation:counts:${CACHE_VERSION}:${(req as any).user?.activeTenantId || 'default'}`);
+        if (cached) {
+          console.log(`[FALLBACK] Returning cached validation counts`);
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        // Ignore cache errors
+      }
+
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT"
+        });
+      }
+
+      res.status(500).json({ 
+        message: "Failed to fetch validation counts",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
@@ -14734,6 +14832,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Dashboard stats (existing general dashboard)
   app.get("/api/dashboard/stats", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const startTime = Date.now();
     try {
       // Try cache first (5-15 min TTL for dashboard data)
       const cacheKey = `dashboard-stats:single-tenant`;
@@ -14745,21 +14844,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[CACHE MISS] dashboard-stats`);
 
-      // Get basic stats first
-      const baseStats = await storage.getDashboardStats();
+      // OPTIMIZED: Add timeout to prevent 504 errors (15 seconds max for dashboard)
+      const dashboardPromise = (async () => {
 
-      // OPTIMIZED: Calculate organizational risk metrics - SELECT specific columns only
-      const [allRisks, allRiskControls] = await Promise.all([
-        requireDb().select({
-          id: risks.id,
-          inherentRisk: risks.inherentRisk,
-          processId: risks.processId,
-        }).from(risks).where(isNull(risks.deletedAt)),
-        requireDb().select({
-          riskId: riskControls.riskId,
-          residualRisk: riskControls.residualRisk,
-        }).from(riskControls)
-      ]);
+        // Get basic stats first
+        const baseStats = await storage.getDashboardStats();
+
+        // OPTIMIZED: Calculate organizational risk metrics - SELECT specific columns only
+        const [allRisks, allRiskControls] = await Promise.all([
+          requireDb().select({
+            id: risks.id,
+            inherentRisk: risks.inherentRisk,
+            processId: risks.processId,
+          }).from(risks).where(isNull(risks.deletedAt)),
+          requireDb().select({
+            riskId: riskControls.riskId,
+            residualRisk: riskControls.residualRisk,
+          }).from(riskControls)
+        ]);
 
       if (allRisks.length > 0) {
         // Calculate residual risk for each risk
@@ -14820,15 +14922,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Cache for 5 minutes - dashboard data changes moderately
         await distributedCache.set(cacheKey, enhancedStats, 300);
-        res.json(enhancedStats);
+        return enhancedStats;
       } else {
         // Cache for 5 minutes
         await distributedCache.set(cacheKey, baseStats, 300);
-        res.json(baseStats);
+        return baseStats;
       }
+      })();
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Dashboard query timeout after 15 seconds')), 15000);
+      });
+
+      const result = await Promise.race([dashboardPromise, timeoutPromise]);
+      res.json(result);
     } catch (error) {
-      console.error("Dashboard stats error:", error);
-      res.status(500).json({ message: "Failed to fetch dashboard stats" });
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/dashboard/stats failed after ${duration}ms:`, error);
+      
+      // Return cached data if available as fallback
+      try {
+        const cached = await distributedCache.get(`dashboard-stats:single-tenant`);
+        if (cached) {
+          console.log(`[FALLBACK] Returning cached dashboard stats`);
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        // Ignore cache errors
+      }
+
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: "Request timeout. The dashboard query took too long to execute.",
+          error: "TIMEOUT"
+        });
+      }
+
+      res.status(500).json({ 
+        message: "Failed to fetch dashboard stats",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 

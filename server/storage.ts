@@ -9870,43 +9870,70 @@ export class DatabaseStorage extends MemStorage {
 
   // Calculate control effectiveness based on evaluations
   async calculateControlEffectiveness(controlId: string): Promise<number> {
-    // Get all criteria with their weights
-    const criteria = await this.getControlEvaluationCriteria();
+    try {
+      // Get all criteria with their weights
+      const criteria = await this.getControlEvaluationCriteria();
 
-    // Get evaluations for this control
-    const evaluations = await db.select({
-      criteriaId: controlEvaluations.criteriaId,
-      score: controlEvaluationOptions.score,
-      weight: controlEvaluationCriteria.weight
-    })
-      .from(controlEvaluations)
-      .innerJoin(controlEvaluationOptions, eq(controlEvaluations.optionId, controlEvaluationOptions.id))
-      .innerJoin(controlEvaluationCriteria, eq(controlEvaluations.criteriaId, controlEvaluationCriteria.id))
-      .where(eq(controlEvaluations.controlId, controlId));
+      // Get evaluations for this control
+      const evaluations = await db.select({
+        criteriaId: controlEvaluations.criteriaId,
+        score: controlEvaluationOptions.score,
+        weight: controlEvaluationCriteria.weight
+      })
+        .from(controlEvaluations)
+        .innerJoin(controlEvaluationOptions, eq(controlEvaluations.optionId, controlEvaluationOptions.id))
+        .innerJoin(controlEvaluationCriteria, eq(controlEvaluations.criteriaId, controlEvaluationCriteria.id))
+        .where(eq(controlEvaluations.controlId, controlId));
 
-    if (evaluations.length === 0) {
-      // No evaluations completed - return current manual effectiveness if set
-      const control = await this.getControl(controlId);
-      return control?.effectiveness || 0;
+      if (evaluations.length === 0) {
+        // No evaluations completed - return current manual effectiveness if set
+        try {
+          const control = await this.getControl(controlId);
+          return control?.effectiveness || 0;
+        } catch (error) {
+          console.error(`[ERROR] calculateControlEffectiveness: Failed to get control ${controlId}:`, error);
+          return 0; // Return 0 if control not found
+        }
+      }
+
+      // Calculate weighted average
+      let totalWeightedScore = 0;
+      let totalWeight = 0;
+
+      for (const evaluation of evaluations) {
+        const score = Number(evaluation.score) || 0;
+        const weight = Number(evaluation.weight) || 0;
+        if (score > 0 && weight > 0) {
+          totalWeightedScore += (score * weight) / 100;
+          totalWeight += weight;
+        }
+      }
+
+      // Calculate base effectiveness percentage (0-100)
+      const baseEffectiveness = totalWeight > 0 ? Math.round((totalWeightedScore / totalWeight) * 100) : 0;
+
+      // Get maximum effectiveness limit from system configuration
+      let maxEffectivenessLimit = 100; // Default
+      try {
+        maxEffectivenessLimit = await this.getMaxEffectivenessLimit();
+      } catch (error) {
+        console.error(`[ERROR] calculateControlEffectiveness: Failed to get max effectiveness limit:`, error);
+        // Continue with default value
+      }
+
+      // Apply the maximum effectiveness limit
+      return Math.min(baseEffectiveness, maxEffectivenessLimit);
+    } catch (error) {
+      console.error(`[ERROR] calculateControlEffectiveness: Unexpected error for control ${controlId}:`, error);
+      // Try to return current effectiveness as fallback
+      try {
+        const control = await this.getControl(controlId);
+        return control?.effectiveness || 0;
+      } catch (fallbackError) {
+        console.error(`[ERROR] calculateControlEffectiveness: Fallback also failed:`, fallbackError);
+        return 0; // Last resort: return 0
+      }
     }
-
-    // Calculate weighted average
-    let totalWeightedScore = 0;
-    let totalWeight = 0;
-
-    for (const evaluation of evaluations) {
-      totalWeightedScore += (evaluation.score * evaluation.weight) / 100;
-      totalWeight += evaluation.weight;
-    }
-
-    // Calculate base effectiveness percentage (0-100)
-    const baseEffectiveness = totalWeight > 0 ? Math.round((totalWeightedScore / totalWeight) * 100) : 0;
-
-    // Get maximum effectiveness limit from system configuration
-    const maxEffectivenessLimit = await this.getMaxEffectivenessLimit();
-
-    // Apply the maximum effectiveness limit
-    return Math.min(baseEffectiveness, maxEffectivenessLimit);
   }
 
   // Recalculate effectiveness for all controls (apply max limit)
