@@ -30,7 +30,7 @@ import {
   invalidateMacroprocesoHierarchy,
   CACHE_VERSION
 } from './cache-helpers';
-import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency } from "./db";
+import { db, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
@@ -665,6 +665,16 @@ function serializeDatesToISO(obj: any): any {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // OPTIMIZED: Lazy initialization middleware - triggers on first API request
+  // This defers database initialization, pool monitoring, and pool warming until first use
+  // This significantly reduces Cloud Run cold start latency
+  app.use('/api', async (req, res, next) => {
+    await ensureDatabaseInitialized();
+    startPoolMonitoringIfNeeded();
+    startPoolWarmingIfNeeded();
+    next();
+  });
+
   // Database optimization endpoint (Admin only in real scenario, open for now to fix perf)
   app.post("/api/admin/optimize-db", async (req, res) => {
     try {

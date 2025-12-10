@@ -172,7 +172,10 @@ if (databaseUrl) {
 export { pool, db };
 
 // Startup migration guard to ensure scopeEntities column exists
-async function initializeDatabase() {
+// OPTIMIZED: Lazy initialization - only runs on first API request
+let dbInitialized = false;
+export async function ensureDatabaseInitialized() {
+  if (dbInitialized) return;
   if (!pool) {
     console.log('⚠️ Skipping database initialization - no DATABASE_URL configured');
     return;
@@ -185,9 +188,13 @@ async function initializeDatabase() {
       ADD COLUMN IF NOT EXISTS scope_entities text[] DEFAULT '{}'::text[]
     `);
     console.log('✅ Database initialization complete - scope_entities column ready');
+    dbInitialized = true;
   } catch (error) {
     console.error('❌ Database initialization error:', error);
   }
+}
+async function initializeDatabase() {
+  await ensureDatabaseInitialized();
 }
 
 // Connection error handling
@@ -686,9 +693,12 @@ function stopPoolMonitoring() {
   }
 }
 
-// Start monitoring if pool exists
-if (pool) {
+// OPTIMIZED: Pool monitoring is now lazy - starts on first API request
+let poolMonitoringStarted = false;
+export function startPoolMonitoringIfNeeded() {
+  if (poolMonitoringStarted || !pool) return;
   startPoolMonitoring();
+  poolMonitoringStarted = true;
 }
 
 // Pool warming - pre-create connections to avoid cold start latency
@@ -903,10 +913,12 @@ export async function getHealthStatus(): Promise<{
   };
 }
 
-// Start pool warming if pool exists
-if (pool) {
-  // Initial warm on startup (after a short delay to let server initialize)
-  // Skip initial warming during quiet hours (00:00-07:00 Chile time)
+// OPTIMIZED: Pool warming is now lazy - starts on first API request
+let poolWarmingStarted = false;
+export function startPoolWarmingIfNeeded() {
+  if (poolWarmingStarted || !pool) return;
+  
+  // Initial warm in background after delay
   setTimeout(async () => {
     if (isQuietHours()) {
       console.log('🌙 Quiet hours (00:00-07:00 Chile time) - skipping initial pool warming');
@@ -930,6 +942,8 @@ if (pool) {
       startPoolWarming();
     }
   }, 500); // Start even sooner for faster cold start
+  
+  poolWarmingStarted = true;
 }
 
 // Cleanup on shutdown
@@ -941,5 +955,4 @@ process.on('SIGINT', () => {
   stopPoolWarming();
 });
 
-// Initialize database on startup
-initializeDatabase();
+// OPTIMIZED: Database initialization is now lazy - will run on first use via ensureDatabaseInitialized()

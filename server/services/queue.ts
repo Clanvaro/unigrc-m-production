@@ -81,6 +81,28 @@ export async function initializeQueues(): Promise<void> {
 
 export { emailQueue, pdfProcessingQueue, aiProcessingQueue };
 
+// OPTIMIZED: Lazy getters for queues (initialization happens on first access)
+export async function getEmailQueue() {
+  if (!queuesInitialized) {
+    await initializeQueues();
+  }
+  return emailQueue;
+}
+
+export async function getPdfProcessingQueue() {
+  if (!queuesInitialized) {
+    await initializeQueues();
+  }
+  return pdfProcessingQueue;
+}
+
+export async function getAiProcessingQueue() {
+  if (!queuesInitialized) {
+    await initializeQueues();
+  }
+  return aiProcessingQueue;
+}
+
 // Job data interfaces
 interface EmailJobData {
   to: string;

@@ -151,8 +151,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Initialize queues before starting server (for memory optimization with lazy loading)
-  await initializeQueues();
+  // OPTIMIZED: Queues are now lazy - initialization happens on first access via getters
+  // await initializeQueues(); // Removed - now lazy via getters
 
   const server = await registerRoutes(app);
 
@@ -198,12 +198,13 @@ app.use((req, res, next) => {
       console.warn('⚠️ OpenAI Service not configured. AI features will be disabled.');
     }
 
-    // Warm cache in background (non-blocking) after server is ready
-    // This pre-loads common data to Redis to eliminate cold cache latency on first load
-    setTimeout(() => {
-      warmCacheForAllTenants().catch((error) => {
-        console.warn('⚠️ Background cache warming failed:', error);
-      });
-    }, 2000); // Wait 2s for DB pool to stabilize before warming cache
+    // OPTIMIZED: Cache warming is now lazy - triggered by getFromTieredCache on first access
+    // // Warm cache in background (non-blocking) after server is ready
+    // // This pre-loads common data to Redis to eliminate cold cache latency on first load
+    // setTimeout(() => {
+    //   warmCacheForAllTenants().catch((error) => {
+    //     console.warn('⚠️ Background cache warming failed:', error);
+    //   });
+    // }, 2000); // Wait 2s for DB pool to stabilize before warming cache
   });
 })();
