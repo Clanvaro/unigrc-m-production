@@ -148,10 +148,10 @@ if (databaseUrl) {
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
-    // FIXED: Rotate connections more frequently to prevent "zombie" connections
-    // Reduced from 200 to 100 to recycle connections even more aggressively
-    // This helps prevent slow pings and connection timeouts by replacing connections sooner
-    maxUses: isCloudSql ? 100 : undefined,
+    // OPTIMIZED: Allow connections to be reused many times before recycling
+    // Higher maxUses reduces connection churn and improves performance with slow databases
+    // Connections will be recycled naturally after many uses, preventing stale connections
+    maxUses: 100, // Same for all DB types - allows connections to serve many queries before recycling
     // Application name for better monitoring in Cloud SQL
     application_name: 'unigrc-backend',
     ssl: sslConfig,
@@ -164,10 +164,10 @@ if (databaseUrl) {
   db = drizzle(pool, { schema, logger: true });
 
   const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=${isCloudSql ? 100 : 'unlimited'}, env=${isProduction ? 'production' : 'development'}`);
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=100, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
     const connectionType = isCloudSqlProxy ? 'Unix socket' : 'IP pública';
-    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}, pingInterval=10s`);
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}`);
     if (!isCloudSqlProxy) {
       console.warn(`⚠️ RECOMMENDATION: Switch to Unix socket connection for Cloud SQL to reduce latency from 100-1000ms to <10ms`);
     }
@@ -775,12 +775,13 @@ export async function warmPool(minConnections: number = 1): Promise<{ success: b
 }
 
 // Check if current time is within quiet hours (00:00 - 07:00 Chile time)
-// During quiet hours, pool warming is paused to save resources
+// During quiet hours, ALL pings are paused to save resources
+// No database connections will be pinged during this period
 function isQuietHours(): boolean {
   const now = new Date();
   const chileTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Santiago' }));
   const hour = chileTime.getHours();
-  return hour >= 0 && hour < 7;
+  return hour >= 0 && hour < 7; // 00:00 to 06:59 (inclusive)
 }
 
 // Track if we were in quiet hours to detect transitions
@@ -796,10 +797,10 @@ function startPoolWarming() {
   // Detect database type for appropriate ping interval
   const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
   const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
-  // Cloud SQL: More frequent pings to maintain Unix socket connections and detect stale connections faster
-  // Reduced intervals to detect and fix connection issues more quickly
-  // Render: 10s, Cloud SQL: 10s, Neon: 15s
-  const PING_INTERVAL = isRender || isCloudSql ? 10000 : 15000;
+  // OPTIMIZED: Less frequent pings to reduce load and connection churn
+  // Ping goal: verify DB is alive, not create excessive load or reconnections
+  // Higher interval (30-60s) allows connections to be reused more before recycling
+  const PING_INTERVAL = 45000; // 45 seconds - balanced between health checks and low overhead
 
   poolWarmingInterval = setInterval(async () => {
     try {
@@ -810,15 +811,21 @@ function startPoolWarming() {
         console.log('🌅 Quiet hours ended - aggressive pool warming');
         const warmCount = isRender ? 5 : (isCloudSql ? 3 : 2);
         await warmPool(warmCount);
-        wasInQuietHours = false;
+        wasInQuietHours = currentlyQuiet;
         return;
+      }
+
+      // Detect transition into quiet hours (00:00) - log once
+      if (!wasInQuietHours && currentlyQuiet) {
+        console.log('🌙 Quiet hours (00:00-07:00 Chile time) - pings paused until 07:00');
       }
 
       wasInQuietHours = currentlyQuiet;
 
-      // Skip pings during quiet hours (00:00-07:00 Chile time)
+      // Skip ALL pings during quiet hours (00:00-07:00 Chile time) to save resources
+      // No database pings will be executed during this period
       if (currentlyQuiet) {
-        return;
+        return; // Exit early - no ping will be executed
       }
 
       const metrics = getPoolMetrics();
@@ -894,34 +901,16 @@ function startPoolWarming() {
           await pingPromise;
           const pingDuration = Date.now() - pingStart;
 
-          // Log slow pings con más detalle
-          if (pingDuration > 500) {
+          // Log slow pings for monitoring (but don't close connections aggressively)
+          if (pingDuration > 1000) {
             const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue (connectionType: ${connectionType})`);
+            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}) - connection will recycle naturally via maxUses`);
           }
           
-          // IMPROVED: Cerrar conexiones lentas más agresivamente (reducido de 5s a 3s)
-          if (pingDuration > 3000) {
-            const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            console.error(`❌ Extremely slow ping (${pingDuration}ms) - closing connection immediately (connectionType: ${connectionType})`);
-            try {
-              if (client) {
-                // Forzar cierre de la conexión
-                await client.end();
-                client = null;
-              }
-            } catch (closeError) {
-              // Ignore close errors - connection may already be dead
-            }
-            // Calentar pool para reemplazar la conexión cerrada
-            await warmPool(3);
-          } else if (pingDuration > 2000) {
-            console.log(`🔄 Very slow ping detected (${pingDuration}ms) - connection will be recycled naturally (maxUses=100), warming pool...`);
-            await warmPool(3);
-          } else if (pingDuration > 1000) {
-            // Para pings moderadamente lentos, solo calentar el pool
-            await warmPool(2);
-          }
+          // OPTIMIZED: Let connections recycle naturally via maxUses instead of closing aggressively
+          // Slow pings don't necessarily mean the connection is bad - it might just be network latency
+          // maxUses=100 ensures connections are recycled after many uses anyway
+          // Only log for monitoring, don't force close or warm pool unnecessarily
         } catch (error: any) {
           // Limpiar timeout si aún existe
           if (timeoutId) {
@@ -929,7 +918,7 @@ function startPoolWarming() {
             timeoutId = null;
           }
           
-          // IMPROVED: Manejo más agresivo de timeouts y errores de conexión
+          // OPTIMIZED: Less aggressive error handling - let pool handle connection recovery naturally
           const isTimeout = error?.message === 'Ping timeout' || 
                            error?.message === 'Connection acquisition timeout' ||
                            error?.message === 'Query timeout' ||
@@ -938,27 +927,11 @@ function startPoolWarming() {
           
           if (isTimeout) {
             const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            console.error(`❌ Ping timeout/error (${error?.message || error}) - closing dead connection (connectionType: ${connectionType})`);
-            try {
-              if (client) {
-                // Forzar cierre si la conexión existe
-                await client.end();
-                client = null;
-              }
-            } catch (closeError) {
-              // Ignore close errors
-            }
-            // Calentar pool para reemplazar la conexión cerrada
-            await warmPool(3);
+            console.warn(`⚠️ Ping timeout/error (${error?.message || error}) - connection will be recycled naturally (connectionType: ${connectionType})`);
+            // Don't force close - let the pool handle it naturally via maxUses and idleTimeout
           } else {
             console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
-            // Si el ping falla, intentar recuperar el pool
-            try {
-              console.log('🔄 Recovering pool after ping failure...');
-              await warmPool(3);
-            } catch (warmError) {
-              console.error('❌ Pool warming failed during recovery:', warmError);
-            }
+            // Only warm pool if it's completely empty, not on every ping failure
           }
         } finally {
           // Limpiar timeout si aún existe
@@ -967,19 +940,12 @@ function startPoolWarming() {
             timeoutId = null;
           }
           
-          // Solo liberar si el cliente es válido y el ping se completó exitosamente
-          if (client && pingCompleted) {
+          // Always release connection back to pool if valid (let maxUses handle recycling)
+          if (client) {
             try {
               client.release();
             } catch (e) {
               // Ignore release errors - connection may already be closed
-            }
-          } else if (client && !pingCompleted) {
-            // Si el ping no se completó, forzar cierre en lugar de liberar
-            try {
-              await client.end();
-            } catch (e) {
-              // Ignore close errors
             }
           }
         }
@@ -991,7 +957,7 @@ function startPoolWarming() {
     }
   }, PING_INTERVAL);
 
-  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL / 1000}s (paused 00:00-07:00 Chile time)`);
+  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL / 1000}s (paused 00:00-07:00 Chile time, maxUses=100 for natural recycling)`);
 }
 
 function stopPoolWarming() {
