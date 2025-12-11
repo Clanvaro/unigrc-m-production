@@ -277,7 +277,7 @@ export default function Controls() {
       if (!response.ok) throw new Error("Failed to fetch controls");
       return response.json();
     },
-    staleTime: 30000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     gcTime: 5 * 60 * 1000,
   });
   const controls = controlsResponse?.data || [];
@@ -290,19 +290,19 @@ export default function Controls() {
       if (!response.ok) throw new Error("Failed to fetch risks");
       return response.json();
     },
-    staleTime: 60000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     gcTime: 5 * 60 * 1000,
   });
   const risks = risksResponse?.data || [];
 
   const { data: processes = [] } = useQuery<any[]>({
     queryKey: queryKeys.processes(),
-    staleTime: 60000, // Processes change less frequently
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: processOwners = [] } = useQuery<any[]>({
     queryKey: queryKeys.processOwners(),
-    staleTime: 60000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   // Get control's associated risks (for both risk dialog and view dialog)

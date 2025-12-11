@@ -106,6 +106,10 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
+
+// OPTIMIZED: Request deduplication map to prevent duplicate requests during rapid navigation
+const pendingRequests = new Map<string, Promise<any>>();
+
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
@@ -130,6 +134,14 @@ export const getQueryFn: <T>(options: {
       url = queryKey.join("/") as string;
     }
     
+    // OPTIMIZED: Request deduplication - if same request is already pending, reuse it
+    const requestKey = `${url}`;
+    const pendingRequest = pendingRequests.get(requestKey);
+    if (pendingRequest) {
+      // Return existing promise instead of making duplicate request
+      return pendingRequest;
+    }
+    
     const fetchData = async () => {
       const res = await fetch(url, {
         credentials: "include",
@@ -143,13 +155,27 @@ export const getQueryFn: <T>(options: {
       return await res.json();
     };
 
-    // Retry network errors for data fetching
-    return withRetry(fetchData, {
+    // Create new request and store it
+    const requestPromise = withRetry(fetchData, {
       ...retryConfigs.fetch,
       onRetry: (attempt, error) => {
         console.warn(`Retrying fetch ${url} (attempt ${attempt}):`, error.message);
       }
     });
+    
+    // Store pending request
+    pendingRequests.set(requestKey, requestPromise);
+    
+    // Clean up after request completes (success or error)
+    requestPromise
+      .then(() => {
+        pendingRequests.delete(requestKey);
+      })
+      .catch(() => {
+        pendingRequests.delete(requestKey);
+      });
+    
+    return requestPromise;
   };
 
 export const queryClient = new QueryClient({
@@ -158,9 +184,12 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: 30 * 1000, // 30 seconds - data considered fresh, prevents redundant refetches
-      gcTime: 5 * 60 * 1000, // 5 minutes cache retention
+      // OPTIMIZED: Increased staleTime to prevent redundant refetches during rapid navigation
+      staleTime: 60 * 1000, // 60 seconds - data considered fresh (increased from 30s)
+      gcTime: 10 * 60 * 1000, // 10 minutes cache retention (increased from 5min)
       refetchOnMount: false, // Only refetch if data is stale (respects staleTime)
+      // OPTIMIZED: Enable structuralSharing to reuse cached data when structure matches
+      structuralSharing: true,
       retry: false,
     },
     mutations: {

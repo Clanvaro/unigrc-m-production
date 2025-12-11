@@ -63,16 +63,19 @@ export default function Dashboard() {
   
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: trendData = [] } = useQuery<TrendDataPoint[]>({
     queryKey: ["/api/dashboard/risk-trends"],
     enabled: !!stats,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: alerts = [] } = useQuery<Alert[]>({
     queryKey: ["/api/dashboard/alerts"],
     enabled: !!stats,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const handleMatrixCellClick = (risks: RiskWithProcess[], probability: number, impact: number, matrixType: string) => {

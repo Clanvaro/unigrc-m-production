@@ -226,24 +226,24 @@ export default function Processes() {
   // Load basic processes without heavy risk calculations for fast initial load
   const { data: basicProcesses = [] } = useQuery<ProcessWithRisks[]>({
     queryKey: ["/api/processes/basic"],
-    staleTime: 60000, // 1 minute - list data, moderate change frequency
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   // Legacy full processes query (kept for compatibility with other components)
   const { data: processes = [] } = useQuery<ProcessWithRisks[]>({
     queryKey: ["/api/processes"],
-    staleTime: 60000, // 1 minute - list data, moderate change frequency
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     enabled: false, // Disabled by default, enable only when needed
   });
 
   const { data: subprocesos = [] } = useQuery<SubprocesoWithRisks[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 60000, // 1 minute - list data, moderate change frequency
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
-    staleTime: 30000, // 30 seconds - frequently changing data
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     enabled: riskModalOpen || macroprocesos.some(m => (m.riskCount ?? 0) > 0), // Load when modal is open or when there are risks
   });
   const risks = risksResponse?.data || [];

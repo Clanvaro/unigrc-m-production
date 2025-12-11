@@ -143,6 +143,7 @@ export default function ActionPlans() {
   // Query unificado para todos los planes de acción
   const { data: allActions = [], isLoading } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   // Check URL params to auto-open create dialog with pre-selected risk or view plan detail
@@ -180,15 +181,18 @@ export default function ActionPlans() {
 
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
   const risks = risksResponse?.data || [];
 
   const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: users = [] } = useQuery<UserType[]>({
     queryKey: ["/api/users"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   const { data: reschedulingMetrics } = useQuery<{

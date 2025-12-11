@@ -204,7 +204,7 @@ export default function RiskMatrix() {
     riskLevelRanges: { lowMax: number; mediumMax: number; highMax: number };
   }>({
     queryKey: ["/api/risk-matrix/lite"],
-    staleTime: 30000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
   // CATALOGS: Loaded in parallel with 5-min staleTime (rarely change)

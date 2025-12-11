@@ -301,7 +301,7 @@ export default function RiskValidationPage() {
   const { data: notifiedControlsResponse } = useQuery<{ data: Control[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/controls/validation/notified", { limit: notifiedControlsPagination.limit, offset: notifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
-    staleTime: 60000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
@@ -313,7 +313,7 @@ export default function RiskValidationPage() {
   const { data: notNotifiedControlsResponse } = useQuery<{ data: Control[], pagination: { total: number, limit: number, offset: number } }>({
     queryKey: ["/api/controls/validation/not-notified", { limit: notNotifiedControlsPagination.limit, offset: notNotifiedControlsPagination.offset }],
     enabled: activeTab === "controls",
-    staleTime: 60000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
@@ -327,7 +327,7 @@ export default function RiskValidationPage() {
   const { data: validatedControls = [] } = useQuery<Control[]>({
     queryKey: ["/api/controls/validation/validated"],
     enabled: activeTab === "controls",
-    staleTime: 60000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
