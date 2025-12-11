@@ -69,10 +69,15 @@ if (databaseUrl) {
     normalizedDatabaseUrl = normalizedDatabaseUrl.replace(/[&?]sslmode=[^&]*/g, '');
     console.log('[DB Config] Using Cloud SQL Proxy - SSL not required');
   } else if (isCloudSql && !databaseUrl.includes('sslmode=')) {
+    // For Cloud SQL with public IP, use sslmode=prefer to allow SSL but not require strict verification
     normalizedDatabaseUrl = databaseUrl.includes('?')
-      ? `${databaseUrl}&sslmode=require`
-      : `${databaseUrl}?sslmode=require`;
-    console.log('[DB Config] Added sslmode=require to Cloud SQL connection string');
+      ? `${databaseUrl}&sslmode=prefer`
+      : `${databaseUrl}?sslmode=prefer`;
+    console.log('[DB Config] Added sslmode=prefer to Cloud SQL connection string');
+  } else if (isCloudSql && databaseUrl.includes('sslmode=require')) {
+    // If sslmode=require is already set, replace with prefer to allow SSL without strict verification
+    normalizedDatabaseUrl = databaseUrl.replace(/sslmode=require/g, 'sslmode=prefer');
+    console.log('[DB Config] Changed sslmode=require to sslmode=prefer for Cloud SQL');
   }
 
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
