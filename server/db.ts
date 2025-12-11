@@ -75,9 +75,12 @@ if (databaseUrl) {
       : `${databaseUrl}?sslmode=prefer`;
     console.log('[DB Config] Added sslmode=prefer to Cloud SQL connection string');
   } else if (isCloudSql && databaseUrl.includes('sslmode=require')) {
-    // If sslmode=require is already set, replace with prefer to allow SSL without strict verification
-    normalizedDatabaseUrl = databaseUrl.replace(/sslmode=require/g, 'sslmode=prefer');
-    console.log('[DB Config] Changed sslmode=require to sslmode=prefer for Cloud SQL');
+    // If sslmode=require is already set, keep it but ensure rejectUnauthorized: false in sslConfig
+    // The sslConfig will handle certificate verification, not the connection string
+    console.log('[DB Config] Cloud SQL with sslmode=require - SSL config will disable certificate verification');
+  } else if (isCloudSql && databaseUrl.includes('sslmode=prefer')) {
+    // If sslmode=prefer is set, that's fine - SSL config will handle certificate verification
+    console.log('[DB Config] Cloud SQL with sslmode=prefer - SSL config will disable certificate verification');
   }
 
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
@@ -103,13 +106,19 @@ if (databaseUrl) {
   // Cloud SQL Proxy (Unix socket) doesn't need SSL - connection is already secure
   // Cloud SQL with public IP requires SSL but may not require client certificates if configured properly
   // For Cloud SQL with public IP, use sslmode=require (not verify-full) to avoid client cert requirement
+  // IMPORTANT: Always set rejectUnauthorized: false for Cloud SQL to avoid certificate verification errors
   const sslConfig = isCloudSqlProxy
     ? false  // Cloud SQL Proxy doesn't need SSL
     : isRenderDb
       ? { rejectUnauthorized: false }  // Render requires SSL
       : isCloudSql
-        ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but may not need client certs
+        ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but disable certificate verification
         : (isProduction ? { rejectUnauthorized: false } : false);
+  
+  // Log SSL configuration for debugging
+  if (isCloudSql && !isCloudSqlProxy) {
+    console.log('[DB Config] Cloud SQL SSL config:', JSON.stringify(sslConfig));
+  }
 
   // Optimized pool settings for different environments
   // Cloud Run + Cloud SQL: max = (concurrency × max_replicas) vs Cloud SQL max_connections
