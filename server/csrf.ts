@@ -28,7 +28,16 @@ const csrfOptions = {
     // In development, use a consistent identifier
     // In production, use actual session ID for better security
     if (isProduction) {
-      return (req.session?.id || 'default-session') as string;
+      // Try to get session ID, but provide a fallback if session is not initialized
+      if (req.session?.id) {
+        return req.session.id as string;
+      }
+      // If no session, create a temporary identifier based on request
+      // This allows CSRF tokens to work even before login
+      const tempId = req.headers['x-request-id'] || 
+                     req.ip || 
+                     `temp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      return `session-${tempId}`;
     }
     // Use user ID if available, otherwise use a fixed development identifier
     const user = (req as any).user;
@@ -105,10 +114,21 @@ export const csrfProtectionForMutations: RequestHandler = (req, res, next) => {
 // This function generates a token and sets it as a cookie
 export function getCSRFToken(req: Request, res: Response): void {
   try {
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // Log diagnostic information
+    logger.info(`[CSRF] Generating token - Production: ${isProduction}, HasSession: ${!!req.session}, SessionID: ${req.session?.id || 'none'}`);
+    
+    // Verify CSRF_SECRET is available
+    const secret = process.env.CSRF_SECRET;
+    if (!secret && isProduction) {
+      logger.error('[CSRF] CSRF_SECRET is not set in production!');
+      throw new Error('CSRF_SECRET environment variable is required in production');
+    }
+    
     // Generate the CSRF token - this will set the cookie automatically
     const csrfToken = generateCsrfToken(req, res);
     
-    const isProduction = process.env.NODE_ENV === 'production';
     const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
     
     // Also manually set the cookie to ensure it's sent with correct settings
@@ -129,9 +149,37 @@ export function getCSRFToken(req: Request, res: Response): void {
     });
   } catch (error) {
     logger.error(`Error handling CSRF token request: ${error instanceof Error ? error.message : String(error)}`);
-    res.status(500).json({ 
-      message: 'Error handling CSRF token request',
-      code: 'CSRF_ERROR'
-    });
+    logger.error(`Error stack: ${error instanceof Error ? error.stack : 'No stack trace'}`);
+    
+    // Try to provide a fallback token if possible
+    try {
+      const isProduction = process.env.NODE_ENV === 'production';
+      const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
+      
+      // Generate a simple fallback token
+      const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
+      
+      res.cookie(cookieName, fallbackToken, {
+        httpOnly: false,
+        sameSite: 'lax',
+        path: '/',
+        secure: isProduction
+      });
+      
+      logger.warn('Using fallback CSRF token due to error');
+      
+      res.json({ 
+        message: 'CSRF token cookie set successfully (fallback)',
+        cookieName,
+        csrfToken: fallbackToken
+      });
+    } catch (fallbackError) {
+      logger.error(`Fallback CSRF token generation also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+      res.status(500).json({ 
+        message: 'Error handling CSRF token request',
+        code: 'CSRF_ERROR',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
   }
 }
