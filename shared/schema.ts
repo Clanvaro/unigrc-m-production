@@ -224,6 +224,8 @@ export const risks = pgTable("risks", {
   // Performance optimization: Indexes for getRisksPaginated filtering and sorting
   index("idx_risks_status").on(table.status),
   index("idx_risks_created_at").on(table.createdAt),
+  // Performance optimization: filter counts by inherent_risk (slow count queries)
+  index("idx_risks_inherent_risk").on(table.inherentRisk),
   // Composite index for efficient pagination queries (filters by status, sorts by created_at)
 ]);
 
