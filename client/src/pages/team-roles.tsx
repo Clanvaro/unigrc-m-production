@@ -179,7 +179,7 @@ export default function TeamRolesPage() {
               </DialogHeader>
               <AssignRoleForm
                 users={activeUsers}
-                roles={roles}
+                roles={auditRoleObjects}
                 onAssign={handleAssignRole}
                 isLoading={assignRoleMutation.isPending}
               />
@@ -388,7 +388,7 @@ function AssignRoleForm({ users, roles, onAssign, isLoading }: AssignRoleFormPro
             <SelectValue placeholder="Seleccionar rol" />
           </SelectTrigger>
           <SelectContent>
-            {auditRoleObjects.map((role) => (
+            {roles.map((role) => (
               <SelectItem key={role.id} value={role.id}>
                 {role.name} - {role.description}
               </SelectItem>

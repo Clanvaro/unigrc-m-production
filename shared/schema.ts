@@ -644,6 +644,10 @@ export const actions = pgTable("actions", {
   // Performance: Partial index for active records queries (soft-delete pattern)
   index("idx_actions_code").on(table.code),
   index("idx_actions_status").on(table.status),
+  // Performance optimization: Index for filtering deleted records (most common query pattern)
+  index("idx_actions_deleted_at").on(table.deletedAt),
+  // Composite index for common query: get non-deleted actions ordered by creation date
+  index("idx_actions_deleted_created").on(table.deletedAt, table.createdAt),
 ]);
 
 // Adjuntos de evidencias para acciones

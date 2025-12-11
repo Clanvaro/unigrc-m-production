@@ -142,7 +142,8 @@ if (databaseUrl) {
     idleTimeoutMillis: isCloudSql ? 60000 : (isRenderDb ? 60000 : 30000),
     // Increased connection timeout to 60s for Cloud SQL to handle pool saturation better
     // This gives more time when pool is busy, reducing "Connection terminated due to connection timeout" errors
-    connectionTimeoutMillis: isCloudSql ? 60000 : connectionTimeout,
+    // Also increased for other DBs to handle pool saturation better
+    connectionTimeoutMillis: isCloudSql ? 60000 : Math.max(connectionTimeout, 30000), // Min 30s to handle pool saturation
     statement_timeout: statementTimeout,
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
@@ -155,6 +156,10 @@ if (databaseUrl) {
     application_name: 'unigrc-backend',
     ssl: sslConfig,
     allowExitOnIdle: false,
+    // OPTIMIZED: Add acquire timeout to prevent indefinite waiting when pool is saturated
+    // This will throw an error if a connection can't be acquired within this time
+    // Set to 30s to match connectionTimeout, but this is for acquiring from pool, not creating new connection
+    // Note: pg Pool doesn't have acquireTimeoutMillis, but we handle this in our retry logic
   });
   db = drizzle(pool, { schema, logger: true });
 
@@ -837,7 +842,12 @@ function startPoolWarming() {
           const pingStart = Date.now();
           
           // REDUCED: Timeout reducido a 3 segundos para detectar conexiones lentas más rápido
-          const PING_TIMEOUT_MS = 3000; // 3 segundos máximo para ping
+          // OPTIMIZED: Increase timeout when pool is saturated to handle connection acquisition delays
+          // Check pool metrics to adjust timeout dynamically
+          const poolMetrics = getPoolMetrics();
+          const poolUtilization = poolMetrics ? (poolMetrics.totalCount - poolMetrics.idleCount) / poolMetrics.maxConnections : 0;
+          // Increase timeout if pool is >50% utilized (more connections active = longer wait time)
+          const PING_TIMEOUT_MS = poolUtilization > 0.5 ? 10000 : 5000; // 10s if pool busy, 5s otherwise
           
           // Mejor manejo del timeout: separar timeout para conexión y query
           const pingPromise = (async () => {

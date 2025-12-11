@@ -515,8 +515,11 @@ export default function Processes() {
 
   const handleCreateProcessSuccess = () => {
     // Force immediate refetch to show new process immediately
+    queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
+    // Refetch immediately to update UI
     queryClient.refetchQueries({ queryKey: ["/api/processes/basic"] });
-    queryClient.refetchQueries({ queryKey: ["/api/processes"] });
     queryClient.refetchQueries({ queryKey: ["/api/macroprocesos"] });
     setIsCreateProcessDialogOpen(false);
     setSelectedMacroprocesoId(null);

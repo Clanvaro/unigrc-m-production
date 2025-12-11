@@ -9326,7 +9326,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
-      const actionPlans = await storage.getActionPlans();
+      // OPTIMIZED: Add timeout to prevent slow queries from blocking the pool
+      const queryTimeout = 8000; // 8 seconds max for action plans query
+      const queryPromise = storage.getActionPlans();
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout after 8 seconds')), queryTimeout);
+      });
+
+      let actionPlans;
+      try {
+        actionPlans = await Promise.race([queryPromise, timeoutPromise]);
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        console.error(`[ERROR] /api/action-plans query failed after ${duration}ms:`, error);
+        // Return cached data if available as fallback
+        const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
+        if (fallbackCache) {
+          console.log(`[FALLBACK] Returning cached action-plans data`);
+          return res.json(fallbackCache);
+        }
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT"
+        });
+      }
 
       // Early return if no plans - avoid unnecessary queries
       if (actionPlans.length === 0) {
@@ -9382,7 +9405,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           gerencias: [],
           associatedRisks: []
         }));
-        await distributedCache.set(cacheKey, plansWithoutRisks, 30);
+        await Promise.all([
+          distributedCache.set(cacheKey, plansWithoutRisks, 30),
+          distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, plansWithoutRisks, 300) // 5 min fallback cache
+        ]);
         console.log(`[ACTION-PLANS] Completed (no risks) in ${Date.now() - startTime}ms`);
         return res.json(plansWithoutRisks);
       }
@@ -9493,9 +9519,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 30 seconds
-      await distributedCache.set(cacheKey, plansWithCounts, 30);
-      console.log(`[ACTION-PLANS] Completed in ${Date.now() - startTime}ms (${actionPlans.length} plans)`);
+      // Cache for 30 seconds + fallback cache for 5 minutes
+      await Promise.all([
+        distributedCache.set(cacheKey, plansWithCounts, 30),
+        distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, plansWithCounts, 300) // 5 min fallback cache
+      ]);
+      const duration = Date.now() - startTime;
+      console.log(`[ACTION-PLANS] Completed in ${duration}ms (${actionPlans.length} plans)`);
+      
+      // Log warning if query was slow
+      if (duration > 2000) {
+        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 2000ms)`);
+      }
 
       res.json(plansWithCounts);
     } catch (error) {

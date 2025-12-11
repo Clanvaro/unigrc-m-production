@@ -371,7 +371,7 @@ export interface IStorage {
   // RiskProcessLink validation
   validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined>;
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
-  getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]>;
+  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
 
@@ -15119,10 +15119,12 @@ export class DatabaseStorage extends MemStorage {
   // ============== ACTION PLANS DATABASE IMPLEMENTATION ==============
   // Override MemStorage action plan methods to use database
   async getActionPlans(): Promise<ActionPlan[]> {
-    // Use actions table (unified table for action plans and audit findings)
+    // OPTIMIZED: Use actions table with index on deletedAt for faster queries
+    // Limit to most recent 1000 records to prevent slow queries with large datasets
     const actionsData = await db.select().from(actions)
       .where(isNull(actions.deletedAt))
-      .orderBy(desc(actions.createdAt));
+      .orderBy(desc(actions.createdAt))
+      .limit(1000); // Limit to prevent slow queries
 
     // Map actions to ActionPlan type for backward compatibility
     // Note: 'title' from actions maps to 'name' in ActionPlan
@@ -20697,7 +20699,10 @@ export class DatabaseStorage extends MemStorage {
     return results;
   }
 
-  async getRiskProcessLinksByValidationStatus(status: string): Promise<RiskProcessLinkWithDetails[]> {
+  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]> {
+    // Build WHERE conditions - filter out deleted risks for performance
+    const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
+
     // First get the base data with process hierarchy
     const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
@@ -20717,12 +20722,12 @@ export class DatabaseStorage extends MemStorage {
       `.as('responsible_owner_id')
     })
       .from(riskProcessLinks)
-      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
       .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
       .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
       .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
       .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-      .where(eq(riskProcessLinks.validationStatus, status))
+      .where(and(...conditions))
       .orderBy(riskProcessLinks.createdAt);
 
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
