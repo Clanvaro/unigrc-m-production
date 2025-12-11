@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/queryKeys";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -183,8 +184,8 @@ export default function RiskMatrix() {
   // This reduces initial load from 89s to <2s
   // ===================================================================================
 
-  // PRIMARY: Lightweight heatmap data with pre-calculated residual risks
-  const { data: liteData, isLoading: liteLoading } = useQuery<{
+  // PRIMARY: Aggregated heatmap data with controls summary from new endpoint
+  const { data: matrixData, isLoading: liteLoading } = useQuery<{
     risks: Array<{
       id: string;
       code: string;
@@ -192,18 +193,27 @@ export default function RiskMatrix() {
       category: string | null;
       probability: number;
       impact: number;
-      inherent_risk: number;
-      macroproceso_id: string | null;
-      process_id: string | null;
-      subproceso_id: string | null;
-      validation_status: string;
-      control_count: number;
-      residual_probability: number;
-      residual_impact: number;
+      inherentRisk: number;
+      residualProbability: number;
+      residualImpact: number;
+      macroprocesoId: string | null;
+      processId: string | null;
+      subprocesoId: string | null;
+      validationStatus: string;
+      controls: {
+        count: number;
+        avgEffectiveness: number;
+        summary: Array<{ code: string }>;
+      };
     }>;
     riskLevelRanges: { lowMax: number; mediumMax: number; highMax: number };
   }>({
-    queryKey: ["/api/risk-matrix/lite"],
+    queryKey: queryKeys.dashboard.riskMatrix(),
+    queryFn: async () => {
+      const response = await fetch("/api/dashboard/risk-matrix");
+      if (!response.ok) throw new Error("Failed to fetch risk matrix data");
+      return response.json();
+    },
     staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
   });
 
@@ -233,30 +243,30 @@ export default function RiskMatrix() {
     staleTime: 300000,
   });
 
-  // Transform lite data to match expected format for heatmap components
+  // Transform matrix data to match expected format for heatmap components
   const risksWithDetails = useMemo(() => {
-    if (!liteData?.risks) return [];
-    return liteData.risks.map(r => ({
+    if (!matrixData?.risks) return [];
+    return matrixData.risks.map(r => ({
       id: r.id,
       code: r.code,
       name: r.name,
       category: r.category,
       probability: Number(r.probability),
       impact: Number(r.impact),
-      inherentRisk: Number(r.inherent_risk),
-      macroprocesoId: r.macroproceso_id,
-      processId: r.process_id,
-      subprocesoId: r.subproceso_id,
-      validationStatus: r.validation_status,
-      controlCount: Number(r.control_count),
-      residualProbability: Number(r.residual_probability),
-      residualImpact: Number(r.residual_impact),
+      inherentRisk: Number(r.inherentRisk),
+      macroprocesoId: r.macroprocesoId,
+      processId: r.processId,
+      subprocesoId: r.subprocesoId,
+      validationStatus: r.validationStatus,
+      controlCount: r.controls?.count || 0,
+      residualProbability: Number(r.residualProbability),
+      residualImpact: Number(r.residualImpact),
       controlEffectiveness: [] as number[],
     }));
-  }, [liteData?.risks]);
+  }, [matrixData?.risks]);
 
   // Extract catalog data with defaults
-  const riskRanges = liteData?.riskLevelRanges || { lowMax: 6, mediumMax: 12, highMax: 19 };
+  const riskRanges = matrixData?.riskLevelRanges || { lowMax: 6, mediumMax: 12, highMax: 19 };
   const processes = processesData || [];
   const macroprocesos = macroprocesosData || [];
   const subprocesos = subprocesosData || [];

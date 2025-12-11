@@ -50,6 +50,11 @@ export const queryKeys = {
     controls: (id: string | undefined | null) => ["/api/risks", id, "controls"] as const,
     validationStatus: (id: string | undefined | null) => ["/api/risks", id, "validation-status"] as const,
     processes: (id: string | undefined | null) => ["/api/risk-processes", "risk", id] as const,
+    // Aggregated endpoint with controls summary
+    withControls: (params: { limit?: number; offset?: number; [key: string]: any } = {}) => {
+      const stableParams = JSON.stringify(params, Object.keys(params).sort());
+      return ["/api/risks/with-controls", stableParams] as const;
+    },
   },
   
   // Controls
@@ -95,6 +100,14 @@ export const queryKeys = {
   systemConfig: {
     riskLevelRanges: () => ["/api/system-config/risk-level-ranges"] as const,
     riskDecimals: () => ["/api/system-config/risk-decimals"] as const,
+  },
+  
+  // Dashboard
+  dashboard: {
+    riskMatrix: () => ["/api/dashboard/risk-matrix"] as const,
+    stats: () => ["/api/dashboard/stats"] as const,
+    riskTrends: () => ["/api/dashboard/risk-trends"] as const,
+    alerts: () => ["/api/dashboard/alerts"] as const,
   },
   
   // Other common endpoints

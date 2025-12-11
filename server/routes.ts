@@ -2457,6 +2457,209 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============== DASHBOARD RISK MATRIX - AGGREGATED ENDPOINT ==============
+  // Returns risks with controls summary and residual calculations in a single call
+  // Optimized to reduce multiple API calls from frontend
+  app.get("/api/dashboard/risk-matrix", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      const cacheKey = `dashboard-risk-matrix:${CACHE_VERSION}:single-tenant`;
+
+      // Try cache first (30 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/dashboard/risk-matrix in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/dashboard/risk-matrix - fetching aggregated data`);
+
+      // Single optimized SQL query with CTEs for control factors and summaries
+      const risksResult = await db.execute(sql`
+        WITH risk_control_factors AS (
+          SELECT 
+            rc.risk_id,
+            EXP(SUM(CASE 
+              WHEN c.effect_target IN ('probability', 'both') 
+              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+              ELSE 0 
+            END)) as prob_factor,
+            EXP(SUM(CASE 
+              WHEN c.effect_target IN ('impact', 'both') 
+              THEN LN(GREATEST(1 - COALESCE(c.effectiveness, 0) / 100.0, 0.001))
+              ELSE 0 
+            END)) as impact_factor,
+            COUNT(CASE WHEN c.effectiveness > 0 THEN 1 END) as control_count,
+            COALESCE(AVG(c.effectiveness), 0) as avg_effectiveness
+          FROM risk_controls rc
+          JOIN controls c ON rc.control_id = c.id AND c.deleted_at IS NULL
+          GROUP BY rc.risk_id
+        ),
+        control_codes_summary AS (
+          SELECT 
+            rc.risk_id,
+            c.code,
+            ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+          FROM risk_controls rc
+          INNER JOIN controls c ON rc.control_id = c.id
+          WHERE c.deleted_at IS NULL
+        ),
+        risk_validation_status AS (
+          SELECT 
+            rpl.risk_id,
+            CASE 
+              WHEN COUNT(*) = 0 THEN 'pending'
+              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
+              WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
+              WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') THEN 'validated'
+              ELSE 'pending'
+            END as aggregated_status
+          FROM risk_process_links rpl
+          GROUP BY rpl.risk_id
+        ),
+        risk_process_primary AS (
+          SELECT DISTINCT ON (rpl.risk_id)
+            rpl.risk_id,
+            rpl.macroproceso_id,
+            rpl.process_id,
+            rpl.subproceso_id
+          FROM risk_process_links rpl
+          ORDER BY rpl.risk_id, rpl.created_at
+        )
+        SELECT 
+          r.id,
+          r.code,
+          r.name,
+          r.category,
+          r.probability,
+          r.impact,
+          r.inherent_risk,
+          COALESCE(rpp.macroproceso_id, r.macroproceso_id) as macroproceso_id,
+          COALESCE(rpp.process_id, r.process_id) as process_id,
+          COALESCE(rpp.subproceso_id, r.subproceso_id) as subproceso_id,
+          COALESCE(rvs.aggregated_status, 'pending') as validation_status,
+          COALESCE(rcf.control_count, 0) as control_count,
+          COALESCE(rcf.avg_effectiveness, 0) as avg_effectiveness,
+          -- Calculate residual probability/impact
+          GREATEST(0.1, LEAST(5, ROUND(
+            r.probability * COALESCE(rcf.prob_factor, 1.0)::numeric, 1
+          ))) as residual_probability,
+          GREATEST(0.1, LEAST(5, ROUND(
+            r.impact * COALESCE(rcf.impact_factor, 1.0)::numeric, 1
+          ))) as residual_impact
+        FROM risks r
+        LEFT JOIN risk_control_factors rcf ON r.id = rcf.risk_id
+        LEFT JOIN risk_validation_status rvs ON r.id = rvs.risk_id
+        LEFT JOIN risk_process_primary rpp ON r.id = rpp.risk_id
+        WHERE r.status = 'active' 
+          AND r.deleted_at IS NULL
+        ORDER BY r.inherent_risk DESC
+      `);
+
+      // Get control codes summary (top 3 per risk) - batch query
+      const riskIds = risksResult.rows.map((r: any) => r.id);
+      let controlCodesByRisk = new Map<string, string[]>();
+      
+      if (riskIds.length > 0) {
+        const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
+        const controlCodesResult = await db.execute(sql`
+          WITH ranked_controls AS (
+            SELECT 
+              rc.risk_id,
+              c.code,
+              ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+            FROM risk_controls rc
+            INNER JOIN controls c ON rc.control_id = c.id
+            WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+          )
+          SELECT risk_id, code
+          FROM ranked_controls
+          WHERE rn <= 3
+          ORDER BY risk_id, rn
+        `);
+
+        // Group control codes by risk_id
+        for (const row of controlCodesResult.rows as any[]) {
+          if (!controlCodesByRisk.has(row.risk_id)) {
+            controlCodesByRisk.set(row.risk_id, []);
+          }
+          const codes = controlCodesByRisk.get(row.risk_id)!;
+          if (codes.length < 3) {
+            codes.push(row.code);
+          }
+        }
+      }
+
+        // Get risk level ranges config
+        const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
+          config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+        );
+
+      // Get risk level ranges config
+      const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
+        config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
+      );
+
+      // Format response with controls summary
+      const risks = risksResult.rows.map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        category: row.category,
+        probability: Number(row.probability),
+        impact: Number(row.impact),
+        inherentRisk: Number(row.inherent_risk),
+        residualProbability: Number(row.residual_probability),
+        residualImpact: Number(row.residual_impact),
+        macroprocesoId: row.macroproceso_id,
+        processId: row.process_id,
+        subprocesoId: row.subproceso_id,
+        validationStatus: row.validation_status,
+        controls: {
+          count: Number(row.control_count) || 0,
+          avgEffectiveness: Number(row.avg_effectiveness) || 0,
+          summary: (controlCodesByRisk.get(row.id) || []).map(code => ({ code }))
+        }
+      }));
+
+      const response = {
+        risks,
+        riskLevelRanges,
+        _meta: {
+          fetchedAt: new Date().toISOString(),
+          duration: Date.now() - requestStart,
+          riskCount: risks.length
+        }
+      };
+
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, response, 30);
+
+      console.log(`[PERF] /api/dashboard/risk-matrix COMPLETE in ${Date.now() - requestStart}ms (${risks.length} risks)`);
+
+      res.json(response);
+    } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/dashboard/risk-matrix failed after ${duration}ms:`, error);
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+          return res.status(500).json({
+            message: "Database connection timeout. Please try again.",
+            error: "TIMEOUT"
+          });
+        }
+      }
+
+      res.status(500).json({
+        message: "Failed to fetch dashboard risk matrix data",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // ============== ULTRA-LIGHTWEIGHT RISKS OVERVIEW (15 min cache) ==============
   // Returns pre-aggregated data: risk list with counts, no heavy JOINs
   // Optimized for list views - full details loaded on-demand when clicking a risk
@@ -2725,6 +2928,212 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("[ERROR] /api/risks/with-control-summary failed:", error);
       res.status(500).json({ message: "Failed to fetch risks with control summary" });
+    }
+  });
+
+  // ============== RISKS WITH CONTROLS - AGGREGATED ENDPOINT ==============
+  // Returns paginated risks with controls summary in a single call
+  // Optimized to reduce multiple API calls from frontend
+  app.get("/api/risks/with-controls", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    
+    try {
+      // Parse pagination params
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      // Parse filters
+      const filters = {
+        status: req.query.status as string,
+        gerenciaId: req.query.gerenciaId as string,
+        macroprocesoId: req.query.macroprocesoId as string,
+        processId: req.query.processId as string,
+        subprocesoId: req.query.subprocesoId as string,
+        search: req.query.search as string,
+        inherentRiskLevel: req.query.inherentRiskLevel as string,
+        residualRiskLevel: req.query.residualRiskLevel as string,
+        ownerId: req.query.ownerId as string,
+      };
+
+      // Build cache key including filters
+      const filterKey = JSON.stringify(filters);
+      const cacheKey = `risks-with-controls:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
+
+      // Try cache first (30 second TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/risks/with-controls in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/risks/with-controls - fetching aggregated data`);
+
+      // Build WHERE conditions
+      const conditions: any[] = [sql`r.status <> 'deleted'`];
+
+      if (filters.status && filters.status !== 'all') {
+        conditions.push(sql`r.status = ${filters.status}`);
+      }
+
+      if (filters.search) {
+        const searchPattern = `%${filters.search}%`;
+        conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
+      }
+
+      if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+        conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
+      }
+
+      if (filters.processId && filters.processId !== 'all') {
+        conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
+      }
+
+      if (filters.subprocesoId && filters.subprocesoId !== 'all') {
+        conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
+      }
+
+      const whereClause = conditions.length > 0
+        ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
+        : sql``;
+
+      // Query risks with control summaries using batch queries
+      const [risksResult, countResult] = await Promise.all([
+        db.execute(sql`
+          SELECT 
+            r.id,
+            r.code,
+            r.name,
+            r.category,
+            r.probability,
+            r.impact,
+            r.inherent_risk,
+            r.status
+          FROM risks r
+          ${whereClause}
+          ORDER BY r.created_at DESC
+          LIMIT ${limit} OFFSET ${offset}
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int as total 
+          FROM risks r
+          ${whereClause}
+        `)
+      ]);
+
+      const risks = risksResult.rows as any[];
+      const total = (countResult.rows[0] as any)?.total || 0;
+
+      // Batch query for control summaries (only if we have risks)
+      let controlSummaryMap = new Map<string, { controlCount: number; avgEffectiveness: number; controlsSummary: { code: string }[] }>();
+
+      if (risks.length > 0) {
+        const riskIds = risks.map(r => r.id);
+        const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
+
+        // Query 1: Control summaries (count, avg effectiveness)
+        const controlSummary = await db.execute(sql`
+          SELECT 
+            rc.risk_id,
+            COUNT(rc.id)::int as control_count,
+            COALESCE(AVG(c.effectiveness), 0)::float as avg_effectiveness
+          FROM risk_controls rc
+          INNER JOIN controls c ON rc.control_id = c.id
+          WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+          GROUP BY rc.risk_id
+        `);
+
+        // Query 2: Control codes (limited to 5 per risk)
+        const controlCodes = await db.execute(sql`
+          WITH ranked_controls AS (
+            SELECT 
+              rc.risk_id,
+              c.code,
+              ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+            FROM risk_controls rc
+            INNER JOIN controls c ON rc.control_id = c.id
+            WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+          )
+          SELECT risk_id, code
+          FROM ranked_controls
+          WHERE rn <= 5
+          ORDER BY risk_id, rn
+        `);
+
+        // Build lookup maps
+        for (const row of controlSummary.rows as any[]) {
+          controlSummaryMap.set(row.risk_id, {
+            controlCount: row.control_count,
+            avgEffectiveness: row.avg_effectiveness,
+            controlsSummary: []
+          });
+        }
+
+        // Group control codes by risk_id
+        for (const row of controlCodes.rows as any[]) {
+          const summary = controlSummaryMap.get(row.risk_id);
+          if (summary && summary.controlsSummary.length < 5) {
+            summary.controlsSummary.push({ code: row.code });
+          }
+        }
+      }
+
+      // Format response
+      const data = risks.map((row: any) => {
+        const summary = controlSummaryMap.get(row.id);
+        return {
+          id: row.id,
+          code: row.code,
+          name: row.name,
+          category: row.category,
+          probability: Number(row.probability),
+          impact: Number(row.impact),
+          inherentRisk: Number(row.inherent_risk),
+          controls: {
+            count: summary?.controlCount || 0,
+            avgEffectiveness: summary?.avgEffectiveness || 0,
+            summary: summary?.controlsSummary || []
+          }
+        };
+      });
+
+      const response = {
+        data,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        },
+        _meta: {
+          fetchedAt: new Date().toISOString(),
+          duration: Date.now() - requestStart
+        }
+      };
+
+      // Cache for 30 seconds
+      await distributedCache.set(cacheKey, response, 30);
+
+      console.log(`[PERF] /api/risks/with-controls COMPLETE in ${Date.now() - requestStart}ms (${risks.length} risks, total: ${total})`);
+
+      res.json(response);
+    } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/risks/with-controls failed after ${duration}ms:`, error);
+      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
+          return res.status(500).json({
+            message: "Database connection timeout. Please try again.",
+            error: "TIMEOUT"
+          });
+        }
+      }
+
+      res.status(500).json({
+        message: "Failed to fetch risks with controls",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
