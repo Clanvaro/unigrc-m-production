@@ -9038,16 +9038,16 @@ export class DatabaseStorage extends MemStorage {
           // Owner info from riskProcessLinks -> processOwners
           ownerName: sql<string | null>`(
             SELECT po.name
-            FROM ${riskProcessLinks} rpl
-            LEFT JOIN ${processOwners} po ON rpl.responsible_override_id = po.id
+            FROM risk_process_links rpl
+            LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id
             WHERE rpl.risk_id = ${risks.id}
             AND po.is_active = true
             LIMIT 1
           )`,
           ownerEmail: sql<string | null>`(
             SELECT po.email
-            FROM ${riskProcessLinks} rpl
-            LEFT JOIN ${processOwners} po ON rpl.responsible_override_id = po.id
+            FROM risk_process_links rpl
+            LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id
             WHERE rpl.risk_id = ${risks.id}
             AND po.is_active = true
             LIMIT 1
