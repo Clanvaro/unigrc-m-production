@@ -16,8 +16,9 @@ export default function Reports() {
   // Use the with-details endpoint to get full risk information including process associations
   const { data: risksData, isLoading: risksLoading, isError: risksError } = useQuery<RiskWithProcess[]>({
     queryKey: ["/api/risks-with-details"],
-    staleTime: 30000, // Cache for 30 seconds
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnWindowFocus: false,
+    retry: 1, // Solo reintentar una vez en caso de error
   });
 
   // Load catalogs to map IDs to names
@@ -25,36 +26,42 @@ export default function Reports() {
     queryKey: ["/api/macroprocesos"],
     staleTime: 300000, // Cache for 5 minutes (catalogs don't change often)
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   const { data: processesData } = useQuery<any[]>({
     queryKey: ["/api/processes"],
     staleTime: 300000,
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   const { data: subprocesosData } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
     staleTime: 300000,
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
-  const { data: controlsResponse, isLoading: controlsLoading } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
+  const { data: controlsResponse, isLoading: controlsLoading, isError: controlsError } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/controls"],
-    staleTime: 30000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
-  const { data: actionPlansData, isLoading: actionPlansLoading } = useQuery<Action[]>({
+  const { data: actionPlansData, isLoading: actionPlansLoading, isError: actionPlansError } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
-    staleTime: 30000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
-  const { data: stats } = useQuery({
+  const { data: stats, isError: statsError } = useQuery({
     queryKey: ["/api/dashboard/stats"],
-    staleTime: 30000,
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   // Defensive array normalization - ensure we always have arrays even if queries fail
@@ -65,12 +72,40 @@ export default function Reports() {
   const controls: Control[] = Array.isArray(controlsResponse?.data) ? controlsResponse.data : [];
   const actionPlans: Action[] = Array.isArray(actionPlansData) ? actionPlansData : [];
 
+  // Show loading state only if critical data is loading
   if (risksLoading || controlsLoading || actionPlansLoading) {
-    return <div className="p-6">Cargando reportes...</div>;
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <p className="text-lg font-medium">Cargando reportes...</p>
+            <p className="text-sm text-muted-foreground mt-2">Por favor espera mientras se cargan los datos</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
-  if (risksError) {
-    return <div className="p-6">Error al cargar riesgos. Por favor intenta de nuevo.</div>;
+  // Show error state with retry option
+  if (risksError || controlsError || actionPlansError || statsError) {
+    return (
+      <div className="p-6">
+        <div className="flex flex-col items-center justify-center h-64 space-y-4">
+          <div className="text-center">
+            <h3 className="text-lg font-semibold text-destructive mb-2">Error al cargar datos</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Algunos datos no pudieron cargarse. Por favor intenta recargar la página.
+            </p>
+            <Button 
+              onClick={() => window.location.reload()} 
+              variant="default"
+            >
+              Recargar página
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Create lookup maps for process names - with defensive checks
@@ -95,18 +130,21 @@ export default function Reports() {
   const riskDistributionData = useMemo(() => {
     if (!Array.isArray(risks) || risks.length === 0) return [];
     try {
+      // Use a stable reference by creating a copy of the array length
       const risksLength = risks.length;
+      const risksArray = risks; // Keep reference stable
+      
       return [
-        { name: "Bajo", value: risks.filter((r) => (r?.inherentRisk || 0) <= 6).length, color: "#22c55e" },
-        { name: "Medio", value: risks.filter((r) => {
+        { name: "Bajo", value: risksArray.filter((r) => (r?.inherentRisk || 0) <= 6).length, color: "#22c55e" },
+        { name: "Medio", value: risksArray.filter((r) => {
           const risk = r?.inherentRisk || 0;
           return risk >= 7 && risk <= 12;
         }).length, color: "#eab308" },
-        { name: "Alto", value: risks.filter((r) => {
+        { name: "Alto", value: risksArray.filter((r) => {
           const risk = r?.inherentRisk || 0;
           return risk >= 13 && risk <= 19;
         }).length, color: "#f97316" },
-        { name: "Crítico", value: risks.filter((r) => (r?.inherentRisk || 0) >= 20).length, color: "#ef4444" },
+        { name: "Crítico", value: risksArray.filter((r) => (r?.inherentRisk || 0) >= 20).length, color: "#ef4444" },
       ];
     } catch (error) {
       console.error("Error calculating risk distribution:", error);
@@ -174,7 +212,7 @@ export default function Reports() {
       console.error("Error calculating risks by process:", error);
       return [];
     }
-  }, [risks.length, macroprocesosMap.size, processesMap.size, subprocesosMap.size]); // FIXED: Use sizes instead of full objects to avoid React #310
+  }, [risks.length, macroprocesos.length, processes.length, subprocesos.length]); // FIXED: Use array lengths instead of Map sizes to avoid React #310
 
   // FIXED: Control effectiveness data - memoized for performance
   // React error #310 fix: Use length instead of full array
@@ -413,7 +451,9 @@ export default function Reports() {
           <CardContent>
             <div className="text-2xl font-bold">{Array.isArray(controls) ? controls.filter((c: Control) => c?.isActive).length : 0}</div>
             <p className="text-xs text-muted-foreground">
-              {Math.round(controls.reduce((sum, c) => sum + c.effectiveness, 0) / Math.max(controls.length, 1))}% efectividad promedio
+              {controls.length > 0 
+                ? Math.round(controls.reduce((sum, c) => sum + (c?.effectiveness || 0), 0) / controls.length)
+                : 0}% efectividad promedio
             </p>
           </CardContent>
         </Card>
@@ -426,7 +466,9 @@ export default function Reports() {
           <CardContent>
             <div className="text-2xl font-bold">{actionPlans.length}</div>
             <p className="text-xs text-muted-foreground">
-              {Math.round((actionPlans.filter((ap: Action) => ap.status === "completed").length / Math.max(actionPlans.length, 1)) * 100)}% completados
+              {actionPlans.length > 0
+                ? Math.round((actionPlans.filter((ap: Action) => ap?.status === "completed").length / actionPlans.length) * 100)
+                : 0}% completados
             </p>
           </CardContent>
         </Card>

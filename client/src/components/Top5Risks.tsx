@@ -19,11 +19,15 @@ interface Top5RisksProps {
 export function Top5Risks({ showHeader = true, compact = false, className = "" }: Top5RisksProps) {
   const { data: risksResponse, isLoading: risksLoading } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    retry: 1,
   });
   const risks = risksResponse?.data || [];
 
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
+    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    retry: 1,
   });
 
   if (risksLoading) {
