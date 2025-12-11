@@ -14482,6 +14482,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/user-roles", isAuthenticated, requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { userId, roleId } = req.body;
+      
+      if (!userId || !roleId) {
+        return res.status(400).json({ 
+          message: "userId and roleId are required" 
+        });
+      }
+
+      const validatedData = insertUserRoleSchema.parse({
+        userId,
+        roleId,
+      });
+      
+      const userRole = await storage.assignUserRole(validatedData);
+
+      // Invalidate BOTH auth caches for this user (permissions changed)
+      authCache.invalidate(userId);
+      await distributedCache.invalidate(`auth-me:${userId}`);
+
+      res.status(201).json(userRole);
+    } catch (error) {
+      console.error("Error assigning user role:", error);
+      res.status(400).json({
+        message: "Invalid user role data",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   app.get("/api/users/:userId/roles", isAuthenticated, async (req, res) => {
     try {
       const userRoles = await storage.getUserRoles(req.params.userId);
