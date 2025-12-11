@@ -2591,11 +2591,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-        // Get risk level ranges config
-        const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
-          config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
-        );
-
       // Get risk level ranges config
       const riskLevelRanges = await storage.getSystemConfig('risk_level_ranges').then(config =>
         config ? JSON.parse(config.value) : { lowMax: 6, mediumMax: 12, highMax: 19 }
