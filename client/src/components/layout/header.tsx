@@ -152,8 +152,11 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     processGerencias: any[];
   }
   
+  // Get tenant/user identifier for cache key (single-tenant mode uses fixed value)
+  const tenantId = currentUser?.id || 'single-tenant';
+  
   const { data: risksPageData } = useQuery<PageDataLite>({
-    queryKey: ["/api/risks/page-data-lite"],
+    queryKey: ['risks-page-data-lite', tenantId],
     queryFn: async () => {
       const response = await fetch("/api/risks/page-data-lite");
       if (!response.ok) throw new Error("Failed to fetch page data");

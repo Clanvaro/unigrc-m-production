@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../lib/queryKeys";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useOptimisticMutation } from "@/hooks/useOptimisticMutation";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +61,8 @@ const translateControlType = (type: string | undefined) => {
 
 export default function Risks() {
   const [, setLocation] = useLocation();
+  const { currentUser } = usePermissions();
+  const tenantId = currentUser?.id || 'single-tenant';
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingRisk, setEditingRisk] = useState<Risk | null>(null);
   const [viewingRisk, setViewingRisk] = useState<Risk | null>(null);
@@ -686,7 +689,7 @@ export default function Risks() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -800,7 +803,7 @@ export default function Risks() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
 
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
@@ -899,7 +902,7 @@ export default function Risks() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
 
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
