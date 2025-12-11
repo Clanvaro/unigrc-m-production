@@ -9037,19 +9037,19 @@ export class DatabaseStorage extends MemStorage {
           deletedAt: risks.deletedAt,
           // Owner info from riskProcessLinks -> processOwners
           ownerName: sql<string | null>`(
-            SELECT ${processOwners.name}
-            FROM ${riskProcessLinks}
-            LEFT JOIN ${processOwners} ON ${riskProcessLinks.responsibleOverrideId} = ${processOwners.id}
-            WHERE ${riskProcessLinks.riskId} = ${risks.id}
-            AND ${processOwners.isActive} = true
+            SELECT po.name
+            FROM ${riskProcessLinks} rpl
+            LEFT JOIN ${processOwners} po ON rpl.responsible_override_id = po.id
+            WHERE rpl.risk_id = ${risks.id}
+            AND po.is_active = true
             LIMIT 1
           )`,
           ownerEmail: sql<string | null>`(
-            SELECT ${processOwners.email}
-            FROM ${riskProcessLinks}
-            LEFT JOIN ${processOwners} ON ${riskProcessLinks.responsibleOverrideId} = ${processOwners.id}
-            WHERE ${riskProcessLinks.riskId} = ${risks.id}
-            AND ${processOwners.isActive} = true
+            SELECT po.email
+            FROM ${riskProcessLinks} rpl
+            LEFT JOIN ${processOwners} po ON rpl.responsible_override_id = po.id
+            WHERE rpl.risk_id = ${risks.id}
+            AND po.is_active = true
             LIMIT 1
           )`,
         })
