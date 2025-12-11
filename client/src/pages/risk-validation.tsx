@@ -504,6 +504,8 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/validated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/rejected"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks"] });
+      // FIXED: Also invalidate bootstrap cache to ensure risk list shows updated validation status
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
       // Also invalidate risk-process-links queries since validating a risk updates both tables
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
@@ -1873,12 +1875,28 @@ export default function RiskValidationPage() {
     </Card>
   );
 
+  // FIXED: Add skeleton loading state
   if (isLoading) {
     return (
-      <div className="container mx-auto p-6">
-        <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-          <p className="text-lg text-muted-foreground">Cargando...</p>
+      <div className="container mx-auto p-6 space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-96" />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-6 w-32" />
+                <Skeleton className="h-4 w-24 mt-2" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-4 w-full mb-2" />
+                <Skeleton className="h-4 w-3/4 mb-2" />
+                <Skeleton className="h-4 w-1/2" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       </div>
     );

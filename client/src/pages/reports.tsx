@@ -90,21 +90,29 @@ export default function Reports() {
       : []
   );
 
-  // Risk distribution data for charts - memoized for performance
+  // FIXED: Risk distribution data for charts - memoized for performance
+  // React error #310 fix: Ensure dependencies are stable and serializable
   const riskDistributionData = useMemo(() => {
-    if (!Array.isArray(risks)) return [];
+    if (!Array.isArray(risks) || risks.length === 0) return [];
     try {
+      const risksLength = risks.length;
       return [
-        { name: "Bajo", value: risks.filter((r) => r?.inherentRisk <= 6).length, color: "#22c55e" },
-        { name: "Medio", value: risks.filter((r) => r?.inherentRisk >= 7 && r?.inherentRisk <= 12).length, color: "#eab308" },
-        { name: "Alto", value: risks.filter((r) => r?.inherentRisk >= 13 && r?.inherentRisk <= 19).length, color: "#f97316" },
-        { name: "Crítico", value: risks.filter((r) => r?.inherentRisk >= 20).length, color: "#ef4444" },
+        { name: "Bajo", value: risks.filter((r) => (r?.inherentRisk || 0) <= 6).length, color: "#22c55e" },
+        { name: "Medio", value: risks.filter((r) => {
+          const risk = r?.inherentRisk || 0;
+          return risk >= 7 && risk <= 12;
+        }).length, color: "#eab308" },
+        { name: "Alto", value: risks.filter((r) => {
+          const risk = r?.inherentRisk || 0;
+          return risk >= 13 && risk <= 19;
+        }).length, color: "#f97316" },
+        { name: "Crítico", value: risks.filter((r) => (r?.inherentRisk || 0) >= 20).length, color: "#ef4444" },
       ];
     } catch (error) {
       console.error("Error calculating risk distribution:", error);
       return [];
     }
-  }, [risks]);
+  }, [risks.length]); // FIXED: Use length instead of full array to avoid React #310
 
   // Risks by process data - Group by macroproceso, process, or subproceso
   // Map IDs to names using catalogs - memoized for performance
@@ -166,26 +174,31 @@ export default function Reports() {
       console.error("Error calculating risks by process:", error);
       return [];
     }
-  }, [risks, macroprocesosMap, processesMap, subprocesosMap]);
+  }, [risks.length, macroprocesosMap.size, processesMap.size, subprocesosMap.size]); // FIXED: Use sizes instead of full objects to avoid React #310
 
-  // Control effectiveness data - memoized for performance
+  // FIXED: Control effectiveness data - memoized for performance
+  // React error #310 fix: Use length instead of full array
   const controlEffectivenessData = useMemo(() => {
-    if (!Array.isArray(controls)) return [];
+    if (!Array.isArray(controls) || controls.length === 0) return [];
     try {
       return [
-        { name: "Excelente (>80%)", value: controls.filter((c) => c?.effectiveness > 80).length, color: "#22c55e" },
-        { name: "Bueno (60-80%)", value: controls.filter((c) => c?.effectiveness >= 60 && c?.effectiveness <= 80).length, color: "#eab308" },
-        { name: "Regular (<60%)", value: controls.filter((c) => c?.effectiveness < 60).length, color: "#ef4444" },
+        { name: "Excelente (>80%)", value: controls.filter((c) => (c?.effectiveness || 0) > 80).length, color: "#22c55e" },
+        { name: "Bueno (60-80%)", value: controls.filter((c) => {
+          const eff = c?.effectiveness || 0;
+          return eff >= 60 && eff <= 80;
+        }).length, color: "#eab308" },
+        { name: "Regular (<60%)", value: controls.filter((c) => (c?.effectiveness || 0) < 60).length, color: "#ef4444" },
       ];
     } catch (error) {
       console.error("Error calculating control effectiveness:", error);
       return [];
     }
-  }, [controls]);
+  }, [controls.length]); // FIXED: Use length instead of full array
 
-  // Action plan status data - memoized for performance
+  // FIXED: Action plan status data - memoized for performance
+  // React error #310 fix: Use length instead of full array
   const actionPlanStatusData = useMemo(() => {
-    if (!Array.isArray(actionPlans)) return [];
+    if (!Array.isArray(actionPlans) || actionPlans.length === 0) return [];
     try {
       return [
         { name: "Completados", value: actionPlans.filter((ap) => ap?.status === "completed").length, color: "#22c55e" },
@@ -206,7 +219,7 @@ export default function Reports() {
       console.error("Error calculating action plan status:", error);
       return [];
     }
-  }, [actionPlans]);
+  }, [actionPlans.length]); // FIXED: Use length instead of full array
 
   const handleExport = async (reportType: string) => {
     try {

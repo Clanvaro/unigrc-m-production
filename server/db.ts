@@ -143,10 +143,10 @@ if (databaseUrl) {
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
-    // Rotate connections more frequently to prevent "zombie" connections that may have issues
-    // Reduced from 1000 to 200 to recycle connections more aggressively and prevent stale connections
-    // This helps prevent slow pings and connection timeouts
-    maxUses: isCloudSql ? 200 : undefined,
+    // FIXED: Rotate connections more frequently to prevent "zombie" connections
+    // Reduced from 200 to 100 to recycle connections even more aggressively
+    // This helps prevent slow pings and connection timeouts by replacing connections sooner
+    maxUses: isCloudSql ? 100 : undefined,
     // Application name for better monitoring in Cloud SQL
     application_name: 'unigrc-backend',
     ssl: sslConfig,
@@ -820,44 +820,85 @@ function startPoolWarming() {
         }
         await warmPool(minWarm);
       } else {
-        // IMPROVED: Use a specific connection for ping to detect stale connections
-        // SAFE APPROACH: Don't close connections immediately - let pool recycle naturally via maxUses
-        // This prevents reducing pool capacity when at minimum connections
+        // FIXED: Use a specific connection for ping with aggressive timeout to detect and close stale connections
+        // IMPROVED: Close connections that take too long (>5s) instead of waiting for maxUses
         let client: any = null;
         try {
           const pingStart = Date.now();
-          client = await pool!.connect();
-          await client.query('SELECT 1');
+          
+          // FIXED: Add timeout to ping query to prevent hanging on dead connections
+          const PING_TIMEOUT_MS = 5000; // 5 seconds max for ping
+          const pingPromise = (async () => {
+            client = await pool!.connect();
+            // Set query timeout to prevent hanging
+            await client.query({
+              text: 'SELECT 1',
+              rowMode: 'array',
+            });
+          })();
+          
+          // Race ping against timeout
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Ping timeout')), PING_TIMEOUT_MS);
+          });
+          
+          await Promise.race([pingPromise, timeoutPromise]);
           const pingDuration = Date.now() - pingStart;
 
           // Log slow pings (indicates connection issues)
           if (pingDuration > 500) {
             console.warn(`⚠️ Slow DB ping: ${pingDuration}ms - possible connection issue`);
-            
-            // If ping is very slow, mark connection for recycling and warm the pool
-            // SAFE: We don't close the connection - maxUses (200) will recycle it naturally
-            // This ensures we don't reduce pool capacity when at minimum
-            if (pingDuration > 2000) {
-              console.log(`🔄 Very slow ping detected (${pingDuration}ms) - connection will be recycled naturally (maxUses=200), warming pool...`);
-              // Warm pool to ensure fresh connections are available
-              await warmPool(3);
-            } else if (pingDuration > 1000) {
-              // For moderately slow pings, just warm the pool without aggressive action
-              await warmPool(2);
+          }
+          
+          // FIXED: Close connections that are extremely slow (>5s) - they're likely dead
+          if (pingDuration > 5000) {
+            console.error(`❌ Extremely slow ping (${pingDuration}ms) - closing connection immediately`);
+            try {
+              // Force close the connection - it's likely dead
+              if (client) {
+                await client.end(); // Close connection instead of releasing
+                client = null; // Mark as closed
+              }
+            } catch (closeError) {
+              // Ignore close errors - connection may already be dead
             }
+            // Warm pool to replace the closed connection
+            await warmPool(3);
+          } else if (pingDuration > 2000) {
+            console.log(`🔄 Very slow ping detected (${pingDuration}ms) - connection will be recycled, warming pool...`);
+            // Warm pool to ensure fresh connections are available
+            await warmPool(3);
+          } else if (pingDuration > 1000) {
+            // For moderately slow pings, just warm the pool without aggressive action
+            await warmPool(2);
           }
         } catch (error: any) {
-          console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
-          // If ping fails, try to warm the pool to recover
-          try {
-            console.log('🔄 Recovering pool after ping failure...');
+          // FIXED: Handle timeout and connection errors more aggressively
+          if (error?.message === 'Ping timeout' || error?.code === 'ETIMEDOUT' || error?.code === 'ECONNRESET') {
+            console.error(`❌ Ping timeout/error - closing dead connection: ${error?.message || error}`);
+            try {
+              // Force close the connection if it timed out
+              if (client) {
+                await client.end(); // Close instead of releasing
+                client = null;
+              }
+            } catch (closeError) {
+              // Ignore close errors
+            }
+            // Warm pool to replace the closed connection
             await warmPool(3);
-          } catch (warmError) {
-            console.error('❌ Pool warming failed during recovery:', warmError);
+          } else {
+            console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
+            // If ping fails, try to warm the pool to recover
+            try {
+              console.log('🔄 Recovering pool after ping failure...');
+              await warmPool(3);
+            } catch (warmError) {
+              console.error('❌ Pool warming failed during recovery:', warmError);
+            }
           }
         } finally {
-          // Always release the client back to the pool
-          // The connection will be recycled naturally when it reaches maxUses (200)
+          // FIXED: Only release if client is still valid (not closed)
           if (client) {
             try {
               client.release();

@@ -335,12 +335,13 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
+    // FIXED: Always fetch when validation column is visible to show correct validation status
     // Only fetch when detail dialogs are open or when columns that need full data are visible
     // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
     enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.validation) && riskIds.length > 0,
     staleTime: 1000 * 30, // 30 seconds - reduced to ensure validation status updates appear faster
     refetchOnMount: true, // Refetch on mount to ensure fresh validation status after returning from validation center
-    refetchOnWindowFocus: false, // Don't refetch on window focus - data changes infrequently
+    refetchOnWindowFocus: true, // FIXED: Refetch on window focus to ensure validation status is up-to-date
   });
 
   // Extract relations from batch response (empty when not loaded)
