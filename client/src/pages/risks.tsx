@@ -338,7 +338,8 @@ export default function Risks() {
     // FIXED: Always fetch risk-process links to calculate validation status correctly
     // This is needed even when validation column is not visible, as validation status affects filtering
     // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
-    enabled: (needsDetailedData || !!viewingRisk || !!editingRisk || !!controlsDialogRisk || visibleColumns.responsible || visibleColumns.validation || filters.validationStatus !== 'all') && riskIds.length > 0,
+    // CRITICAL: Always enabled when there are risks to ensure validation status is always calculated correctly
+    enabled: riskIds.length > 0,
     staleTime: 1000 * 30, // 30 seconds - reduced to ensure validation status updates appear faster
     refetchOnMount: true, // Refetch on mount to ensure fresh validation status after returning from validation center
     refetchOnWindowFocus: true, // FIXED: Refetch on window focus to ensure validation status is up-to-date
@@ -624,30 +625,52 @@ export default function Risks() {
   }, [allRiskProcessLinks, processOwners, subprocesos, processes, macroprocesos, getProcessOwnerDetailsLegacy]);
 
   // Memoize helper function to get aggregated validation status for a risk
+  // CRITICAL: Calculate directly from riskProcessLinks, not from responsibles
+  // This ensures we get the correct validation status for all links
   const getAggregatedValidationStatus = useCallback((risk: Risk) => {
-    const responsibles = getRiskProcessResponsibles(risk);
+    // Get all riskProcessLinks for this risk
+    const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
 
-    if (responsibles.length === 0) {
-      // Fallback to legacy validation status
+    if (riskLinks.length === 0) {
+      // Fallback to legacy validation status if no links exist
       return risk.validationStatus || 'pending_validation';
     }
 
-    // CRITICAL: Filter out undefined entries before accessing properties
-    const statuses = responsibles.filter(r => r && r.validationStatus !== undefined).map((r: ResponsibleWithValidation) => r.validationStatus);
+    // Extract validation statuses from all links
+    const statuses = riskLinks
+      .filter((link: any) => link && link.validationStatus !== undefined && link.validationStatus !== null)
+      .map((link: any) => link.validationStatus);
 
-    // If any are rejected, overall status is rejected
+    if (statuses.length === 0) {
+      return 'pending_validation';
+    }
+
+    // Lógica de agregación (siguiendo calculateAggregatedValidationStatus):
+    // 1. Si hay al menos un rechazo -> "rejected"
+    // 2. Si hay al menos una observación (sin rechazos) -> "observed"
+    // 3. Si todos están validados -> "validated"
+    // 4. Si algunos validados y otros pendientes -> "partially_validated"
+    // 5. Si todos pendientes -> "pending_validation"
+
     if (statuses.includes('rejected')) {
       return 'rejected';
     }
 
-    // If all are validated, overall status is validated
+    if (statuses.includes('observed')) {
+      return 'observed';
+    }
+
     if (statuses.every(status => status === 'validated')) {
       return 'validated';
     }
 
+    if (statuses.some(status => status === 'validated')) {
+      return 'partially_validated';
+    }
+
     // Otherwise, pending validation
     return 'pending_validation';
-  }, [getRiskProcessResponsibles]);
+  }, [allRiskProcessLinks]);
 
   const deleteMutation = useOptimisticMutation({
     queryKey: "/api/risks",
@@ -1394,6 +1417,8 @@ export default function Risks() {
         return <Badge variant="outline" className="text-yellow-600 border-yellow-600">⏳ Pendiente</Badge>;
       case "validated":
         return <Badge variant="outline" className="text-green-600 border-green-600">✅ Validado</Badge>;
+      case "partially_validated":
+        return <Badge variant="outline" className="text-green-600 border-green-600">⚠️ Parcial</Badge>;
       case "observed":
         return <Badge variant="outline" className="text-blue-600 border-blue-600">👁️ Observado</Badge>;
       case "rejected":
