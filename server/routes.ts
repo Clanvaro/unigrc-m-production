@@ -9745,232 +9745,217 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Action Plans - OPTIMIZED: Parallel queries to reduce cold start latency
   app.get("/api/action-plans", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
     try {
-      const startTime = Date.now();
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
         return res.status(400).json({ message: "Tenant ID is required" });
       }
 
-      // Use distributed cache with versioned key (30s TTL)
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
-
       if (cached) {
-        console.log(`[CACHE HIT] ${cacheKey} (${Date.now() - startTime}ms)`);
+        console.log(`[CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
 
-      // OPTIMIZED: Add timeout to prevent slow queries from blocking the pool
-      const queryTimeout = 8000; // 8 seconds max for action plans query
-      const queryPromise = storage.getActionPlans();
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout after 8 seconds')), queryTimeout);
-      });
+      console.log(`[CACHE MISS] /api/action-plans - fetching aggregated data`);
 
-      let actionPlans;
-      try {
-        actionPlans = await Promise.race([queryPromise, timeoutPromise]);
-      } catch (error) {
-        const duration = Date.now() - startTime;
-        console.error(`[ERROR] /api/action-plans query failed after ${duration}ms:`, error);
-        // Return cached data if available as fallback
-        const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
-        if (fallbackCache) {
-          console.log(`[FALLBACK] Returning cached action-plans data`);
-          return res.json(fallbackCache);
-        }
-        return res.status(504).json({ 
-          message: "Request timeout. The query took too long to execute.",
-          error: "TIMEOUT"
-        });
-      }
+      // OPTIMIZED: Single aggregated query with CTEs and JOINs
+      // Get action plans with reschedule counts, risk-process links, and gerencias in one query
+      const actionPlansResult = await db.execute(sql`
+        WITH action_plans_base AS (
+          SELECT 
+            a.id,
+            a.code,
+            a.origin,
+            a.risk_id,
+            a.title,
+            a.description,
+            a.responsible,
+            a.due_date,
+            a.original_due_date,
+            a.reschedule_count,
+            a.priority,
+            a.status,
+            a.progress,
+            a.implemented_at,
+            a.implemented_by,
+            a.implementation_comments,
+            a.management_response,
+            a.agreed_action,
+            a.evidence_submitted_at,
+            a.evidence_submitted_by,
+            a.reviewed_at,
+            a.reviewed_by,
+            a.review_comments,
+            a.validation_status,
+            a.validated_by,
+            a.validated_at,
+            a.validation_comments,
+            a.notified_at,
+            a.created_by,
+            a.updated_by,
+            a.deleted_by,
+            a.deleted_at,
+            a.deletion_reason,
+            a.created_at,
+            a.updated_at
+          FROM actions a
+          WHERE a.deleted_at IS NULL
+          ORDER BY a.created_at DESC
+          LIMIT 1000
+        ),
+        reschedule_counts AS (
+          SELECT 
+            entity_id as action_plan_id,
+            COUNT(*)::int as reschedule_count
+          FROM audit_logs
+          WHERE entity_type = 'action_plan'
+            AND action = 'update'
+            AND changes::text LIKE '%dueDate%'
+          GROUP BY entity_id
+        ),
+        risk_process_info AS (
+          SELECT DISTINCT
+            rpl.risk_id,
+            rpl.process_id,
+            rpl.subproceso_id,
+            rpl.macroproceso_id,
+            COALESCE(p.id, sp.proceso_id, mp_proc.id) as final_process_id
+          FROM risk_process_links rpl
+          LEFT JOIN processes p ON rpl.process_id = p.id
+          LEFT JOIN subprocesos sp ON rpl.subproceso_id = sp.id
+          LEFT JOIN processes mp_proc ON rpl.macroproceso_id = mp_proc.macroproceso_id
+          WHERE rpl.risk_id IS NOT NULL
+        ),
+        process_gerencias_agg AS (
+          SELECT 
+            pg.process_id,
+            json_agg(
+              json_build_object(
+                'id', g.id,
+                'code', g.code,
+                'name', g.name,
+                'description', g.description,
+                'managerId', g.manager_id,
+                'order', g.order,
+                'parentId', g.parent_id,
+                'level', g.level,
+                'status', g.status,
+                'createdBy', g.created_by,
+                'updatedBy', g.updated_by,
+                'deletedBy', g.deleted_by,
+                'deletedAt', g.deleted_at,
+                'deletionReason', g.deletion_reason,
+                'createdAt', g.created_at,
+                'updatedAt', g.updated_at
+              )
+            ) FILTER (WHERE g.id IS NOT NULL) as gerencias
+          FROM process_gerencias pg
+          LEFT JOIN gerencias g ON pg.gerencia_id = g.id
+          WHERE g.deleted_at IS NULL
+          GROUP BY pg.process_id
+        ),
+        associated_risks_agg AS (
+          SELECT 
+            COALESCE(apr.action_plan_id, a.id) as action_plan_id,
+            json_agg(
+              json_build_object(
+                'actionPlanId', apr.action_plan_id,
+                'actionId', apr.action_id,
+                'riskId', apr.risk_id,
+                'isPrimary', apr.is_primary,
+                'riskCode', r.code,
+                'riskName', r.name
+              )
+            ) FILTER (WHERE apr.risk_id IS NOT NULL) as associated_risks
+          FROM action_plan_risks apr
+          INNER JOIN risks r ON apr.risk_id = r.id
+          LEFT JOIN actions a ON apr.action_id = a.id
+          WHERE r.deleted_at IS NULL
+            AND (apr.action_plan_id IS NOT NULL OR a.id IS NOT NULL)
+          GROUP BY COALESCE(apr.action_plan_id, a.id)
+        )
+        SELECT 
+          apb.*,
+          COALESCE(rc.reschedule_count, 0)::int as reschedule_count,
+          COALESCE(pg_agg.gerencias, '[]'::json) as gerencias,
+          COALESCE(ar_agg.associated_risks, '[]'::json) as associated_risks
+        FROM action_plans_base apb
+        LEFT JOIN reschedule_counts rc ON apb.id = rc.action_plan_id
+        LEFT JOIN risk_process_info rpi ON apb.risk_id = rpi.risk_id
+        LEFT JOIN process_gerencias_agg pg_agg ON rpi.final_process_id = pg_agg.process_id
+        LEFT JOIN associated_risks_agg ar_agg ON apb.id = ar_agg.action_plan_id
+        ORDER BY apb.created_at DESC
+      `);
 
-      // Early return if no plans - avoid unnecessary queries
-      if (actionPlans.length === 0) {
-        await distributedCache.set(cacheKey, [], 30);
-        return res.json([]);
-      }
+      const plans = (actionPlansResult.rows as any[]).map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        origin: row.origin,
+        riskId: row.risk_id,
+        name: row.title, // Map title to name for backward compatibility
+        title: row.title,
+        description: row.description,
+        responsible: row.responsible,
+        dueDate: row.due_date,
+        originalDueDate: row.original_due_date,
+        rescheduleCount: row.reschedule_count || 0,
+        priority: row.priority,
+        status: row.status || 'pending',
+        progress: row.progress || 0,
+        implementedAt: row.implemented_at,
+        implementedBy: row.implemented_by,
+        implementationComments: row.implementation_comments,
+        managementResponse: row.management_response,
+        agreedAction: row.agreed_action,
+        evidenceSubmittedAt: row.evidence_submitted_at,
+        evidenceSubmittedBy: row.evidence_submitted_by,
+        reviewedAt: row.reviewed_at,
+        reviewedBy: row.reviewed_by,
+        reviewComments: row.review_comments,
+        validationStatus: row.validation_status,
+        validatedBy: row.validated_by,
+        validatedAt: row.validated_at,
+        validationComments: row.validation_comments,
+        notifiedAt: row.notified_at,
+        createdBy: row.created_by,
+        updatedBy: row.updated_by,
+        deletedBy: row.deleted_by,
+        deletedAt: row.deleted_at,
+        deletionReason: row.deletion_reason,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        gerencias: Array.isArray(row.gerencias) ? row.gerencias : (row.gerencias ? JSON.parse(row.gerencias) : []),
+        associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
+      }));
 
-      const planIds = actionPlans.map(p => p.id);
-      const actionCodes = actionPlans.map(p => p.code);
-      const riskIds = actionPlans
-        .map(p => p.riskId)
-        .filter((id): id is string => id !== null && id !== undefined);
+      const response = plans;
+      await distributedCache.set(cacheKey, response, 30);
+      await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300);
 
-      // PHASE 1: Execute independent queries in parallel
-      const [allActions, auditLogsData, riskProcessLinksData] = await Promise.all([
-        // Get all actions to find corresponding action_id for each plan
-        // Note: actions table doesn't have tenantId - single-tenant system
-        requireDb()
-          .select({ id: actions.id, code: actions.code })
-          .from(actions)
-          .where(inArray(actions.code, actionCodes)),
-
-        // Audit logs for reschedule counting
-        requireDb()
-          .select()
-          .from(auditLogs)
-          .where(and(
-            eq(auditLogs.entityType, 'action_plan'),
-            eq(auditLogs.action, 'update'),
-            inArray(auditLogs.entityId, planIds)
-          )),
-
-        // Risk-process links
-        riskIds.length > 0
-          ? requireDb().select().from(riskProcessLinks).where(inArray(riskProcessLinks.riskId, riskIds))
-          : Promise.resolve([])
-      ]);
-
-      // Count reschedules
-      const rescheduleCounts = new Map<string, number>();
-      for (const log of auditLogsData) {
-        if (log.changes && typeof log.changes === 'object' && 'dueDate' in log.changes) {
-          rescheduleCounts.set(log.entityId, (rescheduleCounts.get(log.entityId) || 0) + 1);
-        }
-      }
-
-      // If no risks linked, return early with simplified data
-      if (riskIds.length === 0) {
-        const plansWithoutRisks = actionPlans.map(plan => ({
-          ...plan,
-          title: plan.name,
-          rescheduleCount: rescheduleCounts.get(plan.id) || 0,
-          gerencias: [],
-          associatedRisks: []
-        }));
-        await Promise.all([
-          distributedCache.set(cacheKey, plansWithoutRisks, 30),
-          distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, plansWithoutRisks, 300) // 5 min fallback cache
-        ]);
-        console.log(`[ACTION-PLANS] Completed (no risks) in ${Date.now() - startTime}ms`);
-        return res.json(plansWithoutRisks);
-      }
-
-      // Extract IDs from risk-process links
-      const processIds = [...new Set(riskProcessLinksData.map(l => l.processId).filter((id): id is string => !!id))];
-      const subprocesoIds = [...new Set(riskProcessLinksData.map(l => l.subprocesoId).filter((id): id is string => !!id))];
-      const macroprocesoIds = [...new Set(riskProcessLinksData.map(l => l.macroprocesoId).filter((id): id is string => !!id))];
-
-      // PHASE 2: Fetch processes, subprocesos, and associated risks in parallel
-      // Note: These tables don't have tenantId - single-tenant system
-      const actionIds = allActions.map(a => a.id);
-      const [processesData, subprocesosData, processesFromMacro, allAssociatedRisks] = await Promise.all([
-        processIds.length > 0
-          ? requireDb().select().from(processes).where(inArray(processes.id, processIds))
-          : Promise.resolve([]),
-
-        subprocesoIds.length > 0
-          ? requireDb().select().from(subprocesos).where(inArray(subprocesos.id, subprocesoIds))
-          : Promise.resolve([]),
-
-        macroprocesoIds.length > 0
-          ? requireDb().select().from(processes).where(inArray(processes.macroprocesoId, macroprocesoIds))
-          : Promise.resolve([]),
-
-        // Associated risks query
-        requireDb()
-          .select({
-            actionPlanId: actionPlanRisks.actionPlanId,
-            actionId: actionPlanRisks.actionId,
-            riskId: actionPlanRisks.riskId,
-            isPrimary: actionPlanRisks.isPrimary,
-            riskCode: risks.code,
-            riskName: risks.name,
-          })
-          .from(actionPlanRisks)
-          .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
-          .where(or(
-            inArray(actionPlanRisks.actionPlanId, planIds),
-            actionIds.length > 0 ? inArray(actionPlanRisks.actionId, actionIds) : undefined
-          ))
-      ]);
-
-      // Get additional parent process IDs from subprocesos
-      const additionalProcessIds = subprocesosData
-        .map(s => s.procesoId)
-        .filter((id): id is string => !!id && !processIds.includes(id));
-
-      // PHASE 3: Fetch additional processes and gerencias data in parallel
-      const allProcessesMap = new Map([...processesData, ...processesFromMacro].map(p => [p.id, p]));
-
-      const [additionalProcesses, processGerenciasData] = await Promise.all([
-        additionalProcessIds.length > 0
-          ? requireDb().select().from(processes).where(inArray(processes.id, additionalProcessIds))
-          : Promise.resolve([]),
-
-        allProcessesMap.size > 0
-          ? requireDb().select().from(processGerencias).where(inArray(processGerencias.processId, Array.from(allProcessesMap.keys())))
-          : Promise.resolve([])
-      ]);
-
-      // Add additional processes to map
-      additionalProcesses.forEach(p => allProcessesMap.set(p.id, p));
-
-      // Get gerencia IDs and fetch in final phase
-      const gerenciaIds = [...new Set(processGerenciasData.map(pg => pg.gerenciaId).filter((id): id is string => !!id))];
-      const gerenciasData = gerenciaIds.length > 0
-        ? await requireDb().select().from(gerencias).where(inArray(gerencias.id, gerenciaIds))
-        : [];
-
-      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
-
-      // Build final result
-      const plansWithCounts = actionPlans.map(plan => {
-        let process = null;
-        if (plan.riskId) {
-          const riskLink = riskProcessLinksData.find(link => link.riskId === plan.riskId);
-          if (riskLink) {
-            if (riskLink.processId) {
-              process = allProcessesMap.get(riskLink.processId) || null;
-            } else if (riskLink.subprocesoId) {
-              const subproceso = subprocesosData.find(s => s.id === riskLink.subprocesoId);
-              if (subproceso?.procesoId) process = allProcessesMap.get(subproceso.procesoId) || null;
-            } else if (riskLink.macroprocesoId) {
-              process = processesFromMacro.find(p => p.macroprocesoId === riskLink.macroprocesoId) || null;
-            }
-          }
-        }
-
-        const gerenciasForPlan = process
-          ? processGerenciasData
-            .filter(pg => pg.processId === process.id)
-            .map(pg => gerenciasMap.get(pg.gerenciaId))
-            .filter((g): g is NonNullable<typeof g> => !!g)
-          : [];
-
-        const correspondingAction = allActions.find(a => a.code === plan.code);
-        const associatedRisksForPlan = allAssociatedRisks.filter(ar =>
-          ar.actionPlanId === plan.id || (correspondingAction && ar.actionId === correspondingAction.id)
-        );
-
-        return {
-          ...plan,
-          title: plan.name,
-          rescheduleCount: rescheduleCounts.get(plan.id) || 0,
-          gerencias: gerenciasForPlan,
-          associatedRisks: associatedRisksForPlan
-        };
-      });
-
-      // Cache for 30 seconds + fallback cache for 5 minutes
-      await Promise.all([
-        distributedCache.set(cacheKey, plansWithCounts, 30),
-        distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, plansWithCounts, 300) // 5 min fallback cache
-      ]);
-      const duration = Date.now() - startTime;
-      console.log(`[ACTION-PLANS] Completed in ${duration}ms (${actionPlans.length} plans)`);
+      const duration = Date.now() - requestStart;
+      console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
       
-      // Log warning if query was slow
       if (duration > 2000) {
         console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 2000ms)`);
       }
 
-      res.json(plansWithCounts);
+      res.json(response);
     } catch (error) {
-      console.error("Failed to fetch action plans:", error);
-      res.status(500).json({ message: "Failed to fetch action plans" });
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/action-plans failed after ${duration}ms:`, error);
+      
+      // Try fallback cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
+      if (fallbackCache) {
+        console.log(`[FALLBACK] Returning cached action-plans data`);
+        return res.json(fallbackCache);
+      }
+      
+      res.status(500).json({ message: "Failed to fetch action plans", error: error instanceof Error ? error.message : String(error) });
     }
   });
 
