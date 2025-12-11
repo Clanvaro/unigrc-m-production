@@ -68,6 +68,9 @@ if (databaseUrl) {
     // Remove sslmode if present (Cloud SQL Proxy doesn't need SSL)
     normalizedDatabaseUrl = normalizedDatabaseUrl.replace(/[&?]sslmode=[^&]*/g, '');
     console.log('[DB Config] Using Cloud SQL Proxy - SSL not required');
+  } else if (isCloudSql && databaseUrl.includes('sslmode=disable')) {
+    // If sslmode=disable, ensure SSL is disabled in config
+    console.log('[DB Config] Cloud SQL with sslmode=disable - SSL will be disabled');
   } else if (isCloudSql && !databaseUrl.includes('sslmode=')) {
     // For Cloud SQL with public IP, use sslmode=prefer to allow SSL but not require strict verification
     normalizedDatabaseUrl = databaseUrl.includes('?')
@@ -107,17 +110,21 @@ if (databaseUrl) {
   // Cloud SQL with public IP requires SSL but may not require client certificates if configured properly
   // For Cloud SQL with public IP, use sslmode=require (not verify-full) to avoid client cert requirement
   // IMPORTANT: Always set rejectUnauthorized: false for Cloud SQL to avoid certificate verification errors
+  // If sslmode=disable, completely disable SSL
   const sslConfig = isCloudSqlProxy
     ? false  // Cloud SQL Proxy doesn't need SSL
-    : isRenderDb
-      ? { rejectUnauthorized: false }  // Render requires SSL
-      : isCloudSql
-        ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but disable certificate verification
-        : (isProduction ? { rejectUnauthorized: false } : false);
+    : isCloudSql && databaseUrl?.includes('sslmode=disable')
+      ? false  // Disable SSL if explicitly requested
+      : isRenderDb
+        ? { rejectUnauthorized: false }  // Render requires SSL
+        : isCloudSql
+          ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but disable certificate verification
+          : (isProduction ? { rejectUnauthorized: false } : false);
   
   // Log SSL configuration for debugging
   if (isCloudSql && !isCloudSqlProxy) {
     console.log('[DB Config] Cloud SQL SSL config:', JSON.stringify(sslConfig));
+    console.log('[DB Config] Database URL contains sslmode=disable:', databaseUrl?.includes('sslmode=disable'));
   }
 
   // Optimized pool settings for different environments
