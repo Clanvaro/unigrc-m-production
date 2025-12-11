@@ -159,7 +159,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes - matches risks.tsx cache
+    staleTime: 60_000, // 1 minute - reduces refetch frequency while keeping data fresh
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     enabled: location === "/risks"

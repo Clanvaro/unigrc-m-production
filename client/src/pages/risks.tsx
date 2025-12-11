@@ -663,6 +663,7 @@ export default function Risks() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -776,6 +777,7 @@ export default function Risks() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
 
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
@@ -874,6 +876,7 @@ export default function Risks() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
 
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
@@ -1270,6 +1273,7 @@ export default function Risks() {
     // CRITICAL: Invalidate ALL risk-related queries for immediate updates across all views
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
     queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
       exact: false
@@ -1290,6 +1294,7 @@ export default function Risks() {
     // CRITICAL: Invalidate ALL risk queries including paginated ones for immediate UI refresh
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
     queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
       exact: false

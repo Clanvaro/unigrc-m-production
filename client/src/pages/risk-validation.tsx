@@ -506,6 +506,7 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risks"] });
       // FIXED: Also invalidate bootstrap cache to ensure risk list shows updated validation status
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
       // Also invalidate risk-process-links queries since validating a risk updates both tables
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
