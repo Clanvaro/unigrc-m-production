@@ -307,6 +307,25 @@ export interface IStorage {
   createRisk(risk: InsertRisk): Promise<Risk>;
   updateRisk(id: string, risk: Partial<InsertRisk>): Promise<Risk | undefined>;
   deleteRisk(id: string): Promise<boolean>;
+  // Optimized lite functions for page-data-lite endpoint
+  getRisksLite(): Promise<Array<Risk & { 
+    ownerName?: string | null;
+    ownerEmail?: string | null;
+    categoryNames?: string[];
+  }>>;
+  getRiskStats(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    deleted: number;
+    byStatus: Record<string, number>;
+    byRiskLevel: {
+      low: number;
+      medium: number;
+      high: number;
+      critical: number;
+    };
+  }>;
   getAllRiskLevelsOptimized(
     options?: { entities?: ('macroprocesos' | 'processes' | 'subprocesos')[] }
   ): Promise<{
@@ -8990,6 +9009,117 @@ export class DatabaseStorage extends MemStorage {
       risks: paginatedRisks,
       total: count
     };
+  }
+
+  // Optimized function to get risks with owner and category info in a single query
+  async getRisksLite(): Promise<Array<Risk & { 
+    ownerName?: string | null;
+    ownerEmail?: string | null;
+    categoryNames?: string[];
+  }>> {
+    return withRetry(async () => {
+      // Get risks with owner info from riskProcessLinks in a single query
+      // Using subqueries to get the first owner from riskProcessLinks
+      const risksWithOwners = await db
+        .select({
+          // All risk fields
+          id: risks.id,
+          code: risks.code,
+          name: risks.name,
+          description: risks.description,
+          category: risks.category,
+          probability: risks.probability,
+          impact: risks.impact,
+          inherentRisk: risks.inherentRisk,
+          status: risks.status,
+          createdAt: risks.createdAt,
+          updatedAt: risks.updatedAt,
+          deletedAt: risks.deletedAt,
+          // Owner info from riskProcessLinks -> processOwners
+          ownerName: sql<string | null>`(
+            SELECT ${processOwners.name}
+            FROM ${riskProcessLinks}
+            LEFT JOIN ${processOwners} ON ${riskProcessLinks.responsibleOverrideId} = ${processOwners.id}
+            WHERE ${riskProcessLinks.riskId} = ${risks.id}
+            AND ${processOwners.isActive} = true
+            LIMIT 1
+          )`,
+          ownerEmail: sql<string | null>`(
+            SELECT ${processOwners.email}
+            FROM ${riskProcessLinks}
+            LEFT JOIN ${processOwners} ON ${riskProcessLinks.responsibleOverrideId} = ${processOwners.id}
+            WHERE ${riskProcessLinks.riskId} = ${risks.id}
+            AND ${processOwners.isActive} = true
+            LIMIT 1
+          )`,
+        })
+        .from(risks)
+        .where(and(
+          isNull(risks.deletedAt),
+          ne(risks.status, 'deleted')
+        ));
+
+      // Map category array to categoryNames
+      return risksWithOwners.map(risk => ({
+        ...risk,
+        categoryNames: Array.isArray(risk.category) ? risk.category : [],
+      }));
+    });
+  }
+
+  // Get risk statistics in a single query
+  async getRiskStats(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    deleted: number;
+    byStatus: Record<string, number>;
+    byRiskLevel: {
+      low: number;
+      medium: number;
+      high: number;
+      critical: number;
+    };
+  }> {
+    return withRetry(async () => {
+      // Single query to get all statistics
+      const stats = await db
+        .select({
+          status: risks.status,
+          inherentRisk: risks.inherentRisk,
+          isDeleted: sql<boolean>`${risks.deletedAt} IS NOT NULL`,
+        })
+        .from(risks);
+
+      // Calculate aggregates
+      const total = stats.length;
+      const active = stats.filter(s => s.status === 'active' && !s.isDeleted).length;
+      const inactive = stats.filter(s => s.status === 'inactive' && !s.isDeleted).length;
+      const deleted = stats.filter(s => s.isDeleted).length;
+
+      const byStatus: Record<string, number> = {};
+      stats.forEach(s => {
+        if (!s.isDeleted) {
+          byStatus[s.status] = (byStatus[s.status] || 0) + 1;
+        }
+      });
+
+      const byRiskLevel = {
+        low: stats.filter(s => !s.isDeleted && s.inherentRisk >= 1 && s.inherentRisk <= 6).length,
+        medium: stats.filter(s => !s.isDeleted && s.inherentRisk >= 7 && s.inherentRisk <= 12).length,
+        high: stats.filter(s => !s.isDeleted && s.inherentRisk >= 13 && s.inherentRisk <= 19).length,
+        critical: stats.filter(s => !s.isDeleted && s.inherentRisk >= 20).length,
+      };
+
+      return {
+        total,
+        active,
+        inactive,
+        deleted,
+        byStatus,
+        byRiskLevel,
+      };
+    });
   }
 
   async getRisksWithDetails(): Promise<RiskWithProcess[]> {

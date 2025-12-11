@@ -1905,23 +1905,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // This endpoint provides only the essential data for the risks page grid and filters
   // Heavy JOINs (riskProcessLinks, riskControlsWithDetails) are loaded on-demand
   app.get("/api/risks/page-data-lite", isAuthenticated, noCacheMiddleware, async (req, res) => {
-    const requestStart = Date.now();
+    const start = Date.now();
+    const steps: any[] = [];
+
+    const mark = (name: string) => steps.push({ name, t: Date.now() - start });
 
     try {
+      mark('start');
+
       const { tenantId } = await resolveActiveTenant(req, { required: true });
+      mark('tenant-resolved');
+
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
 
-      // Try cache first (60 second TTL - longer since this data changes less frequently)
+      // Try cache first
       const cached = await distributedCache.get(cacheKey);
       if (cached) {
-        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+        mark('cache-hit');
+        console.log('[page-data-lite timing]', {
+          total: Date.now() - start,
+          steps,
+        });
         return res.json(cached);
       }
+      mark('cache-miss');
 
-      console.log(`[CACHE MISS] ${cacheKey} - fetching lite data in parallel`);
+      // Create promises (no await yet) - paralelizar todo
+      const risksPromise = storage.getRisksLite();
+      const ownersPromise = storage.getProcessOwners();
+      const statsPromise = storage.getRiskStats();
+      const gerenciasPromise = storage.getGerencias();
+      const macroprocesosPromise = storage.getMacroprocesos();
+      const subprocesosPromise = storage.getSubprocesosWithOwners();
+      const processesPromise = storage.getProcesses();
+      const riskCategoriesPromise = storage.getRiskCategories();
+      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations();
 
-      // Fetch only essential data for filters (no heavy JOINs)
+      mark('promises-created');
+
+      // Execute all in parallel
       const [
+        risks,
+        owners,
+        stats,
         gerencias,
         macroprocesos,
         subprocesos,
@@ -1929,13 +1955,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskCategories,
         processGerenciasRelations
       ] = await Promise.all([
-        storage.getGerencias(),
-        storage.getMacroprocesos(),
-        storage.getSubprocesosWithOwners(),
-        storage.getProcesses(),
-        storage.getRiskCategories(),
-        storage.getAllProcessGerenciasRelations()
+        risksPromise,
+        ownersPromise,
+        statsPromise,
+        gerenciasPromise,
+        macroprocesosPromise,
+        subprocesosPromise,
+        processesPromise,
+        riskCategoriesPromise,
+        processGerenciasRelationsPromise
       ]);
+      mark('db-done');
 
       // Filter out soft-deleted records
       const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
@@ -1944,6 +1974,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
 
       const response = {
+        risks,
+        owners,
+        stats,
         gerencias: activeGerencias,
         macroprocesos: activeMacroprocesos,
         subprocesos: activeSubprocesos,
@@ -1951,26 +1984,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskCategories,
         processGerencias: processGerenciasRelations
       };
+      mark('response-built');
 
       // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
       await distributedCache.set(cacheKey, response, 900);
+      mark('cache-set');
 
-      console.log(`[PERF] /api/risks/page-data-lite COMPLETE in ${Date.now() - requestStart}ms`, {
-        counts: {
-          gerencias: activeGerencias.length,
-          macroprocesos: activeMacroprocesos.length,
-          subprocesos: activeSubprocesos.length,
-          processes: activeProcesses.length
-        }
+      console.log('[page-data-lite timing]', {
+        total: Date.now() - start,
+        steps,
       });
 
       res.json(response);
-    } catch (error) {
-      if (error instanceof ActiveTenantError) {
-        return res.status(400).json({ message: error.message });
+    } catch (err) {
+      console.error('page-data-lite error', err, { total: Date.now() - start, steps });
+      if (err instanceof ActiveTenantError) {
+        return res.status(400).json({ message: err.message });
       }
-      console.error("[ERROR] /api/risks/page-data-lite failed:", error);
-      res.status(500).json({ message: "Failed to fetch risks page data" });
+      res.status(500).json({ error: 'Internal error' });
     }
   });
 
