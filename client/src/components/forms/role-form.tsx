@@ -78,6 +78,7 @@ const AVAILABLE_PERMISSIONS = [
   { id: "delete_audits", label: "Eliminar Auditorías", description: "Eliminar auditorías" },
   { id: "conduct_audits", label: "Ejecutar Auditorías", description: "Realizar trabajo de campo de auditorías" },
   { id: "supervise_audits", label: "Supervisar Auditorías", description: "Supervisar y aprobar auditorías" },
+  { id: "manage_audit_planning", label: "Planificación de Auditoría", description: "Gestionar planes anuales y planificación de auditorías" },
   
   // Permisos específicos de cumplimiento
   { id: "view_compliance", label: "Ver Cumplimiento", description: "Visualizar módulo de cumplimiento" },
