@@ -15197,52 +15197,48 @@ export class DatabaseStorage extends MemStorage {
   // ============== ALL PROCESS-GERENCIA AND PROCESS-OBJETIVO RELATIONS ==============
   async getAllProcessGerenciasRelations(): Promise<any[]> {
     return await withRetry(async () => {
-      const macroRelations = await db
-        .select({
-          macroprocesoId: macroprocesoGerencias.macroprocesoId,
-          processId: sql<string | null>`NULL::text`,
-          subprocesoId: sql<string | null>`NULL::text`,
-          gerenciaId: macroprocesoGerencias.gerenciaId,
-        })
-        .from(macroprocesoGerencias)
-        .innerJoin(macroprocesos, eq(macroprocesoGerencias.macroprocesoId, macroprocesos.id))
-        .innerJoin(gerencias, eq(macroprocesoGerencias.gerenciaId, gerencias.id))
-        .where(and(
-          isNull(macroprocesos.deletedAt),
-          isNull(gerencias.deletedAt)
-        ));
+      // Use raw SQL to avoid Drizzle ambiguity issues with multiple JOINs
+      const macroRelations = await db.execute(sql`
+        SELECT 
+          mg.macroproceso_id as "macroprocesoId",
+          NULL::text as "processId",
+          NULL::text as "subprocesoId",
+          mg.gerencia_id as "gerenciaId"
+        FROM macroproceso_gerencias mg
+        INNER JOIN macroprocesos m ON mg.macroproceso_id = m.id
+        INNER JOIN gerencias g ON mg.gerencia_id = g.id
+        WHERE m.deleted_at IS NULL AND g.deleted_at IS NULL
+      `);
 
-      const processRelations = await db
-        .select({
-          macroprocesoId: sql<string | null>`NULL::text`,
-          processId: processGerencias.processId,
-          subprocesoId: sql<string | null>`NULL::text`,
-          gerenciaId: processGerencias.gerenciaId,
-        })
-        .from(processGerencias)
-        .innerJoin(processes, eq(processGerencias.processId, processes.id))
-        .innerJoin(gerencias, eq(processGerencias.gerenciaId, gerencias.id))
-        .where(and(
-          isNull(processes.deletedAt),
-          isNull(gerencias.deletedAt)
-        ));
+      const processRelations = await db.execute(sql`
+        SELECT 
+          NULL::text as "macroprocesoId",
+          pg.process_id as "processId",
+          NULL::text as "subprocesoId",
+          pg.gerencia_id as "gerenciaId"
+        FROM process_gerencias pg
+        INNER JOIN processes p ON pg.process_id = p.id
+        INNER JOIN gerencias g ON pg.gerencia_id = g.id
+        WHERE p.deleted_at IS NULL AND g.deleted_at IS NULL
+      `);
 
-      const subprocesoRelations = await db
-        .select({
-          macroprocesoId: sql<string | null>`NULL::text`,
-          processId: sql<string | null>`NULL::text`,
-          subprocesoId: subprocesoGerencias.subprocesoId,
-          gerenciaId: subprocesoGerencias.gerenciaId,
-        })
-        .from(subprocesoGerencias)
-        .innerJoin(subprocesos, eq(subprocesoGerencias.subprocesoId, subprocesos.id))
-        .innerJoin(gerencias, eq(subprocesoGerencias.gerenciaId, gerencias.id))
-        .where(and(
-          isNull(subprocesos.deletedAt),
-          isNull(gerencias.deletedAt)
-        ));
+      const subprocesoRelations = await db.execute(sql`
+        SELECT 
+          NULL::text as "macroprocesoId",
+          NULL::text as "processId",
+          sg.subproceso_id as "subprocesoId",
+          sg.gerencia_id as "gerenciaId"
+        FROM subproceso_gerencias sg
+        INNER JOIN subprocesos s ON sg.subproceso_id = s.id
+        INNER JOIN gerencias g ON sg.gerencia_id = g.id
+        WHERE s.deleted_at IS NULL AND g.deleted_at IS NULL
+      `);
 
-      return [...macroRelations, ...processRelations, ...subprocesoRelations];
+      return [
+        ...(macroRelations.rows as any[]),
+        ...(processRelations.rows as any[]),
+        ...(subprocesoRelations.rows as any[])
+      ];
     });
   }
 
