@@ -4859,105 +4859,6 @@ export class MemStorage implements IStorage {
     });
   }
 
-  async getSubproceso(id: string): Promise<Subproceso | undefined> {
-    const [result] = await db.select().from(subprocesos)
-      .where(and(
-        eq(subprocesos.id, id),
-        isNull(subprocesos.deletedAt)
-      ));
-    return result;
-  }
-
-  async getSubprocesoWithOwner(id: string): Promise<SubprocesoWithOwner | undefined> {
-    const [result] = await db
-      .select({
-        subproceso: subprocesos,
-        owner: processOwners,
-      })
-      .from(subprocesos)
-      .leftJoin(processOwners, eq(subprocesos.ownerId, processOwners.id))
-      .where(and(
-        eq(subprocesos.id, id),
-        isNull(subprocesos.deletedAt)
-      ));
-
-    if (!result) return undefined;
-
-    return {
-      ...result.subproceso,
-      owner: result.owner,
-    };
-  }
-
-  async getSubprocesos(): Promise<Subproceso[]> {
-    if (!db) {
-      throw new Error("Database connection not available");
-    }
-    return await db.select().from(subprocesos)
-      .where(isNull(subprocesos.deletedAt));
-  }
-
-  async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
-    return await withRetry(async () => {
-      // Use raw SQL to avoid Drizzle ambiguity issues with JOINs
-      const result = await db.execute(sql`
-        SELECT 
-          s.id,
-          s.code,
-          s.name,
-          s.description,
-          s.owner_id as "ownerId",
-          s.proceso_id as "procesoId",
-          s.status,
-          s.created_by as "createdBy",
-          s.updated_by as "updatedBy",
-          s.deleted_by as "deletedBy",
-          s.deleted_at as "deletedAt",
-          s.deletion_reason as "deletionReason",
-          s.created_at as "createdAt",
-          s.updated_at as "updatedAt",
-          po.id as "owner.id",
-          po.name as "owner.name",
-          po.email as "owner.email",
-          po.phone as "owner.phone",
-          po.position as "owner.position",
-          po.is_active as "owner.isActive",
-          po.created_at as "owner.createdAt",
-          po.updated_at as "owner.updatedAt"
-        FROM subprocesos s
-        LEFT JOIN process_owners po ON s.owner_id = po.id AND po.is_active = true
-        WHERE s.deleted_at IS NULL
-        ORDER BY s.created_at DESC
-      `);
-
-      return (result.rows as any[]).map((row: any) => ({
-        id: row.id,
-        code: row.code,
-        name: row.name,
-        description: row.description,
-        ownerId: row.ownerId,
-        procesoId: row.procesoId,
-        status: row.status,
-        createdBy: row.createdBy,
-        updatedBy: row.updatedBy,
-        deletedBy: row.deletedBy,
-        deletedAt: row.deletedAt,
-        deletionReason: row.deletionReason,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-        owner: row["owner.id"] ? {
-          id: row["owner.id"],
-          name: row["owner.name"],
-          email: row["owner.email"],
-          phone: row["owner.phone"],
-          position: row["owner.position"],
-          isActive: row["owner.isActive"],
-          createdAt: row["owner.createdAt"],
-          updatedAt: row["owner.updatedAt"]
-        } : null
-      }));
-    });
-  }
 
   async getSubprocesosByProceso(procesoId: string): Promise<Subproceso[]> {
     return await db.select().from(subprocesos)
@@ -15253,6 +15154,74 @@ export class DatabaseStorage extends MemStorage {
         ));
 
       return result;
+    });
+  }
+
+  // Override MemStorage methods to use database
+  async getSubprocesos(): Promise<Subproceso[]> {
+    return await db.select().from(subprocesos)
+      .where(isNull(subprocesos.deletedAt));
+  }
+
+  async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
+    return await withRetry(async () => {
+      // Use raw SQL to avoid Drizzle ambiguity issues with JOINs
+      const result = await db.execute(sql`
+        SELECT 
+          s.id,
+          s.code,
+          s.name,
+          s.description,
+          s.owner_id as "ownerId",
+          s.proceso_id as "procesoId",
+          s.status,
+          s.created_by as "createdBy",
+          s.updated_by as "updatedBy",
+          s.deleted_by as "deletedBy",
+          s.deleted_at as "deletedAt",
+          s.deletion_reason as "deletionReason",
+          s.created_at as "createdAt",
+          s.updated_at as "updatedAt",
+          po.id as "owner.id",
+          po.name as "owner.name",
+          po.email as "owner.email",
+          po.phone as "owner.phone",
+          po.position as "owner.position",
+          po.is_active as "owner.isActive",
+          po.created_at as "owner.createdAt",
+          po.updated_at as "owner.updatedAt"
+        FROM subprocesos s
+        LEFT JOIN process_owners po ON s.owner_id = po.id AND po.is_active = true
+        WHERE s.deleted_at IS NULL
+        ORDER BY s.created_at DESC
+      `);
+
+      return (result.rows as any[]).map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        description: row.description,
+        ownerId: row.ownerId,
+        procesoId: row.procesoId,
+        status: row.status,
+        createdBy: row.createdBy,
+        updatedBy: row.updatedBy,
+        deletedBy: row.deletedBy,
+        deletedAt: row.deletedAt,
+        deletionReason: row.deletionReason,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        owner: row["owner.id"] ? {
+          id: row["owner.id"],
+          name: row["owner.name"],
+          email: row["owner.email"],
+          phone: row["owner.phone"],
+          position: row["owner.position"],
+          isActive: row["owner.isActive"],
+          createdAt: row["owner.createdAt"],
+          updatedAt: row["owner.updatedAt"]
+        } : null
+      }));
     });
   }
 

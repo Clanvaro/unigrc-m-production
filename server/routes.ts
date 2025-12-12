@@ -8699,13 +8699,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const control = await storage.createControl(await withTenantId(req, dataWithAudit));
 
-      // Invalidate controls cache
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
-        distributedCache.invalidatePattern(`controls:${tenantId}:*`),
-        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`)
-      ]);
-
       // Save audit log for creation
       await requireDb().insert(auditLogs).values({
         entityType: 'control',
@@ -8719,9 +8712,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Invalidate caches
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await distributedCache.invalidate(`risks-with-details:${tenantId}`);
-      await distributedCache.invalidatePattern(`controls:${tenantId}:*`); // Invalidate all controls cache variants
-      await distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`); // Invalidate optimized endpoint cache
+      await Promise.all([
+        distributedCache.invalidate(`risks-with-details:${tenantId}`),
+        distributedCache.invalidatePattern(`controls:${tenantId}:*`), // Invalidate all controls cache variants
+        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`) // Invalidate optimized endpoint cache
+      ]);
 
       res.status(201).json(control);
     } catch (error) {
