@@ -50,3 +50,4 @@ echo ""
 echo "💡 Para desplegar manualmente, ejecuta:"
 echo "   gcloud run deploy unigrc-backend --region=southamerica-west1 --project=${PROJECT_ID}"
 
+
