@@ -30,7 +30,7 @@ import {
   invalidateMacroprocesoHierarchy,
   CACHE_VERSION
 } from './cache-helpers';
-import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded } from "./db";
+import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
@@ -2119,8 +2119,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const requestStart = Date.now();
 
     try {
-      // Parse pagination params (default 50 risks per page)
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
+      const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
       const offset = parseInt(req.query.offset as string) || 0;
 
       // Parse filters
@@ -2141,47 +2141,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheKeyRisks = `risks-bootstrap:risks:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
       const cacheKeyCatalogs = `risks-bootstrap:catalogs:${CACHE_VERSION}`;
 
-      // Try to get catalogs from cache (5 min TTL - they rarely change)
+      // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
       let catalogs = await distributedCache.get(cacheKeyCatalogs);
 
       // If catalogs not cached, fetch them in parallel with risks
       const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
-        const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategories] = await Promise.all([
-          storage.getGerencias(),
-          storage.getMacroprocesos(),
-          storage.getProcesses(),
-          storage.getSubprocesosWithOwners(),
-          storage.getProcessOwners(),
-          storage.getAllProcessGerenciasRelations(),
-          storage.getRiskCategories()
-        ]);
+        return await withRetry(async () => {
+          const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategories] = await Promise.all([
+            storage.getGerencias(),
+            storage.getMacroprocesos(),
+            storage.getProcesses(),
+            storage.getSubprocesosWithOwners(),
+            storage.getProcessOwners(),
+            storage.getAllProcessGerenciasRelations(),
+            storage.getRiskCategories()
+          ]);
 
-        // Filter out deleted records and map to minimal fields
-        const result = {
-          gerencias: gerencias.filter((g: any) => g.status !== 'deleted').map((g: any) => ({
-            id: g.id, name: g.name, code: g.code
-          })),
-          macroprocesos: macroprocesos.filter((m: any) => m.status !== 'deleted').map((m: any) => ({
-            id: m.id, name: m.name, code: m.code, gerenciaId: m.gerenciaId
-          })),
-          processes: processes.filter((p: any) => p.status !== 'deleted').map((p: any) => ({
-            id: p.id, name: p.name, code: p.code, macroprocesoId: p.macroprocesoId
-          })),
-          subprocesos: subprocesos.filter((s: any) => s.status !== 'deleted').map((s: any) => ({
-            id: s.id, name: s.name, code: s.code, processId: s.processId, ownerName: s.ownerName, ownerPosition: s.ownerPosition
-          })),
-          processOwners: processOwners.map((po: any) => ({
-            id: po.id, name: po.name, position: po.position
-          })),
-          processGerencias: processGerenciasRelations,
-          riskCategories: riskCategories.filter((c: any) => c.isActive).map((c: any) => ({
-            id: c.id, name: c.name, color: c.color || "#6b7280"
-          }))
-        };
+          // Filter out deleted records and map to minimal fields
+          const result = {
+            gerencias: gerencias.filter((g: any) => g.status !== 'deleted').map((g: any) => ({
+              id: g.id, name: g.name, code: g.code
+            })),
+            macroprocesos: macroprocesos.filter((m: any) => m.status !== 'deleted').map((m: any) => ({
+              id: m.id, name: m.name, code: m.code, gerenciaId: m.gerenciaId
+            })),
+            processes: processes.filter((p: any) => p.status !== 'deleted').map((p: any) => ({
+              id: p.id, name: p.name, code: p.code, macroprocesoId: p.macroprocesoId
+            })),
+            subprocesos: subprocesos.filter((s: any) => s.status !== 'deleted').map((s: any) => ({
+              id: s.id, name: s.name, code: s.code, processId: s.processId, ownerName: s.ownerName, ownerPosition: s.ownerPosition
+            })),
+            processOwners: processOwners.map((po: any) => ({
+              id: po.id, name: po.name, position: po.position
+            })),
+            processGerencias: processGerenciasRelations,
+            riskCategories: riskCategories.filter((c: any) => c.isActive).map((c: any) => ({
+              id: c.id, name: c.name, color: c.color || "#6b7280"
+            }))
+          };
 
-        // Cache catalogs for 5 minutes
-        await distributedCache.set(cacheKeyCatalogs, result, 300);
-        return result;
+          // OPTIMIZED: Increased catalog cache from 5 min to 30 min (1800s)
+          await distributedCache.set(cacheKeyCatalogs, result, 1800);
+          return result;
+        });
       })();
 
       // Build SQL query for risks with BATCH QUERY pattern (no LEFT JOIN LATERAL)
@@ -2194,7 +2196,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return cachedRisks;
         }
 
-        const batchStart = Date.now();
+        return await withRetry(async () => {
+          const batchStart = Date.now();
 
         // Build WHERE conditions
         const conditions: any[] = [sql`r.status <> 'deleted'`];
@@ -2224,219 +2227,223 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
           : sql``;
 
-        // STEP 1: Simple risks query (no joins) - very fast
-        const [risksResult, countResult] = await Promise.all([
-          db.execute(sql`
-            SELECT 
-              r.id,
-              r.code,
-              r.name,
-              r.status,
-              r.probability,
-              r.impact,
-              r.inherent_risk,
-              r.evaluation_method,
-              r.macroproceso_id,
-              r.process_id,
-              r.subproceso_id,
-              r.category,
-              r.created_at
-            FROM risks r
-            ${whereClause}
-            ORDER BY r.created_at DESC
-            LIMIT ${limit} OFFSET ${offset}
-          `),
-          db.execute(sql`
-            SELECT COUNT(*)::int as total 
-            FROM risks r
-            ${whereClause}
-          `)
-        ]);
-
-        const risks = risksResult.rows as any[];
-        const total = (countResult.rows[0] as any)?.total || 0;
-
-        // STEP 2: Batch queries for summaries (single query for ALL risks on this page)
-        // Only if we have risks to process
-        let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number; controlsSummary: { code: string }[] }>();
-        let processesSummaryMap = new Map<number, { name: string; type: 'macro' | 'process' | 'subproceso' }[]>();
-        let actionPlansSummaryMap = new Map<number, { code: string; status: string }[]>();
-
-        if (risks.length > 0) {
-          const riskIds = risks.map(r => r.id);
-          const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
-
-          // Query 1: Control summaries (count, avg effectiveness, and codes)
-          const controlSummary = await db.execute(sql`
-            SELECT 
-              rc.risk_id,
-              COUNT(rc.id)::int as control_count,
-              COALESCE(AVG(c.effectiveness), 0)::float as avg_effectiveness
-            FROM risk_controls rc
-            INNER JOIN controls c ON rc.control_id = c.id
-            WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
-            GROUP BY rc.risk_id
-          `);
-
-          // Query 2: Control codes (limited to 3 per risk)
-          const controlCodes = await db.execute(sql`
-            WITH ranked_controls AS (
+          // STEP 1: Simple risks query (no joins) - very fast
+          const [risksResult, countResult] = await Promise.all([
+            requireDb().execute(sql`
               SELECT 
-                rc.risk_id,
-                c.code,
-                ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
-              FROM risk_controls rc
-              INNER JOIN controls c ON rc.control_id = c.id
-              WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
-            )
-            SELECT risk_id, code
-            FROM ranked_controls
-            WHERE rn <= 3
-            ORDER BY risk_id, rn
-          `);
+                r.id,
+                r.code,
+                r.name,
+                r.status,
+                r.probability,
+                r.impact,
+                r.inherent_risk,
+                r.evaluation_method,
+                r.macroproceso_id,
+                r.process_id,
+                r.subproceso_id,
+                r.category,
+                r.created_at
+              FROM risks r
+              ${whereClause}
+              ORDER BY r.created_at DESC
+              LIMIT ${limit} OFFSET ${offset}
+            `),
+            requireDb().execute(sql`
+              SELECT COUNT(*)::int as total 
+              FROM risks r
+              ${whereClause}
+            `)
+          ]);
 
-          // Query 3: Process summaries (limited to 3 per risk, prioritizing subproceso > process > macroproceso)
-          const processSummaries = await db.execute(sql`
-            WITH ranked_links AS (
-              SELECT 
-                rpl.risk_id,
-                COALESCE(s.name, p.name, m.name) as name,
-                CASE 
-                  WHEN rpl.subproceso_id IS NOT NULL THEN 'subproceso'
-                  WHEN rpl.process_id IS NOT NULL THEN 'process'
-                  WHEN rpl.macroproceso_id IS NOT NULL THEN 'macro'
-                END as type,
-                ROW_NUMBER() OVER (PARTITION BY rpl.risk_id ORDER BY 
-                  CASE 
-                    WHEN rpl.subproceso_id IS NOT NULL THEN 1
-                    WHEN rpl.process_id IS NOT NULL THEN 2
-                    WHEN rpl.macroproceso_id IS NOT NULL THEN 3
-                  END
-                ) as rn
-              FROM risk_process_links rpl
-              LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
-              LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
-              LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
-              WHERE rpl.risk_id IN (${riskIdsSql})
-            )
-            SELECT risk_id, name, type
-            FROM ranked_links
-            WHERE rn <= 3
-            ORDER BY risk_id, rn
-          `);
+          const risks = risksResult.rows as any[];
+          const total = (countResult.rows[0] as any)?.total || 0;
 
-          // Query 4: Action plans summaries (limited to 3 per risk)
-          const actionPlansSummaries = await db.execute(sql`
-            WITH ranked_actions AS (
-              SELECT 
-                a.risk_id,
-                a.code,
-                a.status,
-                ROW_NUMBER() OVER (PARTITION BY a.risk_id ORDER BY a.created_at DESC) as rn
-              FROM actions a
-              WHERE a.risk_id IN (${riskIdsSql}) 
-                AND a.origin = 'risk'
-                AND a.deleted_at IS NULL
-            )
-            SELECT risk_id, code, status
-            FROM ranked_actions
-            WHERE rn <= 3
-            ORDER BY risk_id, rn
-          `);
+          // STEP 2: OPTIMIZED - Batch queries for summaries executed in parallel (single query for ALL risks on this page)
+          // Only if we have risks to process
+          let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number; controlsSummary: { code: string }[] }>();
+          let processesSummaryMap = new Map<number, { name: string; type: 'macro' | 'process' | 'subproceso' }[]>();
+          let actionPlansSummaryMap = new Map<number, { code: string; status: string }[]>();
 
-          // Build lookup maps for O(1) access
-          for (const row of controlSummary.rows as any[]) {
-            controlSummaryMap.set(row.risk_id, {
-              controlCount: row.control_count,
-              avgEffectiveness: row.avg_effectiveness,
-              controlsSummary: []
-            });
-          }
+          if (risks.length > 0) {
+            const riskIds = risks.map(r => r.id);
+            const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
 
-          // Group control codes by risk_id
-          for (const row of controlCodes.rows as any[]) {
-            const summary = controlSummaryMap.get(row.risk_id);
-            if (summary && summary.controlsSummary.length < 3) {
-              summary.controlsSummary.push({ code: row.code });
+            // OPTIMIZED: Execute all batch queries in parallel instead of sequentially
+            const [controlSummary, controlCodes, processSummaries, actionPlansSummaries] = await Promise.all([
+              // Query 1: Control summaries (count, avg effectiveness)
+              requireDb().execute(sql`
+                SELECT 
+                  rc.risk_id,
+                  COUNT(rc.id)::int as control_count,
+                  COALESCE(AVG(c.effectiveness), 0)::float as avg_effectiveness
+                FROM risk_controls rc
+                INNER JOIN controls c ON rc.control_id = c.id
+                WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+                GROUP BY rc.risk_id
+              `),
+
+              // Query 2: Control codes (limited to 3 per risk)
+              requireDb().execute(sql`
+                WITH ranked_controls AS (
+                  SELECT 
+                    rc.risk_id,
+                    c.code,
+                    ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+                  FROM risk_controls rc
+                  INNER JOIN controls c ON rc.control_id = c.id
+                  WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+                )
+                SELECT risk_id, code
+                FROM ranked_controls
+                WHERE rn <= 3
+                ORDER BY risk_id, rn
+              `),
+
+              // Query 3: Process summaries (limited to 3 per risk, prioritizing subproceso > process > macroproceso)
+              requireDb().execute(sql`
+                WITH ranked_links AS (
+                  SELECT 
+                    rpl.risk_id,
+                    COALESCE(s.name, p.name, m.name) as name,
+                    CASE 
+                      WHEN rpl.subproceso_id IS NOT NULL THEN 'subproceso'
+                      WHEN rpl.process_id IS NOT NULL THEN 'process'
+                      WHEN rpl.macroproceso_id IS NOT NULL THEN 'macro'
+                    END as type,
+                    ROW_NUMBER() OVER (PARTITION BY rpl.risk_id ORDER BY 
+                      CASE 
+                        WHEN rpl.subproceso_id IS NOT NULL THEN 1
+                        WHEN rpl.process_id IS NOT NULL THEN 2
+                        WHEN rpl.macroproceso_id IS NOT NULL THEN 3
+                      END
+                    ) as rn
+                  FROM risk_process_links rpl
+                  LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
+                  LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
+                  LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
+                  WHERE rpl.risk_id IN (${riskIdsSql})
+                )
+                SELECT risk_id, name, type
+                FROM ranked_links
+                WHERE rn <= 3
+                ORDER BY risk_id, rn
+              `),
+
+              // Query 4: Action plans summaries (limited to 3 per risk)
+              requireDb().execute(sql`
+                WITH ranked_actions AS (
+                  SELECT 
+                    a.risk_id,
+                    a.code,
+                    a.status,
+                    ROW_NUMBER() OVER (PARTITION BY a.risk_id ORDER BY a.created_at DESC) as rn
+                  FROM actions a
+                  WHERE a.risk_id IN (${riskIdsSql}) 
+                    AND a.origin = 'risk'
+                    AND a.deleted_at IS NULL
+                )
+                SELECT risk_id, code, status
+                FROM ranked_actions
+                WHERE rn <= 3
+                ORDER BY risk_id, rn
+              `)
+            ]);
+
+            // Build lookup maps for O(1) access
+            for (const row of controlSummary.rows as any[]) {
+              controlSummaryMap.set(row.risk_id, {
+                controlCount: row.control_count,
+                avgEffectiveness: row.avg_effectiveness,
+                controlsSummary: []
+              });
+            }
+
+            // Group control codes by risk_id
+            for (const row of controlCodes.rows as any[]) {
+              const summary = controlSummaryMap.get(row.risk_id);
+              if (summary && summary.controlsSummary.length < 3) {
+                summary.controlsSummary.push({ code: row.code });
+              }
+            }
+
+            // Group processes by risk_id
+            for (const row of processSummaries.rows as any[]) {
+              if (!processesSummaryMap.has(row.risk_id)) {
+                processesSummaryMap.set(row.risk_id, []);
+              }
+              const processes = processesSummaryMap.get(row.risk_id)!;
+              if (processes.length < 3) {
+                processes.push({ name: row.name, type: row.type });
+              }
+            }
+
+            // Group action plans by risk_id
+            for (const row of actionPlansSummaries.rows as any[]) {
+              if (!actionPlansSummaryMap.has(row.risk_id)) {
+                actionPlansSummaryMap.set(row.risk_id, []);
+              }
+              const plans = actionPlansSummaryMap.get(row.risk_id)!;
+              if (plans.length < 3) {
+                plans.push({ code: row.code, status: row.status });
+              }
             }
           }
 
-          // Group processes by risk_id
-          for (const row of processSummaries.rows as any[]) {
-            if (!processesSummaryMap.has(row.risk_id)) {
-              processesSummaryMap.set(row.risk_id, []);
-            }
-            const processes = processesSummaryMap.get(row.risk_id)!;
-            if (processes.length < 3) {
-              processes.push({ name: row.name, type: row.type });
-            }
-          }
+          // STEP 3: In-memory calculation (O(n) - very fast)
+          const data = risks.map((row: any) => {
+            const summary = controlSummaryMap.get(row.id);
+            const controlCount = summary?.controlCount || 0;
+            // Clamp effectiveness to [0, 100] to prevent negative residuals
+            const rawEffectiveness = summary?.avgEffectiveness || 0;
+            const avgEffectiveness = Math.max(0, Math.min(100, rawEffectiveness));
+            const inherentRisk = parseFloat(row.inherent_risk) || 0;
 
-          // Group action plans by risk_id
-          for (const row of actionPlansSummaries.rows as any[]) {
-            if (!actionPlansSummaryMap.has(row.risk_id)) {
-              actionPlansSummaryMap.set(row.risk_id, []);
+            // Calculate residual risk: inherent * (1 - avg_effectiveness/100)
+            // Result is always >= 0 due to clamped effectiveness
+            const calculatedResidual = controlCount > 0
+              ? inherentRisk * (1 - avgEffectiveness / 100)
+              : inherentRisk;
+
+            return {
+              id: row.id,
+              code: row.code,
+              name: row.name,
+              status: row.status,
+              probability: row.probability,
+              impact: row.impact,
+              inherentRisk: inherentRisk,
+              evaluationMethod: row.evaluation_method,
+              macroprocesoId: row.macroproceso_id,
+              processId: row.process_id,
+              subprocesoId: row.subproceso_id,
+              category: row.category,
+              createdAt: row.created_at,
+              controlCount,
+              calculatedResidual,
+              // Add association summaries
+              processesSummary: processesSummaryMap.get(row.id) || [],
+              controlsSummary: summary?.controlsSummary || [],
+              actionPlansSummary: actionPlansSummaryMap.get(row.id) || []
+            };
+          });
+
+          console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls, ${processesSummaryMap.size} with processes, ${actionPlansSummaryMap.size} with action plans)`);
+
+          const result = {
+            data,
+            pagination: {
+              limit,
+              offset,
+              total,
+              hasMore: offset + limit < total
             }
-            const plans = actionPlansSummaryMap.get(row.risk_id)!;
-            if (plans.length < 3) {
-              plans.push({ code: row.code, status: row.status });
-            }
-          }
-        }
-
-        // STEP 3: In-memory calculation (O(n) - very fast)
-        const data = risks.map((row: any) => {
-          const summary = controlSummaryMap.get(row.id);
-          const controlCount = summary?.controlCount || 0;
-          // Clamp effectiveness to [0, 100] to prevent negative residuals
-          const rawEffectiveness = summary?.avgEffectiveness || 0;
-          const avgEffectiveness = Math.max(0, Math.min(100, rawEffectiveness));
-          const inherentRisk = parseFloat(row.inherent_risk) || 0;
-
-          // Calculate residual risk: inherent * (1 - avg_effectiveness/100)
-          // Result is always >= 0 due to clamped effectiveness
-          const calculatedResidual = controlCount > 0
-            ? inherentRisk * (1 - avgEffectiveness / 100)
-            : inherentRisk;
-
-          return {
-            id: row.id,
-            code: row.code,
-            name: row.name,
-            status: row.status,
-            probability: row.probability,
-            impact: row.impact,
-            inherentRisk: inherentRisk,
-            evaluationMethod: row.evaluation_method,
-            macroprocesoId: row.macroproceso_id,
-            processId: row.process_id,
-            subprocesoId: row.subproceso_id,
-            category: row.category,
-            createdAt: row.created_at,
-            controlCount,
-            calculatedResidual,
-            // Add association summaries
-            processesSummary: processesSummaryMap.get(row.id) || [],
-            controlsSummary: summary?.controlsSummary || [],
-            actionPlansSummary: actionPlansSummaryMap.get(row.id) || []
           };
+
+          // OPTIMIZED: Increased cache from 30s to 2 min (120s) for better hit rate
+          await distributedCache.set(cacheKeyRisks, result, 120);
+          return result;
         });
-
-        console.log(`[PERF] risks-bootstrap batch queries: ${Date.now() - batchStart}ms (${risks.length} risks, ${controlSummaryMap.size} with controls, ${processesSummaryMap.size} with processes, ${actionPlansSummaryMap.size} with action plans)`);
-
-        const result = {
-          data,
-          pagination: {
-            limit,
-            offset,
-            total,
-            hasMore: offset + limit < total
-          }
-        };
-
-        // Cache risks for 30 seconds (increased from 15s for better hit rate)
-        await distributedCache.set(cacheKeyRisks, result, 30);
-        return result;
       })();
 
       // Execute both in parallel
@@ -7638,8 +7645,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     try {
-      // Parse pagination parameters - default to 50 for faster initial load
-      const limit = parseInt(req.query.limit as string) || 50;
+      // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
+      const limit = parseInt(req.query.limit as string) || 25;
       const offset = parseInt(req.query.offset as string) || 0;
 
       // Cache key includes pagination for proper caching
@@ -7654,136 +7661,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
 
-      // OPTIMIZED: Fetch only essential columns for table display
-      // Note: description is needed for table display, resolution_notes removed (large text field)
-      const [eventsData, totalCountResult] = await Promise.all([
-        requireDb().select({
-          id: riskEvents.id,
-          code: riskEvents.code,
-          eventType: riskEvents.eventType,
-          eventDate: riskEvents.eventDate,
-          status: riskEvents.status,
-          severity: riskEvents.severity,
-          description: riskEvents.description,
-          estimatedLoss: riskEvents.estimatedLoss,
-          actualLoss: riskEvents.actualLoss,
-          riskId: riskEvents.riskId,
-          controlId: riskEvents.controlId,
-          processId: riskEvents.processId,
-          createdAt: riskEvents.createdAt,
-          createdBy: riskEvents.createdBy,
-          updatedAt: riskEvents.updatedAt
-        })
-          .from(riskEvents)
-          .where(isNull(riskEvents.deletedAt))
-          .orderBy(desc(riskEvents.eventDate))
-          .limit(limit)
-          .offset(offset),
+      // OPTIMIZED: Use withRetry for robust connection handling
+      return await withRetry(async () => {
+        // OPTIMIZED: Fetch only essential columns - removed createdBy, updatedAt (not used in table)
+        const [eventsData, totalCountResult] = await Promise.all([
+          requireDb().select({
+            id: riskEvents.id,
+            code: riskEvents.code,
+            eventType: riskEvents.eventType,
+            eventDate: riskEvents.eventDate,
+            status: riskEvents.status,
+            severity: riskEvents.severity,
+            description: riskEvents.description,
+            estimatedLoss: riskEvents.estimatedLoss,
+            actualLoss: riskEvents.actualLoss,
+            riskId: riskEvents.riskId,
+            controlId: riskEvents.controlId,
+            processId: riskEvents.processId,
+            createdAt: riskEvents.createdAt,
+          })
+            .from(riskEvents)
+            .where(isNull(riskEvents.deletedAt))
+            .orderBy(desc(riskEvents.eventDate))
+            .limit(limit)
+            .offset(offset),
 
-        requireDb().select({ count: sql<number>`count(*)` })
-          .from(riskEvents)
-          .where(isNull(riskEvents.deletedAt))
-      ]);
+          requireDb().select({ count: sql<number>`count(*)::int` })
+            .from(riskEvents)
+            .where(isNull(riskEvents.deletedAt))
+        ]);
 
-      const eventIds = eventsData.map(e => e.id);
+        const eventIds = eventsData.map(e => e.id);
+        const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
 
-      // OPTIMIZED: Only fetch relation IDs (no JOINs with catalog tables)
-      // Frontend will use cached catalogs to resolve names client-side
-      // Also fetch failed control (controlId) with basic data for display
-      const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
-      const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
-        eventIds.length > 0
-          ? requireDb()
-            .select({
-              riskEventId: riskEventMacroprocesos.riskEventId,
-              macroprocesoId: riskEventMacroprocesos.macroprocesoId
-            })
-            .from(riskEventMacroprocesos)
-            .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
-          : Promise.resolve([]),
-        eventIds.length > 0
-          ? requireDb()
-            .select({
-              riskEventId: riskEventProcesses.riskEventId,
-              processId: riskEventProcesses.processId
-            })
-            .from(riskEventProcesses)
-            .where(inArray(riskEventProcesses.riskEventId, eventIds))
-          : Promise.resolve([]),
-        eventIds.length > 0
-          ? requireDb()
-            .select({
-              riskEventId: riskEventSubprocesos.riskEventId,
-              subprocesoId: riskEventSubprocesos.subprocesoId
-            })
-            .from(riskEventSubprocesos)
-            .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
-          : Promise.resolve([]),
-        controlIds.length > 0
-          ? requireDb()
-            .select({
-              id: controls.id,
-              code: controls.code,
-              name: controls.name,
-            })
-            .from(controls)
-            .where(inArray(controls.id, controlIds))
-          : Promise.resolve([])
-      ]);
+        // OPTIMIZED: Fetch relations in parallel (already optimized, keeping separate for clarity)
+        const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventMacroprocesos.riskEventId,
+                macroprocesoId: riskEventMacroprocesos.macroprocesoId
+              })
+              .from(riskEventMacroprocesos)
+              .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
+            : Promise.resolve([]),
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventProcesses.riskEventId,
+                processId: riskEventProcesses.processId
+              })
+              .from(riskEventProcesses)
+              .where(inArray(riskEventProcesses.riskEventId, eventIds))
+            : Promise.resolve([]),
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventSubprocesos.riskEventId,
+                subprocesoId: riskEventSubprocesos.subprocesoId
+              })
+              .from(riskEventSubprocesos)
+              .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+            : Promise.resolve([]),
+          controlIds.length > 0
+            ? requireDb().select({
+                id: controls.id,
+                code: controls.code,
+                name: controls.name,
+              })
+              .from(controls)
+              .where(inArray(controls.id, controlIds))
+            : Promise.resolve([])
+        ]);
 
-      // Group relation IDs by eventId for O(1) lookup
-      const macroMap = new Map<string, string[]>();
-      const processMap = new Map<string, string[]>();
-      const subprocesoMap = new Map<string, string[]>();
-      const controlMap = new Map(controlRelations.map(c => [c.id, c]));
+        // Group relation IDs by eventId for O(1) lookup
+        const macroMap = new Map<string, string[]>();
+        const processMap = new Map<string, string[]>();
+        const subprocesoMap = new Map<string, string[]>();
+        const controlMap = new Map(controlRelations.map(c => [c.id, c]));
 
-      for (const m of macroRelations) {
-        if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
-        if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
-      }
-      for (const p of processRelations) {
-        if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
-        if (p.processId) processMap.get(p.riskEventId)!.push(p.processId);
-      }
-      for (const s of subprocesoRelations) {
-        if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
-        if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
-      }
-
-      // Build lightweight events list (IDs only, no names)
-      // Include failed control basic data (id, code, name) for display
-      const eventsForList = eventsData.map(event => ({
-        ...event,
-        eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-        createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-        updatedAt: event.updatedAt instanceof Date ? event.updatedAt.toISOString() : event.updatedAt,
-        // Return IDs only - frontend resolves names from cached catalogs
-        macroprocesoIds: macroMap.get(event.id) || [],
-        processIds: processMap.get(event.id) || [],
-        subprocesoIds: subprocesoMap.get(event.id) || [],
-        selectedRisks: event.riskId ? [event.riskId] : [],
-        // Include failed control basic data
-        failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
-      }));
-
-      const response = {
-        riskEvents: {
-          data: eventsForList,
-          pagination: {
-            limit,
-            offset,
-            total: totalCountResult[0]?.count || 0
-          }
+        for (const m of macroRelations) {
+          if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
+          if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
         }
-      };
+        for (const p of processRelations) {
+          if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
+          if (p.processId) processMap.get(p.riskEventId)!.push(String(p.processId));
+        }
+        for (const s of subprocesoRelations) {
+          if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
+          if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
+        }
 
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      await distributedCache.set(cacheKey, response, 900);
+        // Build lightweight events list (IDs only, no names)
+        const eventsForList = eventsData.map(event => ({
+          id: event.id,
+          code: event.code,
+          eventType: event.eventType,
+          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+          status: event.status,
+          severity: event.severity,
+          description: event.description,
+          estimatedLoss: event.estimatedLoss,
+          actualLoss: event.actualLoss,
+          riskId: event.riskId,
+          controlId: event.controlId,
+          processId: event.processId,
+          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+          // Return IDs only - frontend resolves names from cached catalogs
+          macroprocesoIds: macroMap.get(event.id) || [],
+          processIds: processMap.get(event.id) || [],
+          subprocesoIds: subprocesoMap.get(event.id) || [],
+          selectedRisks: event.riskId ? [event.riskId] : [],
+          // Include failed control basic data
+          failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
+        }));
 
-      const duration = Date.now() - startTime;
-      console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
+        const response = {
+          riskEvents: {
+            data: eventsForList,
+            pagination: {
+              limit,
+              offset,
+              total: totalCountResult[0]?.count || 0
+            }
+          }
+        };
 
-      res.json(response);
+        // OPTIMIZED: Increased cache TTL from 15 min to 30 min (1800s) - not critical data
+        await distributedCache.set(cacheKey, response, 1800);
+
+        const duration = Date.now() - startTime;
+        console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
+
+        res.json(response);
+      });
     } catch (error) {
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");

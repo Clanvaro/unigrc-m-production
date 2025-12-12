@@ -13,7 +13,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useSearch } from "@/contexts/SearchContext";
 import type { RiskEvent, Risk, Process } from "@shared/schema";
-import { VirtualizedTable, VirtualizedTableColumn, generateMockEvents } from "@/components/virtualized-table";
+import { VirtualizedTable, VirtualizedTableColumn } from "@/components/virtualized-table";
 import RiskEventForm from "@/components/forms/risk-event-form";
 import { EditGuard, DeleteGuard } from "@/components/auth/permission-guard";
 import { AuditHistory } from "@/components/AuditHistory";
@@ -106,17 +106,19 @@ function RiskEventDetailTabs({
   risks: CatalogItem[];
   processes: CatalogItem[];
 }) {
+  // OPTIMIZED: Lazy load relations only when relations tab is needed
+  const [activeTab, setActiveTab] = useState("details");
   const { data: riskRelations, isLoading: isLoadingRelations } = useQuery<{
     controls: Array<{ id: string; code: string; name: string; residualRisk: string }>;
     actionPlans: Array<{ id: string; title: string; status: string; dueDate: string | null }>;
   }>({
     queryKey: [`/api/risk-events/${event.id}/risk-relations`],
-    enabled: !!event.id && !!event.riskId,
+    enabled: !!event.id && !!event.riskId && activeTab === "relations", // Only load when tab is active
     staleTime: 5 * 60 * 1000, // 5 min cache
   });
 
   return (
-    <Tabs defaultValue="details" className="flex-1 overflow-hidden flex flex-col">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 overflow-hidden flex flex-col">
       <TabsList>
         <TabsTrigger value="details">Detalles</TabsTrigger>
         <TabsTrigger value="relations">Relaciones</TabsTrigger>
@@ -278,16 +280,25 @@ function RiskEventDetailTabs({
         </div>
       </TabsContent>
       
+      {/* OPTIMIZED: Lazy load BowTie and History tabs - only load when tab is selected */}
       <TabsContent value="bowtie" className="flex-1 overflow-y-auto mt-4">
-        <BowTieDiagramWrapper eventId={event.id} event={event} />
+        {activeTab === "bowtie" ? (
+          <BowTieDiagramWrapper eventId={event.id} event={event} />
+        ) : (
+          <div className="text-sm text-muted-foreground p-4">Selecciona el tab para cargar el diagrama Bow Tie</div>
+        )}
       </TabsContent>
       
       <TabsContent value="history" className="flex-1 overflow-y-auto mt-4">
-        <AuditHistory 
-          entityType="risk_event" 
-          entityId={event.id} 
-          maxHeight="500px"
-        />
+        {activeTab === "history" ? (
+          <AuditHistory 
+            entityType="risk_event" 
+            entityId={event.id} 
+            maxHeight="500px"
+          />
+        ) : (
+          <div className="text-sm text-muted-foreground p-4">Selecciona el tab para cargar el historial</div>
+        )}
       </TabsContent>
     </Tabs>
   );
@@ -314,11 +325,11 @@ export default function RiskEvents() {
   const [editingEvent, setEditingEvent] = useState<EnrichedRiskEvent | null>(null);
   const [viewingEvent, setViewingEvent] = useState<EnrichedRiskEvent | null>(null);
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
-  const [testMode50k, setTestMode50k] = useState(false);
+  // Removed testMode50k - not needed for production
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
   const [columnConfigOpen, setColumnConfigOpen] = useState(false);
   
-  // Column visibility state
+  // OPTIMIZED: Reduced default columns to only essential ones for faster initial render
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('riskEventsColumnVisibility');
     return saved ? JSON.parse(saved) : {
@@ -326,9 +337,9 @@ export default function RiskEvents() {
       description: true,
       severity: true,
       status: true,
-      process: true,
-      failedControl: true,
-      lossAmount: true,
+      process: false, // Hidden by default for faster load
+      failedControl: false, // Hidden by default
+      lossAmount: false, // Hidden by default
       actions: true,
     };
   });
@@ -415,15 +426,7 @@ export default function RiskEvents() {
     return () => window.removeEventListener('openRiskEventsSavedViewsMenu', handleOpenSavedViewsMenu);
   }, []);
 
-  // Listen to toggle test mode 50k from header
-  useEffect(() => {
-    const handleToggleTestMode = () => {
-      setTestMode50k(prev => !prev);
-    };
-
-    window.addEventListener('toggleRiskEventsTestMode50k', handleToggleTestMode);
-    return () => window.removeEventListener('toggleRiskEventsTestMode50k', handleToggleTestMode);
-  }, []);
+  // Removed test mode toggle - not needed for production
 
   // Listen to configure columns event from header
   useEffect(() => {
@@ -471,30 +474,37 @@ export default function RiskEvents() {
     };
   }
   
-  // Prefetch catalog data with long TTL (30-60 min cache - static catalogs rarely change)
+  // OPTIMIZED: Lazy load catalogs - only fetch when needed, don't block initial render
+  // Fetch risks catalog only (needed for description column) - load others on demand
+  const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
+    queryKey: ["/api/risks-basic"],
+    staleTime: 60 * 60 * 1000, // 60 min - increased cache since not critical
+    refetchOnWindowFocus: false,
+    // Only fetch if we have events with riskIds
+    enabled: true, // Always fetch as it's small and needed for display
+  });
+  
+  // OPTIMIZED: Lazy load other catalogs only when viewing event details or when process column is visible
+  const needsProcessCatalogs = viewingEvent !== null || columnVisibility.process !== false;
   const { data: macroprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/macroprocesos/basic"],
-    staleTime: 30 * 60 * 1000, // 30 min client cache - static organizational structure
+    staleTime: 60 * 60 * 1000, // 60 min - increased cache
     refetchOnWindowFocus: false,
+    enabled: needsProcessCatalogs, // Lazy load
   });
   
   const { data: processesCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/processes/basic"],
-    staleTime: 30 * 60 * 1000, // 30 min - static organizational structure
+    staleTime: 60 * 60 * 1000, // 60 min - increased cache
     refetchOnWindowFocus: false,
+    enabled: needsProcessCatalogs, // Lazy load
   });
   
   const { data: subprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/subprocesos/basic"],
-    staleTime: 30 * 60 * 1000, // 30 min - static organizational structure
+    staleTime: 60 * 60 * 1000, // 60 min - increased cache
     refetchOnWindowFocus: false,
-  });
-  
-  // Fetch risks catalog for risk name lookups (needed for description column)
-  const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
-    queryKey: ["/api/risks-basic"],
-    staleTime: 15 * 60 * 1000, // 15 min - risks change more often than processes
-    refetchOnWindowFocus: false,
+    enabled: needsProcessCatalogs, // Lazy load
   });
   
   // Build lookup maps for O(1) client-side joins
@@ -505,9 +515,20 @@ export default function RiskEvents() {
     risks: new Map(risksCatalog.map(r => [r.id, r])),
   }), [macroprocesosCatalog, processesCatalog, subprocesosCatalog, risksCatalog]);
   
+  // OPTIMIZED: Server-side pagination - load only what's needed
+  const [paginationOffset, setPaginationOffset] = useState(0);
+  const paginationLimit = 25; // Match backend default
+  
+  // OPTIMIZED: Increased cache and disabled refetch on window focus
   const { data: pageData, isLoading: isPageDataLoading } = useQuery<RiskEventsPageData>({
-    queryKey: ["/api/risk-events/page-data"],
-    staleTime: 30000, // Cache for 30 seconds
+    queryKey: ["/api/risk-events/page-data", paginationOffset, paginationLimit],
+    queryFn: async () => {
+      const response = await fetch(`/api/risk-events/page-data?limit=${paginationLimit}&offset=${paginationOffset}`);
+      if (!response.ok) throw new Error('Failed to fetch events');
+      return response.json();
+    },
+    staleTime: 30 * 60 * 1000, // 30 min - increased from 30 seconds
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
   });
   
   // Transform lightweight events to include resolved names for display
@@ -603,41 +624,33 @@ export default function RiskEvents() {
   // Filter and sort events with enriched type
   type EnrichedEvent = typeof riskEvents[number];
   
-  // Memoize filtered and sorted events to prevent recalculation on every render
-  const filteredEvents = useMemo(() => riskEvents.filter((event: EnrichedEvent) => {
-    // Filter by search term
+  // OPTIMIZED: Simplified filtering - only filter what's loaded (server-side pagination handles the rest)
+  // For a non-critical page, client-side filtering of 25 events is fast enough
+  const filteredEvents = useMemo(() => {
+    let filtered = riskEvents;
+    
+    // Quick filters - only apply if needed
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
-      const matchesSearch = 
-        (event.description || '').toLowerCase().includes(searchLower) ||
-        (event.involvedPersons && event.involvedPersons.toLowerCase().includes(searchLower)) ||
-        (event.reportedBy && event.reportedBy.toLowerCase().includes(searchLower));
-      
-      if (!matchesSearch) return false;
+      filtered = filtered.filter((event: EnrichedEvent) => 
+        (event.description || '').toLowerCase().includes(searchLower)
+      );
+    }
+    if (eventTypeFilter !== "all") {
+      filtered = filtered.filter((event: EnrichedEvent) => event.eventType === eventTypeFilter);
+    }
+    if (statusFilter !== "all") {
+      filtered = filtered.filter((event: EnrichedEvent) => event.status === statusFilter);
+    }
+    if (severityFilter !== "all") {
+      filtered = filtered.filter((event: EnrichedEvent) => event.severity === severityFilter);
+    }
+    if (processFilter !== "all") {
+      filtered = filtered.filter((event: EnrichedEvent) => event.processId === processFilter);
     }
 
-    // Filter by event type
-    if (eventTypeFilter !== "all" && event.eventType !== eventTypeFilter) {
-      return false;
-    }
-
-    // Filter by status
-    if (statusFilter !== "all" && event.status !== statusFilter) {
-      return false;
-    }
-
-    // Filter by severity
-    if (severityFilter !== "all" && event.severity !== severityFilter) {
-      return false;
-    }
-
-    // Filter by process
-    if (processFilter !== "all" && event.processId !== processFilter) {
-      return false;
-    }
-
-    return true;
-  }).sort((a: EnrichedEvent, b: EnrichedEvent) => {
+    // Sort
+    return filtered.sort((a: EnrichedEvent, b: EnrichedEvent) => {
     if (sortOrder === "none") return 0;
     
     let aValue: number | string, bValue: number | string;
@@ -678,7 +691,7 @@ export default function RiskEvents() {
     } else {
       return bValue > aValue ? 1 : bValue < aValue ? -1 : 0;
     }
-  }), [
+  }, [
     riskEvents,
     searchTerm,
     eventTypeFilter,
@@ -689,8 +702,8 @@ export default function RiskEvents() {
     sortOrder,
   ]);
 
-  // Display data - switch between mock and real data
-  const displayData = testMode50k ? (generateMockEvents(50000) as any[]) : filteredEvents;
+  // Display data
+  const displayData = filteredEvents;
 
   const getEventTypeIcon = (type: string) => {
     switch (type) {
@@ -1073,7 +1086,7 @@ export default function RiskEvents() {
 
       {/* Events Table */}
       <Card className="flex-1 flex flex-col overflow-hidden">
-        <CardContent className="p-0 h-full">
+        <CardContent className="p-0 h-full flex flex-col">
           <VirtualizedTable
             data={displayData}
             columns={columns.filter(col => {
@@ -1090,6 +1103,33 @@ export default function RiskEvents() {
           <div id="events-table-description" className="sr-only">
             Tabla con {displayData.length} eventos de riesgo. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
           </div>
+          
+          {/* OPTIMIZED: Server-side pagination controls */}
+          {pageData?.riskEvents?.pagination && (
+            <div className="flex items-center justify-between p-4 border-t">
+              <div className="text-sm text-muted-foreground">
+                Mostrando {paginationOffset + 1} - {Math.min(paginationOffset + paginationLimit, pageData.riskEvents.pagination.total)} de {pageData.riskEvents.pagination.total} eventos
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPaginationOffset(Math.max(0, paginationOffset - paginationLimit))}
+                  disabled={paginationOffset === 0 || isLoading}
+                >
+                  Anterior
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPaginationOffset(paginationOffset + paginationLimit)}
+                  disabled={paginationOffset + paginationLimit >= (pageData.riskEvents.pagination.total || 0) || isLoading}
+                >
+                  Siguiente
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
