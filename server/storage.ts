@@ -8165,8 +8165,10 @@ export class DatabaseStorage extends MemStorage {
       return cached;
     }
 
-    const result = await db.select().from(macroprocesos)
-      .where(isNull(macroprocesos.deletedAt));
+    const result = await withRetry(async () => {
+      return await db.select().from(macroprocesos)
+        .where(isNull(macroprocesos.deletedAt));
+    });
 
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);
@@ -8322,8 +8324,10 @@ export class DatabaseStorage extends MemStorage {
       return cached;
     }
 
-    const result = await db.select().from(processes)
-      .where(isNull(processes.deletedAt));
+    const result = await withRetry(async () => {
+      return await db.select().from(processes)
+        .where(isNull(processes.deletedAt));
+    });
 
     // Cache for 60 seconds
     await distributedCache.set(cacheKey, result, 60);

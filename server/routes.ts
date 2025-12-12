@@ -1931,15 +1931,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       mark('cache-miss');
 
       // Create promises (no await yet) - paralelizar todo
-      const risksPromise = storage.getRisksLite();
-      const ownersPromise = storage.getProcessOwners();
-      const statsPromise = storage.getRiskStats();
-      const gerenciasPromise = storage.getGerencias();
-      const macroprocesosPromise = storage.getMacroprocesos();
-      const subprocesosPromise = storage.getSubprocesosWithOwners();
-      const processesPromise = storage.getProcesses();
-      const riskCategoriesPromise = storage.getRiskCategories();
-      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations();
+      // Wrap each promise with error handling to identify which one fails
+      const risksPromise = storage.getRisksLite().catch(err => {
+        console.error('[page-data-lite] getRisksLite failed:', err);
+        throw new Error(`getRisksLite failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const ownersPromise = storage.getProcessOwners().catch(err => {
+        console.error('[page-data-lite] getProcessOwners failed:', err);
+        throw new Error(`getProcessOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const statsPromise = storage.getRiskStats().catch(err => {
+        console.error('[page-data-lite] getRiskStats failed:', err);
+        throw new Error(`getRiskStats failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const gerenciasPromise = storage.getGerencias().catch(err => {
+        console.error('[page-data-lite] getGerencias failed:', err);
+        throw new Error(`getGerencias failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const macroprocesosPromise = storage.getMacroprocesos().catch(err => {
+        console.error('[page-data-lite] getMacroprocesos failed:', err);
+        throw new Error(`getMacroprocesos failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const subprocesosPromise = storage.getSubprocesosWithOwners().catch(err => {
+        console.error('[page-data-lite] getSubprocesosWithOwners failed:', err);
+        throw new Error(`getSubprocesosWithOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const processesPromise = storage.getProcesses().catch(err => {
+        console.error('[page-data-lite] getProcesses failed:', err);
+        throw new Error(`getProcesses failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const riskCategoriesPromise = storage.getRiskCategories().catch(err => {
+        console.error('[page-data-lite] getRiskCategories failed:', err);
+        throw new Error(`getRiskCategories failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations().catch(err => {
+        console.error('[page-data-lite] getAllProcessGerenciasRelations failed:', err);
+        throw new Error(`getAllProcessGerenciasRelations failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
 
       mark('promises-created');
 
