@@ -1998,10 +1998,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(response);
     } catch (err) {
       console.error('page-data-lite error', err, { total: Date.now() - start, steps });
-      if (err instanceof ActiveTenantError) {
-        return res.status(400).json({ message: err.message });
+      // Log the full error to help debugging 500s
+      if (err instanceof Error) {
+        console.error('Stack trace:', err.stack);
       }
-      res.status(500).json({ error: 'Internal error' });
+      res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });
     }
   });
 
@@ -8684,6 +8685,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Stack trace:', error.stack);
+      }
       res.status(500).json({ message: "Failed to fetch controls", error: error instanceof Error ? error.message : String(error) });
     }
   });

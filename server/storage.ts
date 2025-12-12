@@ -19429,9 +19429,19 @@ export class DatabaseStorage extends MemStorage {
 
   async getProcessOwners(): Promise<ProcessOwner[]> {
     return withRetry(async () => {
-      return await db.select().from(processOwners)
-        .where(eq(processOwners.isActive, true))
-        .orderBy(processOwners.name);
+      // Explicitly select columns to avoid issues with missing/legacy columns like 'company'
+      return await db.select({
+        id: processOwners.id,
+        name: processOwners.name,
+        email: processOwners.email,
+        position: processOwners.position,
+        isActive: processOwners.isActive,
+        createdAt: processOwners.createdAt,
+        updatedAt: processOwners.updatedAt,
+      })
+      .from(processOwners)
+      .where(eq(processOwners.isActive, true))
+      .orderBy(processOwners.name);
     });
   }
 
