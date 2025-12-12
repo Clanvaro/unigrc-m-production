@@ -8613,7 +8613,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ORDER BY co.control_id, co.created_at DESC
         )
         SELECT 
-          cb.*,
+          cb.id,
+          cb.code,
+          cb.name,
+          cb.description,
+          cb.type,
+          cb.frequency,
+          cb.effectiveness,
+          cb.effect_target,
+          cb.responsible_id,
+          cb.process_id,
+          cb.is_active,
+          cb.last_review,
+          cb.validation_status,
+          cb.validated_at,
+          cb.validated_by,
+          cb.validation_comments,
+          cb.notes,
+          cb.created_by,
+          cb.updated_by,
+          cb.deleted_by,
+          cb.deleted_at,
+          cb.deletion_reason,
+          cb.created_at,
+          cb.updated_at,
           COALESCE(rd.risk_count, 0)::int as associated_risks_count,
           COALESCE(rd.associated_risks, '[]'::json) as associated_risks,
           co_agg.owner as control_owner,
@@ -8719,8 +8742,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
       if (error instanceof Error) {
         console.error('Stack trace:', error.stack);
+        console.error('Error message:', error.message);
+        // Log SQL error details if available
+        if ((error as any).code) {
+          console.error('SQL Error code:', (error as any).code);
+        }
+        if ((error as any).detail) {
+          console.error('SQL Error detail:', (error as any).detail);
+        }
       }
-      res.status(500).json({ message: "Failed to fetch controls", error: error instanceof Error ? error.message : String(error) });
+      res.status(500).json({ 
+        message: "Failed to fetch controls", 
+        error: error instanceof Error ? error.message : String(error),
+        ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
+      });
     }
   });
 
