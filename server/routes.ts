@@ -8479,16 +8479,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const offset = parseInt(req.query.offset as string) || 0;
       
-      // Build filters
+      // Build filters - manejar correctamente valores vacíos, undefined y "undefined" como string
       const filters: import('./storage').ControlFilters = {
-        search: req.query.search as string,
-        type: req.query.type && req.query.type !== 'undefined' ? req.query.type as string : undefined,
-        frequency: req.query.frequency && req.query.frequency !== 'undefined' ? req.query.frequency as string : undefined,
-        status: req.query.status && req.query.status !== 'undefined' ? req.query.status as string : undefined,
-        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' ? req.query.validationStatus as string : undefined,
-        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' ? req.query.ownerId as string : undefined,
-        minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
-        maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
+        search: req.query.search && req.query.search !== 'undefined' && req.query.search !== '' ? req.query.search as string : undefined,
+        type: req.query.type && req.query.type !== 'undefined' && req.query.type !== '' ? req.query.type as string : undefined,
+        frequency: req.query.frequency && req.query.frequency !== 'undefined' && req.query.frequency !== '' ? req.query.frequency as string : undefined,
+        status: req.query.status && req.query.status !== 'undefined' && req.query.status !== '' ? req.query.status as string : undefined,
+        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' && req.query.validationStatus !== '' ? req.query.validationStatus as string : undefined,
+        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' && req.query.ownerId !== '' ? req.query.ownerId as string : undefined,
+        minEffectiveness: req.query.minEffectiveness && req.query.minEffectiveness !== 'undefined' && req.query.minEffectiveness !== '' ? parseInt(req.query.minEffectiveness as string) : undefined,
+        maxEffectiveness: req.query.maxEffectiveness && req.query.maxEffectiveness !== 'undefined' && req.query.maxEffectiveness !== '' ? parseInt(req.query.maxEffectiveness as string) : undefined,
       };
 
       const filterKey = JSON.stringify(filters);
