@@ -23488,9 +23488,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all process owners
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    const QUERY_TIMEOUT_MS = 5000; // 5 second timeout for query execution
+    
     try {
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;
+      const tenantResolveStart = Date.now();
       try {
         const tenant = await resolveActiveTenant(req, { required: false });
         tenantId = tenant?.tenantId;
@@ -23498,21 +23501,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // In single-tenant mode, continue without tenantId
         console.warn("Could not resolve tenant (single-tenant mode?):", error);
       }
+      const tenantResolveDuration = Date.now() - tenantResolveStart;
+      if (tenantResolveDuration > 1000) {
+        console.warn(`[SLOW] Tenant resolution took ${tenantResolveDuration}ms`);
+      }
 
       // Use two-tier cache (L1 memory + L2 Redis) for better performance
       // TTL 5 min - process owners change infrequently
       const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
-      const processOwners = await getFromTieredCache(
-        cacheKey,
-        async () => {
-          const queryStart = Date.now();
-          const owners = await storage.getProcessOwners();
-          const queryDuration = Date.now() - queryStart;
-          console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
-          return owners;
-        },
-        300 // 5 minutes - process owners change infrequently
-      );
+      
+      // Add timeout wrapper to prevent long waits
+      const processOwners = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const queryStart = Date.now();
+            try {
+              // Wrap query with timeout
+              const owners = await Promise.race([
+                storage.getProcessOwners(),
+                new Promise<never>((_, reject) => 
+                  setTimeout(() => reject(new Error('Query timeout after 5s')), QUERY_TIMEOUT_MS)
+                )
+              ]);
+              const queryDuration = Date.now() - queryStart;
+              console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
+              return owners;
+            } catch (queryError) {
+              const queryDuration = Date.now() - queryStart;
+              console.error(`[ERROR] Query failed after ${queryDuration}ms:`, queryError);
+              throw queryError;
+            }
+          },
+          300 // 5 minutes - process owners change infrequently
+        ),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Cache/query operation timeout after 10s')), 10000)
+        )
+      ]);
 
       const duration = Date.now() - startTime;
       if (duration > 1000) {
@@ -23526,16 +23552,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
 
-      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated') || error.message.includes('Query timeout'))) {
         return res.status(500).json({
           message: "Database connection timeout. Please try again.",
-          error: "TIMEOUT"
+          error: "TIMEOUT",
+          duration: `${duration}ms`
         });
       }
 
       res.status(500).json({
         message: "Failed to fetch process owners",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: error instanceof Error ? error.message : "Unknown error",
+        duration: `${duration}ms`
       });
     }
   });
