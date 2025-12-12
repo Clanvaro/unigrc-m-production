@@ -221,6 +221,7 @@ export interface ControlFilters {
   type?: string;
   frequency?: string;
   status?: string;
+  validationStatus?: string;
   ownerId?: string;
   minEffectiveness?: number;
   maxEffectiveness?: number;
