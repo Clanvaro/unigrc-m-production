@@ -8888,90 +8888,93 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getRisksPaginated(filters: RiskFilters, limit: number, offset: number): Promise<{ risks: Risk[]; total: number }> {
-    // Build WHERE conditions
-    const conditions = [];
+    return await withRetry(async () => {
+      // Build WHERE conditions
+      const conditions = [];
 
-    // Exclude deleted risks
-    conditions.push(ne(risks.status, 'deleted'));
+      // Exclude deleted risks (check both deletedAt and status)
+      conditions.push(isNull(risks.deletedAt));
+      conditions.push(ne(risks.status, 'deleted'));
 
-    // Apply filters
-    if (filters.search) {
-      const searchPattern = `%${filters.search.toLowerCase()}%`;
-      conditions.push(
-        or(
-          like(sql`LOWER(${risks.name})`, searchPattern),
-          like(sql`LOWER(${risks.code})`, searchPattern),
-          like(sql`LOWER(${risks.description})`, searchPattern)
-        )!
-      );
-    }
+      // Apply filters
+      if (filters.search) {
+        const searchPattern = `%${filters.search.toLowerCase()}%`;
+        conditions.push(
+          or(
+            like(sql`LOWER(${risks.name})`, searchPattern),
+            like(sql`LOWER(${risks.code})`, searchPattern),
+            like(sql`LOWER(${risks.description})`, searchPattern)
+          )!
+        );
+      }
 
-    if (filters.category) {
-      conditions.push(eq(risks.category, filters.category));
-    }
+      if (filters.category) {
+        conditions.push(eq(risks.category, filters.category));
+      }
 
-    if (filters.status) {
-      conditions.push(eq(risks.status, filters.status));
-    }
+      if (filters.status) {
+        conditions.push(eq(risks.status, filters.status));
+      }
 
-    // Use EXISTS for process filters - semantically correct and optimized with existing composite indexes
-    // (idx_rpl_risk_macroproceso, idx_rpl_risk_process, idx_rpl_risk_subproceso)
-    if (filters.processId) {
-      conditions.push(
-        sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.processId} = ${filters.processId})`
-      );
-    }
+      // Use EXISTS for process filters - semantically correct and optimized with existing composite indexes
+      // (idx_rpl_risk_macroproceso, idx_rpl_risk_process, idx_rpl_risk_subproceso)
+      if (filters.processId) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.processId} = ${filters.processId})`
+        );
+      }
 
-    if (filters.subprocesoId) {
-      conditions.push(
-        sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.subprocesoId} = ${filters.subprocesoId})`
-      );
-    }
+      if (filters.subprocesoId) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.subprocesoId} = ${filters.subprocesoId})`
+        );
+      }
 
-    if (filters.macroprocesoId) {
-      conditions.push(
-        sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.macroprocesoId} = ${filters.macroprocesoId})`
-      );
-    }
+      if (filters.macroprocesoId) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM ${riskProcessLinks} WHERE ${riskProcessLinks.riskId} = ${risks.id} AND ${riskProcessLinks.macroprocesoId} = ${filters.macroprocesoId})`
+        );
+      }
 
-    if (filters.minProbability !== undefined) {
-      conditions.push(sql`${risks.probability} >= ${filters.minProbability}`);
-    }
+      if (filters.minProbability !== undefined) {
+        conditions.push(sql`${risks.probability} >= ${filters.minProbability}`);
+      }
 
-    if (filters.maxProbability !== undefined) {
-      conditions.push(sql`${risks.probability} <= ${filters.maxProbability}`);
-    }
+      if (filters.maxProbability !== undefined) {
+        conditions.push(sql`${risks.probability} <= ${filters.maxProbability}`);
+      }
 
-    if (filters.minImpact !== undefined) {
-      conditions.push(sql`${risks.impact} >= ${filters.minImpact}`);
-    }
+      if (filters.minImpact !== undefined) {
+        conditions.push(sql`${risks.impact} >= ${filters.minImpact}`);
+      }
 
-    if (filters.maxImpact !== undefined) {
-      conditions.push(sql`${risks.impact} <= ${filters.maxImpact}`);
-    }
+      if (filters.maxImpact !== undefined) {
+        conditions.push(sql`${risks.impact} <= ${filters.maxImpact}`);
+      }
 
-    // Build WHERE clause
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+      // Build WHERE clause
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Get total count
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(risks)
-      .where(whereClause);
+      // Get total count
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(risks)
+        .where(whereClause);
 
-    // Get paginated results
-    const paginatedRisks = await db
-      .select()
-      .from(risks)
-      .where(whereClause)
-      .limit(limit)
-      .offset(offset)
-      .orderBy(desc(risks.createdAt));
+      // Get paginated results
+      const paginatedRisks = await db
+        .select()
+        .from(risks)
+        .where(whereClause)
+        .limit(limit)
+        .offset(offset)
+        .orderBy(desc(risks.createdAt));
 
-    return {
-      risks: paginatedRisks,
-      total: count
-    };
+      return {
+        risks: paginatedRisks,
+        total: count
+      };
+    });
   }
 
   // Optimized function to get risks with owner and category info in a single query
@@ -15165,62 +15168,23 @@ export class DatabaseStorage extends MemStorage {
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
     return await withRetry(async () => {
-      // Use raw SQL to avoid Drizzle ambiguity issues with JOINs
-      const result = await db.execute(sql`
-        SELECT 
-          s.id,
-          s.code,
-          s.name,
-          s.description,
-          s.owner_id as "ownerId",
-          s.proceso_id as "procesoId",
-          s.status,
-          s.created_by as "createdBy",
-          s.updated_by as "updatedBy",
-          s.deleted_by as "deletedBy",
-          s.deleted_at as "deletedAt",
-          s.deletion_reason as "deletionReason",
-          s.created_at as "createdAt",
-          s.updated_at as "updatedAt",
-          po.id as "owner.id",
-          po.name as "owner.name",
-          po.email as "owner.email",
-          po.phone as "owner.phone",
-          po.position as "owner.position",
-          po.is_active as "owner.isActive",
-          po.created_at as "owner.createdAt",
-          po.updated_at as "owner.updatedAt"
-        FROM subprocesos s
-        LEFT JOIN process_owners po ON s.owner_id = po.id AND po.is_active = true
-        WHERE s.deleted_at IS NULL
-        ORDER BY s.created_at DESC
-      `);
+      // Use Drizzle ORM pattern (same as getProcessesWithOwners) for consistency
+      const results = await db
+        .select({
+          subproceso: subprocesos,
+          owner: processOwners,
+        })
+        .from(subprocesos)
+        .leftJoin(processOwners, and(
+          eq(subprocesos.ownerId, processOwners.id),
+          eq(processOwners.isActive, true)
+        ))
+        .where(isNull(subprocesos.deletedAt))
+        .orderBy(desc(subprocesos.createdAt));
 
-      return (result.rows as any[]).map((row: any) => ({
-        id: row.id,
-        code: row.code,
-        name: row.name,
-        description: row.description,
-        ownerId: row.ownerId,
-        procesoId: row.procesoId,
-        status: row.status,
-        createdBy: row.createdBy,
-        updatedBy: row.updatedBy,
-        deletedBy: row.deletedBy,
-        deletedAt: row.deletedAt,
-        deletionReason: row.deletionReason,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-        owner: row["owner.id"] ? {
-          id: row["owner.id"],
-          name: row["owner.name"],
-          email: row["owner.email"],
-          phone: row["owner.phone"],
-          position: row["owner.position"],
-          isActive: row["owner.isActive"],
-          createdAt: row["owner.createdAt"],
-          updatedAt: row["owner.updatedAt"]
-        } : null
+      return results.map(result => ({
+        ...result.subproceso,
+        owner: result.owner,
       }));
     });
   }

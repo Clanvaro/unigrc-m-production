@@ -2846,7 +2846,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(response);
     } catch (error) {
       console.error("[ERROR] /api/risks failed:", error);
-      res.status(500).json({ message: "Failed to fetch risks" });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error("[ERROR] /api/risks details:", { errorMessage, errorStack });
+      res.status(500).json({ 
+        message: "Failed to fetch risks",
+        error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      });
     }
   });
 
@@ -16980,10 +16986,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(subprocesosWithRisks);
     } catch (error) {
+      console.error('[ERROR] /api/subprocesos failed:', error);
       if (profile) {
         console.log('[PROFILE] /api/subprocesos ERROR', { timings, pool: getPoolMetrics(), error });
       }
-      res.status(500).json({ message: "Failed to fetch subprocesos" });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error('[ERROR] /api/subprocesos details:', { errorMessage, errorStack, pool: getPoolMetrics() });
+      res.status(500).json({ 
+        message: "Failed to fetch subprocesos",
+        error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      });
     }
   });
 
