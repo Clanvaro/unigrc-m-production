@@ -10,7 +10,7 @@ import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { insertProcessSchema, type Process, type FiscalEntity, type ProcessOwner, type Gerencia } from "@shared/schema";
+import { insertProcessSchema, type Process, type Macroproceso, type FiscalEntity, type ProcessOwner, type Gerencia } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { z } from "zod";
@@ -142,7 +142,7 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
         
         return result;
       } else {
-        const result = await apiRequest("/api/processes", "POST", processData) as unknown as { id: string };
+        const result = await apiRequest("/api/processes", "POST", processData) as unknown as Process;
         
         // Add selective entities if needed
         if (processData.entityScope === "selective" && entities && result.id) {
@@ -152,17 +152,75 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
         return result;
       }
     },
-    onSuccess: () => {
+    // Optimistic update for creating new processes
+    onMutate: async (data) => {
+      if (!process) {
+        // Cancel outgoing refetches
+        await queryClient.cancelQueries({ queryKey: ["/api/processes/basic"] });
+        await queryClient.cancelQueries({ queryKey: ["/api/processes"] });
+        await queryClient.cancelQueries({ queryKey: ["/api/macroprocesos"] });
+
+        // Snapshot previous values
+        const previousProcessesBasic = queryClient.getQueryData<Process[]>(["/api/processes/basic"]);
+        const previousProcesses = queryClient.getQueryData<Process[]>(["/api/processes"]);
+        const previousMacroprocesos = queryClient.getQueryData<Macroproceso[]>(["/api/macroprocesos"]);
+
+        // Optimistically update processes list
+        const optimisticProcess: Process = {
+          id: `temp-${Date.now()}`,
+          code: data.code || "",
+          name: data.name,
+          description: data.description || null,
+          ownerId: data.ownerId || null,
+          macroprocesoId: data.macroprocesoId || null,
+          gerenciaId: data.gerenciaId || null,
+          fiscalEntityId: data.fiscalEntityId || null,
+          entityScope: data.entityScope || "transversal",
+          status: "active",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          createdBy: "current-user",
+          deletedAt: null,
+          deletedBy: null,
+          deletionReason: null,
+          updatedBy: null,
+        };
+
+        if (previousProcessesBasic) {
+          queryClient.setQueryData<Process[]>(["/api/processes/basic"], [...previousProcessesBasic, optimisticProcess]);
+        }
+        if (previousProcesses) {
+          queryClient.setQueryData<Process[]>(["/api/processes"], [...previousProcesses, optimisticProcess]);
+        }
+
+        return { previousProcessesBasic, previousProcesses, previousMacroprocesos };
+      }
+    },
+    onSuccess: (result) => {
+      // Invalidate and refetch to get the real data from server
       queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/processes/basic"], refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"], refetchType: 'all' });
+      
       toast({
         title: process ? "Proceso actualizado" : "Proceso creado",
         description: `El proceso ha sido ${process ? "actualizado" : "creado"} exitosamente.`,
       });
       onSuccess?.();
     },
-    onError: () => {
+    onError: (error, variables, context) => {
+      // Rollback optimistic update on error
+      if (context?.previousProcessesBasic) {
+        queryClient.setQueryData(["/api/processes/basic"], context.previousProcessesBasic);
+      }
+      if (context?.previousProcesses) {
+        queryClient.setQueryData(["/api/processes"], context.previousProcesses);
+      }
+      if (context?.previousMacroprocesos) {
+        queryClient.setQueryData(["/api/macroprocesos"], context.previousMacroprocesos);
+      }
+      
       toast({
         title: "Error",
         description: `No se pudo ${process ? "actualizar" : "crear"} el proceso.`,

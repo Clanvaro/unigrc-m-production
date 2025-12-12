@@ -1650,7 +1650,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await Promise.all([
         invalidateCatalogBasicCaches(['macroprocesos', 'processes']),
         invalidateMacroprocesoHierarchy(),
-        invalidateProcessRelationsCaches()
+        invalidateProcessRelationsCaches(),
+        // Invalidate specific cache keys used by getProcesses() and page-data-lite
+        distributedCache.invalidate('processes:single-tenant'),
+        distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:default`),
+        distributedCache.invalidate('risks-page-data-lite:default')
       ]);
 
       res.status(201).json(process);

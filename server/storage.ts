@@ -8988,51 +8988,49 @@ export class DatabaseStorage extends MemStorage {
     categoryNames?: string[];
   }>> {
     return withRetry(async () => {
-      // Get risks with owner info from riskProcessLinks in a single query
-      // Using subqueries to get the first owner from riskProcessLinks
-      const risksWithOwners = await db
-        .select({
-          // All risk fields
-          id: risks.id,
-          code: risks.code,
-          name: risks.name,
-          description: risks.description,
-          category: risks.category,
-          probability: risks.probability,
-          impact: risks.impact,
-          inherentRisk: risks.inherentRisk,
-          status: risks.status,
-          createdAt: risks.createdAt,
-          updatedAt: risks.updatedAt,
-          deletedAt: risks.deletedAt,
-          // Owner info from riskProcessLinks -> processOwners
-          ownerName: sql<string | null>`(
-            SELECT po.name
-            FROM risk_process_links rpl
-            LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id
-            WHERE rpl.risk_id = ${risks.id}
-            AND po.is_active = true
-            LIMIT 1
-          )`,
-          ownerEmail: sql<string | null>`(
-            SELECT po.email
-            FROM risk_process_links rpl
-            LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id
-            WHERE rpl.risk_id = ${risks.id}
-            AND po.is_active = true
-            LIMIT 1
-          )`,
-        })
-        .from(risks)
-        .where(and(
-          isNull(risks.deletedAt),
-          ne(risks.status, 'deleted')
-        ));
+      // Use raw SQL to avoid Drizzle ambiguity issues with correlated subqueries
+      // Get risks with owner info from riskProcessLinks
+      const result = await db.execute(sql`
+        SELECT DISTINCT ON (r.id)
+          r.id,
+          r.code,
+          r.name,
+          r.description,
+          r.category,
+          r.probability,
+          r.impact,
+          r.inherent_risk as "inherentRisk",
+          r.status,
+          r.created_at as "createdAt",
+          r.updated_at as "updatedAt",
+          r.deleted_at as "deletedAt",
+          po.name as "ownerName",
+          po.email as "ownerEmail"
+        FROM risks r
+        LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id
+        LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id AND (po.is_active = true OR po.is_active IS NULL)
+        WHERE r.deleted_at IS NULL
+          AND r.status != 'deleted'
+        ORDER BY r.id, rpl.created_at DESC NULLS LAST
+      `);
 
       // Map category array to categoryNames
-      return risksWithOwners.map(risk => ({
-        ...risk,
-        categoryNames: Array.isArray(risk.category) ? risk.category : [],
+      return (result.rows as any[]).map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        name: row.name,
+        description: row.description,
+        category: row.category,
+        probability: row.probability,
+        impact: row.impact,
+        inherentRisk: row.inherentRisk,
+        status: row.status,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        deletedAt: row.deletedAt,
+        ownerName: row.ownerName,
+        ownerEmail: row.ownerEmail,
+        categoryNames: Array.isArray(row.category) ? row.category : [],
       }));
     });
   }
