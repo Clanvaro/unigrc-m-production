@@ -241,15 +241,15 @@ export default function Controls() {
   }, [filters, searchTerm, responsibleFilter]);
 
   const { data: controlsResponse, isLoading, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
-    queryKey: queryKeys.controls.paginated({
+    queryKey: queryKeys.controls.withDetails({
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
-      paginate: true,
       search: searchTerm,
       type: filters.typeFilter,
       effectiveness: filters.effectivenessFilter,
       status: filters.statusFilter,
-      validationStatus: filters.validationStatusFilter
+      validationStatus: filters.validationStatusFilter,
+      ownerId: responsibleFilter || undefined
     }),
     queryFn: async () => {
       // Map frontend filter values to backend expected values
@@ -264,20 +264,22 @@ export default function Controls() {
       const params = new URLSearchParams({
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
-        paginate: "true",
         search: searchTerm || "",
         type: filters.typeFilter !== "all" ? filters.typeFilter : "",
         status: filters.statusFilter !== "all" ? filters.statusFilter : "",
         validationStatus: filters.validationStatusFilter !== "all" ? filters.validationStatusFilter : "",
         ...(effRange?.min ? { minEffectiveness: effRange.min } : {}),
-        ...(effRange?.max ? { maxEffectiveness: effRange.max } : {})
+        ...(effRange?.max ? { maxEffectiveness: effRange.max } : {}),
+        ...(responsibleFilter ? { ownerId: responsibleFilter } : {})
       });
 
-      const response = await fetch(`/api/controls?${params}`);
+      const response = await fetch(`/api/controls/with-details?${params}`);
       if (!response.ok) throw new Error("Failed to fetch controls");
       return response.json();
     },
     staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     gcTime: 5 * 60 * 1000,
   });
   const controls = controlsResponse?.data || [];

@@ -4917,7 +4917,6 @@ export class MemStorage implements IStorage {
           s.created_at as "createdAt",
           s.updated_at as "updatedAt",
           po.id as "owner.id",
-          po.code as "owner.code",
           po.name as "owner.name",
           po.email as "owner.email",
           po.phone as "owner.phone",
@@ -4948,7 +4947,6 @@ export class MemStorage implements IStorage {
         updatedAt: row.updatedAt,
         owner: row["owner.id"] ? {
           id: row["owner.id"],
-          code: row["owner.code"],
           name: row["owner.name"],
           email: row["owner.email"],
           phone: row["owner.phone"],

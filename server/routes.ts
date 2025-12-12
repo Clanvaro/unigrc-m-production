@@ -8421,6 +8421,267 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // OPTIMIZED: Aggregated endpoint for controls with all details in a single query
+  app.get("/api/controls/with-details", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+    try {
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+
+      // Parse query parameters
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+      
+      // Build filters
+      const filters: import('./storage').ControlFilters = {
+        search: req.query.search as string,
+        type: req.query.type && req.query.type !== 'undefined' ? req.query.type as string : undefined,
+        frequency: req.query.frequency && req.query.frequency !== 'undefined' ? req.query.frequency as string : undefined,
+        status: req.query.status && req.query.status !== 'undefined' ? req.query.status as string : undefined,
+        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' ? req.query.validationStatus as string : undefined,
+        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' ? req.query.ownerId as string : undefined,
+        minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
+        maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
+      };
+
+      const filterKey = JSON.stringify(filters);
+      const cacheKey = `controls-with-details:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/controls/with-details in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
+
+      // Build WHERE conditions for filtering
+      const whereConditions: any[] = [sql`c.status <> 'deleted'`];
+      
+      if (filters.search) {
+        const searchPattern = `%${filters.search.toLowerCase()}%`;
+        whereConditions.push(sql`(
+          LOWER(c.name) LIKE ${searchPattern} OR
+          LOWER(c.code) LIKE ${searchPattern} OR
+          LOWER(c.description) LIKE ${searchPattern}
+        )`);
+      }
+      
+      if (filters.type) {
+        whereConditions.push(sql`c.type = ${filters.type}`);
+      }
+      
+      if (filters.frequency) {
+        whereConditions.push(sql`c.frequency = ${filters.frequency}`);
+      }
+      
+      if (filters.status && filters.status !== 'deleted') {
+        whereConditions.push(sql`c.status = ${filters.status}`);
+      }
+      
+      if (filters.validationStatus) {
+        whereConditions.push(sql`c.validation_status = ${filters.validationStatus}`);
+      }
+      
+      if (filters.minEffectiveness !== undefined) {
+        whereConditions.push(sql`c.effectiveness >= ${filters.minEffectiveness}`);
+      }
+      
+      if (filters.maxEffectiveness !== undefined) {
+        whereConditions.push(sql`c.effectiveness <= ${filters.maxEffectiveness}`);
+      }
+
+      // Build base query with optional owner filter
+      const baseFrom = filters.ownerId 
+        ? sql`FROM controls c
+            INNER JOIN control_owners co_filter ON c.id = co_filter.control_id AND co_filter.is_active = true
+            INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
+        : sql`FROM controls c`;
+      
+      const baseWhere = whereConditions.length > 0 
+        ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
+        : sql``;
+      
+      const ownerFilter = filters.ownerId 
+        ? sql`AND po_filter.id = ${filters.ownerId}`
+        : sql``;
+
+      // OPTIMIZED: Single aggregated query with CTEs
+      const controlsResult = await db.execute(sql`
+        WITH controls_base AS (
+          SELECT 
+            c.id,
+            c.code,
+            c.name,
+            c.description,
+            c.type,
+            c.frequency,
+            c.effectiveness,
+            c.effect_target,
+            c.responsible_id,
+            c.process_id,
+            c.is_active,
+            c.last_review,
+            c.validation_status,
+            c.validated_at,
+            c.validated_by,
+            c.validation_comments,
+            c.notes,
+            c.created_by,
+            c.updated_by,
+            c.deleted_by,
+            c.deleted_at,
+            c.deletion_reason,
+            c.created_at,
+            c.updated_at
+          ${baseFrom}
+          ${baseWhere}
+          ${ownerFilter}
+          ORDER BY c.code
+          LIMIT ${limit} OFFSET ${offset}
+        ),
+        controls_count AS (
+          SELECT COUNT(DISTINCT c.id)::int as total
+          ${baseFrom}
+          ${baseWhere}
+          ${ownerFilter}
+        ),
+        risk_details_agg AS (
+          SELECT 
+            rc.control_id,
+            COUNT(DISTINCT rc.risk_id)::int as risk_count,
+            json_agg(
+              json_build_object(
+                'id', r.id,
+                'code', r.code
+              )
+            ) FILTER (WHERE r.id IS NOT NULL) as associated_risks
+          FROM risk_controls rc
+          INNER JOIN controls_base cb ON rc.control_id = cb.id
+          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
+          GROUP BY rc.control_id
+        ),
+        control_owners_agg AS (
+          SELECT DISTINCT ON (co.control_id)
+            co.control_id,
+            json_build_object(
+              'id', po.id,
+              'fullName', po.name,
+              'cargo', po.position
+            ) as owner
+          FROM control_owners co
+          INNER JOIN controls_base cb ON co.control_id = cb.id
+          INNER JOIN process_owners po ON co.process_owner_id = po.id
+          WHERE co.is_active = true
+          ORDER BY co.control_id, co.created_at DESC
+        )
+        SELECT 
+          cb.*,
+          COALESCE(rd.risk_count, 0)::int as associated_risks_count,
+          COALESCE(rd.associated_risks, '[]'::json) as associated_risks,
+          co_agg.owner as control_owner,
+          cc.total
+        FROM controls_base cb
+        LEFT JOIN risk_details_agg rd ON cb.id = rd.control_id
+        LEFT JOIN control_owners_agg co_agg ON cb.id = co_agg.control_id
+        CROSS JOIN controls_count cc
+        ORDER BY cb.code
+      `);
+
+      // Apply max effectiveness limit
+      let maxEffectivenessLimit = 100;
+      try {
+        const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
+        if (maxLimitConfig) {
+          const parsed = parseInt(maxLimitConfig.configValue);
+          maxEffectivenessLimit = (parsed > 0 && parsed <= 100) ? parsed : 100;
+        }
+      } catch (configError) {
+        console.warn(`[WARN] /api/controls/with-details: Failed to get max effectiveness limit config:`, configError);
+      }
+
+      const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any).total : 0;
+      const controls = (controlsResult.rows as any[]).map((row: any) => {
+        // Parse JSON fields safely
+        let associatedRisks: { id: string; code: string }[] = [];
+        if (row.associated_risks) {
+          if (Array.isArray(row.associated_risks)) {
+            associatedRisks = row.associated_risks;
+          } else if (typeof row.associated_risks === 'string') {
+            try {
+              associatedRisks = JSON.parse(row.associated_risks);
+            } catch (e) {
+              console.warn(`[WARN] Failed to parse associated_risks for control ${row.id}:`, e);
+            }
+          }
+        }
+
+        let controlOwner: { id: string; fullName: string; cargo: string } | undefined = undefined;
+        if (row.control_owner) {
+          if (typeof row.control_owner === 'object') {
+            controlOwner = row.control_owner;
+          } else if (typeof row.control_owner === 'string') {
+            try {
+              controlOwner = JSON.parse(row.control_owner);
+            } catch (e) {
+              console.warn(`[WARN] Failed to parse control_owner for control ${row.id}:`, e);
+            }
+          }
+        }
+
+        return {
+          id: row.id,
+          code: row.code,
+          name: row.name,
+          description: row.description,
+          type: row.type,
+          frequency: row.frequency,
+          effectiveness: maxEffectivenessLimit < 100 
+            ? Math.min(row.effectiveness, maxEffectivenessLimit) 
+            : row.effectiveness,
+          effectTarget: row.effect_target,
+          responsibleId: row.responsible_id,
+          processId: row.process_id,
+          isActive: row.is_active,
+          lastReview: row.last_review,
+          validationStatus: row.validation_status,
+          validatedAt: row.validated_at,
+          validatedBy: row.validated_by,
+          validationComments: row.validation_comments,
+          notes: row.notes,
+          createdBy: row.created_by,
+          updatedBy: row.updated_by,
+          deletedBy: row.deleted_by,
+          deletedAt: row.deleted_at,
+          deletionReason: row.deletion_reason,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          associatedRisksCount: row.associated_risks_count || 0,
+          associatedRisks: associatedRisks,
+          controlOwner: controlOwner
+        };
+      });
+
+      const response = {
+        data: controls,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + limit < total
+        }
+      };
+
+      await distributedCache.set(cacheKey, response, 60);
+      const duration = Date.now() - requestStart;
+      console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
+      
+      res.json(response);
+    } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
+      res.status(500).json({ message: "Failed to fetch controls", error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/controls", isAuthenticated, async (req, res) => {
     try {
       const userId = getAuthenticatedUserId(req);
@@ -8438,6 +8699,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const control = await storage.createControl(await withTenantId(req, dataWithAudit));
 
+      // Invalidate controls cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      await Promise.all([
+        distributedCache.invalidatePattern(`controls:${tenantId}:*`),
+        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`)
+      ]);
+
       // Save audit log for creation
       await requireDb().insert(auditLogs).values({
         entityType: 'control',
@@ -8453,6 +8721,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await distributedCache.invalidate(`risks-with-details:${tenantId}`);
       await distributedCache.invalidatePattern(`controls:${tenantId}:*`); // Invalidate all controls cache variants
+      await distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`); // Invalidate optimized endpoint cache
 
       res.status(201).json(control);
     } catch (error) {
@@ -8544,7 +8813,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // OPTIMIZED: Use granular cache invalidation for control updates
-      await invalidateControlDataCaches();
+      await Promise.all([
+        invalidateControlDataCaches(),
+        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`)
+      ]);
 
       res.json(control);
     } catch (error) {
@@ -8582,8 +8854,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Control not found" });
       }
 
+      // Invalidate controls cache
+      await Promise.all([
+        distributedCache.invalidatePattern(`controls:${tenantId}:*`),
+        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`)
+      ]);
+
       // OPTIMIZED: Use granular cache invalidation for control deletion
-      await invalidateControlDataCaches();
+      await Promise.all([
+        invalidateControlDataCaches(),
+        distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`)
+      ]);
 
       res.status(204).send();
     } catch (error) {
@@ -9001,6 +9282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Invalidate controls cache to ensure fresh data is returned
+      await distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`); // Invalidate optimized endpoint cache
       try {
         await invalidateControlDataCaches();
         console.log(`[CACHE] Invalidated controls cache after effectiveness update for control ${controlId}`);

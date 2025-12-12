@@ -68,6 +68,11 @@ export const queryKeys = {
     },
     detail: (id: string | undefined | null) => ["/api/controls", id] as const,
     risks: (id: string | undefined | null) => ["/api/controls", id, "risks"] as const,
+    // Aggregated endpoint with all details (risks, owners) in single query
+    withDetails: (params: { limit?: number; offset?: number; [key: string]: any } = {}) => {
+      const stableParams = JSON.stringify(params, Object.keys(params).sort());
+      return ["/api/controls/with-details", stableParams] as const;
+    },
   },
   
   // Risk Events

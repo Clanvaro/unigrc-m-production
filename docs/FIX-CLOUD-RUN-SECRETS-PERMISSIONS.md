@@ -85,3 +85,4 @@ Los siguientes secretos necesitan acceso:
       --role="roles/secretmanager.secretAccessor"
   ```
 - La service account se crea automáticamente cuando despliegas Cloud Run por primera vez, pero los permisos de Secret Manager deben otorgarse manualmente
+

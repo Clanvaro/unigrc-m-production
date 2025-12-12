@@ -49,3 +49,4 @@ echo "   Puedes volver a desplegar Cloud Run sin errores de permisos."
 echo ""
 echo "💡 Para desplegar manualmente, ejecuta:"
 echo "   gcloud run deploy unigrc-backend --region=southamerica-west1 --project=${PROJECT_ID}"
+
