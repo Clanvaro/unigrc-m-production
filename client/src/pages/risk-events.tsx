@@ -691,6 +691,7 @@ export default function RiskEvents() {
     } else {
       return bValue > aValue ? 1 : bValue < aValue ? -1 : 0;
     }
+    });
   }, [
     riskEvents,
     searchTerm,
