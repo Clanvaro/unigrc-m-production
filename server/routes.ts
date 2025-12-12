@@ -8501,59 +8501,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
 
-      // Build WHERE conditions for filtering
-      const whereConditions: any[] = [sql`c.status <> 'deleted'`];
-      
-      if (filters.search) {
-        const searchPattern = `%${filters.search.toLowerCase()}%`;
-        whereConditions.push(sql`(
-          LOWER(c.name) LIKE ${searchPattern} OR
-          LOWER(c.code) LIKE ${searchPattern} OR
-          LOWER(c.description) LIKE ${searchPattern}
-        )`);
-      }
-      
-      if (filters.type) {
-        whereConditions.push(sql`c.type = ${filters.type}`);
-      }
-      
-      if (filters.frequency) {
-        whereConditions.push(sql`c.frequency = ${filters.frequency}`);
-      }
-      
-      if (filters.status && filters.status !== 'deleted') {
-        whereConditions.push(sql`c.status = ${filters.status}`);
-      }
-      
-      if (filters.validationStatus) {
-        whereConditions.push(sql`c.validation_status = ${filters.validationStatus}`);
-      }
-      
-      if (filters.minEffectiveness !== undefined) {
-        whereConditions.push(sql`c.effectiveness >= ${filters.minEffectiveness}`);
-      }
-      
-      if (filters.maxEffectiveness !== undefined) {
-        whereConditions.push(sql`c.effectiveness <= ${filters.maxEffectiveness}`);
-      }
+      return await withRetry(async () => {
+        // Build WHERE conditions for filtering
+        const whereConditions: any[] = [sql`c.status <> 'deleted'`];
+        
+        if (filters.search) {
+          const searchPattern = `%${filters.search.toLowerCase()}%`;
+          whereConditions.push(sql`(
+            LOWER(c.name) LIKE ${searchPattern} OR
+            LOWER(c.code) LIKE ${searchPattern} OR
+            LOWER(c.description) LIKE ${searchPattern}
+          )`);
+        }
+        
+        if (filters.type) {
+          whereConditions.push(sql`c.type = ${filters.type}`);
+        }
+        
+        if (filters.frequency) {
+          whereConditions.push(sql`c.frequency = ${filters.frequency}`);
+        }
+        
+        if (filters.status && filters.status !== 'deleted') {
+          whereConditions.push(sql`c.status = ${filters.status}`);
+        }
+        
+        if (filters.validationStatus) {
+          whereConditions.push(sql`c.validation_status = ${filters.validationStatus}`);
+        }
+        
+        if (filters.minEffectiveness !== undefined) {
+          whereConditions.push(sql`c.effectiveness >= ${filters.minEffectiveness}`);
+        }
+        
+        if (filters.maxEffectiveness !== undefined) {
+          whereConditions.push(sql`c.effectiveness <= ${filters.maxEffectiveness}`);
+        }
 
-      // Build base query with optional owner filter
-      const baseFrom = filters.ownerId 
-        ? sql`FROM controls c
-            INNER JOIN control_owners co_filter ON c.id = co_filter.control_id AND co_filter.is_active = true
-            INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
-        : sql`FROM controls c`;
-      
-      const baseWhere = whereConditions.length > 0 
-        ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
-        : sql``;
-      
-      const ownerFilter = filters.ownerId 
-        ? sql`AND po_filter.id = ${filters.ownerId}`
-        : sql``;
+        // Build base query with optional owner filter
+        const baseFrom = filters.ownerId 
+          ? sql`FROM controls c
+              INNER JOIN control_owners co_filter ON c.id = co_filter.control_id AND co_filter.is_active = true
+              INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
+          : sql`FROM controls c`;
+        
+        const baseWhere = whereConditions.length > 0 
+          ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
+          : sql``;
+        
+        const ownerFilter = filters.ownerId 
+          ? sql`AND po_filter.id = ${filters.ownerId}`
+          : sql``;
 
-      // OPTIMIZED: Single aggregated query with CTEs
-      const controlsResult = await db.execute(sql`
+        // OPTIMIZED: Single aggregated query with CTEs
+        const controlsResult = await requireDb().execute(sql`
         WITH controls_base AS (
           SELECT 
             c.id,
@@ -8655,22 +8656,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         LEFT JOIN control_owners_agg co_agg ON cb.id = co_agg.control_id
         CROSS JOIN controls_count cc
         ORDER BY cb.code
-      `);
+        `);
 
-      // Apply max effectiveness limit
-      let maxEffectivenessLimit = 100;
-      try {
-        const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
-        if (maxLimitConfig) {
-          const parsed = parseInt(maxLimitConfig.configValue);
-          maxEffectivenessLimit = (parsed > 0 && parsed <= 100) ? parsed : 100;
+        // Apply max effectiveness limit
+        let maxEffectivenessLimit = 100;
+        try {
+          const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
+          if (maxLimitConfig) {
+            const parsed = parseInt(maxLimitConfig.configValue);
+            maxEffectivenessLimit = (parsed > 0 && parsed <= 100) ? parsed : 100;
+          }
+        } catch (configError) {
+          console.warn(`[WARN] /api/controls/with-details: Failed to get max effectiveness limit config:`, configError);
         }
-      } catch (configError) {
-        console.warn(`[WARN] /api/controls/with-details: Failed to get max effectiveness limit config:`, configError);
-      }
 
-      const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any).total : 0;
-      const controls = (controlsResult.rows as any[]).map((row: any) => {
+        const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any).total : 0;
+        const controls = (controlsResult.rows as any[]).map((row: any) => {
         // Parse JSON fields safely
         let associatedRisks: { id: string; code: string }[] = [];
         if (row.associated_risks) {
@@ -8698,54 +8699,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        return {
-          id: row.id,
-          code: row.code,
-          name: row.name,
-          description: row.description,
-          type: row.type,
-          frequency: row.frequency,
-          effectiveness: maxEffectivenessLimit < 100 
-            ? Math.min(row.effectiveness, maxEffectivenessLimit) 
-            : row.effectiveness,
-          effectTarget: row.effect_target,
-          responsibleId: row.responsible_id,
-          processId: row.process_id,
-          isActive: row.is_active,
-          lastReview: row.last_review,
-          validationStatus: row.validation_status,
-          validatedAt: row.validated_at,
-          validatedBy: row.validated_by,
-          validationComments: row.validation_comments,
-          notes: row.notes,
-          createdBy: row.created_by,
-          updatedBy: row.updated_by,
-          deletedBy: row.deleted_by,
-          deletedAt: row.deleted_at,
-          deletionReason: row.deletion_reason,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          associatedRisksCount: row.associated_risks_count || 0,
-          associatedRisks: associatedRisks,
-          controlOwner: controlOwner
+          return {
+            id: row.id,
+            code: row.code,
+            name: row.name,
+            description: row.description,
+            type: row.type,
+            frequency: row.frequency,
+            effectiveness: maxEffectivenessLimit < 100 
+              ? Math.min(row.effectiveness, maxEffectivenessLimit) 
+              : row.effectiveness,
+            effectTarget: row.effect_target,
+            responsibleId: row.responsible_id,
+            processId: row.process_id,
+            isActive: row.is_active,
+            lastReview: row.last_review,
+            validationStatus: row.validation_status,
+            validatedAt: row.validated_at,
+            validatedBy: row.validated_by,
+            validationComments: row.validation_comments,
+            notes: row.notes,
+            createdBy: row.created_by,
+            updatedBy: row.updated_by,
+            deletedBy: row.deleted_by,
+            deletedAt: row.deleted_at,
+            deletionReason: row.deletion_reason,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            associatedRisksCount: row.associated_risks_count || 0,
+            associatedRisks: associatedRisks,
+            controlOwner: controlOwner
+          };
+        });
+
+        const response = {
+          data: controls,
+          pagination: {
+            limit,
+            offset,
+            total,
+            hasMore: offset + limit < total
+          }
         };
+
+        await distributedCache.set(cacheKey, response, 60);
+        const duration = Date.now() - requestStart;
+        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
+        
+        res.json(response);
       });
-
-      const response = {
-        data: controls,
-        pagination: {
-          limit,
-          offset,
-          total,
-          hasMore: offset + limit < total
-        }
-      };
-
-      await distributedCache.set(cacheKey, response, 60);
-      const duration = Date.now() - requestStart;
-      console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
-      
-      res.json(response);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
