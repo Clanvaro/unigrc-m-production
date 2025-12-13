@@ -6321,6 +6321,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get risk-process links by validation status (cached 15s for validation center)
   app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    const QUERY_TIMEOUT_MS = 20000; // 20 seconds timeout
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -6336,26 +6337,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
 
+      // OPTIMIZED: Support pagination to improve performance
+      const { limit, offset } = normalizePaginationParams(req.query);
+      const usePagination = limit !== undefined || offset !== undefined;
+      
+      // Cache key includes pagination params if used
+      const cacheKey = usePagination 
+        ? `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}:${limit}:${offset}`
+        : `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+      
       // Cache TTL: shorter for pending (15s), longer for validated/rejected/observed (60s)
       const cacheTTL = actualStatus === 'pending_validation' ? 15 : 60;
-      const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
-        console.log(`[CACHE HIT] ${cacheKey}`);
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
         return res.json(cached);
       }
 
-      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
-      const queryPromise = storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      const queryStartTime = Date.now();
+      
+      // OPTIMIZED: Add timeout to prevent long-running queries (20 seconds max)
+      const queryPromise = storage.getRiskProcessLinksByValidationStatus(
+        actualStatus, 
+        tenantId,
+        usePagination ? { limit, offset } : undefined
+      );
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+        setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
       });
 
-      const riskProcessLinks = await Promise.race([queryPromise, timeoutPromise]);
+      const result = await Promise.race([queryPromise, timeoutPromise]);
+      const queryDuration = Date.now() - queryStartTime;
 
-      await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+      // Format response based on pagination
+      let response;
+      if (usePagination) {
+        response = createPaginatedResponse(result.data, result.total, limit, offset);
+      } else {
+        // Backward compatibility: return array if no pagination
+        response = result.data;
+      }
 
-      res.json(riskProcessLinks);
+      await distributedCache.set(cacheKey, response, cacheTTL);
+      
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] /api/risk-processes/validation/:status (${actualStatus}) completed in ${duration}ms (query: ${queryDuration}ms, ${result.data.length} items, total: ${result.total})`);
+
+      res.json(response);
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/risk-processes/validation/:status failed after ${duration}ms:`, error);
@@ -6376,16 +6405,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check if it's a timeout error
-      if (error instanceof Error && error.message.includes('timeout')) {
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('Query timeout') ||
+         error.message.includes('TIMEOUT'));
+      
+      if (isTimeout) {
         return res.status(504).json({ 
           message: "Request timeout. The query took too long to execute.",
-          error: "TIMEOUT"
+          error: "TIMEOUT",
+          duration: `${duration}ms`,
+          suggestion: "Try using pagination parameters (limit, offset) to reduce query time"
         });
+      }
+
+      // Log SQL error details if available
+      if (error instanceof Error) {
+        console.error('Error message:', error.message);
+        if ((error as any).code) {
+          console.error('SQL Error code:', (error as any).code);
+        }
+        if ((error as any).detail) {
+          console.error('SQL Error detail:', (error as any).detail);
+        }
       }
 
       res.status(500).json({ 
         message: "Failed to fetch risk processes by validation status",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: error instanceof Error ? error.message : "Unknown error",
+        duration: `${duration}ms`,
+        ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
       });
     }
   });

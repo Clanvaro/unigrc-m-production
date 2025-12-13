@@ -391,7 +391,7 @@ export interface IStorage {
   // RiskProcessLink validation
   validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined>;
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
-  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]>;
+  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, options?: { limit?: number; offset?: number }): Promise<{ data: RiskProcessLinkWithDetails[]; total: number }>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
 
@@ -20833,12 +20833,20 @@ export class DatabaseStorage extends MemStorage {
     return results;
   }
 
-  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]> {
+  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, options?: { limit?: number; offset?: number }): Promise<{ data: RiskProcessLinkWithDetails[]; total: number }> {
     // Build WHERE conditions - filter out deleted risks for performance
     const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
 
-    // First get the base data with process hierarchy
-    const baseResults = await db.select({
+    // OPTIMIZED: Get total count first (separate query for better performance)
+    const [{ count }] = await db.select({ 
+      count: sql<number>`count(*)::int` 
+    })
+      .from(riskProcessLinks)
+      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+      .where(and(...conditions));
+
+    // OPTIMIZED: Build query with pagination if provided
+    let baseQuery = db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
       macroproceso: macroprocesos,
@@ -20864,6 +20872,16 @@ export class DatabaseStorage extends MemStorage {
       .where(and(...conditions))
       .orderBy(riskProcessLinks.createdAt);
 
+    // Apply pagination if provided (Drizzle methods return new query objects)
+    if (options?.limit !== undefined) {
+      baseQuery = baseQuery.limit(options.limit);
+    }
+    if (options?.offset !== undefined) {
+      baseQuery = baseQuery.offset(options.offset);
+    }
+
+    const baseResults = await baseQuery;
+
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
     const owners = ownerIds.length > 0
@@ -20888,7 +20906,7 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
 
-    return results;
+    return { data: results, total: count };
   }
 
   async getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]> {
