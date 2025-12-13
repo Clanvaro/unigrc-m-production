@@ -8923,7 +8923,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ) FILTER (WHERE r.id IS NOT NULL) as associated_risks
           FROM risk_controls rc
           INNER JOIN controls_base cb ON rc.control_id = cb.id
-          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status != 'deleted'
+          -- OPTIMIZED: Use INNER JOIN instead of LEFT JOIN to reduce dataset before aggregation
+          -- This is faster because we only care about risks that exist and are not deleted
+          INNER JOIN risks r ON rc.risk_id = r.id AND r.status != 'deleted'
           GROUP BY rc.control_id
         ),
         control_owners_agg AS (
@@ -8940,7 +8942,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           INNER JOIN controls_base cb ON co.control_id = cb.id
           INNER JOIN process_owners po ON co.process_owner_id = po.id
           WHERE co.is_active = true
-          ORDER BY co.control_id, co.assigned_at DESC NULLS LAST
+          -- OPTIMIZED: NULLS LAST helps with index usage when assigned_at can be NULL
+          ORDER BY co.control_id, co.assigned_at DESC NULLS LAST NULLS LAST
         )
         SELECT 
           cb.id,
