@@ -9134,15 +9134,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
          error.message.includes('Endpoint timeout'));
       
       if (isTimeoutError) {
+        const poolMetrics = getPoolMetrics();
+        console.error(`[TIMEOUT] /api/controls/with-details after ${duration}ms`, {
+          poolMetrics: poolMetrics ? {
+            total: poolMetrics.totalCount,
+            idle: poolMetrics.idleCount,
+            active: poolMetrics.totalCount - poolMetrics.idleCount,
+            waiting: poolMetrics.waitingCount,
+            max: poolMetrics.maxConnections
+          } : null
+        });
+        
         return res.status(504).json({ 
-          message: "Request timeout. The query took too long to execute.", 
+          message: `Request timeout. The endpoint took too long to execute (${duration}ms). The query may be too complex or the database is under heavy load.`,
           error: "TIMEOUT",
-          duration: `${duration}ms`
+          duration: `${duration}ms`,
+          maxTimeout: `${ENDPOINT_TIMEOUT_MS}ms`,
+          suggestion: "Try reducing the number of controls per page or applying filters to narrow the results."
         });
       }
       
       res.status(500).json({ 
-        message: "Failed to fetch controls", 
+        message: "Failed to fetch controls with details", 
         error: error instanceof Error ? error.message : String(error),
         duration: `${duration}ms`,
         ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
