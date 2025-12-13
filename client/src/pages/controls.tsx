@@ -264,36 +264,17 @@ export default function Controls() {
       const params = new URLSearchParams({
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
+        search: searchTerm || "",
+        type: filters.typeFilter !== "all" ? filters.typeFilter : "",
+        status: filters.statusFilter !== "all" ? filters.statusFilter : "",
+        validationStatus: filters.validationStatusFilter !== "all" ? filters.validationStatusFilter : "",
+        ...(effRange?.min ? { minEffectiveness: effRange.min } : {}),
+        ...(effRange?.max ? { maxEffectiveness: effRange.max } : {}),
+        ...(responsibleFilter ? { ownerId: responsibleFilter } : {})
       });
-      
-      // Solo agregar parámetros que tengan valores válidos (no vacíos ni "all")
-      if (searchTerm) {
-        params.append('search', searchTerm);
-      }
-      if (filters.typeFilter && filters.typeFilter !== "all") {
-        params.append('type', filters.typeFilter);
-      }
-      if (filters.statusFilter && filters.statusFilter !== "all") {
-        params.append('status', filters.statusFilter);
-      }
-      if (filters.validationStatusFilter && filters.validationStatusFilter !== "all") {
-        params.append('validationStatus', filters.validationStatusFilter);
-      }
-      if (effRange?.min) {
-        params.append('minEffectiveness', effRange.min);
-      }
-      if (effRange?.max) {
-        params.append('maxEffectiveness', effRange.max);
-      }
-      if (responsibleFilter) {
-        params.append('ownerId', responsibleFilter);
-      }
 
       const response = await fetch(`/api/controls/with-details?${params}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to fetch controls: ${response.status} ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error("Failed to fetch controls");
       return response.json();
     },
     staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida

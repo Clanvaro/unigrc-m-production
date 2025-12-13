@@ -42,7 +42,7 @@ export class TwoTierCache {
     // Configuration
     private readonly L1_DEFAULT_TTL = 30 * 1000; // 30 seconds
     private readonly L2_DEFAULT_TTL = 5 * 60; // 5 minutes (in seconds for Redis)
-    private readonly L2_TIMEOUT = 200; // 200ms timeout for L2 cache (aumentado de 100ms para ser más tolerante con Redis lento)
+    private readonly L2_TIMEOUT = 100; // 100ms timeout for L2 cache
     private readonly CLEANUP_INTERVAL = 60 * 1000; // Clean L1 every minute
 
     private cleanupTimer: NodeJS.Timeout;
@@ -86,30 +86,6 @@ export class TwoTierCache {
             this.stats.l2Errors++;
             return null;
         }
-    }
-
-    /**
-     * Get value from L1 cache only (no L2) - for catalogs where L2 is too slow
-     * OPTIMIZED: Upstash in Virginia adds 100-600ms latency, which is worse than direct DB (13ms)
-     * Use this for catalogs that change infrequently (macroprocesos, processes, subprocesos, gerencias)
-     */
-    getCatalog(key: string): any {
-        const l1Entry = this.l1Cache.get(key);
-        if (l1Entry && !this.isExpired(l1Entry)) {
-            this.stats.l1Hits++;
-            return l1Entry.data;
-        }
-        this.stats.l1Misses++;
-        return null;
-    }
-
-    /**
-     * Set value in L1 cache only (no L2) - for catalogs
-     * OPTIMIZED: Skip L2 for catalogs to avoid Upstash latency (100-600ms)
-     */
-    setCatalog(key: string, data: any, ttlMs: number = 5 * 60 * 1000): void {
-        // Set in L1 only (synchronous, <1ms)
-        this.setL1(key, data, ttlMs);
     }
 
     /**
@@ -226,18 +202,10 @@ export class TwoTierCache {
 
     /**
      * Get value from L2 with timeout
-     * OPTIMIZED: Manejo silencioso de timeouts - no lanzar error, solo retornar null
      */
     private async getFromL2WithTimeout(key: string): Promise<any> {
-        const timeoutPromise = new Promise<null>((resolve) => {
-            setTimeout(() => {
-                this.stats.l2Timeouts++;
-                // Log solo si hay muchos timeouts (no spam en logs)
-                if (this.stats.l2Timeouts % 10 === 0) {
-                    console.warn(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms) - ${this.stats.l2Timeouts} total timeouts`);
-                }
-                resolve(null);
-            }, this.L2_TIMEOUT);
+        const timeoutPromise = new Promise<null>((_, reject) => {
+            setTimeout(() => reject(new Error('L2 cache timeout')), this.L2_TIMEOUT);
         });
 
         try {
@@ -247,16 +215,11 @@ export class TwoTierCache {
             ]);
             return result;
         } catch (error) {
-            // Redis error - log solo si es crítico, no timeout
-            if (!(error instanceof Error && error.message === 'L2 cache timeout')) {
-                this.stats.l2Errors++;
-                // Log solo errores no-timeout (timeouts ya se manejan arriba)
-                if (this.stats.l2Errors % 10 === 0) {
-                    console.warn(`[TwoTierCache] L2 error for key ${key}:`, error instanceof Error ? error.message : 'Unknown error');
-                }
+            if (error instanceof Error && error.message === 'L2 cache timeout') {
+                this.stats.l2Timeouts++;
+                console.warn(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms)`);
             }
-            // Retornar null silenciosamente - el sistema fallará a DB
-            return null;
+            throw error;
         }
     }
 

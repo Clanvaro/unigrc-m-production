@@ -474,24 +474,21 @@ export default function RiskEvents() {
     };
   }
   
-  // OPTIMIZED: Prefetch catalogs in parallel with page-data for faster initial load
-  // Fetch risks catalog immediately (needed for description column) - small and critical
+  // OPTIMIZED: Lazy load catalogs - only fetch when needed, don't block initial render
+  // Fetch risks catalog only (needed for description column) - load others on demand
   const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/risks-basic"],
     staleTime: 60 * 60 * 1000, // 60 min - increased cache since not critical
-    gcTime: 60 * 60 * 1000, // Keep in cache for 60 min
     refetchOnWindowFocus: false,
+    // Only fetch if we have events with riskIds
     enabled: true, // Always fetch as it's small and needed for display
-    // Prefetch immediately, don't wait for page-data
   });
   
   // OPTIMIZED: Lazy load other catalogs only when viewing event details or when process column is visible
-  // But prefetch them early if process column might be shown
   const needsProcessCatalogs = viewingEvent !== null || columnVisibility.process !== false;
   const { data: macroprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/macroprocesos/basic"],
     staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    gcTime: 60 * 60 * 1000, // Keep in cache for 60 min
     refetchOnWindowFocus: false,
     enabled: needsProcessCatalogs, // Lazy load
   });
@@ -499,7 +496,6 @@ export default function RiskEvents() {
   const { data: processesCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/processes/basic"],
     staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    gcTime: 60 * 60 * 1000, // Keep in cache for 60 min
     refetchOnWindowFocus: false,
     enabled: needsProcessCatalogs, // Lazy load
   });
@@ -507,7 +503,6 @@ export default function RiskEvents() {
   const { data: subprocesosCatalog = [] } = useQuery<CatalogItem[]>({
     queryKey: ["/api/subprocesos/basic"],
     staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    gcTime: 60 * 60 * 1000, // Keep in cache for 60 min
     refetchOnWindowFocus: false,
     enabled: needsProcessCatalogs, // Lazy load
   });
@@ -532,10 +527,8 @@ export default function RiskEvents() {
       if (!response.ok) throw new Error('Failed to fetch events');
       return response.json();
     },
-    staleTime: 60 * 60 * 1000, // 60 min - increased to match backend cache TTL
-    gcTime: 60 * 60 * 1000, // Keep in cache for 60 min
+    staleTime: 30 * 60 * 1000, // 30 min - increased from 30 seconds
     refetchOnWindowFocus: false, // Don't refetch when window regains focus
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
   
   // Transform lightweight events to include resolved names for display

@@ -8,7 +8,6 @@ import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import { authCache } from "./auth-cache";
-import { pool } from "./db";
 
 // Check if Replit Auth is properly configured
 const isReplitAuthConfigured = () => {
@@ -38,42 +37,43 @@ export function getSession() {
   let sessionStore: any = undefined;
 
   // Only use PostgreSQL session store if DATABASE_URL is configured
-  // OPTIMIZED: Use shared pool instead of creating separate connection
-  // This prevents "Connection terminated unexpectedly" errors and improves connection management
   if (databaseUrl) {
-    if (pool) {
-      const pgStore = connectPg(session);
+    const pgStore = connectPg(session);
 
-      console.log('[Session] Initializing PostgreSQL session store with shared pool');
-      console.log('[Session] Using shared database pool for better connection management');
+    // Remove channel_binding parameter if present (can cause issues with some drivers)
+    databaseUrl = databaseUrl.replace(/[&?]channel_binding=[^&]*/g, '');
 
-      sessionStore = new pgStore({
-        pool: pool, // Use shared pool instead of conString to prevent connection issues
-        createTableIfMissing: false,
-        ttl: sessionTtl,
-        tableName: "sessions",
-        pruneSessionInterval: 24 * 60 * 60, // Auto-cleanup expired sessions every 24 hours (in seconds)
-        errorLog: (err: Error) => {
-          console.error('[Session Store Error]', err.message);
-          console.error('[Session Store Error Stack]', err.stack);
-        },
-      });
-
-      // Log when store is ready
-      sessionStore.on?.('connect', () => {
-        console.log('[Session] PostgreSQL session store connected');
-      });
-
-      sessionStore.on?.('error', (err: Error) => {
-        console.error('[Session] Store error:', err.message);
-      });
-    } else {
-      // Pool not yet initialized - will use MemoryStore temporarily
-      // Pool will be available after database initialization (lazy init)
-      console.warn('[Session] Database pool not yet initialized - using in-memory session store temporarily');
-      console.warn('[Session] Sessions will be lost on server restart until pool is initialized');
-      // sessionStore will be undefined, which makes express-session use MemoryStore
+    // Ensure sslmode=require is present for Render PostgreSQL connections
+    const isRenderDb = databaseUrl.includes('render.com') || databaseUrl.includes('oregon-postgres.render.com');
+    if (isRenderDb && !databaseUrl.includes('sslmode=')) {
+      databaseUrl = databaseUrl.includes('?')
+        ? `${databaseUrl}&sslmode=require`
+        : `${databaseUrl}?sslmode=require`;
     }
+
+    console.log('[Session] Initializing PostgreSQL session store');
+    console.log('[Session] Database URL configured: Yes (hidden)');
+
+    sessionStore = new pgStore({
+      conString: databaseUrl,
+      createTableIfMissing: false,
+      ttl: sessionTtl,
+      tableName: "sessions",
+      pruneSessionInterval: 24 * 60 * 60, // Auto-cleanup expired sessions every 24 hours (in seconds)
+      errorLog: (err: Error) => {
+        console.error('[Session Store Error]', err.message);
+        console.error('[Session Store Error Stack]', err.stack);
+      },
+    });
+
+    // Log when store is ready
+    sessionStore.on?.('connect', () => {
+      console.log('[Session] PostgreSQL session store connected');
+    });
+
+    sessionStore.on?.('error', (err: Error) => {
+      console.error('[Session] Store error:', err.message);
+    });
   } else {
     console.log('[Session] No DATABASE_URL configured - using in-memory session store');
     console.warn('[Session] ⚠️  In-memory sessions will be lost on server restart');
@@ -218,26 +218,8 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  // OPTIMIZED: Simple in-memory cache for deserialized users (TTL: 30s)
-  // This reduces redundant deserializations for the same user in short time windows
-  const userDeserializeCache = new Map<string, { user: Express.User; timestamp: number }>();
-  const DESERIALIZE_CACHE_TTL = 30 * 1000; // 30 seconds
-
   passport.deserializeUser(async (sessionData: any, cb) => {
-    const deserializeStart = Date.now();
     try {
-      const userId = sessionData?.id;
-      
-      // Check cache first (only if we have a valid user ID)
-      if (userId) {
-        const cached = userDeserializeCache.get(userId);
-        if (cached && Date.now() - cached.timestamp < DESERIALIZE_CACHE_TTL) {
-          // Cache hit - return immediately
-          cb(null, cached.user);
-          return;
-        }
-      }
-
       const user = {
         id: sessionData.id,
         email: sessionData.email || '',
@@ -245,31 +227,10 @@ export async function setupAuth(app: Express) {
         isPlatformAdmin: sessionData.isPlatformAdmin === true,
         permissions: [] as string[]
       };
-
-      // Cache the deserialized user
-      if (userId) {
-        userDeserializeCache.set(userId, { user: user as Express.User, timestamp: Date.now() });
-        // Cleanup old entries periodically (keep cache size reasonable)
-        if (userDeserializeCache.size > 1000) {
-          const now = Date.now();
-          for (const [key, value] of userDeserializeCache.entries()) {
-            if (now - value.timestamp > DESERIALIZE_CACHE_TTL) {
-              userDeserializeCache.delete(key);
-            }
-          }
-        }
-      }
-
-      // Only log if deserialization is slow (>10ms) or in development
-      const duration = Date.now() - deserializeStart;
-      if (duration > 10 || process.env.NODE_ENV !== 'production') {
-        console.log(`[Passport] Deserializing user: ${user.id} (${duration}ms)`);
-      }
-
+      console.log('[Passport] Deserializing user:', user.id);
       cb(null, user as Express.User);
     } catch (err) {
-      const duration = Date.now() - deserializeStart;
-      console.error(`[Passport] Deserialize error after ${duration}ms:`, err);
+      console.error('[Passport] Deserialize error:', err);
       cb(err as Error, null);
     }
   });

@@ -78,65 +78,24 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
   const [useGlobalDocumentation, setUseGlobalDocumentation] = useState<boolean>(false);
   const lastToastTimeRef = useRef<number>(0);
 
-  // OPTIMIZED: Usar endpoints básicos para catálogos (más rápidos, menos datos)
-  // Estos endpoints ya están optimizados y en cache
-  const { data: macroprocesosBasic = [] } = useQuery<any[]>({
-    queryKey: ["/api/macroprocesos/basic"],
-    staleTime: 10 * 60 * 1000, // 10 minutos - catálogos cambian raramente
-    gcTime: 30 * 60 * 1000, // 30 minutos en cache
-    refetchOnWindowFocus: false,
-    retry: false, // No reintentar si falla, usar fallback
-  });
-  
-  const { data: macroprocesosFull = [] } = useQuery<any[]>({
+  const { data: macroprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    enabled: macroprocesosBasic.length === 0, // Solo cargar si básico no tiene datos
   });
-  const macroprocesos = macroprocesosBasic.length > 0 ? macroprocesosBasic : macroprocesosFull;
 
-  const { data: processesBasic = [] } = useQuery<any[]>({
-    queryKey: ["/api/processes/basic"],
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
-  
-  const { data: processesFull = [] } = useQuery<any[]>({
+  const { data: processes = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    enabled: processesBasic.length === 0,
   });
-  const processes = processesBasic.length > 0 ? processesBasic : processesFull;
 
-  const { data: subprocesosBasic = [] } = useQuery<any[]>({
-    queryKey: ["/api/subprocesos/basic"],
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
-  
-  const { data: subprocesosFull = [] } = useQuery<any[]>({
+  const { data: subprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
-    staleTime: 10 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    enabled: subprocesosBasic.length === 0,
   });
-  const subprocesos = subprocesosBasic.length > 0 ? subprocesosBasic : subprocesosFull;
 
   // Cargar criterios dinámicos de probabilidad
   const { data: probabilityCriteria = [] } = useQuery<DynamicCriterion[]>({
     queryKey: ["/api/probability-criteria/active"],
   });
 
-  // OPTIMIZED: Cargar asociaciones existentes con cache aumentado y prefetch
+  // Cargar asociaciones existentes si estamos editando un riesgo
   const { 
     data: existingRiskProcesses = [], 
     isSuccess: riskProcessesLoaded,
@@ -145,10 +104,8 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
   } = useQuery<any[]>({
     queryKey: queryKeys.risks.processes(risk?.id),
     enabled: !!risk?.id,
-    staleTime: 5 * 60 * 1000, // 5 minutos - asociaciones raramente cambian
-    gcTime: 10 * 60 * 1000, // 10 minutos en cache
+    staleTime: 30000, // 30 segundos - reutilizar datos recientes
     refetchOnWindowFocus: false, // No refetch al cambiar de ventana
-    refetchOnMount: false, // No refetch si ya tenemos datos en cache
   });
 
 

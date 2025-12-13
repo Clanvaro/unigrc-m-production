@@ -5128,9 +5128,7 @@ export const processOwners = pgTable("process_owners", {
   index("idx_process_owners_email").on(table.email),
   index("idx_process_owners_active").on(table.isActive),
   index("idx_process_owners_company").on(table.company),
-  // Performance: Composite index for common query pattern (active + ordering by name)
-  // This optimizes the WHERE isActive = true ORDER BY name query used in getProcessOwners()
-  index("idx_process_owners_active_name").on(table.isActive, table.name),
+  // Performance: Composite index for common query pattern (active + ordering)
   // index("idx_process_owners_company_id").on(table.companyId) // TEMPORARILY COMMENTED OUT
 ]);
 

@@ -31,11 +31,11 @@ import {
   Trash2,
   Calendar,
   Clock,
+  Award,
   Mail,
   Phone
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
 
 export default function TeamMembersPage() {
   const [searchTerm, setSearchTerm] = useState("");
@@ -97,7 +97,18 @@ export default function TeamMembersPage() {
   // Mutación para agregar miembro al equipo
   const addMemberMutation = useMutation({
     mutationFn: async ({ userId, roleId }: { userId: string; roleId: string }) => {
-      return await apiRequest("/api/user-roles", "POST", { userId, roleId });
+      const response = await fetch("/api/user-roles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, roleId }),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Error al agregar miembro");
+      }
+      
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
@@ -159,6 +170,7 @@ export default function TeamMembersPage() {
         roleName: role?.name || "Sin rol",
         roleLevel: getRoleLevelByName(role?.name || ""),
         status: user.isActive ? "active" : "inactive",
+        certifications: ["CPA"], // Placeholder
         totalHours: 160,
         availableHours: 120,
         allocatedHours: 40,
@@ -346,6 +358,20 @@ export default function TeamMembersPage() {
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2">
+              <Award className="w-4 h-4 text-muted-foreground" />
+              <div>
+                <p className="text-sm text-muted-foreground">Certificaciones</p>
+                <p className="text-2xl font-bold">
+                  {teamMembers.reduce((sum, member) => sum + member.certifications.length, 0)}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2">
               <Calendar className="w-4 h-4 text-muted-foreground" />
               <div>
                 <p className="text-sm text-muted-foreground">Activos</p>
@@ -390,6 +416,7 @@ export default function TeamMembersPage() {
                   <ResponsiveTableHead variant="compact" priority="high">Rol</ResponsiveTableHead>
                   <ResponsiveTableHead variant="compact" priority="medium">Departamento</ResponsiveTableHead>
                   <ResponsiveTableHead variant="compact" priority="medium">Horas</ResponsiveTableHead>
+                  <ResponsiveTableHead variant="compact" priority="low">Certificaciones</ResponsiveTableHead>
                   <ResponsiveTableHead variant="compact" priority="high">Estado</ResponsiveTableHead>
                   <ResponsiveTableHead variant="compact" priority="high">Acciones</ResponsiveTableHead>
                 </ResponsiveTableRow>
@@ -421,6 +448,15 @@ export default function TeamMembersPage() {
                       <div className="text-sm min-w-0">
                         <p><strong>{member.availableHours}</strong> disponibles</p>
                         <p className="text-muted-foreground">{member.allocatedHours} asignadas</p>
+                      </div>
+                    </ResponsiveTableCell>
+                    <ResponsiveTableCell variant="compact" priority="low" label="Certificaciones">
+                      <div className="flex flex-wrap gap-1 min-w-0">
+                        {member.certifications.map((cert, index) => (
+                          <Badge key={index} variant="outline" className="text-xs">
+                            {cert}
+                          </Badge>
+                        ))}
                       </div>
                     </ResponsiveTableCell>
                     <ResponsiveTableCell variant="compact" priority="high" label="Estado">

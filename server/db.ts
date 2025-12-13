@@ -142,11 +142,9 @@ if (databaseUrl) {
   let poolMax: number;
   if (isCloudSql) {
     // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
-    // Default: Conservative 10 connections (reduced from 20 for better resource management)
-    // With concurrency=40 and max-instances=10, max theoretical = 400 concurrent requests
-    // Pool of 10 connections = 2.5% of max theoretical (very conservative, prevents pool exhaustion)
+    // Default: Conservative 10 connections (adjust based on Cloud SQL instance size)
     // Review Cloud SQL logs to detect too many connections and adjust accordingly
-    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '10', 10);
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '20', 10);
     poolMax = cloudSqlMax;
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
@@ -172,10 +170,9 @@ if (databaseUrl) {
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
     // OPTIMIZED: Allow connections to be reused many times before recycling
-    // Cloud SQL: Lower maxUses (50) to recycle stale connections faster and reduce latency spikes
-    // Other DBs: Higher maxUses (100) to reduce connection churn
+    // Higher maxUses reduces connection churn and improves performance with slow databases
     // Connections will be recycled naturally after many uses, preventing stale connections
-    maxUses: isCloudSql ? 50 : 100, // Cloud SQL: 50 uses (reciclar más rápido), Others: 100 uses
+    maxUses: 100, // Same for all DB types - allows connections to serve many queries before recycling
     // Application name for better monitoring in Cloud SQL
     application_name: 'unigrc-backend',
     ssl: sslConfig,
@@ -188,11 +185,10 @@ if (databaseUrl) {
   db = drizzle(pool, { schema, logger: true });
 
   const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
-  const actualMaxUses = isCloudSql ? 50 : 100;
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=${actualMaxUses}, env=${isProduction ? 'production' : 'development'}`);
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=100, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
     const connectionType = isCloudSqlProxy ? 'Unix socket' : 'IP pública';
-    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=${actualMaxUses} (connections recycled after ${actualMaxUses} uses), connectionType=${connectionType}`);
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}`);
     if (!isCloudSqlProxy) {
       console.warn(`⚠️ RECOMMENDATION: Switch to Unix socket connection for Cloud SQL to reduce latency from 100-1000ms to <10ms`);
     }
@@ -293,31 +289,8 @@ if (pool) {
     });
   });
 
-  // OPTIMIZED: Track connection creation to detect leaks
-  // Only log if many connections are created in a short time (potential leak)
-  let connectionCreationTimes: number[] = [];
-  const CONNECTION_LEAK_THRESHOLD = 5; // Alert if 5+ connections in 10 seconds
-  const CONNECTION_LEAK_WINDOW = 10000; // 10 seconds window
-
   pool.on('connect', () => {
-    const now = Date.now();
-    connectionCreationTimes.push(now);
-    
-    // Clean old entries (older than window)
-    connectionCreationTimes = connectionCreationTimes.filter(time => now - time < CONNECTION_LEAK_WINDOW);
-    
-    // Only log if it's unusual (many connections in short time) or first few connections
-    const recentConnections = connectionCreationTimes.length;
-    const metrics = getPoolMetrics();
-    
-    if (recentConnections >= CONNECTION_LEAK_THRESHOLD) {
-      // Potential leak - log with pool metrics
-      console.warn(`⚠️ [POOL LEAK?] ${recentConnections} new connections in ${CONNECTION_LEAK_WINDOW/1000}s. Pool: total=${metrics?.totalCount}/${metrics?.maxConnections}, idle=${metrics?.idleCount}, active=${(metrics?.totalCount || 0) - (metrics?.idleCount || 0)}`);
-    } else if (recentConnections <= 2) {
-      // Normal - first few connections, log normally
-      console.log(`✅ New database connection established (${recentConnections} in last ${CONNECTION_LEAK_WINDOW/1000}s)`);
-    }
-    // Otherwise, silent (normal connection creation)
+    console.log('✅ New database connection established');
   });
 
   // Log slow queries for debugging (Nov 23, 2025)
@@ -949,51 +922,15 @@ function startPoolWarming() {
           await pingPromise;
           const pingDuration = Date.now() - pingStart;
 
-          // DIAGNÓSTICO MEJORADO: Log slow pings with detailed pool metrics
+          // Log slow pings for monitoring (but don't close connections aggressively)
           if (pingDuration > 1000) {
             const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            const currentPoolMetrics = getPoolMetrics();
-            const activeConnections = (currentPoolMetrics?.totalCount || 0) - (currentPoolMetrics?.idleCount || 0);
-            const poolUtilizationPct = currentPoolMetrics 
-              ? Math.round((activeConnections / currentPoolMetrics.maxConnections) * 100)
-              : 0;
-            
-            // Determinar causa probable
-            let possibleCause = 'Unknown';
-            if (currentPoolMetrics?.waitingCount > 0) {
-              possibleCause = `Pool saturated - ${currentPoolMetrics.waitingCount} queries waiting for connections`;
-            } else if (poolUtilizationPct > 80) {
-              possibleCause = `Pool highly utilized (${poolUtilizationPct}%) - may need more connections or optimize slow queries`;
-            } else if (poolUtilizationPct > 50) {
-              possibleCause = `Pool moderately utilized (${poolUtilizationPct}%) - possible Cloud SQL load or stale connection`;
-            } else {
-              possibleCause = 'Possible Cloud SQL load, network latency, or stale connection';
-            }
-            
-            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType})`, {
-              poolTotal: currentPoolMetrics?.totalCount || 0,
-              poolIdle: currentPoolMetrics?.idleCount || 0,
-              poolActive: activeConnections,
-              poolMax: currentPoolMetrics?.maxConnections || 0,
-              poolWaiting: currentPoolMetrics?.waitingCount || 0,
-              poolUtilization: `${poolUtilizationPct}%`,
-              possibleCause: possibleCause,
-              recommendation: currentPoolMetrics?.waitingCount > 0 
-                ? 'Increase DB_POOL_MAX or optimize slow queries'
-                : poolUtilizationPct > 80
-                  ? 'Consider increasing DB_POOL_MAX or check Cloud SQL metrics'
-                  : 'Check Cloud SQL CPU/I/O metrics and query performance'
-            });
-            
-            // Alerta crítica si pool está saturado durante ping
-            if (poolUtilizationPct > 0.9 && currentPoolMetrics && currentPoolMetrics.waitingCount > 0) {
-              console.error(`🚨 CRITICAL: Pool saturated during ping - ${currentPoolMetrics.waitingCount} queries waiting, ${poolUtilizationPct}% utilized. Immediate action required.`);
-            }
+            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}) - connection will recycle naturally via maxUses`);
           }
           
           // OPTIMIZED: Let connections recycle naturally via maxUses instead of closing aggressively
           // Slow pings don't necessarily mean the connection is bad - it might just be network latency
-          // maxUses ensures connections are recycled after many uses anyway
+          // maxUses=100 ensures connections are recycled after many uses anyway
           // Only log for monitoring, don't force close or warm pool unnecessarily
         } catch (error: any) {
           // Limpiar timeout si aún existe
