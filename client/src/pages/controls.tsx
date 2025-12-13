@@ -290,7 +290,10 @@ export default function Controls() {
       }
 
       const response = await fetch(`/api/controls/with-details?${params}`);
-      if (!response.ok) throw new Error("Failed to fetch controls");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to fetch controls: ${response.status} ${response.statusText}`);
+      }
       return response.json();
     },
     staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida

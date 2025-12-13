@@ -9039,7 +9039,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             code: row.code,
             name: row.name,
             // OPTIMIZED: Large text fields excluded from list view (null in list, available in detail endpoint)
-            description: row.description || null,  // Will be null in list view, full value in detail
+            // These fields are set to NULL in SQL, so they will be null here
+            description: row.description ?? null,  // Will be null in list view, full value in detail
             type: row.type,
             frequency: row.frequency,
             effectiveness: maxEffectivenessLimit < 100 
@@ -9051,12 +9052,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             validationStatus: row.validation_status,
             validatedAt: row.validated_at,
             validatedBy: row.validated_by,
-            validationComments: row.validation_comments || null,  // Will be null in list view, full value in detail
+            validationComments: row.validation_comments ?? null,  // Will be null in list view, full value in detail
             createdBy: row.created_by,
             updatedBy: row.updated_by,
             deletedBy: row.deleted_by,
             deletedAt: row.deleted_at,
-            deletionReason: row.deletion_reason || null,  // Will be null in list view, full value in detail
+            deletionReason: row.deletion_reason ?? null,  // Will be null in list view, full value in detail
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             associatedRisksCount: row.associated_risks_count || 0,
