@@ -74,27 +74,31 @@ function ProcessMapContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: macroprocesos = [], isLoading: isLoadingMacroprocesos } = useQuery<MacroprocesoWithRisks[]>({
-    queryKey: ["/api/macroprocesos"],
-    staleTime: 60000,
+  // OPTIMIZED: Use consolidated endpoint instead of 5 separate API calls
+  // Benefits: Only 1 network trip, 1 cache usage, 1 user deserialization
+  const { data: processStructure, isLoading: isLoadingProcessStructure } = useQuery<{
+    macroprocesos: Macroproceso[];
+    processes: Process[];
+    subprocesos: Subproceso[];
+    gerencias: Gerencia[];
+    processOwners: ProcessOwner[];
+  }>({
+    queryKey: ["/api/catalogs/process-structure"],
+    staleTime: 120000, // 2 minutes - catalog data changes infrequently
+    gcTime: 10 * 60 * 1000, // 10 minutes in cache
+    refetchOnWindowFocus: false,
   });
 
-  const { data: basicProcesses = [] } = useQuery<ProcessWithRisks[]>({
-    queryKey: ["/api/processes/basic"],
-    staleTime: 60000,
-  });
+  // Extract data from consolidated response
+  const macroprocesos = (processStructure?.macroprocesos || []) as MacroprocesoWithRisks[];
+  const basicProcesses = (processStructure?.processes || []) as ProcessWithRisks[];
+  const processes = (processStructure?.processes || []) as ProcessWithRisks[];
+  const subprocesos = (processStructure?.subprocesos || []) as SubprocesoWithRisks[];
+  const processOwners = processStructure?.processOwners || [];
+  const gerencias = processStructure?.gerencias || [];
+  const isLoadingMacroprocesos = isLoadingProcessStructure;
 
-  const { data: processes = [] } = useQuery<ProcessWithRisks[]>({
-    queryKey: ["/api/processes"],
-    staleTime: 60000,
-    enabled: false,
-  });
-
-  const { data: subprocesos = [] } = useQuery<SubprocesoWithRisks[]>({
-    queryKey: ["/api/subprocesos"],
-    staleTime: 60000,
-  });
-
+  // Keep separate queries for data not in consolidated endpoint
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
     staleTime: 60000,
@@ -106,16 +110,6 @@ function ProcessMapContent() {
     queryKey: ["/api/process-validations"],
     staleTime: 60000,
     enabled: false,
-  });
-
-  const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
-    queryKey: ["/api/process-owners"],
-    staleTime: 120000,
-  });
-
-  const { data: gerencias = [] } = useQuery<Gerencia[]>({
-    queryKey: ["/api/gerencias"],
-    staleTime: 120000,
   });
 
   const { data: processMapValidatedRisks } = useQuery<{

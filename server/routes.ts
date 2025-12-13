@@ -24059,6 +24059,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============= CONSOLIDATED CATALOGS ENDPOINT =============
+  
+  /**
+   * Consolidated endpoint for process structure catalogs
+   * OPTIMIZED: Single request instead of 5-6 separate API calls
+   * Benefits:
+   * - Only 1 network trip (vs 5-6)
+   * - Only 1 TwoTierCache usage (vs 5-6)
+   * - Only 1 user deserialization (vs 5-6)
+   * - Parallel DB queries (more efficient)
+   * - Better cache hit rate
+   */
+  app.get("/api/catalogs/process-structure", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
+    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
+    
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/catalogs/process-structure START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
+    
+    try {
+      const cacheKey = 'catalogs:process-structure';
+      
+      // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+      const cached = twoTierCache.getCatalog(cacheKey);
+      if (cached) {
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE HIT] /api/catalogs/process-structure in ${duration}ms`);
+        return res.json(cached);
+      }
+      
+      // Cache miss - fetch all catalogs in parallel (more efficient than separate endpoints)
+      const queryStartTime = Date.now();
+      
+      const [macroprocesos, processes, subprocesos, gerencias, processOwners] = await Promise.race([
+        Promise.all([
+          Promise.race([
+            storage.getMacroprocesos(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`getMacroprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+            )
+          ]),
+          Promise.race([
+            storage.getProcesses(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`getProcesses timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+            )
+          ]),
+          Promise.race([
+            storage.getSubprocesos(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`getSubprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+            )
+          ]),
+          Promise.race([
+            storage.getGerencias(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`getGerencias timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+            )
+          ]),
+          Promise.race([
+            storage.getProcessOwners(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`getProcessOwners timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+            )
+          ])
+        ]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - startTime;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
+      ]);
+      
+      const queryDuration = Date.now() - queryStartTime;
+      
+      // Log warning if query is slow
+      if (queryDuration > 2000) {
+        console.warn(`[PERF] /api/catalogs/process-structure query took ${queryDuration}ms (threshold: 2000ms)`);
+      }
+      
+      const result = {
+        macroprocesos,
+        processes,
+        subprocesos,
+        gerencias,
+        processOwners,
+        _meta: {
+          fetchedAt: new Date().toISOString(),
+          duration: queryDuration
+        }
+      };
+      
+      // Cache in L1 only (5 min TTL - catalog data changes infrequently)
+      twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
+      
+      const totalDuration = Date.now() - startTime;
+      console.log(`[CACHE MISS] /api/catalogs/process-structure computed in ${totalDuration}ms (query: ${queryDuration}ms)`);
+      
+      res.json(result);
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/catalogs/process-structure failed after ${duration}ms:`, error);
+      
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Query timeout'))) {
+        return res.status(504).json({
+          message: `Request timeout. The endpoint took too long to execute (${duration}ms).`,
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
+      }
+      
+      res.status(500).json({
+        message: "Failed to fetch process structure catalogs",
+        error: error instanceof Error ? error.message : String(error),
+        duration: `${duration}ms`
+      });
+    }
+  });
+
   // ============= PROCESS OWNERS MANAGEMENT =============
 
   // Get all process owners
