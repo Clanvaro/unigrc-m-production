@@ -2,7 +2,7 @@
 
 ## Problema Identificado
 
-Los endpoints `/api/risks` y `/api/users` estaban tardando aproximadamente **19-20 segundos** en responder, muy por encima del umbral de 3 segundos configurado en el middleware de performance.
+Los endpoints `/api/risks`, `/api/users` y `/api/controls/with-details` estaban tardando aproximadamente **19-20 segundos** en responder, causando errores **504 Gateway Timeout** en el frontend, muy por encima del umbral de 3 segundos configurado en el middleware de performance.
 
 ### Síntomas
 - Errores `504 Gateway Timeout` en el frontend
@@ -19,6 +19,11 @@ Los endpoints `/api/risks` y `/api/users` estaban tardando aproximadamente **19-
 ### Endpoint `/api/users`
 1. **Falta de índice en `created_at`**: El `ORDER BY created_at` no tenía un índice dedicado.
 2. **Consulta sin límite**: Aunque el caché ayuda, en caso de cache miss, la consulta traía todos los usuarios sin límite.
+
+### Endpoint `/api/controls/with-details`
+1. **Consultas SQL complejas**: La consulta usa CTEs (Common Table Expressions) con múltiples JOINs que no estaban optimizados.
+2. **Falta de índices**: No había índices optimizados para búsquedas de texto, filtros por efectividad, o JOINs con `control_owners`.
+3. **Filtros múltiples**: La consulta filtra por múltiples campos simultáneamente sin índices compuestos adecuados.
 
 ## Soluciones Implementadas
 
@@ -40,6 +45,13 @@ Se creó el archivo `migrations/optimize-slow-endpoints.sql` con los siguientes 
 #### Para `/api/users`:
 - **`idx_users_created_at`**: Índice para ordenamiento por fecha de creación
 - **`idx_users_active_created`**: Índice compuesto para usuarios activos ordenados
+
+#### Para `/api/controls/with-details`:
+- **`idx_controls_pagination_optimized`**: Índice compuesto para paginación (status, code)
+- **`idx_controls_search_text`**: Índice GIN para búsqueda de texto completo
+- **`idx_controls_effectiveness`**: Índice para filtros de efectividad
+- **`idx_controls_filters`**: Índice compuesto para filtros comunes (type, frequency, validationStatus)
+- **`idx_control_owners_active`**: Índice para JOINs optimizados con control_owners
 
 ### 2. Optimización del Código
 
@@ -105,6 +117,7 @@ Después de aplicar estas optimizaciones, deberías ver:
 1. **Tiempos de respuesta mejorados**:
    - `/api/risks`: De ~19 segundos a **< 500ms** (primera consulta) y **< 50ms** (con caché)
    - `/api/users`: De ~19 segundos a **< 200ms** (primera consulta) y **< 50ms** (con caché)
+   - `/api/controls/with-details`: De timeouts 504 a **< 1000ms** (primera consulta) y **< 100ms** (con caché)
 
 2. **Menos errores 504**: El frontend debería recibir respuestas dentro del timeout
 

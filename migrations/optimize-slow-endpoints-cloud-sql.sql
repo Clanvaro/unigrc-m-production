@@ -1,5 +1,6 @@
 -- Optimización de endpoints lentos: /api/risks y /api/users
--- Ejecutar este script para mejorar el rendimiento de estos endpoints
+-- Versión para ejecutar en Google Cloud SQL Web UI
+-- NOTA: Ejecuta cada sección por separado para evitar problemas de transacciones
 
 -- ============================================================
 -- OPTIMIZACIÓN PARA /api/risks (GET /api/risks)
@@ -8,13 +9,14 @@
 -- Índice compuesto para optimizar getRisksPaginated
 -- Cubre: filtrado por deletedAt, status, y ordenamiento por createdAt
 -- Esto mejora significativamente las consultas COUNT(*) y SELECT con ORDER BY
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_pagination_optimized 
+CREATE INDEX IF NOT EXISTS idx_risks_pagination_optimized 
 ON risks(deleted_at, status, created_at DESC) 
 WHERE deleted_at IS NULL AND status != 'deleted';
 
 -- Índice para búsquedas de texto (name, code, description)
 -- Usado cuando hay un filtro de búsqueda
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_search_text 
+-- NOTA: Este índice usa GIN para búsqueda de texto completo
+CREATE INDEX IF NOT EXISTS idx_risks_search_text 
 ON risks USING gin(
   to_tsvector('spanish', 
     coalesce(name, '') || ' ' || 
@@ -26,7 +28,7 @@ WHERE deleted_at IS NULL;
 
 -- Índice compuesto para filtros de probabilidad e impacto
 -- Usado cuando hay filtros minProbability, maxProbability, minImpact, maxImpact
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_risks_probability_impact 
+CREATE INDEX IF NOT EXISTS idx_risks_probability_impact 
 ON risks(probability, impact) 
 WHERE deleted_at IS NULL;
 
@@ -35,12 +37,12 @@ WHERE deleted_at IS NULL;
 -- ============================================================
 
 -- Índice para ordenamiento por createdAt (usado en ORDER BY)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_created_at 
+CREATE INDEX IF NOT EXISTS idx_users_created_at 
 ON users(created_at DESC);
 
 -- Índice compuesto para usuarios activos ordenados por fecha de creación
 -- Útil si en el futuro se filtra por usuarios activos
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_active_created 
+CREATE INDEX IF NOT EXISTS idx_users_active_created 
 ON users(is_active, created_at DESC) 
 WHERE is_active = true;
 
@@ -59,13 +61,13 @@ VACUUM ANALYZE users;
 -- Índice compuesto para optimizar getControlsPaginatedWithDetails
 -- Cubre: filtrado por status (<> 'deleted'), ordenamiento por code
 -- Esto mejora significativamente las consultas con paginación
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_controls_pagination_optimized 
+CREATE INDEX IF NOT EXISTS idx_controls_pagination_optimized 
 ON controls(status, code) 
 WHERE status <> 'deleted';
 
 -- Índice para búsquedas de texto (name, code, description)
 -- Usado cuando hay un filtro de búsqueda
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_controls_search_text 
+CREATE INDEX IF NOT EXISTS idx_controls_search_text 
 ON controls USING gin(
   to_tsvector('spanish', 
     coalesce(name, '') || ' ' || 
@@ -77,17 +79,17 @@ WHERE status <> 'deleted';
 
 -- Índice compuesto para filtros de efectividad
 -- Usado cuando hay filtros minEffectiveness, maxEffectiveness
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_controls_effectiveness 
+CREATE INDEX IF NOT EXISTS idx_controls_effectiveness 
 ON controls(effectiveness) 
 WHERE status <> 'deleted';
 
 -- Índice compuesto para filtros comunes (type, frequency, validationStatus)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_controls_filters 
+CREATE INDEX IF NOT EXISTS idx_controls_filters 
 ON controls(type, frequency, validation_status) 
 WHERE status <> 'deleted';
 
 -- Índice para control_owners (usado en JOINs con filtro por owner)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_control_owners_active 
+CREATE INDEX IF NOT EXISTS idx_control_owners_active 
 ON control_owners(control_id, process_owner_id, is_active) 
 WHERE is_active = true;
 

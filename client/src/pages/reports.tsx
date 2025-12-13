@@ -72,42 +72,9 @@ export default function Reports() {
   const controls: Control[] = Array.isArray(controlsResponse?.data) ? controlsResponse.data : [];
   const actionPlans: Action[] = Array.isArray(actionPlansData) ? actionPlansData : [];
 
-  // Show loading state only if critical data is loading
-  if (risksLoading || controlsLoading || actionPlansLoading) {
-    return (
-      <div className="p-6">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <p className="text-lg font-medium">Cargando reportes...</p>
-            <p className="text-sm text-muted-foreground mt-2">Por favor espera mientras se cargan los datos</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show error state with retry option
-  if (risksError || controlsError || actionPlansError || statsError) {
-    return (
-      <div className="p-6">
-        <div className="flex flex-col items-center justify-center h-64 space-y-4">
-          <div className="text-center">
-            <h3 className="text-lg font-semibold text-destructive mb-2">Error al cargar datos</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Algunos datos no pudieron cargarse. Por favor intenta recargar la página.
-            </p>
-            <Button 
-              onClick={() => window.location.reload()} 
-              variant="default"
-            >
-              Recargar página
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  // CRITICAL FIX: All hooks (useMemo) must be called BEFORE any conditional returns
+  // This prevents React error #310 (Rendered more hooks than during the previous render)
+  
   // Create lookup maps for process names - memoized to prevent React #310
   const macroprocesosMap = useMemo(() => {
     return new Map(
@@ -134,7 +101,20 @@ export default function Reports() {
   }, [subprocesos]);
 
   // FIXED: Risk distribution data for charts - memoized for performance
-  // React error #310 fix: Include risks array directly in dependencies
+  // React error #310 fix: Create stable hash of risk values to track changes
+  const riskValuesHash = useMemo(() => {
+    if (!Array.isArray(risks) || risks.length === 0) return '';
+    try {
+      // Create a stable hash from risk values that matter for distribution
+      return risks
+        .map(r => r?.inherentRisk || 0)
+        .sort((a, b) => a - b)
+        .join(',');
+    } catch {
+      return '';
+    }
+  }, [risks]);
+
   const riskDistributionData = useMemo(() => {
     if (!Array.isArray(risks) || risks.length === 0) return [];
     try {
@@ -154,17 +134,36 @@ export default function Reports() {
       console.error("Error calculating risk distribution:", error);
       return [];
     }
-  }, [risks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riskValuesHash]); // Use only stable hash - risks is accessed from closure
 
   // Risks by process data - Group by macroproceso, process, or subproceso
   // Map IDs to names using catalogs - memoized for performance
-  // React error #310 fix: Include all dependencies directly
+  // React error #310 fix: Create stable hash of process IDs to track changes
+  const processIdsHash = useMemo(() => {
+    if (!Array.isArray(risks)) return '';
+    try {
+      return risks
+        .map((r: any) => r?.macroprocesoId || r?.processId || r?.subprocesoId || '')
+        .filter(Boolean)
+        .sort()
+        .join(',');
+    } catch {
+      return '';
+    }
+  }, [risks]);
+
+  const catalogHash = useMemo(() => {
+    return `${macroprocesos.length}-${processes.length}-${subprocesos.length}`;
+  }, [macroprocesos.length, processes.length, subprocesos.length]);
+
   const risksByProcessData = useMemo(() => {
     if (!Array.isArray(risks)) return [];
     
     try {
       const processCounts = new Map<string, { name: string; count: number }>();
       
+      // Access risks, macroprocesosMap, processesMap, subprocesosMap from closure
       risks.forEach((risk: any) => {
         // Check macroproceso level - use macroproceso object if available, otherwise map from ID
         if (risk?.macroproceso) {
@@ -217,10 +216,23 @@ export default function Reports() {
       console.error("Error calculating risks by process:", error);
       return [];
     }
-  }, [risks, macroprocesosMap, processesMap, subprocesosMap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processIdsHash, catalogHash]); // Use only stable hashes - arrays and Maps accessed from closure
 
   // FIXED: Control effectiveness data - memoized for performance
-  // React error #310 fix: Include controls array directly in dependencies
+  // React error #310 fix: Create stable hash of effectiveness values
+  const controlEffectivenessHash = useMemo(() => {
+    if (!Array.isArray(controls) || controls.length === 0) return '';
+    try {
+      return controls
+        .map(c => c?.effectiveness || 0)
+        .sort((a, b) => a - b)
+        .join(',');
+    } catch {
+      return '';
+    }
+  }, [controls]);
+
   const controlEffectivenessData = useMemo(() => {
     if (!Array.isArray(controls) || controls.length === 0) return [];
     try {
@@ -236,10 +248,23 @@ export default function Reports() {
       console.error("Error calculating control effectiveness:", error);
       return [];
     }
-  }, [controls]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlEffectivenessHash]); // Use only stable hash - controls accessed from closure
 
   // FIXED: Action plan status data - memoized for performance
-  // React error #310 fix: Include actionPlans array directly in dependencies
+  // React error #310 fix: Create stable hash of status and due dates
+  const actionPlanStatusHash = useMemo(() => {
+    if (!Array.isArray(actionPlans) || actionPlans.length === 0) return '';
+    try {
+      return actionPlans
+        .map(ap => `${ap?.status || 'unknown'}-${ap?.dueDate || 'no-date'}`)
+        .sort()
+        .join(',');
+    } catch {
+      return '';
+    }
+  }, [actionPlans]);
+
   const actionPlanStatusData = useMemo(() => {
     if (!Array.isArray(actionPlans) || actionPlans.length === 0) return [];
     try {
@@ -262,7 +287,45 @@ export default function Reports() {
       console.error("Error calculating action plan status:", error);
       return [];
     }
-  }, [actionPlans]);
+  }, [actionPlans, actionPlanStatusHash]); // Use stable hash as dependency
+
+  // Show loading state only if critical data is loading
+  // MOVED AFTER ALL HOOKS to prevent React error #310
+  if (risksLoading || controlsLoading || actionPlansLoading) {
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="text-center">
+            <p className="text-lg font-medium">Cargando reportes...</p>
+            <p className="text-sm text-muted-foreground mt-2">Por favor espera mientras se cargan los datos</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state with retry option
+  // MOVED AFTER ALL HOOKS to prevent React error #310
+  if (risksError || controlsError || actionPlansError || statsError) {
+    return (
+      <div className="p-6">
+        <div className="flex flex-col items-center justify-center h-64 space-y-4">
+          <div className="text-center">
+            <h3 className="text-lg font-semibold text-destructive mb-2">Error al cargar datos</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Algunos datos no pudieron cargarse. Por favor intenta recargar la página.
+            </p>
+            <Button 
+              onClick={() => window.location.reload()} 
+              variant="default"
+            >
+              Recargar página
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleExport = async (reportType: string) => {
     try {
