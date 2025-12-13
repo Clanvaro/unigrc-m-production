@@ -8501,9 +8501,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
 
-      return await withRetry(async () => {
-        // Build WHERE conditions for filtering
-        const whereConditions: any[] = [sql`c.status <> 'deleted'`];
+      // Add timeout to prevent long-running queries (8 seconds max)
+      const QUERY_TIMEOUT_MS = 8000;
+      const queryStartTime = Date.now();
+
+      return await Promise.race([
+        withRetry(async () => {
+          // Build WHERE conditions for filtering
+          const whereConditions: any[] = [sql`c.status <> 'deleted'`];
         
         if (filters.search) {
           const searchPattern = `%${filters.search.toLowerCase()}%`;
@@ -8555,6 +8560,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : sql``;
 
         // OPTIMIZED: Single aggregated query with CTEs
+        // Performance notes:
+        // - controls_base applies LIMIT/OFFSET early to reduce data processed
+        // - risk_details_agg and control_owners_agg JOIN with controls_base (materialized CTE)
+        // - Indexes on control_owners(control_id, is_active, assigned_at) and risk_controls(control_id) are critical
         const controlsResult = await requireDb().execute(sql`
         WITH controls_base AS (
           SELECT 
@@ -8565,7 +8574,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             c.type,
             c.frequency,
             c.effectiveness,
-            c.effect_target,
             c.effect_target,
             c.is_active,
             c.last_review,
@@ -8602,7 +8610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ) FILTER (WHERE r.id IS NOT NULL) as associated_risks
           FROM risk_controls rc
           INNER JOIN controls_base cb ON rc.control_id = cb.id
-          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
+          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status != 'deleted'
           GROUP BY rc.control_id
         ),
         control_owners_agg AS (
@@ -8627,7 +8635,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cb.type,
           cb.frequency,
           cb.effectiveness,
-          cb.effect_target,
           cb.effect_target,
           cb.is_active,
           cb.last_review,
@@ -8735,14 +8742,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
 
         await distributedCache.set(cacheKey, response, 60);
+        const queryDuration = Date.now() - queryStartTime;
         const duration = Date.now() - requestStart;
-        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
+        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (query: ${queryDuration}ms, ${controls.length} controls, total: ${total})`);
         
         res.json(response);
-      });
+        }),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => {
+            const elapsed = Date.now() - queryStartTime;
+            reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
+          }, QUERY_TIMEOUT_MS)
+        )
+      ]);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
+      
+      // Check if it's a timeout error
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('Query timeout') ||
+         error.message.includes('TIMEOUT'));
+      
       if (error instanceof Error) {
         console.error('Stack trace:', error.stack);
         console.error('Error message:', error.message);
@@ -8754,9 +8776,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('SQL Error detail:', (error as any).detail);
         }
       }
+      
+      // Return appropriate error response
+      if (isTimeout) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.", 
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
+      }
+      
       res.status(500).json({ 
         message: "Failed to fetch controls", 
         error: error instanceof Error ? error.message : String(error),
+        duration: `${duration}ms`,
         ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
       });
     }
