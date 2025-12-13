@@ -8953,7 +8953,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           INNER JOIN process_owners po ON co.process_owner_id = po.id
           WHERE co.is_active = true
           -- OPTIMIZED: NULLS LAST helps with index usage when assigned_at can be NULL
-          ORDER BY co.control_id, co.assigned_at DESC NULLS LAST NULLS LAST
+          -- Index idx_control_owners_control_active_assigned should be applied for optimal performance
+          ORDER BY co.control_id, co.assigned_at DESC NULLS LAST
         )
         SELECT 
           cb.id,
