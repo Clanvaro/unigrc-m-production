@@ -2121,7 +2121,22 @@ export default function Risks() {
                 Ver Detalles
               </DropdownMenuItem>
               <EditGuard itemType="risk">
-                <DropdownMenuItem onClick={() => { setNeedsDetailedData(true); setEditingRisk(risk); }}>
+                <DropdownMenuItem onClick={() => { 
+                  setNeedsDetailedData(true);
+                  // OPTIMIZED: Prefetch procesos asociados antes de abrir el modal
+                  if (risk?.id) {
+                    queryClient.prefetchQuery({
+                      queryKey: queryKeys.risks.processes(risk.id),
+                      queryFn: async () => {
+                        const response = await fetch(`/api/risk-processes/risk/${risk.id}`);
+                        if (!response.ok) throw new Error('Failed to prefetch');
+                        return response.json();
+                      },
+                      staleTime: 5 * 60 * 1000, // 5 minutos
+                    });
+                  }
+                  setEditingRisk(risk);
+                }}>
                   <Edit className="h-4 w-4 mr-2" />
                   Editar
                 </DropdownMenuItem>

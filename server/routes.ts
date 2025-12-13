@@ -6038,17 +6038,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get risk-process associations by risk ID
   app.get("/api/risk-processes/risk/:riskId", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      const cacheKey = `risk-processes:risk:${req.params.riskId}:${tenantId}`;
+      const cacheKey = `risk-processes:risk:${req.params.riskId}:${CACHE_VERSION}`;
       const riskProcesses = await getFromTieredCache(
         cacheKey,
-        async () => await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId),
-        60 // 1 minuto TTL - asociaciones no cambian frecuentemente
+        async () => {
+          // OPTIMIZED: Solo traer campos necesarios para el formulario (IDs y nombres básicos)
+          const links = await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId);
+          // Retornar solo lo necesario para el formulario (reducir payload)
+          return links.map(link => ({
+            id: link.id,
+            riskId: link.riskId,
+            macroprocesoId: link.macroprocesoId,
+            processId: link.processId,
+            subprocesoId: link.subprocesoId,
+            // Solo nombres básicos si están disponibles (para display)
+            macroproceso: link.macroproceso ? { id: link.macroproceso.id, name: link.macroproceso.name } : undefined,
+            process: link.process ? { id: link.process.id, name: link.process.name } : undefined,
+            subproceso: link.subproceso ? { id: link.subproceso.id, name: link.subproceso.name } : undefined,
+          }));
+        },
+        300 // 5 minutos TTL - asociaciones raramente cambian, aumentar cache para mejor performance
       );
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/risk-processes/risk/:riskId completed in ${duration}ms (${riskProcesses.length} associations)`);
+      }
       res.json(riskProcesses);
     } catch (error) {
       console.error("Error fetching risk processes by risk:", error);
