@@ -36,6 +36,7 @@ import {
   Phone
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function TeamMembersPage() {
   const [searchTerm, setSearchTerm] = useState("");
@@ -97,18 +98,7 @@ export default function TeamMembersPage() {
   // Mutación para agregar miembro al equipo
   const addMemberMutation = useMutation({
     mutationFn: async ({ userId, roleId }: { userId: string; roleId: string }) => {
-      const response = await fetch("/api/user-roles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, roleId }),
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Error al agregar miembro");
-      }
-      
-      return response.json();
+      return await apiRequest("/api/user-roles", "POST", { userId, roleId });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
