@@ -1911,8 +1911,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks/page-data-lite", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const start = Date.now();
     const steps: any[] = [];
+    const ENDPOINT_TIMEOUT_MS = 60000; // 60 seconds max for entire endpoint
 
     const mark = (name: string) => steps.push({ name, t: Date.now() - start });
+
+    // Helper to add timeout to a promise
+    const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, name: string): Promise<T> => {
+      return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`${name} timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        })
+      ]);
+    };
 
     try {
       mark('start');
@@ -1934,59 +1947,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       mark('cache-miss');
 
-      // Create promises (no await yet) - paralelizar todo
-      // Wrap each promise with error handling to identify which one fails
-      const risksPromise = storage.getRisksLite().catch(err => {
+      // OPTIMIZED: Add individual timeouts to prevent any single query from hanging
+      // Use Promise.allSettled to continue even if some queries fail
+      const QUERY_TIMEOUT_MS = 15000; // 15 seconds per query
+
+      const risksPromise = withTimeout(storage.getRisksLite(), QUERY_TIMEOUT_MS, 'getRisksLite').catch(err => {
         console.error('[page-data-lite] getRisksLite failed:', err);
-        throw new Error(`getRisksLite failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null; // Return null on error instead of throwing
       });
-      const ownersPromise = storage.getProcessOwners().catch(err => {
+      const ownersPromise = withTimeout(storage.getProcessOwners(), QUERY_TIMEOUT_MS, 'getProcessOwners').catch(err => {
         console.error('[page-data-lite] getProcessOwners failed:', err);
-        throw new Error(`getProcessOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const statsPromise = storage.getRiskStats().catch(err => {
+      const statsPromise = withTimeout(storage.getRiskStats(), QUERY_TIMEOUT_MS, 'getRiskStats').catch(err => {
         console.error('[page-data-lite] getRiskStats failed:', err);
-        throw new Error(`getRiskStats failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const gerenciasPromise = storage.getGerencias().catch(err => {
+      const gerenciasPromise = withTimeout(storage.getGerencias(), QUERY_TIMEOUT_MS, 'getGerencias').catch(err => {
         console.error('[page-data-lite] getGerencias failed:', err);
-        throw new Error(`getGerencias failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const macroprocesosPromise = storage.getMacroprocesos().catch(err => {
+      const macroprocesosPromise = withTimeout(storage.getMacroprocesos(), QUERY_TIMEOUT_MS, 'getMacroprocesos').catch(err => {
         console.error('[page-data-lite] getMacroprocesos failed:', err);
-        throw new Error(`getMacroprocesos failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const subprocesosPromise = storage.getSubprocesosWithOwners().catch(err => {
+      const subprocesosPromise = withTimeout(storage.getSubprocesosWithOwners(), QUERY_TIMEOUT_MS, 'getSubprocesosWithOwners').catch(err => {
         console.error('[page-data-lite] getSubprocesosWithOwners failed:', err);
-        throw new Error(`getSubprocesosWithOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const processesPromise = storage.getProcesses().catch(err => {
+      const processesPromise = withTimeout(storage.getProcesses(), QUERY_TIMEOUT_MS, 'getProcesses').catch(err => {
         console.error('[page-data-lite] getProcesses failed:', err);
-        throw new Error(`getProcesses failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const riskCategoriesPromise = storage.getRiskCategories().catch(err => {
+      const riskCategoriesPromise = withTimeout(storage.getRiskCategories(), QUERY_TIMEOUT_MS, 'getRiskCategories').catch(err => {
         console.error('[page-data-lite] getRiskCategories failed:', err);
-        throw new Error(`getRiskCategories failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
-      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations().catch(err => {
+      const processGerenciasRelationsPromise = withTimeout(storage.getAllProcessGerenciasRelations(), QUERY_TIMEOUT_MS, 'getAllProcessGerenciasRelations').catch(err => {
         console.error('[page-data-lite] getAllProcessGerenciasRelations failed:', err);
-        throw new Error(`getAllProcessGerenciasRelations failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       });
 
       mark('promises-created');
 
-      // Execute all in parallel
-      const [
-        risks,
-        owners,
-        stats,
-        gerencias,
-        macroprocesos,
-        subprocesos,
-        processes,
-        riskCategories,
-        processGerenciasRelations
-      ] = await Promise.all([
+      // OPTIMIZED: Use Promise.allSettled with overall timeout to prevent endpoint from hanging
+      const queryPromise = Promise.all([
         risksPromise,
         ownersPromise,
         statsPromise,
@@ -1997,24 +2002,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskCategoriesPromise,
         processGerenciasRelationsPromise
       ]);
-      mark('db-done');
 
-      // Filter out soft-deleted records
-      const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
-      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
-      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
-      const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
-
-      const response = {
+      const [
         risks,
         owners,
         stats,
+        gerencias,
+        macroprocesos,
+        subprocesos,
+        processes,
+        riskCategories,
+        processGerenciasRelations
+      ] = await Promise.race([
+        queryPromise,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Endpoint timeout after ${ENDPOINT_TIMEOUT_MS}ms`));
+          }, ENDPOINT_TIMEOUT_MS);
+        })
+      ]);
+      mark('db-done');
+
+      // Check if critical queries failed
+      if (!risks || !owners || !stats) {
+        const failed = [];
+        if (!risks) failed.push('risks');
+        if (!owners) failed.push('owners');
+        if (!stats) failed.push('stats');
+        console.error(`[page-data-lite] Critical queries failed: ${failed.join(', ')}`);
+        // Return partial data if possible, or error if critical data is missing
+        if (!risks) {
+          return res.status(500).json({ message: "Failed to fetch risks data", error: "Critical query timeout" });
+        }
+      }
+
+      // Filter out soft-deleted records (handle null values from failed queries)
+      const activeGerencias = (gerencias || []).filter((g: any) => g && g.status !== 'deleted');
+      const activeMacroprocesos = (macroprocesos || []).filter((m: any) => m && m.status !== 'deleted');
+      const activeSubprocesos = (subprocesos || []).filter((s: any) => s && s.status !== 'deleted');
+      const activeProcesses = (processes || []).filter((p: any) => p && p.status !== 'deleted');
+
+      const response = {
+        risks: risks || [],
+        owners: owners || [],
+        stats: stats || { total: 0, active: 0, inactive: 0, deleted: 0, byStatus: {}, byRiskLevel: { low: 0, medium: 0, high: 0, critical: 0 } },
         gerencias: activeGerencias,
         macroprocesos: activeMacroprocesos,
         subprocesos: activeSubprocesos,
         processes: activeProcesses,
-        riskCategories,
-        processGerencias: processGerenciasRelations
+        riskCategories: riskCategories || [],
+        processGerencias: processGerenciasRelations || []
       };
       mark('response-built');
 
@@ -2029,12 +2066,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(response);
     } catch (err) {
-      console.error('page-data-lite error', err, { total: Date.now() - start, steps });
+      const duration = Date.now() - start;
+      console.error('page-data-lite error', err, { total: duration, steps });
       // Log the full error to help debugging 500s
       if (err instanceof Error) {
         console.error('Stack trace:', err.stack);
+        // Check if it's a timeout error
+        if (err.message.includes('timeout') || err.message.includes('Timeout')) {
+          return res.status(504).json({ 
+            message: "Request timeout. The query took too long to execute.",
+            error: "TIMEOUT",
+            duration: `${duration}ms`
+          });
+        }
       }
-      res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });
+      res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err), duration: `${duration}ms` });
     }
   });
 
