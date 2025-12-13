@@ -7784,6 +7784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Frontend prefetches catalogs (macroprocesos/processes/subprocesos) and does client-side joins
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    const QUERY_TIMEOUT_MS = 10000; // 10 seconds timeout
     try {
       // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
       const limit = parseInt(req.query.limit as string) || 25;
@@ -7792,150 +7793,166 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache key includes pagination for proper caching
       const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant:${limit}:${offset}`;
 
-      // Try to get from cache
-      const cached = await distributedCache.get<any>(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] risk-events/page-data (${Date.now() - startTime}ms)`);
-        return res.json(cached);
-      }
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) with 60 min TTL
+      const queryStartTime = Date.now();
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
+            
+            // OPTIMIZED: Use withRetry for robust connection handling
+            return await withRetry(async () => {
+              // OPTIMIZED: Fetch only essential columns - removed createdBy, updatedAt (not used in table)
+              const [eventsData, totalCountResult] = await Promise.all([
+                requireDb().select({
+                  id: riskEvents.id,
+                  code: riskEvents.code,
+                  eventType: riskEvents.eventType,
+                  eventDate: riskEvents.eventDate,
+                  status: riskEvents.status,
+                  severity: riskEvents.severity,
+                  description: riskEvents.description,
+                  estimatedLoss: riskEvents.estimatedLoss,
+                  actualLoss: riskEvents.actualLoss,
+                  riskId: riskEvents.riskId,
+                  controlId: riskEvents.controlId,
+                  processId: riskEvents.processId,
+                  createdAt: riskEvents.createdAt,
+                })
+                  .from(riskEvents)
+                  .where(isNull(riskEvents.deletedAt))
+                  .orderBy(desc(riskEvents.eventDate))
+                  .limit(limit)
+                  .offset(offset),
 
-      console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
+                requireDb().select({ count: sql<number>`count(*)::int` })
+                  .from(riskEvents)
+                  .where(isNull(riskEvents.deletedAt))
+              ]);
 
-      // OPTIMIZED: Use withRetry for robust connection handling
-      return await withRetry(async () => {
-        // OPTIMIZED: Fetch only essential columns - removed createdBy, updatedAt (not used in table)
-        const [eventsData, totalCountResult] = await Promise.all([
-          requireDb().select({
-            id: riskEvents.id,
-            code: riskEvents.code,
-            eventType: riskEvents.eventType,
-            eventDate: riskEvents.eventDate,
-            status: riskEvents.status,
-            severity: riskEvents.severity,
-            description: riskEvents.description,
-            estimatedLoss: riskEvents.estimatedLoss,
-            actualLoss: riskEvents.actualLoss,
-            riskId: riskEvents.riskId,
-            controlId: riskEvents.controlId,
-            processId: riskEvents.processId,
-            createdAt: riskEvents.createdAt,
-          })
-            .from(riskEvents)
-            .where(isNull(riskEvents.deletedAt))
-            .orderBy(desc(riskEvents.eventDate))
-            .limit(limit)
-            .offset(offset),
+              const eventIds = eventsData.map(e => e.id);
+              const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
 
-          requireDb().select({ count: sql<number>`count(*)::int` })
-            .from(riskEvents)
-            .where(isNull(riskEvents.deletedAt))
-        ]);
+              // OPTIMIZED: Fetch relations in parallel (already optimized, keeping separate for clarity)
+              const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
+                eventIds.length > 0
+                  ? requireDb().select({
+                      riskEventId: riskEventMacroprocesos.riskEventId,
+                      macroprocesoId: riskEventMacroprocesos.macroprocesoId
+                    })
+                    .from(riskEventMacroprocesos)
+                    .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
+                  : Promise.resolve([]),
+                eventIds.length > 0
+                  ? requireDb().select({
+                      riskEventId: riskEventProcesses.riskEventId,
+                      processId: riskEventProcesses.processId
+                    })
+                    .from(riskEventProcesses)
+                    .where(inArray(riskEventProcesses.riskEventId, eventIds))
+                  : Promise.resolve([]),
+                eventIds.length > 0
+                  ? requireDb().select({
+                      riskEventId: riskEventSubprocesos.riskEventId,
+                      subprocesoId: riskEventSubprocesos.subprocesoId
+                    })
+                    .from(riskEventSubprocesos)
+                    .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+                  : Promise.resolve([]),
+                controlIds.length > 0
+                  ? requireDb().select({
+                      id: controls.id,
+                      code: controls.code,
+                      name: controls.name,
+                    })
+                    .from(controls)
+                    .where(inArray(controls.id, controlIds))
+                  : Promise.resolve([])
+              ]);
 
-        const eventIds = eventsData.map(e => e.id);
-        const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
+              // Group relation IDs by eventId for O(1) lookup
+              const macroMap = new Map<string, string[]>();
+              const processMap = new Map<string, string[]>();
+              const subprocesoMap = new Map<string, string[]>();
+              const controlMap = new Map(controlRelations.map(c => [c.id, c]));
 
-        // OPTIMIZED: Fetch relations in parallel (already optimized, keeping separate for clarity)
-        const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
-          eventIds.length > 0
-            ? requireDb().select({
-                riskEventId: riskEventMacroprocesos.riskEventId,
-                macroprocesoId: riskEventMacroprocesos.macroprocesoId
-              })
-              .from(riskEventMacroprocesos)
-              .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
-            : Promise.resolve([]),
-          eventIds.length > 0
-            ? requireDb().select({
-                riskEventId: riskEventProcesses.riskEventId,
-                processId: riskEventProcesses.processId
-              })
-              .from(riskEventProcesses)
-              .where(inArray(riskEventProcesses.riskEventId, eventIds))
-            : Promise.resolve([]),
-          eventIds.length > 0
-            ? requireDb().select({
-                riskEventId: riskEventSubprocesos.riskEventId,
-                subprocesoId: riskEventSubprocesos.subprocesoId
-              })
-              .from(riskEventSubprocesos)
-              .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
-            : Promise.resolve([]),
-          controlIds.length > 0
-            ? requireDb().select({
-                id: controls.id,
-                code: controls.code,
-                name: controls.name,
-              })
-              .from(controls)
-              .where(inArray(controls.id, controlIds))
-            : Promise.resolve([])
-        ]);
+              for (const m of macroRelations) {
+                if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
+                if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
+              }
+              for (const p of processRelations) {
+                if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
+                if (p.processId) processMap.get(p.riskEventId)!.push(String(p.processId));
+              }
+              for (const s of subprocesoRelations) {
+                if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
+                if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
+              }
 
-        // Group relation IDs by eventId for O(1) lookup
-        const macroMap = new Map<string, string[]>();
-        const processMap = new Map<string, string[]>();
-        const subprocesoMap = new Map<string, string[]>();
-        const controlMap = new Map(controlRelations.map(c => [c.id, c]));
+              // Build lightweight events list (IDs only, no names)
+              const eventsForList = eventsData.map(event => ({
+                id: event.id,
+                code: event.code,
+                eventType: event.eventType,
+                eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+                status: event.status,
+                severity: event.severity,
+                description: event.description,
+                estimatedLoss: event.estimatedLoss,
+                actualLoss: event.actualLoss,
+                riskId: event.riskId,
+                controlId: event.controlId,
+                processId: event.processId,
+                createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+                // Return IDs only - frontend resolves names from cached catalogs
+                macroprocesoIds: macroMap.get(event.id) || [],
+                processIds: processMap.get(event.id) || [],
+                subprocesoIds: subprocesoMap.get(event.id) || [],
+                selectedRisks: event.riskId ? [event.riskId] : [],
+                // Include failed control basic data
+                failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
+              }));
 
-        for (const m of macroRelations) {
-          if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
-          if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
-        }
-        for (const p of processRelations) {
-          if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
-          if (p.processId) processMap.get(p.riskEventId)!.push(String(p.processId));
-        }
-        for (const s of subprocesoRelations) {
-          if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
-          if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
-        }
+              return {
+                riskEvents: {
+                  data: eventsForList,
+                  pagination: {
+                    limit,
+                    offset,
+                    total: totalCountResult[0]?.count || 0
+                  }
+                }
+              };
+            });
+          },
+          3600 // 60 minutes TTL (increased from 30 min for better cache hit rate)
+        ),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => {
+            const elapsed = Date.now() - queryStartTime;
+            reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
+          }, QUERY_TIMEOUT_MS)
+        )
+      ]);
 
-        // Build lightweight events list (IDs only, no names)
-        const eventsForList = eventsData.map(event => ({
-          id: event.id,
-          code: event.code,
-          eventType: event.eventType,
-          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-          status: event.status,
-          severity: event.severity,
-          description: event.description,
-          estimatedLoss: event.estimatedLoss,
-          actualLoss: event.actualLoss,
-          riskId: event.riskId,
-          controlId: event.controlId,
-          processId: event.processId,
-          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-          // Return IDs only - frontend resolves names from cached catalogs
-          macroprocesoIds: macroMap.get(event.id) || [],
-          processIds: processMap.get(event.id) || [],
-          subprocesoIds: subprocesoMap.get(event.id) || [],
-          selectedRisks: event.riskId ? [event.riskId] : [],
-          // Include failed control basic data
-          failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
-        }));
+      const queryDuration = Date.now() - queryStartTime;
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] risk-events/page-data completed in ${duration}ms (query: ${queryDuration}ms, ${response.riskEvents.data.length} events, total: ${response.riskEvents.pagination.total})`);
 
-        const response = {
-          riskEvents: {
-            data: eventsForList,
-            pagination: {
-              limit,
-              offset,
-              total: totalCountResult[0]?.count || 0
-            }
-          }
-        };
-
-        // OPTIMIZED: Increased cache TTL from 15 min to 30 min (1800s) - not critical data
-        await distributedCache.set(cacheKey, response, 1800);
-
-        const duration = Date.now() - startTime;
-        console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
-
-        res.json(response);
-      });
+      res.json(response);
     } catch (error) {
+      const duration = Date.now() - startTime;
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+      
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: `Request timeout. The query took too long to execute (${duration}ms). Consider optimizing the query or increasing the timeout.`,
+          error: "TIMEOUT"
+        });
+      }
+      
       res.status(500).json({ 
         message: "Failed to fetch risk events page data",
         error: error instanceof Error ? error.message : "Unknown error"
