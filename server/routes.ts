@@ -8807,8 +8807,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheKey = `controls-with-details:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
 
       // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds max for entire endpoint
-      const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query (reduced from 8s to be more aggressive)
+      // Increased timeouts to handle complex queries with many controls
+      const ENDPOINT_TIMEOUT_MS = 25000; // 25 seconds max for entire endpoint (increased from 15s)
+      const QUERY_TIMEOUT_MS = 20000; // 20 seconds per query (increased from 10s for complex aggregations)
       const queryStartTime = Date.now();
 
       return await Promise.race([
