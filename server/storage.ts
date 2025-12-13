@@ -7744,9 +7744,9 @@ export class DatabaseStorage extends MemStorage {
       conditions.push(eq(controls.status, filters.status));
     }
 
-    if (filters.ownerId) {
-      conditions.push(eq(controls.ownerId, filters.ownerId));
-    }
+    // NOTE: ownerId filter is not supported in getControlsPaginated
+    // Use getControlsPaginatedWithDetails instead if owner filtering is needed
+    // Controls have owners through controlOwners table (many-to-many relationship)
 
     if (filters.minEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} >= ${filters.minEffectiveness}`);
@@ -8675,7 +8675,13 @@ export class DatabaseStorage extends MemStorage {
   async getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]> {
     if (riskIds.length === 0) return [];
 
+    // Validate riskIds to prevent empty arrays in inArray (causes Drizzle errors)
+    const validRiskIds = riskIds.filter(id => id && typeof id === 'string' && id.trim().length > 0);
+    if (validRiskIds.length === 0) return [];
+
     // OPTIMIZED: Select only essential columns instead of entire tables (~80% payload reduction)
+    // FIXED: Removed controls.ownerId - this field doesn't exist in the schema
+    // Controls have owners through controlOwners table (many-to-many relationship)
     const results = await db.select({
       // RiskControl fields
       id: riskControls.id,
@@ -8690,7 +8696,6 @@ export class DatabaseStorage extends MemStorage {
       ctrlFrequency: controls.frequency,
       ctrlEffectiveness: controls.effectiveness,
       ctrlEffectTarget: controls.effectTarget,
-      ctrlOwnerId: controls.ownerId,
       ctrlStatus: controls.status,
       ctrlIsActive: controls.isActive,
       ctrlAutomationLevel: controls.automationLevel
@@ -8698,7 +8703,7 @@ export class DatabaseStorage extends MemStorage {
       .from(riskControls)
       .innerJoin(controls, eq(riskControls.controlId, controls.id))
       .where(and(
-        inArray(riskControls.riskId, riskIds),
+        inArray(riskControls.riskId, validRiskIds),
         isNull(controls.deletedAt)
       ));
 
@@ -8716,10 +8721,10 @@ export class DatabaseStorage extends MemStorage {
         frequency: r.ctrlFrequency,
         effectiveness: r.ctrlEffectiveness,
         effectTarget: r.ctrlEffectTarget,
-        ownerId: r.ctrlOwnerId,
         status: r.ctrlStatus,
         isActive: r.ctrlIsActive,
         automationLevel: r.ctrlAutomationLevel
+        // Note: ownerId removed - controls have owners through controlOwners table
       } as Control
     }));
   }
