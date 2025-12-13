@@ -10471,6 +10471,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Action Plans - OPTIMIZED: Parallel queries to reduce cold start latency
   app.get("/api/action-plans", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds for the entire endpoint
+    const QUERY_TIMEOUT_MS = 10000; // 10 seconds for the query
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -10478,17 +10480,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
-        return res.json(cached);
-      }
 
-      console.log(`[CACHE MISS] /api/action-plans - fetching aggregated data`);
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const queryStartTime = Date.now();
 
-      // OPTIMIZED: Single aggregated query with CTEs and JOINs
-      // Get action plans with reschedule counts, risk-process links, and gerencias in one query
-      const actionPlansResult = await db.execute(sql`
+            // OPTIMIZED: Add timeout to prevent long-running queries (10 seconds max)
+            const queryPromise = db.execute(sql`
         WITH action_plans_base AS (
           SELECT 
             a.id,
@@ -10615,78 +10616,128 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ORDER BY apb.created_at DESC
       `);
 
-      const plans = (actionPlansResult.rows as any[]).map((row: any) => ({
-        id: row.id,
-        code: row.code,
-        origin: row.origin,
-        riskId: row.risk_id,
-        name: row.title, // Map title to name for backward compatibility
-        title: row.title,
-        description: row.description,
-        responsible: row.responsible,
-        dueDate: row.due_date,
-        originalDueDate: row.original_due_date,
-        rescheduleCount: row.reschedule_count || 0,
-        priority: row.priority,
-        status: row.status || 'pending',
-        progress: row.progress || 0,
-        implementedAt: row.implemented_at,
-        implementedBy: row.implemented_by,
-        implementationComments: row.implementation_comments,
-        managementResponse: row.management_response,
-        agreedAction: row.agreed_action,
-        evidenceSubmittedAt: row.evidence_submitted_at,
-        evidenceSubmittedBy: row.evidence_submitted_by,
-        reviewedAt: row.reviewed_at,
-        reviewedBy: row.reviewed_by,
-        reviewComments: row.review_comments,
-        validationStatus: row.validation_status,
-        validatedBy: row.validated_by,
-        validatedAt: row.validated_at,
-        validationComments: row.validation_comments,
-        notifiedAt: row.notified_at,
-        createdBy: row.created_by,
-        updatedBy: row.updated_by,
-        deletedBy: row.deleted_by,
-        deletedAt: row.deleted_at,
-        deletionReason: row.deletion_reason,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        gerencias: Array.isArray(row.gerencias) ? row.gerencias : (row.gerencias ? JSON.parse(row.gerencias) : []),
-        associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
-      }));
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
+            });
 
-      const response = plans;
-      await distributedCache.set(cacheKey, response, 30);
-      await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300);
+            const actionPlansResult = await Promise.race([queryPromise, timeoutPromise]);
+            const queryDuration = Date.now() - queryStartTime;
 
-      const duration = Date.now() - requestStart;
-      console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
-      
-      if (duration > 2000) {
-        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 2000ms)`);
+            // Log warning if query is slow
+            if (queryDuration > 5000) {
+              console.warn(`[PERF] /api/action-plans query took ${queryDuration}ms (threshold: 5000ms)`);
+            }
+
+            const plans = (actionPlansResult.rows as any[]).map((row: any) => ({
+              id: row.id,
+              code: row.code,
+              origin: row.origin,
+              riskId: row.risk_id,
+              name: row.title, // Map title to name for backward compatibility
+              title: row.title,
+              description: row.description,
+              responsible: row.responsible,
+              dueDate: row.due_date,
+              originalDueDate: row.original_due_date,
+              rescheduleCount: row.reschedule_count || 0,
+              priority: row.priority,
+              status: row.status || 'pending',
+              progress: row.progress || 0,
+              implementedAt: row.implemented_at,
+              implementedBy: row.implemented_by,
+              implementationComments: row.implementation_comments,
+              managementResponse: row.management_response,
+              agreedAction: row.agreed_action,
+              evidenceSubmittedAt: row.evidence_submitted_at,
+              evidenceSubmittedBy: row.evidence_submitted_by,
+              reviewedAt: row.reviewed_at,
+              reviewedBy: row.reviewed_by,
+              reviewComments: row.review_comments,
+              validationStatus: row.validation_status,
+              validatedBy: row.validated_by,
+              validatedAt: row.validated_at,
+              validationComments: row.validation_comments,
+              notifiedAt: row.notified_at,
+              createdBy: row.created_by,
+              updatedBy: row.updated_by,
+              deletedBy: row.deleted_by,
+              deletedAt: row.deleted_at,
+              deletionReason: row.deletion_reason,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+              gerencias: Array.isArray(row.gerencias) ? row.gerencias : (row.gerencias ? JSON.parse(row.gerencias) : []),
+              associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
+            }));
+
+            return {
+              data: plans,
+              _meta: {
+                fetchedAt: new Date().toISOString(),
+                duration: queryDuration
+              }
+            };
+          },
+          300 // 5 minutos TTL (aumentado de 30s para mejor cache hit rate)
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
+      ]);
+
+      const totalDuration = Date.now() - requestStart;
+      const cacheHit = !(response as any)?._meta;
+
+      if (cacheHit) {
+        console.log(`[CACHE HIT] /api/action-plans in ${totalDuration}ms`);
+      } else {
+        console.log(`[CACHE MISS] /api/action-plans computed in ${totalDuration}ms`);
       }
 
-      res.json(response);
+      if (totalDuration > 3000) {
+        console.warn(`[PERF] /api/action-plans took ${totalDuration}ms (threshold: 3000ms, cacheHit: ${cacheHit})`);
+      }
+
+      // Return data array (backward compatibility) or full response with metadata
+      const data = (response as any)?.data || response;
+      res.json(Array.isArray(data) ? data : response);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/action-plans failed after ${duration}ms:`, error);
       
-      // Try fallback cache
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
-      if (fallbackCache) {
-        console.log(`[FALLBACK] Returning cached action-plans data`);
-        return res.json(fallbackCache);
+      // Check if it's a timeout error
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('Query timeout') ||
+         error.message.includes('TIMEOUT') ||
+         error.message.includes('Endpoint timeout'));
+      
+      if (isTimeout) {
+        return res.status(504).json({ 
+          message: "Request timeout. The endpoint took too long to execute.",
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
       }
       
-      res.status(500).json({ message: "Failed to fetch action plans", error: error instanceof Error ? error.message : String(error) });
+      res.status(500).json({ 
+        message: "Failed to fetch action plans",
+        error: error instanceof Error ? error.message : "Unknown error",
+        duration: `${duration}ms`
+      });
     }
   });
 
   // Helper function to invalidate action plan caches
   async function invalidateActionPlanCaches(tenantId: string) {
-    await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}`, null, 0);
+    // Invalidar cache de dos niveles (memoria + Redis)
+    const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
+    invalidateMemoryCache(cacheKey);
+    await distributedCache.set(cacheKey, null, 0);
+    // También invalidar fallback cache si existe
+    await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, null, 0);
   }
 
   app.post("/api/action-plans", isAuthenticated, async (req, res) => {
@@ -11425,8 +11476,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Invalidate action plans validation caches
       await Promise.all([
+        invalidateActionPlanCaches(tenantId),
         distributedCache.invalidatePattern(`validation:action-plans:*:${tenantId}`),
-        distributedCache.invalidatePattern(`action-plans:*:${tenantId}`),
         distributedCache.set(`validation:action-plans:pending:${tenantId}`, null, 0)
       ]);
 

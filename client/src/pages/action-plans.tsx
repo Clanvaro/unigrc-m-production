@@ -141,10 +141,17 @@ export default function ActionPlans() {
   const queryClient = useQueryClient();
 
   // Query unificado para todos los planes de acción
-  const { data: allActions = [], isLoading } = useQuery<Action[]>({
+  // OPTIMIZED: Aumentar staleTime a 10 min para carga rápida, pero mantener refetchOnMount para datos frescos
+  const { data: allActionsRaw = [], isLoading } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 600000, // 10 minutos - carga rápida
+    gcTime: 30 * 60 * 1000, // 30 minutos en cache
+    refetchOnWindowFocus: false, // No refetch innecesario
+    refetchOnReconnect: false, // No refetch innecesario
+    refetchOnMount: true, // Siempre cargar datos frescos al montar
   });
+  // Asegurar que siempre sea un array
+  const allActions = Array.isArray(allActionsRaw) ? allActionsRaw : [];
 
   // Check URL params to auto-open create dialog with pre-selected risk or view plan detail
   useEffect(() => {
@@ -179,22 +186,35 @@ export default function ActionPlans() {
     }
   }, [allActions]);
 
+  // OPTIMIZED: Aumentar staleTime a 10 min para carga rápida
   const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 600000, // 10 minutos - carga rápida
+    gcTime: 30 * 60 * 1000, // 30 minutos en cache
+    refetchOnWindowFocus: false, // No refetch innecesario
+    refetchOnReconnect: false, // No refetch innecesario
   });
   const risks = risksResponse?.data || [];
 
-  const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
+  const { data: processOwnersRaw = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 600000, // 10 minutos - carga rápida
+    gcTime: 30 * 60 * 1000, // 30 minutos en cache
+    refetchOnWindowFocus: false, // No refetch innecesario
+    refetchOnReconnect: false, // No refetch innecesario
   });
+  const processOwners = Array.isArray(processOwnersRaw) ? processOwnersRaw : [];
 
-  const { data: users = [] } = useQuery<UserType[]>({
+  const { data: usersRaw = [] } = useQuery<UserType[]>({
     queryKey: ["/api/users"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 600000, // 10 minutos - carga rápida
+    gcTime: 30 * 60 * 1000, // 30 minutos en cache
+    refetchOnWindowFocus: false, // No refetch innecesario
+    refetchOnReconnect: false, // No refetch innecesario
   });
+  const users = Array.isArray(usersRaw) ? usersRaw : [];
 
+  // OPTIMIZED: Lazy load - solo cargar cuando se necesite (no en carga inicial)
   const { data: reschedulingMetrics } = useQuery<{
     summary: {
       totalPlans: number;
@@ -211,6 +231,10 @@ export default function ActionPlans() {
     };
   }>({
     queryKey: ["/api/action-plans/metrics/rescheduling"],
+    enabled: false, // Lazy load - habilitar cuando se necesite (ej: cuando se abre tab de métricas)
+    staleTime: 600000, // 10 minutos - carga rápida
+    gcTime: 30 * 60 * 1000, // 30 minutos en cache
+    refetchOnWindowFocus: false, // No refetch innecesario
   });
 
   const deleteMutation = useMutation({
@@ -218,6 +242,8 @@ export default function ActionPlans() {
       apiRequest(`/api/action-plans/${id}`, "DELETE", { deletionReason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
+      // Refetch inmediato para ver cambios al instante
+      queryClient.refetchQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trash"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
@@ -236,6 +262,8 @@ export default function ActionPlans() {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
+      // Refetch inmediato para ver cambios al instante
+      queryClient.refetchQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       toast({ title: "Plan completado", description: "El plan de acción ha sido marcado como completado." });
     },
@@ -248,6 +276,8 @@ export default function ActionPlans() {
     mutationFn: (id: string) => apiRequest(`/api/action-plans/${id}/reopen`, "POST", {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
+      // Refetch inmediato para ver cambios al instante
+      queryClient.refetchQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       toast({ 
         title: "Plan reabierto", 
@@ -267,6 +297,8 @@ export default function ActionPlans() {
     mutationFn: (id: string) => apiRequest(`/api/action-plans/${id}/resend-validation`, "POST", {}),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
+      // Refetch inmediato para ver cambios al instante
+      queryClient.refetchQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       toast({ 
         title: "Email de revalidación enviado", 
@@ -287,6 +319,8 @@ export default function ActionPlans() {
       apiRequest("/api/action-plans/send-email", "POST", { planIds, subject, message }),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/action-plans"] });
+      // Refetch inmediato para ver cambios al instante
+      queryClient.refetchQueries({ queryKey: ["/api/action-plans"] });
       queryClient.invalidateQueries({ queryKey: ["/api/actions"] });
       toast({ 
         title: "Emails enviados exitosamente", 
