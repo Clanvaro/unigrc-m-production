@@ -42,7 +42,7 @@ export class TwoTierCache {
     // Configuration
     private readonly L1_DEFAULT_TTL = 30 * 1000; // 30 seconds
     private readonly L2_DEFAULT_TTL = 5 * 60; // 5 minutes (in seconds for Redis)
-    private readonly L2_TIMEOUT = 100; // 100ms timeout for L2 cache
+    private readonly L2_TIMEOUT = 200; // 200ms timeout for L2 cache (aumentado de 100ms para ser más tolerante con Redis lento)
     private readonly CLEANUP_INTERVAL = 60 * 1000; // Clean L1 every minute
 
     private cleanupTimer: NodeJS.Timeout;
@@ -202,10 +202,18 @@ export class TwoTierCache {
 
     /**
      * Get value from L2 with timeout
+     * OPTIMIZED: Manejo silencioso de timeouts - no lanzar error, solo retornar null
      */
     private async getFromL2WithTimeout(key: string): Promise<any> {
-        const timeoutPromise = new Promise<null>((_, reject) => {
-            setTimeout(() => reject(new Error('L2 cache timeout')), this.L2_TIMEOUT);
+        const timeoutPromise = new Promise<null>((resolve) => {
+            setTimeout(() => {
+                this.stats.l2Timeouts++;
+                // Log solo si hay muchos timeouts (no spam en logs)
+                if (this.stats.l2Timeouts % 10 === 0) {
+                    console.warn(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms) - ${this.stats.l2Timeouts} total timeouts`);
+                }
+                resolve(null);
+            }, this.L2_TIMEOUT);
         });
 
         try {
@@ -215,11 +223,16 @@ export class TwoTierCache {
             ]);
             return result;
         } catch (error) {
-            if (error instanceof Error && error.message === 'L2 cache timeout') {
-                this.stats.l2Timeouts++;
-                console.warn(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms)`);
+            // Redis error - log solo si es crítico, no timeout
+            if (!(error instanceof Error && error.message === 'L2 cache timeout')) {
+                this.stats.l2Errors++;
+                // Log solo errores no-timeout (timeouts ya se manejan arriba)
+                if (this.stats.l2Errors % 10 === 0) {
+                    console.warn(`[TwoTierCache] L2 error for key ${key}:`, error instanceof Error ? error.message : 'Unknown error');
+                }
             }
-            throw error;
+            // Retornar null silenciosamente - el sistema fallará a DB
+            return null;
         }
     }
 

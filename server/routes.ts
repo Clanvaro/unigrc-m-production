@@ -16809,48 +16809,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Macroprocesos routes - with 60s distributed cache
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
+    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
     try {
-      const cacheKey = `macroprocesos:single-tenant`;
+      const cacheKey = `macroprocesos:single-tenant:${CACHE_VERSION}`;
 
-      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
-      const cached = await twoTierCache.get(cacheKey);
-      if (cached) {
-        return res.json(cached);
-      }
+      // OPTIMIZED: Use getFromTieredCache for better performance and timeout handling
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const queryStartTime = Date.now();
 
-      // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
-      const [macroprocesos, allRiskLevels] = await Promise.all([
-        storage.getMacroprocesos(),
-        storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
+            // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
+            const macroprocesosPromise = storage.getMacroprocesos();
+            const riskLevelsPromise = storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] });
+
+            const queryPromise = Promise.all([
+              Promise.race([
+                macroprocesosPromise,
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`getMacroprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+                )
+              ]),
+              Promise.race([
+                riskLevelsPromise,
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`getAllRiskLevelsOptimized timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+                )
+              ])
+            ]);
+
+            const [macroprocesos, allRiskLevels] = await queryPromise;
+            const queryDuration = Date.now() - queryStartTime;
+
+            // Log warning if query is slow
+            if (queryDuration > 2000) {
+              console.warn(`[PERF] /api/macroprocesos query took ${queryDuration}ms (threshold: 2000ms)`);
+            }
+
+            // Filter out soft-deleted records
+            const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+
+            // Fetch process owners for macroprocesos that have ownerId
+            const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
+            const owners = ownerIds.length > 0
+              ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
+              : [];
+            const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
+
+            const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
+              const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+              const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
+
+              return {
+                ...macroproceso,
+                ...riskLevels,
+                owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
+              };
+            });
+
+            return {
+              data: macroprocesoswithRisks,
+              _meta: {
+                fetchedAt: new Date().toISOString(),
+                duration: queryDuration
+              }
+            };
+          },
+          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
       ]);
 
-      // Filter out soft-deleted records
-      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+      const totalDuration = Date.now() - requestStart;
+      const cacheHit = !(response as any)?._meta;
 
-      // Fetch process owners for macroprocesos that have ownerId
-      const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
-      const owners = ownerIds.length > 0
-        ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
-        : [];
-      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
+      if (cacheHit) {
+        console.log(`[CACHE HIT] /api/macroprocesos in ${totalDuration}ms`);
+      } else {
+        console.log(`[CACHE MISS] /api/macroprocesos computed in ${totalDuration}ms`);
+      }
 
-      const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
-        const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-        const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
+      if (totalDuration > 2000) {
+        console.warn(`[PERF] /api/macroprocesos took ${totalDuration}ms (threshold: 2000ms, cacheHit: ${cacheHit})`);
+      }
 
-        return {
-          ...macroproceso,
-          ...riskLevels,
-          owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
-        };
-      });
-
-      // Cache for 60 seconds (L1: 30s, L2: 60s)
-      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
-
-      res.json(macroprocesoswithRisks);
+      // Return data array (backward compatibility) or full response with metadata
+      const data = (response as any)?.data || response;
+      res.json(Array.isArray(data) ? data : response);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch macroprocesos" });
+      const duration = Date.now() - requestStart;
+      
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('TIMEOUT') ||
+         error.message.includes('Endpoint timeout'));
+
+      if (isTimeout) {
+        return res.status(504).json({ 
+          message: "Request timeout. The endpoint took too long to execute.",
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
+      }
+
+      console.error(`[ERROR] /api/macroprocesos failed after ${duration}ms:`, error);
+      res.status(500).json({ 
+        message: "Failed to fetch macroprocesos",
+        error: error instanceof Error ? error.message : "Unknown error",
+        duration: `${duration}ms`
+      });
     }
   });
 
@@ -24005,10 +24080,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
 
       const duration = Date.now() - startTime;
-      if (duration > 1000) {
-        console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
-      } else if (duration < 10) {
+      const cacheHit = duration < 100; // Likely cache hit if <100ms
+      
+      if (cacheHit) {
         console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
+      } else if (duration > 2000) {
+        console.warn(`[PERF] /api/process-owners took ${duration}ms (threshold: 2000ms)`);
       }
 
       res.json(processOwners);
@@ -24016,9 +24093,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
 
-      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated') || error.message.includes('Query timeout'))) {
-        return res.status(500).json({
-          message: "Database connection timeout. Please try again.",
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('Connection terminated') || 
+         error.message.includes('Query timeout') ||
+         error.message.includes('Cache/query operation timeout'));
+
+      if (isTimeout) {
+        return res.status(504).json({
+          message: "Request timeout. The endpoint took too long to execute.",
           error: "TIMEOUT",
           duration: `${duration}ms`
         });

@@ -218,8 +218,26 @@ export async function setupAuth(app: Express) {
     }
   });
 
+  // OPTIMIZED: Simple in-memory cache for deserialized users (TTL: 30s)
+  // This reduces redundant deserializations for the same user in short time windows
+  const userDeserializeCache = new Map<string, { user: Express.User; timestamp: number }>();
+  const DESERIALIZE_CACHE_TTL = 30 * 1000; // 30 seconds
+
   passport.deserializeUser(async (sessionData: any, cb) => {
+    const deserializeStart = Date.now();
     try {
+      const userId = sessionData?.id;
+      
+      // Check cache first (only if we have a valid user ID)
+      if (userId) {
+        const cached = userDeserializeCache.get(userId);
+        if (cached && Date.now() - cached.timestamp < DESERIALIZE_CACHE_TTL) {
+          // Cache hit - return immediately
+          cb(null, cached.user);
+          return;
+        }
+      }
+
       const user = {
         id: sessionData.id,
         email: sessionData.email || '',
@@ -227,10 +245,31 @@ export async function setupAuth(app: Express) {
         isPlatformAdmin: sessionData.isPlatformAdmin === true,
         permissions: [] as string[]
       };
-      console.log('[Passport] Deserializing user:', user.id);
+
+      // Cache the deserialized user
+      if (userId) {
+        userDeserializeCache.set(userId, { user: user as Express.User, timestamp: Date.now() });
+        // Cleanup old entries periodically (keep cache size reasonable)
+        if (userDeserializeCache.size > 1000) {
+          const now = Date.now();
+          for (const [key, value] of userDeserializeCache.entries()) {
+            if (now - value.timestamp > DESERIALIZE_CACHE_TTL) {
+              userDeserializeCache.delete(key);
+            }
+          }
+        }
+      }
+
+      // Only log if deserialization is slow (>10ms) or in development
+      const duration = Date.now() - deserializeStart;
+      if (duration > 10 || process.env.NODE_ENV !== 'production') {
+        console.log(`[Passport] Deserializing user: ${user.id} (${duration}ms)`);
+      }
+
       cb(null, user as Express.User);
     } catch (err) {
-      console.error('[Passport] Deserialize error:', err);
+      const duration = Date.now() - deserializeStart;
+      console.error(`[Passport] Deserialize error after ${duration}ms:`, err);
       cb(err as Error, null);
     }
   });

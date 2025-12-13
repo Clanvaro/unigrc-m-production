@@ -15,6 +15,7 @@
 import { notificationService } from "./notification-service";
 import { NotificationTypes } from "@shared/schema";
 import { distributedCache } from "./services/redis";
+import { twoTierCache } from "./services/two-tier-cache";
 import {
   getSystemConfigFromCache,
   setSystemConfigCache,
@@ -14449,18 +14450,14 @@ export class DatabaseStorage extends MemStorage {
   async getGerencias(): Promise<Gerencia[]> {
     const cacheKey = 'gerencias:single-tenant';
 
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cacheStart = Date.now();
-    const cached = await distributedCache.get(cacheKey);
-    const cacheDuration = Date.now() - cacheStart;
-    
+    // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <200ms with timeout)
+    // TTL 5 min - catalog data changes infrequently
+    const cached = await twoTierCache.get(cacheKey);
     if (cached) {
-      console.log(`[DB] getGerencias: Cache hit in ${cacheDuration}ms`);
       return cached;
     }
 
-    console.log(`[DB] getGerencias: Cache miss (checked in ${cacheDuration}ms), querying database...`);
-    
+    // Cache miss - query database
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       return await db.select().from(gerencias)
@@ -14468,13 +14465,13 @@ export class DatabaseStorage extends MemStorage {
         .orderBy(gerencias.level, gerencias.order);
     });
     const queryDuration = Date.now() - queryStart;
-    console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
+    
+    if (queryDuration > 100) {
+      console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
+    }
 
-    // Cache for 60 seconds
-    const cacheSetStart = Date.now();
-    await distributedCache.set(cacheKey, result, 60);
-    const cacheSetDuration = Date.now() - cacheSetStart;
-    console.log(`[DB] getGerencias: Cache set completed in ${cacheSetDuration}ms`);
+    // Cache for 5 minutes (L1: 30s, L2: 5min)
+    await twoTierCache.set(cacheKey, result, 300);
 
     return result;
   }
