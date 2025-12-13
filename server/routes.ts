@@ -1989,6 +1989,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const steps: any[] = [];
     const ENDPOINT_TIMEOUT_MS = 60000; // 60 seconds max for entire endpoint
 
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/risks/page-data-lite START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
+
     const mark = (name: string) => steps.push({ name, t: Date.now() - start });
 
     // Helper to add timeout to a promise
@@ -8765,6 +8775,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // OPTIMIZED: Aggregated endpoint for controls with all details in a single query
   app.get("/api/controls/with-details", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/controls/with-details START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
@@ -10473,6 +10492,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const requestStart = Date.now();
     const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds for the entire endpoint
     const QUERY_TIMEOUT_MS = 10000; // 10 seconds for the query
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/action-plans START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -16812,6 +16840,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const requestStart = Date.now();
     const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
     const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/macroprocesos START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
     try {
       const cacheKey = `macroprocesos:single-tenant:${CACHE_VERSION}`;
 
@@ -24028,7 +24065,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     const QUERY_TIMEOUT_MS = 5000; // 5 second timeout for query execution
-    
+    // OPTIMIZED: Log pool metrics at start to detect connection leaks
+    const poolMetrics = getPoolMetrics();
+    if (poolMetrics) {
+      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
+      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
+      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
+        console.log(`[POOL] /api/process-owners START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
+      }
+    }
     try {
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;

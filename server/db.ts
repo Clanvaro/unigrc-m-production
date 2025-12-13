@@ -289,8 +289,31 @@ if (pool) {
     });
   });
 
+  // OPTIMIZED: Track connection creation to detect leaks
+  // Only log if many connections are created in a short time (potential leak)
+  let connectionCreationTimes: number[] = [];
+  const CONNECTION_LEAK_THRESHOLD = 5; // Alert if 5+ connections in 10 seconds
+  const CONNECTION_LEAK_WINDOW = 10000; // 10 seconds window
+
   pool.on('connect', () => {
-    console.log('✅ New database connection established');
+    const now = Date.now();
+    connectionCreationTimes.push(now);
+    
+    // Clean old entries (older than window)
+    connectionCreationTimes = connectionCreationTimes.filter(time => now - time < CONNECTION_LEAK_WINDOW);
+    
+    // Only log if it's unusual (many connections in short time) or first few connections
+    const recentConnections = connectionCreationTimes.length;
+    const metrics = getPoolMetrics();
+    
+    if (recentConnections >= CONNECTION_LEAK_THRESHOLD) {
+      // Potential leak - log with pool metrics
+      console.warn(`⚠️ [POOL LEAK?] ${recentConnections} new connections in ${CONNECTION_LEAK_WINDOW/1000}s. Pool: total=${metrics?.totalCount}/${metrics?.maxConnections}, idle=${metrics?.idleCount}, active=${(metrics?.totalCount || 0) - (metrics?.idleCount || 0)}`);
+    } else if (recentConnections <= 2) {
+      // Normal - first few connections, log normally
+      console.log(`✅ New database connection established (${recentConnections} in last ${CONNECTION_LEAK_WINDOW/1000}s)`);
+    }
+    // Otherwise, silent (normal connection creation)
   });
 
   // Log slow queries for debugging (Nov 23, 2025)
