@@ -1485,19 +1485,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Processes - Basic endpoint for fast initial loading - with 60s distributed cache
   app.get("/api/processes/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Try two-tier cache first (L1: <1ms, L2: <100ms with timeout)
       const cacheKey = `processes-basic:single-tenant`;
       const cached = await twoTierCache.get(cacheKey);
       if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/processes/basic in ${duration}ms`);
+        }
         return res.json(cached);
       }
+
+      console.log(`[CACHE MISS] /api/processes/basic - fetching data`);
+      const fetchStart = Date.now();
 
       // PERFORMANCE: Only fetch process risk levels (not all entities)
       const [processes, allRiskLevels] = await Promise.all([
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
+      
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`[DB] /api/processes/basic fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
+      
+      if (fetchDuration > 3000) {
+        console.warn(`⚠️ Slow /api/processes/basic query: ${fetchDuration}ms`);
+      }
 
       // Return essential fields with risk count for display
       const basicProcesses = processes.map((process) => {
@@ -1519,35 +1534,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache for 30 minutes (L1: 5min, L2: 30min) - static organizational structure
       await twoTierCache.set(cacheKey, basicProcesses, 1800);
 
+      const totalDuration = Date.now() - requestStart;
+      console.log(`[PERF] /api/processes/basic COMPLETE in ${totalDuration}ms (${basicProcesses.length} processes)`);
+      
       res.json(basicProcesses);
     } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/processes/basic failed after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+        console.error('Error message:', error.message);
+      }
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      console.error("Error in /api/processes/basic:", error);
-      console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
       res.status(500).json({ 
         message: "Failed to fetch basic processes",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
     }
   });
 
   // Processes - Full endpoint with risk calculations (legacy) - with 60s distributed cache
   app.get("/api/processes", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Try distributed cache first (60s TTL)
       const cacheKey = `processes:single-tenant`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/processes in ${duration}ms`);
+        }
         return res.json(cached);
       }
+
+      console.log(`[CACHE MISS] /api/processes - fetching data`);
+      const fetchStart = Date.now();
 
       // PERFORMANCE: Only fetch process risk levels (not all entities)
       const [processes, allRiskLevels] = await Promise.all([
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
+      
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`[DB] /api/processes fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
+      
+      if (fetchDuration > 3000) {
+        console.warn(`⚠️ Slow /api/processes query: ${fetchDuration}ms`);
+      }
 
       // Filter out soft-deleted records
       const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
@@ -1563,13 +1600,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache for 60 seconds
       await distributedCache.set(cacheKey, processesWithRisks, 60);
 
+      const totalDuration = Date.now() - requestStart;
+      console.log(`[PERF] /api/processes COMPLETE in ${totalDuration}ms (${processesWithRisks.length} processes)`);
+      
       res.json(processesWithRisks);
     } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/processes failed after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+        console.error('Error message:', error.message);
+      }
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      console.error("Error in /api/processes:", error);
-      res.status(500).json({ message: "Failed to fetch processes", error: error instanceof Error ? error.message : 'Unknown error' });
+      res.status(500).json({ 
+        message: "Failed to fetch processes",
+        error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
+      });
     }
   });
 
@@ -16370,20 +16418,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Macroprocesos routes - with 60s distributed cache
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       const cacheKey = `macroprocesos:single-tenant`;
 
       // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
       const cached = await twoTierCache.get(cacheKey);
       if (cached) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/macroprocesos in ${duration}ms`);
+        }
         return res.json(cached);
       }
+
+      console.log(`[CACHE MISS] /api/macroprocesos - fetching data`);
+      const fetchStart = Date.now();
 
       // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
       const [macroprocesos, allRiskLevels] = await Promise.all([
         storage.getMacroprocesos(),
         storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
       ]);
+      
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`[DB] /api/macroprocesos fetched ${macroprocesos.length} macroprocesos and risk levels in ${fetchDuration}ms`);
+      
+      if (fetchDuration > 3000) {
+        console.warn(`⚠️ Slow /api/macroprocesos query: ${fetchDuration}ms`);
+      }
 
       // Filter out soft-deleted records
       const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
@@ -16409,9 +16472,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache for 60 seconds (L1: 30s, L2: 60s)
       await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
 
+      const totalDuration = Date.now() - requestStart;
+      console.log(`[PERF] /api/macroprocesos COMPLETE in ${totalDuration}ms (${macroprocesoswithRisks.length} macroprocesos)`);
+      
       res.json(macroprocesoswithRisks);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch macroprocesos" });
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/macroprocesos failed after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+        console.error('Error message:', error.message);
+      }
+      res.status(500).json({ 
+        message: "Failed to fetch macroprocesos",
+        error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
+      });
     }
   });
 
