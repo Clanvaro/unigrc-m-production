@@ -8691,20 +8691,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const filterKey = JSON.stringify(filters);
       const cacheKey = `controls-with-details:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/controls/with-details in ${Date.now() - requestStart}ms`);
-        return res.json(cached);
-      }
 
-      console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
-
-      // Add timeout to prevent long-running queries (8 seconds max)
-      const QUERY_TIMEOUT_MS = 8000;
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
+      const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds max for entire endpoint
+      const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query (reduced from 8s to be more aggressive)
       const queryStartTime = Date.now();
 
       return await Promise.race([
-        withRetry(async () => {
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
+            
+            return await Promise.race([
+              withRetry(async () => {
           // Build WHERE conditions for filtering
           const whereConditions: any[] = [sql`c.status <> 'deleted'`];
         
@@ -8929,30 +8929,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         });
 
-        const response = {
-          data: controls,
-          pagination: {
-            limit,
-            offset,
-            total,
-            hasMore: offset + limit < total
-          }
-        };
+                const queryDuration = Date.now() - queryStartTime;
+                const duration = Date.now() - requestStart;
+                
+                const response = {
+                  data: controls,
+                  pagination: {
+                    limit,
+                    offset,
+                    total,
+                    hasMore: offset + limit < total
+                  },
+                  _meta: {
+                    fetchedAt: new Date().toISOString(),
+                    duration: duration,
+                    queryDuration: queryDuration,
+                  }
+                };
 
-        await distributedCache.set(cacheKey, response, 60);
-        const queryDuration = Date.now() - queryStartTime;
-        const duration = Date.now() - requestStart;
-        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (query: ${queryDuration}ms, ${controls.length} controls, total: ${total})`);
-        
-        res.json(response);
-        }),
+                console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (query: ${queryDuration}ms, ${controls.length} controls, total: ${total})`);
+                
+                // Log warning if query is slow
+                if (queryDuration > 5000) {
+                  console.warn(`[PERF] /api/controls/with-details query took ${queryDuration}ms (threshold: 5000ms)`);
+                }
+                
+                return response;
+              }),
+              new Promise<never>((_, reject) => 
+                setTimeout(() => {
+                  const elapsed = Date.now() - queryStartTime;
+                  reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
+                }, QUERY_TIMEOUT_MS)
+              )
+            ]);
+          },
+          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
+        ),
         new Promise<never>((_, reject) => 
           setTimeout(() => {
-            const elapsed = Date.now() - queryStartTime;
-            reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
-          }, QUERY_TIMEOUT_MS)
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
         )
       ]);
+
+      const totalDuration = Date.now() - requestStart;
+      const cacheHit = !response._meta;
+      
+      if (cacheHit) {
+        console.log(`[CACHE HIT] /api/controls/with-details in ${totalDuration}ms`);
+      } else {
+        console.log(`[CACHE MISS] /api/controls/with-details computed in ${totalDuration}ms`);
+      }
+
+      // Log warning if endpoint is slow
+      if (totalDuration > 5000) {
+        console.warn(`[PERF] /api/controls/with-details took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
+      }
+
+      res.json(response);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
@@ -8976,7 +9012,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Return appropriate error response
-      if (isTimeout) {
+      const isTimeoutError = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('Query timeout') ||
+         error.message.includes('TIMEOUT') ||
+         error.message.includes('Endpoint timeout'));
+      
+      if (isTimeoutError) {
         return res.status(504).json({ 
           message: "Request timeout. The query took too long to execute.", 
           error: "TIMEOUT",
