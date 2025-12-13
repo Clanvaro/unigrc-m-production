@@ -16416,6 +16416,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Catalog endpoint for process structure - used by organization page
+  app.get("/api/catalogs/process-structure", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
+    try {
+      const cacheKey = `catalogs:process-structure:single-tenant`;
+
+      // Try cache first (5 minute TTL - org structure changes infrequently)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        const duration = Date.now() - requestStart;
+        if (duration > 50) {
+          console.log(`[CACHE HIT] /api/catalogs/process-structure in ${duration}ms`);
+        }
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/catalogs/process-structure - fetching data`);
+      const fetchStart = Date.now();
+
+      // Fetch minimal data needed for process structure display
+      const [macroprocesosData, processesData, subprocesosData] = await Promise.all([
+        requireDb()
+          .select({
+            id: macroprocesos.id,
+            code: macroprocesos.code,
+            name: macroprocesos.name,
+            type: macroprocesos.type,
+            order: macroprocesos.order,
+          })
+          .from(macroprocesos)
+          .where(isNull(macroprocesos.deletedAt))
+          .orderBy(macroprocesos.order),
+        
+        requireDb()
+          .select({
+            id: processes.id,
+            code: processes.code,
+            name: processes.name,
+            macroprocesoId: processes.macroprocesoId,
+          })
+          .from(processes)
+          .where(isNull(processes.deletedAt))
+          .orderBy(processes.code),
+        
+        requireDb()
+          .select({
+            id: subprocesos.id,
+            code: subprocesos.code,
+            name: subprocesos.name,
+            procesoId: subprocesos.procesoId,
+          })
+          .from(subprocesos)
+          .where(isNull(subprocesos.deletedAt))
+          .orderBy(subprocesos.code),
+      ]);
+
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`[DB] /api/catalogs/process-structure fetched data in ${fetchDuration}ms (${macroprocesosData.length} macros, ${processesData.length} processes, ${subprocesosData.length} subprocesos)`);
+
+      const response = {
+        macroprocesos: macroprocesosData,
+        processes: processesData,
+        subprocesos: subprocesosData,
+      };
+
+      // Cache for 5 minutes
+      await distributedCache.set(cacheKey, response, 300);
+
+      const totalDuration = Date.now() - requestStart;
+      console.log(`[PERF] /api/catalogs/process-structure COMPLETE in ${totalDuration}ms`);
+      
+      res.json(response);
+    } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/catalogs/process-structure failed after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+        console.error('Error message:', error.message);
+      }
+      res.status(500).json({ 
+        message: "Error interno del servidor al obtener la estructura de procesos",
+        error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
+      });
+    }
+  });
+
   // Macroprocesos routes - with 60s distributed cache
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const requestStart = Date.now();
