@@ -1935,58 +1935,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
 
-      // Try cache first
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        mark('cache-hit');
-        console.log('[page-data-lite timing]', {
-          total: Date.now() - start,
-          steps,
-        });
-        return res.json(cached);
-      }
-      mark('cache-miss');
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
+      const response = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          mark('cache-miss');
+          
+          // OPTIMIZED: Add individual timeouts to prevent any single query from hanging
+          // Reduced timeout to 10s for faster failure detection and better UX
+          const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query (reduced from 15s)
 
-      // OPTIMIZED: Add individual timeouts to prevent any single query from hanging
-      // Use Promise.allSettled to continue even if some queries fail
-      const QUERY_TIMEOUT_MS = 15000; // 15 seconds per query
+      // OPTIMIZED: Add timing to each query to identify slow queries
+      const queryWithTiming = async <T>(promise: Promise<T>, name: string): Promise<T | null> => {
+        const queryStart = Date.now();
+        try {
+          const result = await withTimeout(promise, QUERY_TIMEOUT_MS, name);
+          const queryDuration = Date.now() - queryStart;
+          if (queryDuration > 2000) {
+            console.log(`[page-data-lite] ${name} took ${queryDuration}ms`);
+          }
+          return result;
+        } catch (err) {
+          const queryDuration = Date.now() - queryStart;
+          console.error(`[page-data-lite] ${name} failed after ${queryDuration}ms:`, err);
+          return null;
+        }
+      };
 
-      const risksPromise = withTimeout(storage.getRisksLite(), QUERY_TIMEOUT_MS, 'getRisksLite').catch(err => {
-        console.error('[page-data-lite] getRisksLite failed:', err);
-        return null; // Return null on error instead of throwing
-      });
-      const ownersPromise = withTimeout(storage.getProcessOwners(), QUERY_TIMEOUT_MS, 'getProcessOwners').catch(err => {
-        console.error('[page-data-lite] getProcessOwners failed:', err);
-        return null;
-      });
-      const statsPromise = withTimeout(storage.getRiskStats(), QUERY_TIMEOUT_MS, 'getRiskStats').catch(err => {
-        console.error('[page-data-lite] getRiskStats failed:', err);
-        return null;
-      });
-      const gerenciasPromise = withTimeout(storage.getGerencias(), QUERY_TIMEOUT_MS, 'getGerencias').catch(err => {
-        console.error('[page-data-lite] getGerencias failed:', err);
-        return null;
-      });
-      const macroprocesosPromise = withTimeout(storage.getMacroprocesos(), QUERY_TIMEOUT_MS, 'getMacroprocesos').catch(err => {
-        console.error('[page-data-lite] getMacroprocesos failed:', err);
-        return null;
-      });
-      const subprocesosPromise = withTimeout(storage.getSubprocesosWithOwners(), QUERY_TIMEOUT_MS, 'getSubprocesosWithOwners').catch(err => {
-        console.error('[page-data-lite] getSubprocesosWithOwners failed:', err);
-        return null;
-      });
-      const processesPromise = withTimeout(storage.getProcesses(), QUERY_TIMEOUT_MS, 'getProcesses').catch(err => {
-        console.error('[page-data-lite] getProcesses failed:', err);
-        return null;
-      });
-      const riskCategoriesPromise = withTimeout(storage.getRiskCategories(), QUERY_TIMEOUT_MS, 'getRiskCategories').catch(err => {
-        console.error('[page-data-lite] getRiskCategories failed:', err);
-        return null;
-      });
-      const processGerenciasRelationsPromise = withTimeout(storage.getAllProcessGerenciasRelations(), QUERY_TIMEOUT_MS, 'getAllProcessGerenciasRelations').catch(err => {
-        console.error('[page-data-lite] getAllProcessGerenciasRelations failed:', err);
-        return null;
-      });
+      const risksPromise = queryWithTiming(storage.getRisksLite(), 'getRisksLite');
+      const ownersPromise = queryWithTiming(storage.getProcessOwners(), 'getProcessOwners');
+      const statsPromise = queryWithTiming(storage.getRiskStats(), 'getRiskStats');
+      const gerenciasPromise = queryWithTiming(storage.getGerencias(), 'getGerencias');
+      const macroprocesosPromise = queryWithTiming(storage.getMacroprocesos(), 'getMacroprocesos');
+      const subprocesosPromise = queryWithTiming(storage.getSubprocesosWithOwners(), 'getSubprocesosWithOwners');
+      const processesPromise = queryWithTiming(storage.getProcesses(), 'getProcesses');
+      const riskCategoriesPromise = queryWithTiming(storage.getRiskCategories(), 'getRiskCategories');
+      const processGerenciasRelationsPromise = queryWithTiming(storage.getAllProcessGerenciasRelations(), 'getAllProcessGerenciasRelations');
 
       mark('promises-created');
 
@@ -2030,9 +2014,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!owners) failed.push('owners');
         if (!stats) failed.push('stats');
         console.error(`[page-data-lite] Critical queries failed: ${failed.join(', ')}`);
-        // Return partial data if possible, or error if critical data is missing
+        // Throw error if critical data is missing (will be caught by outer try-catch)
         if (!risks) {
-          return res.status(500).json({ message: "Failed to fetch risks data", error: "Critical query timeout" });
+          throw new Error("Failed to fetch risks data: Critical query timeout");
         }
       }
 
@@ -2053,16 +2037,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskCategories: riskCategories || [],
         processGerencias: processGerenciasRelations || []
       };
-      mark('response-built');
+          mark('response-built');
 
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      await distributedCache.set(cacheKey, response, 900);
-      mark('cache-set');
+          // Add metadata for debugging
+          const responseWithTiming = {
+            ...response,
+            _meta: {
+              fetchedAt: new Date().toISOString(),
+              duration: Date.now() - start,
+            }
+          };
 
+          const totalDuration = Date.now() - start;
+          console.log('[page-data-lite timing]', {
+            total: totalDuration,
+            steps,
+            cacheHit: false,
+          });
+
+          // Log warning if endpoint is slow
+          if (totalDuration > 5000) {
+            console.warn(`[PERF] /api/risks/page-data-lite took ${totalDuration}ms (threshold: 5000ms)`);
+          }
+
+          return responseWithTiming;
+        },
+        1800 // 30 minutes TTL (increased from 15 min)
+      );
+
+      mark('cache-complete');
+      const totalDuration = Date.now() - start;
+      
+      // Log cache status
+      const cacheHit = !response._meta;
+      if (cacheHit) {
+        mark('cache-hit');
+      }
+      
       console.log('[page-data-lite timing]', {
-        total: Date.now() - start,
+        total: totalDuration,
         steps,
+        cacheHit,
       });
+
+      // Log warning if endpoint is slow (even with cache)
+      if (totalDuration > 5000) {
+        console.warn(`[PERF] /api/risks/page-data-lite took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
+      }
 
       res.json(response);
     } catch (err) {
