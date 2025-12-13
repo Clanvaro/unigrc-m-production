@@ -3751,6 +3751,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Batch load relations for visible risks (on-demand loading for paginated view)
   // OPTIMIZED: Uses WHERE IN queries instead of loading ALL data and filtering in memory
   app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStartTime = Date.now();
+    const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query
+    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds total
+
     try {
       const { riskIds, limitPerRisk } = req.body;
 
@@ -3776,81 +3780,111 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}:limit${maxLinksPerRisk}`;
 
-      const requestStartTime = Date.now();
-
       // OPTIMIZED: Use two-tier cache (memory + Redis) with 60s TTL for better performance
-      const response = await getFromTieredCache(
-        cacheKey,
-        async () => {
-          const dbStartTime = Date.now();
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const dbStartTime = Date.now();
 
-          // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
-          const [allLinks, allControls] = await Promise.all([
-            storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
+            // Helper to add timeout to a promise
+            const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, name: string): Promise<T> => {
+              return Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                  setTimeout(() => {
+                    reject(new Error(`${name} timeout after ${timeoutMs}ms`));
+                  }, timeoutMs);
+                })
+              ]);
+            };
+
+            // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+            // Add individual timeouts to prevent any query from hanging
+            const linksPromise = withTimeout(
+              storage.getRiskProcessLinksByRiskIds(limitedIds),
+              QUERY_TIMEOUT_MS,
+              'getRiskProcessLinksByRiskIds'
+            ).catch(err => {
               console.error("[batch-relations] Error fetching risk process links:", err);
               return [];
-            }),
-            storage.getRiskControlsByRiskIds(limitedIds).catch(err => {
+            });
+
+            const controlsPromise = withTimeout(
+              storage.getRiskControlsByRiskIds(limitedIds),
+              QUERY_TIMEOUT_MS,
+              'getRiskControlsByRiskIds'
+            ).catch(err => {
               console.error("[batch-relations] Error fetching risk controls:", err);
               return [];
-            })
-          ]);
+            });
 
-          // Apply per-risk limits to prevent huge responses
-          // Group by riskId and limit each group
-          const linksByRisk = new Map<string, typeof allLinks>();
-          const controlsByRisk = new Map<string, typeof allControls>();
+            const queryStartTime = Date.now();
+            const [allLinks, allControls] = await Promise.all([linksPromise, controlsPromise]);
+            const queryDuration = Date.now() - queryStartTime;
 
-          // Group process links by riskId
-          for (const link of allLinks) {
-            if (!linksByRisk.has(link.riskId)) {
-              linksByRisk.set(link.riskId, []);
+            // OPTIMIZED: Use more efficient grouping with pre-sized arrays
+            const groupingStartTime = Date.now();
+            const linksByRisk = new Map<string, typeof allLinks>();
+            const controlsByRisk = new Map<string, typeof allControls>();
+
+            // Pre-allocate arrays for known riskIds to avoid repeated Map lookups
+            for (const riskId of limitedIds) {
+              linksByRisk.set(riskId, []);
+              controlsByRisk.set(riskId, []);
             }
-            const group = linksByRisk.get(link.riskId)!;
-            if (group.length < maxLinksPerRisk) {
-              group.push(link);
-            }
-          }
 
-          // Group controls by riskId
-          for (const control of allControls) {
-            if (!controlsByRisk.has(control.riskId)) {
-              controlsByRisk.set(control.riskId, []);
+            // Group process links by riskId (optimized - no repeated Map.has checks)
+            for (const link of allLinks) {
+              const group = linksByRisk.get(link.riskId);
+              if (group && group.length < maxLinksPerRisk) {
+                group.push(link);
+              }
             }
-            const group = controlsByRisk.get(control.riskId)!;
-            if (group.length < maxLinksPerRisk) {
-              group.push(control);
+
+            // Group controls by riskId (optimized - no repeated Map.has checks)
+            for (const control of allControls) {
+              const group = controlsByRisk.get(control.riskId);
+              if (group && group.length < maxLinksPerRisk) {
+                group.push(control);
+              }
             }
-          }
 
-          // Flatten back to arrays
-          const filteredLinks = Array.from(linksByRisk.values()).flat();
-          const filteredControls = Array.from(controlsByRisk.values()).flat();
+            // Flatten back to arrays
+            const filteredLinks = Array.from(linksByRisk.values()).flat();
+            const filteredControls = Array.from(controlsByRisk.values()).flat();
+            const groupingDuration = Date.now() - groupingStartTime;
 
-          const dbDuration = Date.now() - dbStartTime;
-          const totalLinks = filteredLinks.length;
-          const totalControls = filteredControls.length;
-          const truncatedLinks = allLinks.length > totalLinks;
-          const truncatedControls = allControls.length > totalControls;
-          
-          console.log(`[PERF] [batch-relations] DB query took ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
+            const dbDuration = Date.now() - dbStartTime;
+            const totalLinks = filteredLinks.length;
+            const totalControls = filteredControls.length;
+            const truncatedLinks = allLinks.length > totalLinks;
+            const truncatedControls = allControls.length > totalControls;
+            
+            console.log(`[PERF] [batch-relations] DB query: ${queryDuration}ms, grouping: ${groupingDuration}ms, total: ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
 
-          return {
-            riskProcessLinks: filteredLinks,
-            riskControls: filteredControls,
-            metadata: {
-              totalRisks: limitedIds.length,
-              linksPerRiskLimit: maxLinksPerRisk,
-              controlsPerRiskLimit: maxLinksPerRisk,
-              linksTruncated: truncatedLinks,
-              controlsTruncated: truncatedControls,
-              totalLinksAvailable: allLinks.length,
-              totalControlsAvailable: allControls.length
-            }
-          };
-        },
-        60 // Redis TTL: 60 seconds (increased from 15s)
-      );
+            return {
+              riskProcessLinks: filteredLinks,
+              riskControls: filteredControls,
+              metadata: {
+                totalRisks: limitedIds.length,
+                linksPerRiskLimit: maxLinksPerRisk,
+                controlsPerRiskLimit: maxLinksPerRisk,
+                linksTruncated: truncatedLinks,
+                controlsTruncated: truncatedControls,
+                totalLinksAvailable: allLinks.length,
+                totalControlsAvailable: allControls.length
+              }
+            };
+          },
+          60 // Redis TTL: 60 seconds (increased from 15s)
+        ),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`Endpoint timeout after ${ENDPOINT_TIMEOUT_MS}ms`));
+          }, ENDPOINT_TIMEOUT_MS);
+        })
+      ]);
 
       const totalDuration = Date.now() - requestStartTime;
       
@@ -3866,8 +3900,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(response);
     } catch (error) {
-      console.error("[ERROR] /api/risks/batch-relations failed:", error);
-      res.status(500).json({ message: "Failed to fetch risk relations" });
+      const duration = Date.now() - requestStartTime;
+      console.error("[ERROR] /api/risks/batch-relations failed:", error, { duration: `${duration}ms` });
+      
+      // Check if it's a timeout error
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Timeout'))) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
+      }
+      
+      res.status(500).json({ message: "Failed to fetch risk relations", error: String(error), duration: `${duration}ms` });
     }
   });
 
