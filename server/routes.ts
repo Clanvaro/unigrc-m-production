@@ -8617,7 +8617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           INNER JOIN controls_base cb ON co.control_id = cb.id
           INNER JOIN process_owners po ON co.process_owner_id = po.id
           WHERE co.is_active = true
-          ORDER BY co.control_id, co.created_at DESC
+          ORDER BY co.control_id, co.assigned_at DESC
         )
         SELECT 
           cb.id,
