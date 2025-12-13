@@ -8893,7 +8893,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             c.id,
             c.code,
             c.name,
-            c.description,
+            -- OPTIMIZED: Exclude large text fields from list view (description, validation_comments, deletion_reason)
+            -- These fields are only needed in detail view (/api/controls/:id) to reduce payload size
+            -- c.description,  -- Excluded: large text field, only needed in detail view
             c.type,
             c.frequency,
             c.effectiveness,
@@ -8903,12 +8905,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             c.validation_status,
             c.validated_at,
             c.validated_by,
-            c.validation_comments,
+            -- c.validation_comments,  -- Excluded: large text field, only needed in detail view
             c.created_by,
             c.updated_by,
             c.deleted_by,
             c.deleted_at,
-            c.deletion_reason,
+            -- c.deletion_reason,  -- Excluded: large text field, only needed in detail view
             c.created_at,
             c.updated_at
           ${baseFrom}
@@ -8960,7 +8962,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cb.id,
           cb.code,
           cb.name,
-          cb.description,
+          -- OPTIMIZED: Excluded large text fields (description, validation_comments, deletion_reason)
+          -- These are only available in detail endpoint (/api/controls/:id)
+          NULL::text as description,  -- Excluded from list view to reduce payload size
           cb.type,
           cb.frequency,
           cb.effectiveness,
@@ -8970,12 +8974,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cb.validation_status,
           cb.validated_at,
           cb.validated_by,
-          cb.validation_comments,
+          NULL::text as validation_comments,  -- Excluded from list view to reduce payload size
           cb.created_by,
           cb.updated_by,
           cb.deleted_by,
           cb.deleted_at,
-          cb.deletion_reason,
+          NULL::text as deletion_reason,  -- Excluded from list view to reduce payload size
           cb.created_at,
           cb.updated_at,
           COALESCE(rd.risk_count, 0)::int as associated_risks_count,
@@ -9034,7 +9038,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             id: row.id,
             code: row.code,
             name: row.name,
-            description: row.description,
+            // OPTIMIZED: Large text fields excluded from list view (null in list, available in detail endpoint)
+            description: row.description || null,  // Will be null in list view, full value in detail
             type: row.type,
             frequency: row.frequency,
             effectiveness: maxEffectivenessLimit < 100 
@@ -9046,12 +9051,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             validationStatus: row.validation_status,
             validatedAt: row.validated_at,
             validatedBy: row.validated_by,
-            validationComments: row.validation_comments,
+            validationComments: row.validation_comments || null,  // Will be null in list view, full value in detail
             createdBy: row.created_by,
             updatedBy: row.updated_by,
             deletedBy: row.deleted_by,
             deletedAt: row.deleted_at,
-            deletionReason: row.deletion_reason,
+            deletionReason: row.deletion_reason || null,  // Will be null in list view, full value in detail
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             associatedRisksCount: row.associated_risks_count || 0,
