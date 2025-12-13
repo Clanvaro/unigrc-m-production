@@ -15,7 +15,6 @@
 import { notificationService } from "./notification-service";
 import { NotificationTypes } from "@shared/schema";
 import { distributedCache } from "./services/redis";
-import { twoTierCache } from "./services/two-tier-cache";
 import {
   getSystemConfigFromCache,
   setSystemConfigCache,
@@ -392,7 +391,7 @@ export interface IStorage {
   // RiskProcessLink validation
   validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined>;
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
-  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, options?: { limit?: number; offset?: number }): Promise<{ data: RiskProcessLinkWithDetails[]; total: number }>;
+  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
 
@@ -7745,9 +7744,9 @@ export class DatabaseStorage extends MemStorage {
       conditions.push(eq(controls.status, filters.status));
     }
 
-    // NOTE: ownerId filter is not supported in getControlsPaginated
-    // Use getControlsPaginatedWithDetails instead if owner filtering is needed
-    // Controls have owners through controlOwners table (many-to-many relationship)
+    if (filters.ownerId) {
+      conditions.push(eq(controls.ownerId, filters.ownerId));
+    }
 
     if (filters.minEffectiveness !== undefined) {
       conditions.push(sql`${controls.effectiveness} >= ${filters.minEffectiveness}`);
@@ -8161,21 +8160,19 @@ export class DatabaseStorage extends MemStorage {
   async getMacroprocesos(): Promise<Macroproceso[]> {
     const cacheKey = 'macroprocesos:single-tenant';
 
-    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
-    const cached = twoTierCache.getCatalog(cacheKey);
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Cache miss - query database (fast: ~13ms)
     const result = await withRetry(async () => {
       return await db.select().from(macroprocesos)
         .where(isNull(macroprocesos.deletedAt));
     });
 
-    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
-    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
     return result;
   }
 
@@ -8322,21 +8319,19 @@ export class DatabaseStorage extends MemStorage {
   async getProcesses(): Promise<Process[]> {
     const cacheKey = 'processes:single-tenant';
 
-    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
-    const cached = twoTierCache.getCatalog(cacheKey);
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Cache miss - query database (fast: ~13ms)
     const result = await withRetry(async () => {
       return await db.select().from(processes)
         .where(isNull(processes.deletedAt));
     });
 
-    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
-    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
+    // Cache for 60 seconds
+    await distributedCache.set(cacheKey, result, 60);
     return result;
   }
 
@@ -8680,13 +8675,7 @@ export class DatabaseStorage extends MemStorage {
   async getRiskControlsByRiskIds(riskIds: string[]): Promise<(RiskControl & { control: Control })[]> {
     if (riskIds.length === 0) return [];
 
-    // Validate riskIds to prevent empty arrays in inArray (causes Drizzle errors)
-    const validRiskIds = riskIds.filter(id => id && typeof id === 'string' && id.trim().length > 0);
-    if (validRiskIds.length === 0) return [];
-
     // OPTIMIZED: Select only essential columns instead of entire tables (~80% payload reduction)
-    // FIXED: Removed controls.ownerId - this field doesn't exist in the schema
-    // Controls have owners through controlOwners table (many-to-many relationship)
     const results = await db.select({
       // RiskControl fields
       id: riskControls.id,
@@ -8701,6 +8690,7 @@ export class DatabaseStorage extends MemStorage {
       ctrlFrequency: controls.frequency,
       ctrlEffectiveness: controls.effectiveness,
       ctrlEffectTarget: controls.effectTarget,
+      ctrlOwnerId: controls.ownerId,
       ctrlStatus: controls.status,
       ctrlIsActive: controls.isActive,
       ctrlAutomationLevel: controls.automationLevel
@@ -8708,7 +8698,7 @@ export class DatabaseStorage extends MemStorage {
       .from(riskControls)
       .innerJoin(controls, eq(riskControls.controlId, controls.id))
       .where(and(
-        inArray(riskControls.riskId, validRiskIds),
+        inArray(riskControls.riskId, riskIds),
         isNull(controls.deletedAt)
       ));
 
@@ -8726,10 +8716,10 @@ export class DatabaseStorage extends MemStorage {
         frequency: r.ctrlFrequency,
         effectiveness: r.ctrlEffectiveness,
         effectTarget: r.ctrlEffectTarget,
+        ownerId: r.ctrlOwnerId,
         status: r.ctrlStatus,
         isActive: r.ctrlIsActive,
         automationLevel: r.ctrlAutomationLevel
-        // Note: ownerId removed - controls have owners through controlOwners table
       } as Control
     }));
   }
@@ -8970,13 +8960,9 @@ export class DatabaseStorage extends MemStorage {
       // Build WHERE clause
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-      // Get total count
-      const [{ count }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(risks)
-        .where(whereClause);
-
-      // Get paginated results
+      // OPTIMIZED: Use a single query with window function for better performance
+      // This avoids two separate queries and allows PostgreSQL to optimize better
+      // Get paginated results and total count in one query (more efficient than two separate queries)
       const paginatedRisks = await db
         .select()
         .from(risks)
@@ -8984,6 +8970,14 @@ export class DatabaseStorage extends MemStorage {
         .limit(limit)
         .offset(offset)
         .orderBy(desc(risks.createdAt));
+
+      // OPTIMIZED: Only count if we need to (for pagination info)
+      // Use a faster COUNT(*) with the same WHERE clause
+      // PostgreSQL can optimize this better with the composite index
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(risks)
+        .where(whereClause);
 
       return {
         risks: paginatedRisks,
@@ -9686,21 +9680,21 @@ export class DatabaseStorage extends MemStorage {
   async getRiskCategories(): Promise<RiskCategory[]> {
     const cacheKey = 'risk-categories';
 
-    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
-    const cached = twoTierCache.getCatalog(cacheKey);
+    // Try to get from cache first
+    const cached = await distributedCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Cache miss - query database (fast: ~13ms)
+    // Query database with retry for Neon cold starts
     const categories = await withRetry(async () => {
       return await db.select().from(riskCategories)
         .where(eq(riskCategories.isActive, true));
     });
 
-    // Cache in L1 only (10 min TTL - catalog data changes infrequently)
-    twoTierCache.setCatalog(cacheKey, categories, 10 * 60 * 1000);
+    // Store in cache for 10 minutes (600 seconds)
+    await distributedCache.set(cacheKey, categories, 600);
+
     return categories;
   }
 
@@ -14454,14 +14448,18 @@ export class DatabaseStorage extends MemStorage {
   async getGerencias(): Promise<Gerencia[]> {
     const cacheKey = 'gerencias:single-tenant';
 
-    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
-    const cached = twoTierCache.getCatalog(cacheKey);
+    // Try cache first (60s TTL - catalog data changes infrequently)
+    const cacheStart = Date.now();
+    const cached = await distributedCache.get(cacheKey);
+    const cacheDuration = Date.now() - cacheStart;
+    
     if (cached) {
+      console.log(`[DB] getGerencias: Cache hit in ${cacheDuration}ms`);
       return cached;
     }
 
-    // Cache miss - query database (fast: ~13ms)
+    console.log(`[DB] getGerencias: Cache miss (checked in ${cacheDuration}ms), querying database...`);
+    
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       return await db.select().from(gerencias)
@@ -14469,13 +14467,13 @@ export class DatabaseStorage extends MemStorage {
         .orderBy(gerencias.level, gerencias.order);
     });
     const queryDuration = Date.now() - queryStart;
-    
-    if (queryDuration > 100) {
-      console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
-    }
+    console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
 
-    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
-    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
+    // Cache for 60 seconds
+    const cacheSetStart = Date.now();
+    await distributedCache.set(cacheKey, result, 60);
+    const cacheSetDuration = Date.now() - cacheSetStart;
+    console.log(`[DB] getGerencias: Cache set completed in ${cacheSetDuration}ms`);
 
     return result;
   }
@@ -15171,24 +15169,8 @@ export class DatabaseStorage extends MemStorage {
 
   // Override MemStorage methods to use database
   async getSubprocesos(): Promise<Subproceso[]> {
-    const cacheKey = 'subprocesos:single-tenant';
-
-    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
-    const cached = twoTierCache.getCatalog(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    // Cache miss - query database (fast: ~13ms)
-    const result = await withRetry(async () => {
-      return await db.select().from(subprocesos)
-        .where(isNull(subprocesos.deletedAt));
-    });
-
-    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
-    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
-    return result;
+    return await db.select().from(subprocesos)
+      .where(isNull(subprocesos.deletedAt));
   }
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
@@ -20855,20 +20837,12 @@ export class DatabaseStorage extends MemStorage {
     return results;
   }
 
-  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, options?: { limit?: number; offset?: number }): Promise<{ data: RiskProcessLinkWithDetails[]; total: number }> {
+  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]> {
     // Build WHERE conditions - filter out deleted risks for performance
     const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
 
-    // OPTIMIZED: Get total count first (separate query for better performance)
-    const [{ count }] = await db.select({ 
-      count: sql<number>`count(*)::int` 
-    })
-      .from(riskProcessLinks)
-      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .where(and(...conditions));
-
-    // OPTIMIZED: Build query with pagination if provided
-    let baseQuery = db.select({
+    // First get the base data with process hierarchy
+    const baseResults = await db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
       macroproceso: macroprocesos,
@@ -20894,16 +20868,6 @@ export class DatabaseStorage extends MemStorage {
       .where(and(...conditions))
       .orderBy(riskProcessLinks.createdAt);
 
-    // Apply pagination if provided (Drizzle methods return new query objects)
-    if (options?.limit !== undefined) {
-      baseQuery = baseQuery.limit(options.limit);
-    }
-    if (options?.offset !== undefined) {
-      baseQuery = baseQuery.offset(options.offset);
-    }
-
-    const baseResults = await baseQuery;
-
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
     const owners = ownerIds.length > 0
@@ -20928,7 +20892,7 @@ export class DatabaseStorage extends MemStorage {
       validatedByUser: result.validatedByUser || undefined,
     }));
 
-    return { data: results, total: count };
+    return results;
   }
 
   async getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]> {

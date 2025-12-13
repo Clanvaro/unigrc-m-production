@@ -1535,117 +1535,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Processes - Full endpoint with risk calculations (legacy) - with 60s distributed cache
   app.get("/api/processes", noCacheMiddleware, isAuthenticated, async (req, res) => {
-    const requestStart = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
-    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
     try {
-      const cacheKey = `processes:single-tenant:${CACHE_VERSION}`;
+      // Try distributed cache first (60s TTL)
+      const cacheKey = `processes:single-tenant`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
 
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const queryStartTime = Date.now();
-
-            // OPTIMIZED: Add timeout to prevent long-running queries
-            const processesPromise = storage.getProcessesWithOwners();
-            const riskLevelsPromise = storage.getAllRiskLevelsOptimized({ entities: ['processes'] });
-
-            const queryPromise = Promise.all([
-              Promise.race([
-                processesPromise,
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`getProcessesWithOwners timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-                )
-              ]),
-              Promise.race([
-                riskLevelsPromise,
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`getAllRiskLevelsOptimized timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-                )
-              ])
-            ]);
-
-            const [processes, allRiskLevels] = await queryPromise;
-            const queryDuration = Date.now() - queryStartTime;
-
-            // Log warning if query is slow
-            if (queryDuration > 3000) {
-              console.warn(`[PERF] /api/processes query took ${queryDuration}ms (threshold: 3000ms)`);
-            }
-
-            // Filter out soft-deleted records
-            const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
-
-            const processesWithRisks = activeProcesses.map((process) => {
-              const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-              return {
-                ...process,
-                ...riskLevels
-              };
-            });
-
-            return {
-              data: processesWithRisks,
-              _meta: {
-                fetchedAt: new Date().toISOString(),
-                duration: queryDuration
-              }
-            };
-          },
-          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
+      // PERFORMANCE: Only fetch process risk levels (not all entities)
+      const [processes, allRiskLevels] = await Promise.all([
+        storage.getProcessesWithOwners(),
+        storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
 
-      const totalDuration = Date.now() - requestStart;
-      const cacheHit = !(response as any)?._meta;
+      // Filter out soft-deleted records
+      const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
 
-      if (cacheHit) {
-        console.log(`[CACHE HIT] /api/processes in ${totalDuration}ms`);
-      } else {
-        console.log(`[CACHE MISS] /api/processes computed in ${totalDuration}ms`);
-      }
+      const processesWithRisks = activeProcesses.map((process) => {
+        const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        return {
+          ...process,
+          ...riskLevels
+        };
+      });
 
-      if (totalDuration > 3000) {
-        console.warn(`[PERF] /api/processes took ${totalDuration}ms (threshold: 3000ms, cacheHit: ${cacheHit})`);
-      }
+      // Cache for 60 seconds
+      await distributedCache.set(cacheKey, processesWithRisks, 60);
 
-      // Return data array (backward compatibility) or full response with metadata
-      const data = (response as any)?.data || response;
-      res.json(Array.isArray(data) ? data : response);
+      res.json(processesWithRisks);
     } catch (error) {
-      const duration = Date.now() - requestStart;
-      
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('TIMEOUT') ||
-         error.message.includes('Endpoint timeout'));
-
-      if (isTimeout) {
-        return res.status(504).json({ 
-          message: "Request timeout. The endpoint took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`
-        });
-      }
-
-      console.error(`[ERROR] /api/processes failed after ${duration}ms:`, error);
-      res.status(500).json({ 
-        message: "Failed to fetch processes", 
-        error: error instanceof Error ? error.message : 'Unknown error',
-        duration: `${duration}ms`
-      });
+      console.error("Error in /api/processes:", error);
+      res.status(500).json({ message: "Failed to fetch processes", error: error instanceof Error ? error.message : 'Unknown error' });
     }
   });
 
@@ -1987,31 +1911,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks/page-data-lite", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const start = Date.now();
     const steps: any[] = [];
-    const ENDPOINT_TIMEOUT_MS = 60000; // 60 seconds max for entire endpoint
-
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/risks/page-data-lite START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
 
     const mark = (name: string) => steps.push({ name, t: Date.now() - start });
-
-    // Helper to add timeout to a promise
-    const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, name: string): Promise<T> => {
-      return Promise.race([
-        promise,
-        new Promise<T>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`${name} timeout after ${timeoutMs}ms`));
-          }, timeoutMs);
-        })
-      ]);
-    };
 
     try {
       mark('start');
@@ -2021,58 +1922,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
 
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      const response = await getFromTieredCache(
-        cacheKey,
-        async () => {
-          mark('cache-miss');
-          
-          // OPTIMIZED: Add individual timeouts to prevent any single query from hanging
-          // Reduced timeout to 10s for faster failure detection and better UX
-          const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query (reduced from 15s)
+      // Try cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        mark('cache-hit');
+        console.log('[page-data-lite timing]', {
+          total: Date.now() - start,
+          steps,
+        });
+        return res.json(cached);
+      }
+      mark('cache-miss');
 
-      // OPTIMIZED: Add timing to each query to identify slow queries
-      const queryWithTiming = async <T>(promise: Promise<T>, name: string): Promise<T | null> => {
-        const queryStart = Date.now();
-        try {
-          const result = await withTimeout(promise, QUERY_TIMEOUT_MS, name);
-          const queryDuration = Date.now() - queryStart;
-          if (queryDuration > 2000) {
-            console.log(`[page-data-lite] ${name} took ${queryDuration}ms`);
-          }
-          return result;
-        } catch (err) {
-          const queryDuration = Date.now() - queryStart;
-          console.error(`[page-data-lite] ${name} failed after ${queryDuration}ms:`, err);
-          return null;
-        }
-      };
-
-      const risksPromise = queryWithTiming(storage.getRisksLite(), 'getRisksLite');
-      const ownersPromise = queryWithTiming(storage.getProcessOwners(), 'getProcessOwners');
-      const statsPromise = queryWithTiming(storage.getRiskStats(), 'getRiskStats');
-      const gerenciasPromise = queryWithTiming(storage.getGerencias(), 'getGerencias');
-      const macroprocesosPromise = queryWithTiming(storage.getMacroprocesos(), 'getMacroprocesos');
-      const subprocesosPromise = queryWithTiming(storage.getSubprocesosWithOwners(), 'getSubprocesosWithOwners');
-      const processesPromise = queryWithTiming(storage.getProcesses(), 'getProcesses');
-      const riskCategoriesPromise = queryWithTiming(storage.getRiskCategories(), 'getRiskCategories');
-      const processGerenciasRelationsPromise = queryWithTiming(storage.getAllProcessGerenciasRelations(), 'getAllProcessGerenciasRelations');
+      // Create promises (no await yet) - paralelizar todo
+      // Wrap each promise with error handling to identify which one fails
+      const risksPromise = storage.getRisksLite().catch(err => {
+        console.error('[page-data-lite] getRisksLite failed:', err);
+        throw new Error(`getRisksLite failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const ownersPromise = storage.getProcessOwners().catch(err => {
+        console.error('[page-data-lite] getProcessOwners failed:', err);
+        throw new Error(`getProcessOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const statsPromise = storage.getRiskStats().catch(err => {
+        console.error('[page-data-lite] getRiskStats failed:', err);
+        throw new Error(`getRiskStats failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const gerenciasPromise = storage.getGerencias().catch(err => {
+        console.error('[page-data-lite] getGerencias failed:', err);
+        throw new Error(`getGerencias failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const macroprocesosPromise = storage.getMacroprocesos().catch(err => {
+        console.error('[page-data-lite] getMacroprocesos failed:', err);
+        throw new Error(`getMacroprocesos failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const subprocesosPromise = storage.getSubprocesosWithOwners().catch(err => {
+        console.error('[page-data-lite] getSubprocesosWithOwners failed:', err);
+        throw new Error(`getSubprocesosWithOwners failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const processesPromise = storage.getProcesses().catch(err => {
+        console.error('[page-data-lite] getProcesses failed:', err);
+        throw new Error(`getProcesses failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const riskCategoriesPromise = storage.getRiskCategories().catch(err => {
+        console.error('[page-data-lite] getRiskCategories failed:', err);
+        throw new Error(`getRiskCategories failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations().catch(err => {
+        console.error('[page-data-lite] getAllProcessGerenciasRelations failed:', err);
+        throw new Error(`getAllProcessGerenciasRelations failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
 
       mark('promises-created');
 
-      // OPTIMIZED: Use Promise.allSettled with overall timeout to prevent endpoint from hanging
-      const queryPromise = Promise.all([
-        risksPromise,
-        ownersPromise,
-        statsPromise,
-        gerenciasPromise,
-        macroprocesosPromise,
-        subprocesosPromise,
-        processesPromise,
-        riskCategoriesPromise,
-        processGerenciasRelationsPromise
-      ]);
-
+      // Execute all in parallel
       const [
         risks,
         owners,
@@ -2083,111 +1986,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processes,
         riskCategories,
         processGerenciasRelations
-      ] = await Promise.race([
-        queryPromise,
-        new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`Endpoint timeout after ${ENDPOINT_TIMEOUT_MS}ms`));
-          }, ENDPOINT_TIMEOUT_MS);
-        })
+      ] = await Promise.all([
+        risksPromise,
+        ownersPromise,
+        statsPromise,
+        gerenciasPromise,
+        macroprocesosPromise,
+        subprocesosPromise,
+        processesPromise,
+        riskCategoriesPromise,
+        processGerenciasRelationsPromise
       ]);
       mark('db-done');
 
-      // Check if critical queries failed
-      if (!risks || !owners || !stats) {
-        const failed = [];
-        if (!risks) failed.push('risks');
-        if (!owners) failed.push('owners');
-        if (!stats) failed.push('stats');
-        console.error(`[page-data-lite] Critical queries failed: ${failed.join(', ')}`);
-        // Throw error if critical data is missing (will be caught by outer try-catch)
-        if (!risks) {
-          throw new Error("Failed to fetch risks data: Critical query timeout");
-        }
-      }
-
-      // Filter out soft-deleted records (handle null values from failed queries)
-      const activeGerencias = (gerencias || []).filter((g: any) => g && g.status !== 'deleted');
-      const activeMacroprocesos = (macroprocesos || []).filter((m: any) => m && m.status !== 'deleted');
-      const activeSubprocesos = (subprocesos || []).filter((s: any) => s && s.status !== 'deleted');
-      const activeProcesses = (processes || []).filter((p: any) => p && p.status !== 'deleted');
+      // Filter out soft-deleted records
+      const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
+      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
+      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+      const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
 
       const response = {
-        risks: risks || [],
-        owners: owners || [],
-        stats: stats || { total: 0, active: 0, inactive: 0, deleted: 0, byStatus: {}, byRiskLevel: { low: 0, medium: 0, high: 0, critical: 0 } },
+        risks,
+        owners,
+        stats,
         gerencias: activeGerencias,
         macroprocesos: activeMacroprocesos,
         subprocesos: activeSubprocesos,
         processes: activeProcesses,
-        riskCategories: riskCategories || [],
-        processGerencias: processGerenciasRelations || []
+        riskCategories,
+        processGerencias: processGerenciasRelations
       };
-          mark('response-built');
+      mark('response-built');
 
-          // Add metadata for debugging
-          const responseWithTiming = {
-            ...response,
-            _meta: {
-              fetchedAt: new Date().toISOString(),
-              duration: Date.now() - start,
-            }
-          };
+      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
+      await distributedCache.set(cacheKey, response, 900);
+      mark('cache-set');
 
-          const totalDuration = Date.now() - start;
-          console.log('[page-data-lite timing]', {
-            total: totalDuration,
-            steps,
-            cacheHit: false,
-          });
-
-          // Log warning if endpoint is slow
-          if (totalDuration > 5000) {
-            console.warn(`[PERF] /api/risks/page-data-lite took ${totalDuration}ms (threshold: 5000ms)`);
-          }
-
-          return responseWithTiming;
-        },
-        1800 // 30 minutes TTL (increased from 15 min)
-      );
-
-      mark('cache-complete');
-      const totalDuration = Date.now() - start;
-      
-      // Log cache status
-      const cacheHit = !response._meta;
-      if (cacheHit) {
-        mark('cache-hit');
-      }
-      
       console.log('[page-data-lite timing]', {
-        total: totalDuration,
+        total: Date.now() - start,
         steps,
-        cacheHit,
       });
-
-      // Log warning if endpoint is slow (even with cache)
-      if (totalDuration > 5000) {
-        console.warn(`[PERF] /api/risks/page-data-lite took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
-      }
 
       res.json(response);
     } catch (err) {
-      const duration = Date.now() - start;
-      console.error('page-data-lite error', err, { total: duration, steps });
+      console.error('page-data-lite error', err, { total: Date.now() - start, steps });
       // Log the full error to help debugging 500s
       if (err instanceof Error) {
         console.error('Stack trace:', err.stack);
-        // Check if it's a timeout error
-        if (err.message.includes('timeout') || err.message.includes('Timeout')) {
-          return res.status(504).json({ 
-            message: "Request timeout. The query took too long to execute.",
-            error: "TIMEOUT",
-            duration: `${duration}ms`
-          });
-        }
       }
-      res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err), duration: `${duration}ms` });
+      res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });
     }
   });
 
@@ -2270,8 +2117,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Replaces 5+ parallel API calls with 1 optimized call
   app.get("/api/risks/bootstrap", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 60000; // 60 seconds for the entire endpoint (complex query with catalogs)
-    const QUERY_TIMEOUT_MS = 45000; // 45 seconds for individual queries
 
     try {
       // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
@@ -2601,16 +2446,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       })();
 
-      // Execute both in parallel with timeout
-      const [catalogsResult, risksResult] = await Promise.race([
-        Promise.all([catalogsPromise, risksPromise]),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
-      ]);
+      // Execute both in parallel
+      const [catalogsResult, risksResult] = await Promise.all([catalogsPromise, risksPromise]);
 
       const response = {
         risks: risksResult,
@@ -3025,9 +2862,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CACHE ${bypassCache ? 'BYPASS' : 'MISS'}] /api/risks key=${cacheKey.slice(0, 50)}...`);
 
       // Cache miss - query database (single-tenant mode - no tenantId needed)
+      const queryStart = Date.now();
       const { risks: paginatedRisks, total } = await storage.getRisksPaginated(filters, limit, offset);
+      const queryDuration = Date.now() - queryStart;
 
-      console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total}`);
+      console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total} in ${queryDuration}ms`);
+      
+      // Log warning if query is slow (indicates missing indexes or large dataset)
+      if (queryDuration > 3000) {
+        console.warn(`⚠️ Slow getRisksPaginated query: ${queryDuration}ms. Check if indexes are properly created.`);
+      }
 
       // Prepare response
       const response = {
@@ -3868,10 +3712,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Batch load relations for visible risks (on-demand loading for paginated view)
   // OPTIMIZED: Uses WHERE IN queries instead of loading ALL data and filtering in memory
   app.post("/api/risks/batch-relations", isAuthenticated, noCacheMiddleware, async (req, res) => {
-    const requestStartTime = Date.now();
-    const QUERY_TIMEOUT_MS = 10000; // 10 seconds per query
-    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds total
-
     try {
       const { riskIds, limitPerRisk } = req.body;
 
@@ -3897,111 +3737,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}:limit${maxLinksPerRisk}`;
 
+      const requestStartTime = Date.now();
+
       // OPTIMIZED: Use two-tier cache (memory + Redis) with 60s TTL for better performance
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const dbStartTime = Date.now();
+      const response = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const dbStartTime = Date.now();
 
-            // Helper to add timeout to a promise
-            const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, name: string): Promise<T> => {
-              return Promise.race([
-                promise,
-                new Promise<T>((_, reject) => {
-                  setTimeout(() => {
-                    reject(new Error(`${name} timeout after ${timeoutMs}ms`));
-                  }, timeoutMs);
-                })
-              ]);
-            };
-
-            // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
-            // Add individual timeouts to prevent any query from hanging
-            const linksPromise = withTimeout(
-              storage.getRiskProcessLinksByRiskIds(limitedIds),
-              QUERY_TIMEOUT_MS,
-              'getRiskProcessLinksByRiskIds'
-            ).catch(err => {
+          // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+          const [allLinks, allControls] = await Promise.all([
+            storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
               console.error("[batch-relations] Error fetching risk process links:", err);
               return [];
-            });
-
-            const controlsPromise = withTimeout(
-              storage.getRiskControlsByRiskIds(limitedIds),
-              QUERY_TIMEOUT_MS,
-              'getRiskControlsByRiskIds'
-            ).catch(err => {
+            }),
+            storage.getRiskControlsByRiskIds(limitedIds).catch(err => {
               console.error("[batch-relations] Error fetching risk controls:", err);
               return [];
-            });
+            })
+          ]);
 
-            const queryStartTime = Date.now();
-            const [allLinks, allControls] = await Promise.all([linksPromise, controlsPromise]);
-            const queryDuration = Date.now() - queryStartTime;
+          // Apply per-risk limits to prevent huge responses
+          // Group by riskId and limit each group
+          const linksByRisk = new Map<string, typeof allLinks>();
+          const controlsByRisk = new Map<string, typeof allControls>();
 
-            // OPTIMIZED: Use more efficient grouping with pre-sized arrays
-            const groupingStartTime = Date.now();
-            const linksByRisk = new Map<string, typeof allLinks>();
-            const controlsByRisk = new Map<string, typeof allControls>();
-
-            // Pre-allocate arrays for known riskIds to avoid repeated Map lookups
-            for (const riskId of limitedIds) {
-              linksByRisk.set(riskId, []);
-              controlsByRisk.set(riskId, []);
+          // Group process links by riskId
+          for (const link of allLinks) {
+            if (!linksByRisk.has(link.riskId)) {
+              linksByRisk.set(link.riskId, []);
             }
-
-            // Group process links by riskId (optimized - no repeated Map.has checks)
-            for (const link of allLinks) {
-              const group = linksByRisk.get(link.riskId);
-              if (group && group.length < maxLinksPerRisk) {
-                group.push(link);
-              }
+            const group = linksByRisk.get(link.riskId)!;
+            if (group.length < maxLinksPerRisk) {
+              group.push(link);
             }
+          }
 
-            // Group controls by riskId (optimized - no repeated Map.has checks)
-            for (const control of allControls) {
-              const group = controlsByRisk.get(control.riskId);
-              if (group && group.length < maxLinksPerRisk) {
-                group.push(control);
-              }
+          // Group controls by riskId
+          for (const control of allControls) {
+            if (!controlsByRisk.has(control.riskId)) {
+              controlsByRisk.set(control.riskId, []);
             }
+            const group = controlsByRisk.get(control.riskId)!;
+            if (group.length < maxLinksPerRisk) {
+              group.push(control);
+            }
+          }
 
-            // Flatten back to arrays
-            const filteredLinks = Array.from(linksByRisk.values()).flat();
-            const filteredControls = Array.from(controlsByRisk.values()).flat();
-            const groupingDuration = Date.now() - groupingStartTime;
+          // Flatten back to arrays
+          const filteredLinks = Array.from(linksByRisk.values()).flat();
+          const filteredControls = Array.from(controlsByRisk.values()).flat();
 
-            const dbDuration = Date.now() - dbStartTime;
-            const totalLinks = filteredLinks.length;
-            const totalControls = filteredControls.length;
-            const truncatedLinks = allLinks.length > totalLinks;
-            const truncatedControls = allControls.length > totalControls;
-            
-            console.log(`[PERF] [batch-relations] DB query: ${queryDuration}ms, grouping: ${groupingDuration}ms, total: ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
+          const dbDuration = Date.now() - dbStartTime;
+          const totalLinks = filteredLinks.length;
+          const totalControls = filteredControls.length;
+          const truncatedLinks = allLinks.length > totalLinks;
+          const truncatedControls = allControls.length > totalControls;
+          
+          console.log(`[PERF] [batch-relations] DB query took ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
 
-            return {
-              riskProcessLinks: filteredLinks,
-              riskControls: filteredControls,
-              metadata: {
-                totalRisks: limitedIds.length,
-                linksPerRiskLimit: maxLinksPerRisk,
-                controlsPerRiskLimit: maxLinksPerRisk,
-                linksTruncated: truncatedLinks,
-                controlsTruncated: truncatedControls,
-                totalLinksAvailable: allLinks.length,
-                totalControlsAvailable: allControls.length
-              }
-            };
-          },
-          60 // Redis TTL: 60 seconds (increased from 15s)
-        ),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`Endpoint timeout after ${ENDPOINT_TIMEOUT_MS}ms`));
-          }, ENDPOINT_TIMEOUT_MS);
-        })
-      ]);
+          return {
+            riskProcessLinks: filteredLinks,
+            riskControls: filteredControls,
+            metadata: {
+              totalRisks: limitedIds.length,
+              linksPerRiskLimit: maxLinksPerRisk,
+              controlsPerRiskLimit: maxLinksPerRisk,
+              linksTruncated: truncatedLinks,
+              controlsTruncated: truncatedControls,
+              totalLinksAvailable: allLinks.length,
+              totalControlsAvailable: allControls.length
+            }
+          };
+        },
+        60 // Redis TTL: 60 seconds (increased from 15s)
+      );
 
       const totalDuration = Date.now() - requestStartTime;
       
@@ -4017,19 +3827,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(response);
     } catch (error) {
-      const duration = Date.now() - requestStartTime;
-      console.error("[ERROR] /api/risks/batch-relations failed:", error, { duration: `${duration}ms` });
-      
-      // Check if it's a timeout error
-      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Timeout'))) {
-        return res.status(504).json({ 
-          message: "Request timeout. The query took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`
-        });
-      }
-      
-      res.status(500).json({ message: "Failed to fetch risk relations", error: String(error), duration: `${duration}ms` });
+      console.error("[ERROR] /api/risks/batch-relations failed:", error);
+      res.status(500).json({ message: "Failed to fetch risk relations" });
     }
   });
 
@@ -6155,37 +5954,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get risk-process associations by risk ID
   app.get("/api/risk-processes/risk/:riskId", isAuthenticated, async (req, res) => {
-    const startTime = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant found" });
       }
-      const cacheKey = `risk-processes:risk:${req.params.riskId}:${CACHE_VERSION}`;
+      const cacheKey = `risk-processes:risk:${req.params.riskId}:${tenantId}`;
       const riskProcesses = await getFromTieredCache(
         cacheKey,
-        async () => {
-          // OPTIMIZED: Solo traer campos necesarios para el formulario (IDs y nombres básicos)
-          const links = await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId);
-          // Retornar solo lo necesario para el formulario (reducir payload)
-          return links.map(link => ({
-            id: link.id,
-            riskId: link.riskId,
-            macroprocesoId: link.macroprocesoId,
-            processId: link.processId,
-            subprocesoId: link.subprocesoId,
-            // Solo nombres básicos si están disponibles (para display)
-            macroproceso: link.macroproceso ? { id: link.macroproceso.id, name: link.macroproceso.name } : undefined,
-            process: link.process ? { id: link.process.id, name: link.process.name } : undefined,
-            subproceso: link.subproceso ? { id: link.subproceso.id, name: link.subproceso.name } : undefined,
-          }));
-        },
-        300 // 5 minutos TTL - asociaciones raramente cambian, aumentar cache para mejor performance
+        async () => await storage.getRiskProcessLinksByRisk(req.params.riskId, tenantId),
+        60 // 1 minuto TTL - asociaciones no cambian frecuentemente
       );
-      const duration = Date.now() - startTime;
-      if (duration > 1000) {
-        console.log(`[PERF] /api/risk-processes/risk/:riskId completed in ${duration}ms (${riskProcesses.length} associations)`);
-      }
       res.json(riskProcesses);
     } catch (error) {
       console.error("Error fetching risk processes by risk:", error);
@@ -6548,9 +6327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get risk-process links by validation status (cached 15s for validation center)
   app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
-    const requestStart = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds for the entire endpoint
-    const QUERY_TIMEOUT_MS = 10000; // 10 seconds for the query
+    const startTime = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -6566,122 +6343,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
 
-      // OPTIMIZED: Support pagination to improve performance
-      const { limit, offset } = normalizePaginationParams(req.query);
-      const usePagination = limit !== undefined || offset !== undefined;
-      
-      // Cache key includes pagination params if used
-      const cacheKey = usePagination 
-        ? `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}:${limit}:${offset}`
-        : `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
-      
-      // Cache TTL: shorter for pending (30s), longer for validated/rejected/observed (300s = 5 min)
-      const cacheTTL = actualStatus === 'pending_validation' ? 30 : 300;
-
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const queryStartTime = Date.now();
-            
-            // OPTIMIZED: Add timeout to prevent long-running queries (10 seconds max)
-            const queryPromise = storage.getRiskProcessLinksByValidationStatus(
-              actualStatus, 
-              tenantId,
-              usePagination ? { limit, offset } : undefined
-            );
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
-            });
-
-            const result = await Promise.race([queryPromise, timeoutPromise]);
-            const queryDuration = Date.now() - queryStartTime;
-
-            // Log warning if query is slow
-            if (queryDuration > 5000) {
-              console.warn(`[PERF] /api/risk-processes/validation/:status query took ${queryDuration}ms (threshold: 5000ms)`);
-            }
-
-            // Format response based on pagination
-            let responseData;
-            if (usePagination) {
-              responseData = createPaginatedResponse(result.data, result.total, limit, offset);
-            } else {
-              // Backward compatibility: return array if no pagination
-              responseData = result.data;
-            }
-
-            // Add metadata for cache hit detection and timing
-            if (usePagination && typeof responseData === 'object' && responseData !== null && !Array.isArray(responseData)) {
-              (responseData as any)._meta = {
-                fetchedAt: new Date().toISOString(),
-                duration: queryDuration
-              };
-            }
-
-            return responseData;
-          },
-          cacheTTL
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
-      ]);
-
-      const totalDuration = Date.now() - requestStart;
-      const cacheHit = !(response as any)?._meta;
-
-      if (cacheHit) {
-        console.log(`[CACHE HIT] /api/risk-processes/validation/:status (${actualStatus}) in ${totalDuration}ms`);
-      } else {
-        console.log(`[CACHE MISS] /api/risk-processes/validation/:status (${actualStatus}) computed in ${totalDuration}ms`);
+      // Cache TTL: shorter for pending (15s), longer for validated/rejected/observed (60s)
+      const cacheTTL = actualStatus === 'pending_validation' ? 15 : 60;
+      const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        console.log(`[CACHE HIT] ${cacheKey}`);
+        return res.json(cached);
       }
 
-      if (totalDuration > 5000) {
-        console.warn(`[PERF] /api/risk-processes/validation/:status (${actualStatus}) took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
-      }
+      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
+      const queryPromise = storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+      });
 
-      res.json(response);
+      const riskProcessLinks = await Promise.race([queryPromise, timeoutPromise]);
+
+      await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+
+      res.json(riskProcessLinks);
     } catch (error) {
-      const duration = Date.now() - requestStart;
+      const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/risk-processes/validation/:status failed after ${duration}ms:`, error);
       
-      // Check if it's a timeout error
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('Query timeout') ||
-         error.message.includes('TIMEOUT') ||
-         error.message.includes('Endpoint timeout'));
-      
-      if (isTimeout) {
-        return res.status(504).json({ 
-          message: "Request timeout. The endpoint took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`,
-          suggestion: "Try using pagination parameters (limit, offset) to reduce query time"
-        });
+      // Return cached data if available as fallback
+      try {
+        const { tenantId } = await resolveActiveTenant(req, { required: true });
+        const { status } = req.params;
+        const actualStatus = status === 'pending' ? 'pending_validation' : status;
+        const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+        const cached = await distributedCache.get(cacheKey);
+        if (cached) {
+          console.log(`[FALLBACK] Returning cached risk-processes validation data`);
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        // Ignore cache errors
       }
 
-      // Log SQL error details if available
-      if (error instanceof Error) {
-        console.error('Error message:', error.message);
-        if ((error as any).code) {
-          console.error('SQL Error code:', (error as any).code);
-        }
-        if ((error as any).detail) {
-          console.error('SQL Error detail:', (error as any).detail);
-        }
+      // Check if it's a timeout error
+      if (error instanceof Error && error.message.includes('timeout')) {
+        return res.status(504).json({ 
+          message: "Request timeout. The query took too long to execute.",
+          error: "TIMEOUT"
+        });
       }
 
       res.status(500).json({ 
         message: "Failed to fetch risk processes by validation status",
-        error: error instanceof Error ? error.message : "Unknown error",
-        duration: `${duration}ms`,
-        ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
@@ -7940,7 +7651,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Frontend prefetches catalogs (macroprocesos/processes/subprocesos) and does client-side joins
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
-    const QUERY_TIMEOUT_MS = 10000; // 10 seconds timeout
     try {
       // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
       const limit = parseInt(req.query.limit as string) || 25;
@@ -7949,166 +7659,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Cache key includes pagination for proper caching
       const cacheKey = `risk-events-page-data:${CACHE_VERSION}:single-tenant:${limit}:${offset}`;
 
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) with 60 min TTL
-      const queryStartTime = Date.now();
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
-            
-            // OPTIMIZED: Use withRetry for robust connection handling
-            return await withRetry(async () => {
-              // OPTIMIZED: Fetch only essential columns - removed createdBy, updatedAt (not used in table)
-              const [eventsData, totalCountResult] = await Promise.all([
-                requireDb().select({
-                  id: riskEvents.id,
-                  code: riskEvents.code,
-                  eventType: riskEvents.eventType,
-                  eventDate: riskEvents.eventDate,
-                  status: riskEvents.status,
-                  severity: riskEvents.severity,
-                  description: riskEvents.description,
-                  estimatedLoss: riskEvents.estimatedLoss,
-                  actualLoss: riskEvents.actualLoss,
-                  riskId: riskEvents.riskId,
-                  controlId: riskEvents.controlId,
-                  processId: riskEvents.processId,
-                  createdAt: riskEvents.createdAt,
-                })
-                  .from(riskEvents)
-                  .where(isNull(riskEvents.deletedAt))
-                  .orderBy(desc(riskEvents.eventDate))
-                  .limit(limit)
-                  .offset(offset),
+      // Try to get from cache
+      const cached = await distributedCache.get<any>(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] risk-events/page-data (${Date.now() - startTime}ms)`);
+        return res.json(cached);
+      }
 
-                requireDb().select({ count: sql<number>`count(*)::int` })
-                  .from(riskEvents)
-                  .where(isNull(riskEvents.deletedAt))
-              ]);
+      console.log(`[CACHE MISS] risk-events/page-data - fetching optimized data`);
 
-              const eventIds = eventsData.map(e => e.id);
-              const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
+      // OPTIMIZED: Use withRetry for robust connection handling
+      return await withRetry(async () => {
+        // OPTIMIZED: Fetch only essential columns - removed createdBy, updatedAt (not used in table)
+        const [eventsData, totalCountResult] = await Promise.all([
+          requireDb().select({
+            id: riskEvents.id,
+            code: riskEvents.code,
+            eventType: riskEvents.eventType,
+            eventDate: riskEvents.eventDate,
+            status: riskEvents.status,
+            severity: riskEvents.severity,
+            description: riskEvents.description,
+            estimatedLoss: riskEvents.estimatedLoss,
+            actualLoss: riskEvents.actualLoss,
+            riskId: riskEvents.riskId,
+            controlId: riskEvents.controlId,
+            processId: riskEvents.processId,
+            createdAt: riskEvents.createdAt,
+          })
+            .from(riskEvents)
+            .where(isNull(riskEvents.deletedAt))
+            .orderBy(desc(riskEvents.eventDate))
+            .limit(limit)
+            .offset(offset),
 
-              // OPTIMIZED: Fetch relations in parallel (already optimized, keeping separate for clarity)
-              const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
-                eventIds.length > 0
-                  ? requireDb().select({
-                      riskEventId: riskEventMacroprocesos.riskEventId,
-                      macroprocesoId: riskEventMacroprocesos.macroprocesoId
-                    })
-                    .from(riskEventMacroprocesos)
-                    .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
-                  : Promise.resolve([]),
-                eventIds.length > 0
-                  ? requireDb().select({
-                      riskEventId: riskEventProcesses.riskEventId,
-                      processId: riskEventProcesses.processId
-                    })
-                    .from(riskEventProcesses)
-                    .where(inArray(riskEventProcesses.riskEventId, eventIds))
-                  : Promise.resolve([]),
-                eventIds.length > 0
-                  ? requireDb().select({
-                      riskEventId: riskEventSubprocesos.riskEventId,
-                      subprocesoId: riskEventSubprocesos.subprocesoId
-                    })
-                    .from(riskEventSubprocesos)
-                    .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
-                  : Promise.resolve([]),
-                controlIds.length > 0
-                  ? requireDb().select({
-                      id: controls.id,
-                      code: controls.code,
-                      name: controls.name,
-                    })
-                    .from(controls)
-                    .where(inArray(controls.id, controlIds))
-                  : Promise.resolve([])
-              ]);
+          requireDb().select({ count: sql<number>`count(*)::int` })
+            .from(riskEvents)
+            .where(isNull(riskEvents.deletedAt))
+        ]);
 
-              // Group relation IDs by eventId for O(1) lookup
-              const macroMap = new Map<string, string[]>();
-              const processMap = new Map<string, string[]>();
-              const subprocesoMap = new Map<string, string[]>();
-              const controlMap = new Map(controlRelations.map(c => [c.id, c]));
+        const eventIds = eventsData.map(e => e.id);
+        const controlIds = eventsData.map(e => e.controlId).filter((id): id is string => !!id);
 
-              for (const m of macroRelations) {
-                if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
-                if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
-              }
-              for (const p of processRelations) {
-                if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
-                if (p.processId) processMap.get(p.riskEventId)!.push(String(p.processId));
-              }
-              for (const s of subprocesoRelations) {
-                if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
-                if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
-              }
+        // OPTIMIZED: Fetch relations in parallel (already optimized, keeping separate for clarity)
+        const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventMacroprocesos.riskEventId,
+                macroprocesoId: riskEventMacroprocesos.macroprocesoId
+              })
+              .from(riskEventMacroprocesos)
+              .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
+            : Promise.resolve([]),
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventProcesses.riskEventId,
+                processId: riskEventProcesses.processId
+              })
+              .from(riskEventProcesses)
+              .where(inArray(riskEventProcesses.riskEventId, eventIds))
+            : Promise.resolve([]),
+          eventIds.length > 0
+            ? requireDb().select({
+                riskEventId: riskEventSubprocesos.riskEventId,
+                subprocesoId: riskEventSubprocesos.subprocesoId
+              })
+              .from(riskEventSubprocesos)
+              .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
+            : Promise.resolve([]),
+          controlIds.length > 0
+            ? requireDb().select({
+                id: controls.id,
+                code: controls.code,
+                name: controls.name,
+              })
+              .from(controls)
+              .where(inArray(controls.id, controlIds))
+            : Promise.resolve([])
+        ]);
 
-              // Build lightweight events list (IDs only, no names)
-              const eventsForList = eventsData.map(event => ({
-                id: event.id,
-                code: event.code,
-                eventType: event.eventType,
-                eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
-                status: event.status,
-                severity: event.severity,
-                description: event.description,
-                estimatedLoss: event.estimatedLoss,
-                actualLoss: event.actualLoss,
-                riskId: event.riskId,
-                controlId: event.controlId,
-                processId: event.processId,
-                createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
-                // Return IDs only - frontend resolves names from cached catalogs
-                macroprocesoIds: macroMap.get(event.id) || [],
-                processIds: processMap.get(event.id) || [],
-                subprocesoIds: subprocesoMap.get(event.id) || [],
-                selectedRisks: event.riskId ? [event.riskId] : [],
-                // Include failed control basic data
-                failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
-              }));
+        // Group relation IDs by eventId for O(1) lookup
+        const macroMap = new Map<string, string[]>();
+        const processMap = new Map<string, string[]>();
+        const subprocesoMap = new Map<string, string[]>();
+        const controlMap = new Map(controlRelations.map(c => [c.id, c]));
 
-              return {
-                riskEvents: {
-                  data: eventsForList,
-                  pagination: {
-                    limit,
-                    offset,
-                    total: totalCountResult[0]?.count || 0
-                  }
-                }
-              };
-            });
-          },
-          3600 // 60 minutes TTL (increased from 30 min for better cache hit rate)
-        ),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => {
-            const elapsed = Date.now() - queryStartTime;
-            reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
-          }, QUERY_TIMEOUT_MS)
-        )
-      ]);
+        for (const m of macroRelations) {
+          if (!macroMap.has(m.riskEventId)) macroMap.set(m.riskEventId, []);
+          if (m.macroprocesoId) macroMap.get(m.riskEventId)!.push(m.macroprocesoId);
+        }
+        for (const p of processRelations) {
+          if (!processMap.has(p.riskEventId)) processMap.set(p.riskEventId, []);
+          if (p.processId) processMap.get(p.riskEventId)!.push(String(p.processId));
+        }
+        for (const s of subprocesoRelations) {
+          if (!subprocesoMap.has(s.riskEventId)) subprocesoMap.set(s.riskEventId, []);
+          if (s.subprocesoId) subprocesoMap.get(s.riskEventId)!.push(s.subprocesoId);
+        }
 
-      const queryDuration = Date.now() - queryStartTime;
-      const duration = Date.now() - startTime;
-      console.log(`[PERF] risk-events/page-data completed in ${duration}ms (query: ${queryDuration}ms, ${response.riskEvents.data.length} events, total: ${response.riskEvents.pagination.total})`);
+        // Build lightweight events list (IDs only, no names)
+        const eventsForList = eventsData.map(event => ({
+          id: event.id,
+          code: event.code,
+          eventType: event.eventType,
+          eventDate: event.eventDate instanceof Date ? event.eventDate.toISOString() : event.eventDate,
+          status: event.status,
+          severity: event.severity,
+          description: event.description,
+          estimatedLoss: event.estimatedLoss,
+          actualLoss: event.actualLoss,
+          riskId: event.riskId,
+          controlId: event.controlId,
+          processId: event.processId,
+          createdAt: event.createdAt instanceof Date ? event.createdAt.toISOString() : event.createdAt,
+          // Return IDs only - frontend resolves names from cached catalogs
+          macroprocesoIds: macroMap.get(event.id) || [],
+          processIds: processMap.get(event.id) || [],
+          subprocesoIds: subprocesoMap.get(event.id) || [],
+          selectedRisks: event.riskId ? [event.riskId] : [],
+          // Include failed control basic data
+          failedControl: event.controlId ? controlMap.get(event.controlId) || null : null
+        }));
 
-      res.json(response);
+        const response = {
+          riskEvents: {
+            data: eventsForList,
+            pagination: {
+              limit,
+              offset,
+              total: totalCountResult[0]?.count || 0
+            }
+          }
+        };
+
+        // OPTIMIZED: Increased cache TTL from 15 min to 30 min (1800s) - not critical data
+        await distributedCache.set(cacheKey, response, 1800);
+
+        const duration = Date.now() - startTime;
+        console.log(`[PERF] risk-events/page-data completed in ${duration}ms (${eventsForList.length} events)`);
+
+        res.json(response);
+      });
     } catch (error) {
-      const duration = Date.now() - startTime;
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
-      
-      if (error instanceof Error && error.message.includes('timeout')) {
-        return res.status(504).json({ 
-          message: `Request timeout. The query took too long to execute (${duration}ms). Consider optimizing the query or increasing the timeout.`,
-          error: "TIMEOUT"
-        });
-      }
-      
       res.status(500).json({ 
         message: "Failed to fetch risk events page data",
         error: error instanceof Error ? error.message : "Unknown error"
@@ -8785,15 +8479,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // OPTIMIZED: Aggregated endpoint for controls with all details in a single query
   app.get("/api/controls/with-details", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/controls/with-details START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
@@ -8801,37 +8486,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const offset = parseInt(req.query.offset as string) || 0;
       
-      // Build filters - manejar correctamente valores vacíos, undefined y "undefined" como string
+      // Build filters
       const filters: import('./storage').ControlFilters = {
-        search: req.query.search && req.query.search !== 'undefined' && req.query.search !== '' ? req.query.search as string : undefined,
-        type: req.query.type && req.query.type !== 'undefined' && req.query.type !== '' ? req.query.type as string : undefined,
-        frequency: req.query.frequency && req.query.frequency !== 'undefined' && req.query.frequency !== '' ? req.query.frequency as string : undefined,
-        status: req.query.status && req.query.status !== 'undefined' && req.query.status !== '' ? req.query.status as string : undefined,
-        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' && req.query.validationStatus !== '' ? req.query.validationStatus as string : undefined,
-        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' && req.query.ownerId !== '' ? req.query.ownerId as string : undefined,
-        minEffectiveness: req.query.minEffectiveness && req.query.minEffectiveness !== 'undefined' && req.query.minEffectiveness !== '' ? parseInt(req.query.minEffectiveness as string) : undefined,
-        maxEffectiveness: req.query.maxEffectiveness && req.query.maxEffectiveness !== 'undefined' && req.query.maxEffectiveness !== '' ? parseInt(req.query.maxEffectiveness as string) : undefined,
+        search: req.query.search as string,
+        type: req.query.type && req.query.type !== 'undefined' ? req.query.type as string : undefined,
+        frequency: req.query.frequency && req.query.frequency !== 'undefined' ? req.query.frequency as string : undefined,
+        status: req.query.status && req.query.status !== 'undefined' ? req.query.status as string : undefined,
+        validationStatus: req.query.validationStatus && req.query.validationStatus !== 'undefined' ? req.query.validationStatus as string : undefined,
+        ownerId: req.query.ownerId && req.query.ownerId !== 'undefined' ? req.query.ownerId as string : undefined,
+        minEffectiveness: req.query.minEffectiveness ? parseInt(req.query.minEffectiveness as string) : undefined,
+        maxEffectiveness: req.query.maxEffectiveness ? parseInt(req.query.maxEffectiveness as string) : undefined,
       };
 
       const filterKey = JSON.stringify(filters);
       const cacheKey = `controls-with-details:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/controls/with-details in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
 
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      // Increased timeouts to handle complex queries with many controls
-      const ENDPOINT_TIMEOUT_MS = 25000; // 25 seconds max for entire endpoint (increased from 15s)
-      const QUERY_TIMEOUT_MS = 20000; // 20 seconds per query (increased from 10s for complex aggregations)
-      const queryStartTime = Date.now();
+      console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
 
-      return await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
-            
-            return await Promise.race([
-              withRetry(async () => {
-          // Build WHERE conditions for filtering
-          const whereConditions: any[] = [sql`c.status <> 'deleted'`];
+      return await withRetry(async () => {
+        // Build WHERE conditions for filtering
+        const whereConditions: any[] = [sql`c.status <> 'deleted'`];
         
         if (filters.search) {
           const searchPattern = `%${filters.search.toLowerCase()}%`;
@@ -8873,48 +8552,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
               INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
           : sql`FROM controls c`;
         
-        // Add owner filter to conditions if present
-        if (filters.ownerId) {
-          whereConditions.push(sql`po_filter.id = ${filters.ownerId}`);
-        }
-        
         const baseWhere = whereConditions.length > 0 
           ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
           : sql``;
+        
+        const ownerFilter = filters.ownerId 
+          ? sql`AND po_filter.id = ${filters.ownerId}`
+          : sql``;
 
         // OPTIMIZED: Single aggregated query with CTEs
-        // Performance notes:
-        // - controls_base applies LIMIT/OFFSET early to reduce data processed
-        // - risk_details_agg and control_owners_agg JOIN with controls_base (materialized CTE)
-        // - Indexes on control_owners(control_id, is_active, assigned_at) and risk_controls(control_id) are critical
         const controlsResult = await requireDb().execute(sql`
         WITH controls_base AS (
           SELECT 
             c.id,
             c.code,
             c.name,
-            -- OPTIMIZED: Exclude large text fields from list view (description, validation_comments, deletion_reason)
-            -- These fields are only needed in detail view (/api/controls/:id) to reduce payload size
-            -- c.description,  -- Excluded: large text field, only needed in detail view
+            c.description,
             c.type,
             c.frequency,
             c.effectiveness,
+            c.effect_target,
             c.effect_target,
             c.is_active,
             c.last_review,
             c.validation_status,
             c.validated_at,
             c.validated_by,
-            -- c.validation_comments,  -- Excluded: large text field, only needed in detail view
+            c.validation_comments,
             c.created_by,
             c.updated_by,
             c.deleted_by,
             c.deleted_at,
-            -- c.deletion_reason,  -- Excluded: large text field, only needed in detail view
+            c.deletion_reason,
             c.created_at,
             c.updated_at
           ${baseFrom}
           ${baseWhere}
+          ${ownerFilter}
           ORDER BY c.code
           LIMIT ${limit} OFFSET ${offset}
         ),
@@ -8922,6 +8596,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           SELECT COUNT(DISTINCT c.id)::int as total
           ${baseFrom}
           ${baseWhere}
+          ${ownerFilter}
         ),
         risk_details_agg AS (
           SELECT 
@@ -8935,14 +8610,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ) FILTER (WHERE r.id IS NOT NULL) as associated_risks
           FROM risk_controls rc
           INNER JOIN controls_base cb ON rc.control_id = cb.id
-          -- OPTIMIZED: Use INNER JOIN instead of LEFT JOIN to reduce dataset before aggregation
-          -- This is faster because we only care about risks that exist and are not deleted
-          INNER JOIN risks r ON rc.risk_id = r.id AND r.status != 'deleted'
+          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
           GROUP BY rc.control_id
         ),
         control_owners_agg AS (
-          -- OPTIMIZED: Use window function instead of DISTINCT ON for better performance
-          -- This avoids sorting all rows when we only need the latest per control
           SELECT DISTINCT ON (co.control_id)
             co.control_id,
             json_build_object(
@@ -8954,32 +8625,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           INNER JOIN controls_base cb ON co.control_id = cb.id
           INNER JOIN process_owners po ON co.process_owner_id = po.id
           WHERE co.is_active = true
-          -- OPTIMIZED: NULLS LAST helps with index usage when assigned_at can be NULL
-          -- Index idx_control_owners_control_active_assigned should be applied for optimal performance
-          ORDER BY co.control_id, co.assigned_at DESC NULLS LAST
+          ORDER BY co.control_id, co.created_at DESC
         )
         SELECT 
           cb.id,
           cb.code,
           cb.name,
-          -- OPTIMIZED: Excluded large text fields (description, validation_comments, deletion_reason)
-          -- These are only available in detail endpoint (/api/controls/:id)
-          NULL::text as description,  -- Excluded from list view to reduce payload size
+          cb.description,
           cb.type,
           cb.frequency,
           cb.effectiveness,
+          cb.effect_target,
           cb.effect_target,
           cb.is_active,
           cb.last_review,
           cb.validation_status,
           cb.validated_at,
           cb.validated_by,
-          NULL::text as validation_comments,  -- Excluded from list view to reduce payload size
+          cb.validation_comments,
           cb.created_by,
           cb.updated_by,
           cb.deleted_by,
           cb.deleted_at,
-          NULL::text as deletion_reason,  -- Excluded from list view to reduce payload size
+          cb.deletion_reason,
           cb.created_at,
           cb.updated_at,
           COALESCE(rd.risk_count, 0)::int as associated_risks_count,
@@ -9038,9 +8706,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             id: row.id,
             code: row.code,
             name: row.name,
-            // OPTIMIZED: Large text fields excluded from list view (null in list, available in detail endpoint)
-            // These fields are set to NULL in SQL, so they will be null here
-            description: row.description ?? null,  // Will be null in list view, full value in detail
+            description: row.description,
             type: row.type,
             frequency: row.frequency,
             effectiveness: maxEffectivenessLimit < 100 
@@ -9052,12 +8718,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             validationStatus: row.validation_status,
             validatedAt: row.validated_at,
             validatedBy: row.validated_by,
-            validationComments: row.validation_comments ?? null,  // Will be null in list view, full value in detail
+            validationComments: row.validation_comments,
             createdBy: row.created_by,
             updatedBy: row.updated_by,
             deletedBy: row.deleted_by,
             deletedAt: row.deleted_at,
-            deletionReason: row.deletion_reason ?? null,  // Will be null in list view, full value in detail
+            deletionReason: row.deletion_reason,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
             associatedRisksCount: row.associated_risks_count || 0,
@@ -9066,76 +8732,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         });
 
-                const queryDuration = Date.now() - queryStartTime;
-                const duration = Date.now() - requestStart;
-                
-                const response = {
-                  data: controls,
-                  pagination: {
-                    limit,
-                    offset,
-                    total,
-                    hasMore: offset + limit < total
-                  },
-                  _meta: {
-                    fetchedAt: new Date().toISOString(),
-                    duration: duration,
-                    queryDuration: queryDuration,
-                  }
-                };
+        const response = {
+          data: controls,
+          pagination: {
+            limit,
+            offset,
+            total,
+            hasMore: offset + limit < total
+          }
+        };
 
-                console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (query: ${queryDuration}ms, ${controls.length} controls, total: ${total})`);
-                
-                // Log warning if query is slow
-                if (queryDuration > 5000) {
-                  console.warn(`[PERF] /api/controls/with-details query took ${queryDuration}ms (threshold: 5000ms)`);
-                }
-                
-                return response;
-              }),
-              new Promise<never>((_, reject) => 
-                setTimeout(() => {
-                  const elapsed = Date.now() - queryStartTime;
-                  reject(new Error(`Query timeout after ${elapsed}ms (max: ${QUERY_TIMEOUT_MS}ms)`));
-                }, QUERY_TIMEOUT_MS)
-              )
-            ]);
-          },
-          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
-        ),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
-      ]);
-
-      const totalDuration = Date.now() - requestStart;
-      const cacheHit = !response._meta;
-      
-      if (cacheHit) {
-        console.log(`[CACHE HIT] /api/controls/with-details in ${totalDuration}ms`);
-      } else {
-        console.log(`[CACHE MISS] /api/controls/with-details computed in ${totalDuration}ms`);
-      }
-
-      // Log warning if endpoint is slow
-      if (totalDuration > 5000) {
-        console.warn(`[PERF] /api/controls/with-details took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
-      }
-
-      res.json(response);
+        await distributedCache.set(cacheKey, response, 60);
+        const duration = Date.now() - requestStart;
+        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
+        
+        res.json(response);
+      });
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
-      
-      // Check if it's a timeout error
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('Query timeout') ||
-         error.message.includes('TIMEOUT'));
-      
       if (error instanceof Error) {
         console.error('Stack trace:', error.stack);
         console.error('Error message:', error.message);
@@ -9147,39 +8762,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('SQL Error detail:', (error as any).detail);
         }
       }
-      
-      // Return appropriate error response
-      const isTimeoutError = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('Query timeout') ||
-         error.message.includes('TIMEOUT') ||
-         error.message.includes('Endpoint timeout'));
-      
-      if (isTimeoutError) {
-        const poolMetrics = getPoolMetrics();
-        console.error(`[TIMEOUT] /api/controls/with-details after ${duration}ms`, {
-          poolMetrics: poolMetrics ? {
-            total: poolMetrics.totalCount,
-            idle: poolMetrics.idleCount,
-            active: poolMetrics.totalCount - poolMetrics.idleCount,
-            waiting: poolMetrics.waitingCount,
-            max: poolMetrics.maxConnections
-          } : null
-        });
-        
-        return res.status(504).json({ 
-          message: `Request timeout. The endpoint took too long to execute (${duration}ms). The query may be too complex or the database is under heavy load.`,
-          error: "TIMEOUT",
-          duration: `${duration}ms`,
-          maxTimeout: `${ENDPOINT_TIMEOUT_MS}ms`,
-          suggestion: "Try reducing the number of controls per page or applying filters to narrow the results."
-        });
-      }
-      
       res.status(500).json({ 
-        message: "Failed to fetch controls with details", 
+        message: "Failed to fetch controls", 
         error: error instanceof Error ? error.message : String(error),
-        duration: `${duration}ms`,
         ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
       });
     }
@@ -10526,17 +10111,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Action Plans - OPTIMIZED: Parallel queries to reduce cold start latency
   app.get("/api/action-plans", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds for the entire endpoint
-    const QUERY_TIMEOUT_MS = 10000; // 10 seconds for the query
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/action-plans START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -10544,16 +10118,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
 
-      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const queryStartTime = Date.now();
+      console.log(`[CACHE MISS] /api/action-plans - fetching aggregated data`);
 
-            // OPTIMIZED: Add timeout to prevent long-running queries (10 seconds max)
-            const queryPromise = db.execute(sql`
+      // OPTIMIZED: Single aggregated query with CTEs and JOINs
+      // Get action plans with reschedule counts, risk-process links, and gerencias in one query
+      const actionPlansResult = await db.execute(sql`
         WITH action_plans_base AS (
           SELECT 
             a.id,
@@ -10680,128 +10255,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ORDER BY apb.created_at DESC
       `);
 
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
-            });
+      const plans = (actionPlansResult.rows as any[]).map((row: any) => ({
+        id: row.id,
+        code: row.code,
+        origin: row.origin,
+        riskId: row.risk_id,
+        name: row.title, // Map title to name for backward compatibility
+        title: row.title,
+        description: row.description,
+        responsible: row.responsible,
+        dueDate: row.due_date,
+        originalDueDate: row.original_due_date,
+        rescheduleCount: row.reschedule_count || 0,
+        priority: row.priority,
+        status: row.status || 'pending',
+        progress: row.progress || 0,
+        implementedAt: row.implemented_at,
+        implementedBy: row.implemented_by,
+        implementationComments: row.implementation_comments,
+        managementResponse: row.management_response,
+        agreedAction: row.agreed_action,
+        evidenceSubmittedAt: row.evidence_submitted_at,
+        evidenceSubmittedBy: row.evidence_submitted_by,
+        reviewedAt: row.reviewed_at,
+        reviewedBy: row.reviewed_by,
+        reviewComments: row.review_comments,
+        validationStatus: row.validation_status,
+        validatedBy: row.validated_by,
+        validatedAt: row.validated_at,
+        validationComments: row.validation_comments,
+        notifiedAt: row.notified_at,
+        createdBy: row.created_by,
+        updatedBy: row.updated_by,
+        deletedBy: row.deleted_by,
+        deletedAt: row.deleted_at,
+        deletionReason: row.deletion_reason,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        gerencias: Array.isArray(row.gerencias) ? row.gerencias : (row.gerencias ? JSON.parse(row.gerencias) : []),
+        associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
+      }));
 
-            const actionPlansResult = await Promise.race([queryPromise, timeoutPromise]);
-            const queryDuration = Date.now() - queryStartTime;
+      const response = plans;
+      await distributedCache.set(cacheKey, response, 30);
+      await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300);
 
-            // Log warning if query is slow
-            if (queryDuration > 5000) {
-              console.warn(`[PERF] /api/action-plans query took ${queryDuration}ms (threshold: 5000ms)`);
-            }
-
-            const plans = (actionPlansResult.rows as any[]).map((row: any) => ({
-              id: row.id,
-              code: row.code,
-              origin: row.origin,
-              riskId: row.risk_id,
-              name: row.title, // Map title to name for backward compatibility
-              title: row.title,
-              description: row.description,
-              responsible: row.responsible,
-              dueDate: row.due_date,
-              originalDueDate: row.original_due_date,
-              rescheduleCount: row.reschedule_count || 0,
-              priority: row.priority,
-              status: row.status || 'pending',
-              progress: row.progress || 0,
-              implementedAt: row.implemented_at,
-              implementedBy: row.implemented_by,
-              implementationComments: row.implementation_comments,
-              managementResponse: row.management_response,
-              agreedAction: row.agreed_action,
-              evidenceSubmittedAt: row.evidence_submitted_at,
-              evidenceSubmittedBy: row.evidence_submitted_by,
-              reviewedAt: row.reviewed_at,
-              reviewedBy: row.reviewed_by,
-              reviewComments: row.review_comments,
-              validationStatus: row.validation_status,
-              validatedBy: row.validated_by,
-              validatedAt: row.validated_at,
-              validationComments: row.validation_comments,
-              notifiedAt: row.notified_at,
-              createdBy: row.created_by,
-              updatedBy: row.updated_by,
-              deletedBy: row.deleted_by,
-              deletedAt: row.deleted_at,
-              deletionReason: row.deletion_reason,
-              createdAt: row.created_at,
-              updatedAt: row.updated_at,
-              gerencias: Array.isArray(row.gerencias) ? row.gerencias : (row.gerencias ? JSON.parse(row.gerencias) : []),
-              associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
-            }));
-
-            return {
-              data: plans,
-              _meta: {
-                fetchedAt: new Date().toISOString(),
-                duration: queryDuration
-              }
-            };
-          },
-          300 // 5 minutos TTL (aumentado de 30s para mejor cache hit rate)
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
-      ]);
-
-      const totalDuration = Date.now() - requestStart;
-      const cacheHit = !(response as any)?._meta;
-
-      if (cacheHit) {
-        console.log(`[CACHE HIT] /api/action-plans in ${totalDuration}ms`);
-      } else {
-        console.log(`[CACHE MISS] /api/action-plans computed in ${totalDuration}ms`);
+      const duration = Date.now() - requestStart;
+      console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
+      
+      if (duration > 2000) {
+        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 2000ms)`);
       }
 
-      if (totalDuration > 3000) {
-        console.warn(`[PERF] /api/action-plans took ${totalDuration}ms (threshold: 3000ms, cacheHit: ${cacheHit})`);
-      }
-
-      // Return data array (backward compatibility) or full response with metadata
-      const data = (response as any)?.data || response;
-      res.json(Array.isArray(data) ? data : response);
+      res.json(response);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/action-plans failed after ${duration}ms:`, error);
       
-      // Check if it's a timeout error
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('Query timeout') ||
-         error.message.includes('TIMEOUT') ||
-         error.message.includes('Endpoint timeout'));
-      
-      if (isTimeout) {
-        return res.status(504).json({ 
-          message: "Request timeout. The endpoint took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`
-        });
+      // Try fallback cache
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
+      if (fallbackCache) {
+        console.log(`[FALLBACK] Returning cached action-plans data`);
+        return res.json(fallbackCache);
       }
       
-      res.status(500).json({ 
-        message: "Failed to fetch action plans",
-        error: error instanceof Error ? error.message : "Unknown error",
-        duration: `${duration}ms`
-      });
+      res.status(500).json({ message: "Failed to fetch action plans", error: error instanceof Error ? error.message : String(error) });
     }
   });
 
   // Helper function to invalidate action plan caches
   async function invalidateActionPlanCaches(tenantId: string) {
-    // Invalidar cache de dos niveles (memoria + Redis)
-    const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
-    invalidateMemoryCache(cacheKey);
-    await distributedCache.set(cacheKey, null, 0);
-    // También invalidar fallback cache si existe
-    await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, null, 0);
+    await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}`, null, 0);
   }
 
   app.post("/api/action-plans", isAuthenticated, async (req, res) => {
@@ -11540,8 +11065,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Invalidate action plans validation caches
       await Promise.all([
-        invalidateActionPlanCaches(tenantId),
         distributedCache.invalidatePattern(`validation:action-plans:*:${tenantId}`),
+        distributedCache.invalidatePattern(`action-plans:*:${tenantId}`),
         distributedCache.set(`validation:action-plans:pending:${tenantId}`, null, 0)
       ]);
 
@@ -15519,21 +15044,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Users - with two-tier cache (L1 memory + L2 Redis) for better performance
   app.get("/api/users", noCacheMiddleware, isAuthenticated, requireAnyPermission(["view_users", "users:manage", "manage_users"]), async (req, res) => {
     try {
+      const requestStart = Date.now();
+      
       // Use two-tier cache: L1 memory (<1ms) + L2 Redis (~50ms) for optimal performance
       // TTL increased to 300s (5 min) as users don't change frequently
       const cacheKey = `users:all`;
       const users = await getFromTieredCache(
         cacheKey,
         async () => {
+          const fetchStart = Date.now();
+          // OPTIMIZED: getUsers() uses indexed query with ORDER BY created_at DESC
+          // The index idx_users_created_at will make this query fast
           const fetchedUsers = await storage.getUsers();
-          console.log(`✅ Successfully fetched ${fetchedUsers.length} users`);
+          const fetchDuration = Date.now() - fetchStart;
+          console.log(`✅ Successfully fetched ${fetchedUsers.length} users in ${fetchDuration}ms`);
+          
+          // Safety check: If query takes too long or returns too many users, log a warning
+          if (fetchDuration > 5000) {
+            console.warn(`⚠️ Slow getUsers() query: ${fetchDuration}ms for ${fetchedUsers.length} users`);
+          }
+          
           return fetchedUsers;
         },
         300 // 5 minutes - users change infrequently
       );
 
+      const totalDuration = Date.now() - requestStart;
+      if (totalDuration > 100) {
+        console.log(`[PERF] /api/users completed in ${totalDuration}ms (cached: ${totalDuration < 50})`);
+      }
+
       res.json(users);
     } catch (error) {
+      console.error('[ERROR] /api/users failed:', error);
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
@@ -16200,52 +15743,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }]);
   });
 
-  // Add user to tenant (single-tenant mode - no-op but returns success)
-  app.post("/api/tenants/:tenantId/users", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
-    try {
-      const { tenantId } = req.params;
-      const { userId, isActive } = req.body;
-
-      if (!userId) {
-        return res.status(400).json({ message: "userId is required" });
-      }
-
-      // In single-tenant mode, all users are automatically part of the single tenant
-      // This endpoint exists for API compatibility but doesn't need to do anything
-      // Just validate that the user exists
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      // Return success response
-      res.status(201).json({
-        id: `membership-${userId}-${tenantId}`,
-        tenantId: tenantId,
-        userId: userId,
-        isActive: isActive !== undefined ? isActive : true,
-        message: "User added to organization (single-tenant mode)"
-      });
-    } catch (error) {
-      console.error("Error adding user to tenant:", error);
-      res.status(500).json({ message: "Failed to add user to organization" });
-    }
-  });
-
-  // Remove user from tenant (single-tenant mode - no-op but returns success)
-  app.delete("/api/tenants/:tenantId/users/:userId", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
-    try {
-      const { tenantId, userId } = req.params;
-
-      // In single-tenant mode, users can't be removed from the single tenant
-      // This endpoint exists for API compatibility
-      res.status(204).send();
-    } catch (error) {
-      console.error("Error removing user from tenant:", error);
-      res.status(500).json({ message: "Failed to remove user from organization" });
-    }
-  });
-
   app.post("/api/user/switch-tenant", isAuthenticated, async (req, res) => {
     // No-op in single-tenant mode
     res.json({ message: "Single-tenant mode - no switch needed", activeTenantId: 'single-tenant' });
@@ -16873,132 +16370,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Macroprocesos routes - with 60s distributed cache
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
-    const requestStart = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
-    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/macroprocesos START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
     try {
-      const cacheKey = `macroprocesos:single-tenant:${CACHE_VERSION}`;
+      const cacheKey = `macroprocesos:single-tenant`;
 
-      // OPTIMIZED: Use getFromTieredCache for better performance and timeout handling
-      const response = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const queryStartTime = Date.now();
+      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      const cached = await twoTierCache.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
 
-            // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
-            const macroprocesosPromise = storage.getMacroprocesos();
-            const riskLevelsPromise = storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] });
-
-            const queryPromise = Promise.all([
-              Promise.race([
-                macroprocesosPromise,
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`getMacroprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-                )
-              ]),
-              Promise.race([
-                riskLevelsPromise,
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`getAllRiskLevelsOptimized timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-                )
-              ])
-            ]);
-
-            const [macroprocesos, allRiskLevels] = await queryPromise;
-            const queryDuration = Date.now() - queryStartTime;
-
-            // Log warning if query is slow
-            if (queryDuration > 2000) {
-              console.warn(`[PERF] /api/macroprocesos query took ${queryDuration}ms (threshold: 2000ms)`);
-            }
-
-            // Filter out soft-deleted records
-            const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
-
-            // Fetch process owners for macroprocesos that have ownerId
-            const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
-            const owners = ownerIds.length > 0
-              ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
-              : [];
-            const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-
-            const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
-              const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-              const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
-
-              return {
-                ...macroproceso,
-                ...riskLevels,
-                owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
-              };
-            });
-
-            return {
-              data: macroprocesoswithRisks,
-              _meta: {
-                fetchedAt: new Date().toISOString(),
-                duration: queryDuration
-              }
-            };
-          },
-          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - requestStart;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
+      // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
+      const [macroprocesos, allRiskLevels] = await Promise.all([
+        storage.getMacroprocesos(),
+        storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
       ]);
 
-      const totalDuration = Date.now() - requestStart;
-      const cacheHit = !(response as any)?._meta;
+      // Filter out soft-deleted records
+      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
 
-      if (cacheHit) {
-        console.log(`[CACHE HIT] /api/macroprocesos in ${totalDuration}ms`);
-      } else {
-        console.log(`[CACHE MISS] /api/macroprocesos computed in ${totalDuration}ms`);
-      }
+      // Fetch process owners for macroprocesos that have ownerId
+      const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
+      const owners = ownerIds.length > 0
+        ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
+        : [];
+      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
 
-      if (totalDuration > 2000) {
-        console.warn(`[PERF] /api/macroprocesos took ${totalDuration}ms (threshold: 2000ms, cacheHit: ${cacheHit})`);
-      }
+      const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
+        const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+        const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
 
-      // Return data array (backward compatibility) or full response with metadata
-      const data = (response as any)?.data || response;
-      res.json(Array.isArray(data) ? data : response);
-    } catch (error) {
-      const duration = Date.now() - requestStart;
-      
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('TIMEOUT') ||
-         error.message.includes('Endpoint timeout'));
-
-      if (isTimeout) {
-        return res.status(504).json({ 
-          message: "Request timeout. The endpoint took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`
-        });
-      }
-
-      console.error(`[ERROR] /api/macroprocesos failed after ${duration}ms:`, error);
-      res.status(500).json({ 
-        message: "Failed to fetch macroprocesos",
-        error: error instanceof Error ? error.message : "Unknown error",
-        duration: `${duration}ms`
+        return {
+          ...macroproceso,
+          ...riskLevels,
+          owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
+        };
       });
+
+      // Cache for 60 seconds (L1: 30s, L2: 60s)
+      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
+
+      res.json(macroprocesoswithRisks);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch macroprocesos" });
     }
   });
 
@@ -24095,153 +23508,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ============= CONSOLIDATED CATALOGS ENDPOINT =============
-  
-  /**
-   * Consolidated endpoint for process structure catalogs
-   * OPTIMIZED: Single request instead of 5-6 separate API calls
-   * Benefits:
-   * - Only 1 network trip (vs 5-6)
-   * - Only 1 TwoTierCache usage (vs 5-6)
-   * - Only 1 user deserialization (vs 5-6)
-   * - Parallel DB queries (more efficient)
-   * - Better cache hit rate
-   */
-  app.get("/api/catalogs/process-structure", noCacheMiddleware, isAuthenticated, async (req, res) => {
-    const startTime = Date.now();
-    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
-    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
-    
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/catalogs/process-structure START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
-    
-    try {
-      const cacheKey = 'catalogs:process-structure';
-      
-      // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
-      const cached = twoTierCache.getCatalog(cacheKey);
-      if (cached) {
-        const duration = Date.now() - startTime;
-        console.log(`[CACHE HIT] /api/catalogs/process-structure in ${duration}ms`);
-        return res.json(cached);
-      }
-      
-      // Cache miss - fetch all catalogs in parallel (more efficient than separate endpoints)
-      const queryStartTime = Date.now();
-      
-      const [macroprocesos, processes, subprocesos, gerencias, processOwners] = await Promise.race([
-        Promise.all([
-          Promise.race([
-            storage.getMacroprocesos(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`getMacroprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-            )
-          ]),
-          Promise.race([
-            storage.getProcesses(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`getProcesses timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-            )
-          ]),
-          Promise.race([
-            storage.getSubprocesos(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`getSubprocesos timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-            )
-          ]),
-          Promise.race([
-            storage.getGerencias(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`getGerencias timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-            )
-          ]),
-          Promise.race([
-            storage.getProcessOwners(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`getProcessOwners timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
-            )
-          ])
-        ]),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => {
-            const elapsed = Date.now() - startTime;
-            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
-          }, ENDPOINT_TIMEOUT_MS)
-        )
-      ]);
-      
-      const queryDuration = Date.now() - queryStartTime;
-      
-      // Log warning if query is slow
-      if (queryDuration > 2000) {
-        console.warn(`[PERF] /api/catalogs/process-structure query took ${queryDuration}ms (threshold: 2000ms)`);
-      }
-      
-      const result = {
-        macroprocesos,
-        processes,
-        subprocesos,
-        gerencias,
-        processOwners,
-        _meta: {
-          fetchedAt: new Date().toISOString(),
-          duration: queryDuration
-        }
-      };
-      
-      // Cache in L1 only (5 min TTL - catalog data changes infrequently)
-      twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
-      
-      const totalDuration = Date.now() - startTime;
-      console.log(`[CACHE MISS] /api/catalogs/process-structure computed in ${totalDuration}ms (query: ${queryDuration}ms)`);
-      
-      res.json(result);
-    } catch (error) {
-      const duration = Date.now() - startTime;
-      console.error(`[ERROR] /api/catalogs/process-structure failed after ${duration}ms:`, error);
-      
-      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Query timeout'))) {
-        return res.status(504).json({
-          message: `Request timeout. The endpoint took too long to execute (${duration}ms).`,
-          error: "TIMEOUT",
-          duration: `${duration}ms`
-        });
-      }
-      
-      res.status(500).json({
-        message: "Failed to fetch process structure catalogs",
-        error: error instanceof Error ? error.message : String(error),
-        duration: `${duration}ms`
-      });
-    }
-  });
-
   // ============= PROCESS OWNERS MANAGEMENT =============
 
   // Get all process owners
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
-    const QUERY_TIMEOUT_MS = 5000; // 5 second timeout for query execution
-    // OPTIMIZED: Log pool metrics at start to detect connection leaks
-    const poolMetrics = getPoolMetrics();
-    if (poolMetrics) {
-      const activeConnections = poolMetrics.totalCount - poolMetrics.idleCount;
-      const utilizationPct = Math.round((activeConnections / poolMetrics.maxConnections) * 100);
-      if (utilizationPct > 50 || poolMetrics.waitingCount > 0) {
-        console.log(`[POOL] /api/process-owners START: total=${poolMetrics.totalCount}/${poolMetrics.maxConnections}, idle=${poolMetrics.idleCount}, active=${activeConnections}, waiting=${poolMetrics.waitingCount}, utilization=${utilizationPct}%`);
-      }
-    }
     try {
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;
-      const tenantResolveStart = Date.now();
       try {
         const tenant = await resolveActiveTenant(req, { required: false });
         tenantId = tenant?.tenantId;
@@ -24249,52 +23523,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // In single-tenant mode, continue without tenantId
         console.warn("Could not resolve tenant (single-tenant mode?):", error);
       }
-      const tenantResolveDuration = Date.now() - tenantResolveStart;
-      if (tenantResolveDuration > 1000) {
-        console.warn(`[SLOW] Tenant resolution took ${tenantResolveDuration}ms`);
-      }
 
       // Use two-tier cache (L1 memory + L2 Redis) for better performance
       // TTL 5 min - process owners change infrequently
       const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
-      
-      // Add timeout wrapper to prevent long waits
-      const processOwners = await Promise.race([
-        getFromTieredCache(
-          cacheKey,
-          async () => {
-            const queryStart = Date.now();
-            try {
-              // Wrap query with timeout
-              const owners = await Promise.race([
-                storage.getProcessOwners(),
-                new Promise<never>((_, reject) => 
-                  setTimeout(() => reject(new Error('Query timeout after 5s')), QUERY_TIMEOUT_MS)
-                )
-              ]);
-              const queryDuration = Date.now() - queryStart;
-              console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
-              return owners;
-            } catch (queryError) {
-              const queryDuration = Date.now() - queryStart;
-              console.error(`[ERROR] Query failed after ${queryDuration}ms:`, queryError);
-              throw queryError;
-            }
-          },
-          300 // 5 minutes - process owners change infrequently
-        ),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Cache/query operation timeout after 10s')), 10000)
-        )
-      ]);
+      const processOwners = await getFromTieredCache(
+        cacheKey,
+        async () => {
+          const queryStart = Date.now();
+          const owners = await storage.getProcessOwners();
+          const queryDuration = Date.now() - queryStart;
+          console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
+          return owners;
+        },
+        300 // 5 minutes - process owners change infrequently
+      );
 
       const duration = Date.now() - startTime;
-      const cacheHit = duration < 100; // Likely cache hit if <100ms
-      
-      if (cacheHit) {
+      if (duration > 1000) {
+        console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
+      } else if (duration < 10) {
         console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
-      } else if (duration > 2000) {
-        console.warn(`[PERF] /api/process-owners took ${duration}ms (threshold: 2000ms)`);
       }
 
       res.json(processOwners);
@@ -24302,24 +23551,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
 
-      const isTimeout = error instanceof Error && 
-        (error.message.includes('timeout') || 
-         error.message.includes('Connection terminated') || 
-         error.message.includes('Query timeout') ||
-         error.message.includes('Cache/query operation timeout'));
-
-      if (isTimeout) {
-        return res.status(504).json({
-          message: "Request timeout. The endpoint took too long to execute.",
-          error: "TIMEOUT",
-          duration: `${duration}ms`
+      if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
+        return res.status(500).json({
+          message: "Database connection timeout. Please try again.",
+          error: "TIMEOUT"
         });
       }
 
       res.status(500).json({
         message: "Failed to fetch process owners",
-        error: error instanceof Error ? error.message : "Unknown error",
-        duration: `${duration}ms`
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });
