@@ -104,57 +104,80 @@ export default function RiskValidationPage() {
 
   // New queries for risk-process links instead of whole risks
   // OPTIMIZATION: Only fetch when risks tab is active + cache optimization to prevent unnecessary refetches
-  const { data: pendingRiskProcessLinks = [], isLoading } = useQuery<any[]>({
+  // DEFENSIVE: Ensure arrays are always arrays, even on error
+  const { data: pendingRiskProcessLinksRaw, isLoading } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/pending"],
     enabled: activeTab === "risks",
     staleTime: 30000,
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    retry: 1, // Retry once on failure
+    retryDelay: 1000, // Wait 1 second before retry
   });
+  const pendingRiskProcessLinks = Array.isArray(pendingRiskProcessLinksRaw) ? pendingRiskProcessLinksRaw : [];
 
-  const { data: validatedRiskProcessLinks = [] } = useQuery<any[]>({
+  const { data: validatedRiskProcessLinksRaw } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    retry: 1,
+    retryDelay: 1000,
   });
+  const validatedRiskProcessLinks = Array.isArray(validatedRiskProcessLinksRaw) ? validatedRiskProcessLinksRaw : [];
 
-  const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
+  const { data: rejectedRiskProcessLinksRaw } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    retry: 1,
+    retryDelay: 1000,
   });
+  const rejectedRiskProcessLinks = Array.isArray(rejectedRiskProcessLinksRaw) ? rejectedRiskProcessLinksRaw : [];
 
-  const { data: observedRiskProcessLinks = [] } = useQuery<any[]>({
+  const { data: observedRiskProcessLinksRaw } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/observed"],
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    retry: 1,
+    retryDelay: 1000,
   });
+  const observedRiskProcessLinks = Array.isArray(observedRiskProcessLinksRaw) ? observedRiskProcessLinksRaw : [];
 
   // Shared catalog queries (always enabled) with 2-minute staleTime
-  const { data: processes = [] } = useQuery<any[]>({
+  // DEFENSIVE: Ensure arrays are always arrays, even on error
+  const { data: processesRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
     staleTime: 120000,
+    retry: 1,
+    retryDelay: 1000,
   });
+  const processes = Array.isArray(processesRaw) ? processesRaw : [];
 
-  const { data: macroprocesos = [] } = useQuery<any[]>({
+  const { data: macroprocesosRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
     staleTime: 120000,
+    retry: 1,
+    retryDelay: 1000,
   });
+  const macroprocesos = Array.isArray(macroprocesosRaw) ? macroprocesosRaw : [];
 
-  const { data: subprocesos = [] } = useQuery<any[]>({
+  const { data: subprocesosRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
     staleTime: 120000,
+    retry: 1,
+    retryDelay: 1000,
   });
+  const subprocesos = Array.isArray(subprocesosRaw) ? subprocesosRaw : [];
 
   const { data: users = [] } = useQuery<any[]>({
     queryKey: ["/api/users"],

@@ -1535,41 +1535,117 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Processes - Full endpoint with risk calculations (legacy) - with 60s distributed cache
   app.get("/api/processes", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 10000; // 10 seconds for the entire endpoint
+    const QUERY_TIMEOUT_MS = 8000; // 8 seconds for individual queries
     try {
-      // Try distributed cache first (60s TTL)
-      const cacheKey = `processes:single-tenant`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        return res.json(cached);
-      }
+      const cacheKey = `processes:single-tenant:${CACHE_VERSION}`;
 
-      // PERFORMANCE: Only fetch process risk levels (not all entities)
-      const [processes, allRiskLevels] = await Promise.all([
-        storage.getProcessesWithOwners(),
-        storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const queryStartTime = Date.now();
+
+            // OPTIMIZED: Add timeout to prevent long-running queries
+            const processesPromise = storage.getProcessesWithOwners();
+            const riskLevelsPromise = storage.getAllRiskLevelsOptimized({ entities: ['processes'] });
+
+            const queryPromise = Promise.all([
+              Promise.race([
+                processesPromise,
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`getProcessesWithOwners timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+                )
+              ]),
+              Promise.race([
+                riskLevelsPromise,
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`getAllRiskLevelsOptimized timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS)
+                )
+              ])
+            ]);
+
+            const [processes, allRiskLevels] = await queryPromise;
+            const queryDuration = Date.now() - queryStartTime;
+
+            // Log warning if query is slow
+            if (queryDuration > 3000) {
+              console.warn(`[PERF] /api/processes query took ${queryDuration}ms (threshold: 3000ms)`);
+            }
+
+            // Filter out soft-deleted records
+            const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
+
+            const processesWithRisks = activeProcesses.map((process) => {
+              const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+              return {
+                ...process,
+                ...riskLevels
+              };
+            });
+
+            return {
+              data: processesWithRisks,
+              _meta: {
+                fetchedAt: new Date().toISOString(),
+                duration: queryDuration
+              }
+            };
+          },
+          300 // 5 minutos TTL (aumentado de 60s para mejor cache hit rate)
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
       ]);
 
-      // Filter out soft-deleted records
-      const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
+      const totalDuration = Date.now() - requestStart;
+      const cacheHit = !(response as any)?._meta;
 
-      const processesWithRisks = activeProcesses.map((process) => {
-        const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-        return {
-          ...process,
-          ...riskLevels
-        };
-      });
+      if (cacheHit) {
+        console.log(`[CACHE HIT] /api/processes in ${totalDuration}ms`);
+      } else {
+        console.log(`[CACHE MISS] /api/processes computed in ${totalDuration}ms`);
+      }
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, processesWithRisks, 60);
+      if (totalDuration > 3000) {
+        console.warn(`[PERF] /api/processes took ${totalDuration}ms (threshold: 3000ms, cacheHit: ${cacheHit})`);
+      }
 
-      res.json(processesWithRisks);
+      // Return data array (backward compatibility) or full response with metadata
+      const data = (response as any)?.data || response;
+      res.json(Array.isArray(data) ? data : response);
     } catch (error) {
+      const duration = Date.now() - requestStart;
+      
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      console.error("Error in /api/processes:", error);
-      res.status(500).json({ message: "Failed to fetch processes", error: error instanceof Error ? error.message : 'Unknown error' });
+
+      const isTimeout = error instanceof Error && 
+        (error.message.includes('timeout') || 
+         error.message.includes('TIMEOUT') ||
+         error.message.includes('Endpoint timeout'));
+
+      if (isTimeout) {
+        return res.status(504).json({ 
+          message: "Request timeout. The endpoint took too long to execute.",
+          error: "TIMEOUT",
+          duration: `${duration}ms`
+        });
+      }
+
+      console.error(`[ERROR] /api/processes failed after ${duration}ms:`, error);
+      res.status(500).json({ 
+        message: "Failed to fetch processes", 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        duration: `${duration}ms`
+      });
     }
   });
 
@@ -6452,8 +6528,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Get risk-process links by validation status (cached 15s for validation center)
   app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
-    const startTime = Date.now();
-    const QUERY_TIMEOUT_MS = 20000; // 20 seconds timeout
+    const requestStart = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 15000; // 15 seconds for the entire endpoint
+    const QUERY_TIMEOUT_MS = 10000; // 10 seconds for the query
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
@@ -6478,73 +6555,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ? `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}:${limit}:${offset}`
         : `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       
-      // Cache TTL: shorter for pending (15s), longer for validated/rejected/observed (60s)
-      const cacheTTL = actualStatus === 'pending_validation' ? 15 : 60;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        const duration = Date.now() - startTime;
-        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
-        return res.json(cached);
-      }
+      // Cache TTL: shorter for pending (30s), longer for validated/rejected/observed (300s = 5 min)
+      const cacheTTL = actualStatus === 'pending_validation' ? 30 : 300;
 
-      const queryStartTime = Date.now();
-      
-      // OPTIMIZED: Add timeout to prevent long-running queries (20 seconds max)
-      const queryPromise = storage.getRiskProcessLinksByValidationStatus(
-        actualStatus, 
-        tenantId,
-        usePagination ? { limit, offset } : undefined
-      );
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
-      });
+      // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <100ms) for better performance
+      const response = await Promise.race([
+        getFromTieredCache(
+          cacheKey,
+          async () => {
+            const queryStartTime = Date.now();
+            
+            // OPTIMIZED: Add timeout to prevent long-running queries (10 seconds max)
+            const queryPromise = storage.getRiskProcessLinksByValidationStatus(
+              actualStatus, 
+              tenantId,
+              usePagination ? { limit, offset } : undefined
+            );
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error(`Query timeout after ${QUERY_TIMEOUT_MS}ms`)), QUERY_TIMEOUT_MS);
+            });
 
-      const result = await Promise.race([queryPromise, timeoutPromise]);
-      const queryDuration = Date.now() - queryStartTime;
+            const result = await Promise.race([queryPromise, timeoutPromise]);
+            const queryDuration = Date.now() - queryStartTime;
 
-      // Format response based on pagination
-      let response;
-      if (usePagination) {
-        response = createPaginatedResponse(result.data, result.total, limit, offset);
+            // Log warning if query is slow
+            if (queryDuration > 5000) {
+              console.warn(`[PERF] /api/risk-processes/validation/:status query took ${queryDuration}ms (threshold: 5000ms)`);
+            }
+
+            // Format response based on pagination
+            let responseData;
+            if (usePagination) {
+              responseData = createPaginatedResponse(result.data, result.total, limit, offset);
+            } else {
+              // Backward compatibility: return array if no pagination
+              responseData = result.data;
+            }
+
+            // Add metadata for cache hit detection and timing
+            if (usePagination && typeof responseData === 'object' && responseData !== null && !Array.isArray(responseData)) {
+              (responseData as any)._meta = {
+                fetchedAt: new Date().toISOString(),
+                duration: queryDuration
+              };
+            }
+
+            return responseData;
+          },
+          cacheTTL
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
+      ]);
+
+      const totalDuration = Date.now() - requestStart;
+      const cacheHit = !(response as any)?._meta;
+
+      if (cacheHit) {
+        console.log(`[CACHE HIT] /api/risk-processes/validation/:status (${actualStatus}) in ${totalDuration}ms`);
       } else {
-        // Backward compatibility: return array if no pagination
-        response = result.data;
+        console.log(`[CACHE MISS] /api/risk-processes/validation/:status (${actualStatus}) computed in ${totalDuration}ms`);
       }
 
-      await distributedCache.set(cacheKey, response, cacheTTL);
-      
-      const duration = Date.now() - startTime;
-      console.log(`[PERF] /api/risk-processes/validation/:status (${actualStatus}) completed in ${duration}ms (query: ${queryDuration}ms, ${result.data.length} items, total: ${result.total})`);
+      if (totalDuration > 5000) {
+        console.warn(`[PERF] /api/risk-processes/validation/:status (${actualStatus}) took ${totalDuration}ms (threshold: 5000ms, cacheHit: ${cacheHit})`);
+      }
 
       res.json(response);
     } catch (error) {
-      const duration = Date.now() - startTime;
+      const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risk-processes/validation/:status failed after ${duration}ms:`, error);
       
-      // Return cached data if available as fallback
-      try {
-        const { tenantId } = await resolveActiveTenant(req, { required: true });
-        const { status } = req.params;
-        const actualStatus = status === 'pending' ? 'pending_validation' : status;
-        const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
-        const cached = await distributedCache.get(cacheKey);
-        if (cached) {
-          console.log(`[FALLBACK] Returning cached risk-processes validation data`);
-          return res.json(cached);
-        }
-      } catch (cacheError) {
-        // Ignore cache errors
-      }
-
       // Check if it's a timeout error
       const isTimeout = error instanceof Error && 
         (error.message.includes('timeout') || 
          error.message.includes('Query timeout') ||
-         error.message.includes('TIMEOUT'));
+         error.message.includes('TIMEOUT') ||
+         error.message.includes('Endpoint timeout'));
       
       if (isTimeout) {
         return res.status(504).json({ 
-          message: "Request timeout. The query took too long to execute.",
+          message: "Request timeout. The endpoint took too long to execute.",
           error: "TIMEOUT",
           duration: `${duration}ms`,
           suggestion: "Try using pagination parameters (limit, offset) to reduce query time"
