@@ -15890,6 +15890,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }]);
   });
 
+  // Add user to tenant (single-tenant mode - no-op but returns success)
+  app.post("/api/tenants/:tenantId/users", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { userId, isActive } = req.body;
+
+      if (!userId) {
+        return res.status(400).json({ message: "userId is required" });
+      }
+
+      // In single-tenant mode, all users are automatically part of the single tenant
+      // This endpoint exists for API compatibility but doesn't need to do anything
+      // Just validate that the user exists
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Return success response
+      res.status(201).json({
+        id: `membership-${userId}-${tenantId}`,
+        tenantId: tenantId,
+        userId: userId,
+        isActive: isActive !== undefined ? isActive : true,
+        message: "User added to organization (single-tenant mode)"
+      });
+    } catch (error) {
+      console.error("Error adding user to tenant:", error);
+      res.status(500).json({ message: "Failed to add user to organization" });
+    }
+  });
+
+  // Remove user from tenant (single-tenant mode - no-op but returns success)
+  app.delete("/api/tenants/:tenantId/users/:userId", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const { tenantId, userId } = req.params;
+
+      // In single-tenant mode, users can't be removed from the single tenant
+      // This endpoint exists for API compatibility
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error removing user from tenant:", error);
+      res.status(500).json({ message: "Failed to remove user from organization" });
+    }
+  });
+
   app.post("/api/user/switch-tenant", isAuthenticated, async (req, res) => {
     // No-op in single-tenant mode
     res.json({ message: "Single-tenant mode - no switch needed", activeTenantId: 'single-tenant' });
