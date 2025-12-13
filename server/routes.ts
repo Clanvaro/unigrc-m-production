@@ -2270,6 +2270,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Replaces 5+ parallel API calls with 1 optimized call
   app.get("/api/risks/bootstrap", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
+    const ENDPOINT_TIMEOUT_MS = 60000; // 60 seconds for the entire endpoint (complex query with catalogs)
+    const QUERY_TIMEOUT_MS = 45000; // 45 seconds for individual queries
 
     try {
       // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
@@ -2599,8 +2601,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       })();
 
-      // Execute both in parallel
-      const [catalogsResult, risksResult] = await Promise.all([catalogsPromise, risksPromise]);
+      // Execute both in parallel with timeout
+      const [catalogsResult, risksResult] = await Promise.race([
+        Promise.all([catalogsPromise, risksPromise]),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => {
+            const elapsed = Date.now() - requestStart;
+            reject(new Error(`Endpoint timeout after ${elapsed}ms (max: ${ENDPOINT_TIMEOUT_MS}ms)`));
+          }, ENDPOINT_TIMEOUT_MS)
+        )
+      ]);
 
       const response = {
         risks: risksResult,

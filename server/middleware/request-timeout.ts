@@ -16,10 +16,20 @@ export function requestTimeoutMiddleware(req: Request, res: Response, next: Next
   // Skip timeout for health checks, warmup endpoints, and endpoints that manage their own timeouts
   // Endpoints with their own timeout handling:
   // - /api/controls/with-details: Has 25s endpoint timeout and 20s query timeout
+  // - /api/processes: Has 10s endpoint timeout and 8s query timeout
+  // - /api/process-owners: Has timeout handling
+  // - /api/risk-processes/validation/:status: Has 15s endpoint timeout and 10s query timeout
+  // - /api/risks/bootstrap: Needs timeout handling (will add)
+  // - /api/macroprocesos: Has 10s endpoint timeout and 8s query timeout
   if (req.path === '/health' || 
       req.path === '/api/health' || 
       req.path === '/api/warmup' ||
-      req.path === '/api/controls/with-details') {
+      req.path === '/api/controls/with-details' ||
+      req.path === '/api/processes' ||
+      req.path === '/api/process-owners' ||
+      req.path.startsWith('/api/risk-processes/validation/') ||
+      req.path === '/api/risks/bootstrap' ||
+      req.path === '/api/macroprocesos') {
     return next();
   }
 
