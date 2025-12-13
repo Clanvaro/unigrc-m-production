@@ -89,6 +89,30 @@ export class TwoTierCache {
     }
 
     /**
+     * Get value from L1 cache only (no L2) - for catalogs where L2 is too slow
+     * OPTIMIZED: Upstash in Virginia adds 100-600ms latency, which is worse than direct DB (13ms)
+     * Use this for catalogs that change infrequently (macroprocesos, processes, subprocesos, gerencias)
+     */
+    getCatalog(key: string): any {
+        const l1Entry = this.l1Cache.get(key);
+        if (l1Entry && !this.isExpired(l1Entry)) {
+            this.stats.l1Hits++;
+            return l1Entry.data;
+        }
+        this.stats.l1Misses++;
+        return null;
+    }
+
+    /**
+     * Set value in L1 cache only (no L2) - for catalogs
+     * OPTIMIZED: Skip L2 for catalogs to avoid Upstash latency (100-600ms)
+     */
+    setCatalog(key: string, data: any, ttlMs: number = 5 * 60 * 1000): void {
+        // Set in L1 only (synchronous, <1ms)
+        this.setL1(key, data, ttlMs);
+    }
+
+    /**
      * Set value in both L1 and L2 caches
      */
     async set(key: string, data: any, ttl?: number): Promise<void> {

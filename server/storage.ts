@@ -8161,19 +8161,21 @@ export class DatabaseStorage extends MemStorage {
   async getMacroprocesos(): Promise<Macroproceso[]> {
     const cacheKey = 'macroprocesos:single-tenant';
 
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cached = await distributedCache.get(cacheKey);
+    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
+    const cached = twoTierCache.getCatalog(cacheKey);
     if (cached) {
       return cached;
     }
 
+    // Cache miss - query database (fast: ~13ms)
     const result = await withRetry(async () => {
       return await db.select().from(macroprocesos)
         .where(isNull(macroprocesos.deletedAt));
     });
 
-    // Cache for 60 seconds
-    await distributedCache.set(cacheKey, result, 60);
+    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
+    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
     return result;
   }
 
@@ -8320,19 +8322,21 @@ export class DatabaseStorage extends MemStorage {
   async getProcesses(): Promise<Process[]> {
     const cacheKey = 'processes:single-tenant';
 
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cached = await distributedCache.get(cacheKey);
+    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
+    const cached = twoTierCache.getCatalog(cacheKey);
     if (cached) {
       return cached;
     }
 
+    // Cache miss - query database (fast: ~13ms)
     const result = await withRetry(async () => {
       return await db.select().from(processes)
         .where(isNull(processes.deletedAt));
     });
 
-    // Cache for 60 seconds
-    await distributedCache.set(cacheKey, result, 60);
+    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
+    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
     return result;
   }
 
@@ -9682,21 +9686,21 @@ export class DatabaseStorage extends MemStorage {
   async getRiskCategories(): Promise<RiskCategory[]> {
     const cacheKey = 'risk-categories';
 
-    // Try to get from cache first
-    const cached = await distributedCache.get(cacheKey);
+    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
+    const cached = twoTierCache.getCatalog(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Query database with retry for Neon cold starts
+    // Cache miss - query database (fast: ~13ms)
     const categories = await withRetry(async () => {
       return await db.select().from(riskCategories)
         .where(eq(riskCategories.isActive, true));
     });
 
-    // Store in cache for 10 minutes (600 seconds)
-    await distributedCache.set(cacheKey, categories, 600);
-
+    // Cache in L1 only (10 min TTL - catalog data changes infrequently)
+    twoTierCache.setCatalog(cacheKey, categories, 10 * 60 * 1000);
     return categories;
   }
 
@@ -14450,14 +14454,14 @@ export class DatabaseStorage extends MemStorage {
   async getGerencias(): Promise<Gerencia[]> {
     const cacheKey = 'gerencias:single-tenant';
 
-    // OPTIMIZED: Use two-tier cache (L1: memory <1ms, L2: Redis <200ms with timeout)
-    // TTL 5 min - catalog data changes infrequently
-    const cached = await twoTierCache.get(cacheKey);
+    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
+    const cached = twoTierCache.getCatalog(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Cache miss - query database
+    // Cache miss - query database (fast: ~13ms)
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       return await db.select().from(gerencias)
@@ -14470,8 +14474,8 @@ export class DatabaseStorage extends MemStorage {
       console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
     }
 
-    // Cache for 5 minutes (L1: 30s, L2: 5min)
-    await twoTierCache.set(cacheKey, result, 300);
+    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
+    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
 
     return result;
   }
@@ -15167,8 +15171,24 @@ export class DatabaseStorage extends MemStorage {
 
   // Override MemStorage methods to use database
   async getSubprocesos(): Promise<Subproceso[]> {
-    return await db.select().from(subprocesos)
-      .where(isNull(subprocesos.deletedAt));
+    const cacheKey = 'subprocesos:single-tenant';
+
+    // OPTIMIZED: Use L1 cache only (no L2) - Upstash in Virginia adds 100-600ms latency
+    // Postgres responds in 13ms, so L2 is counterproductive for catalogs
+    const cached = twoTierCache.getCatalog(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss - query database (fast: ~13ms)
+    const result = await withRetry(async () => {
+      return await db.select().from(subprocesos)
+        .where(isNull(subprocesos.deletedAt));
+    });
+
+    // Cache in L1 only (5 min TTL - catalog data changes infrequently)
+    twoTierCache.setCatalog(cacheKey, result, 5 * 60 * 1000);
+    return result;
   }
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
