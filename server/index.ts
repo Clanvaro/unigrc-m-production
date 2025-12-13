@@ -26,6 +26,7 @@ import { applyPerformanceOptimizations } from "./performance";
 // OPTIMIZED: Lazy load openAIService - only needed for status check at startup
 // import { openAIService } from "./openai-service";
 import { initializeQueues } from "./services/queue";
+import { requestTimeoutMiddleware } from "./middleware/request-timeout";
 
 // Validate required secrets before starting server
 validateRequiredSecrets();
@@ -75,6 +76,10 @@ app.use(cors(corsConfig));
 
 // Global rate limiting
 app.use(globalRateLimiter);
+
+// Request timeout middleware - prevents requests from hanging indefinitely
+// Must be early in the middleware chain but after rate limiting
+app.use(requestTimeoutMiddleware);
 
 // Payload size limit (AWS ALB compatible - 900KB limit)
 // SKIP for file upload endpoints - they need raw stream for Multer
@@ -185,11 +190,122 @@ app.use((req, res, next) => {
   // Use 127.0.0.1 in development (avoids macOS AirPlay Receiver conflict on port 5000)
   const host = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
 
+  // Graceful shutdown handler
+  let isShuttingDown = false;
+  let activeConnections = new Set<any>();
+
+  // Track active connections for graceful shutdown
+  server.on('connection', (socket: any) => {
+    activeConnections.add(socket);
+    socket.on('close', () => {
+      activeConnections.delete(socket);
+    });
+  });
+
+  const gracefulShutdown = async (signal: string) => {
+    if (isShuttingDown) {
+      console.log(`⚠️ Shutdown already in progress, forcing exit...`);
+      process.exit(1);
+      return;
+    }
+
+    isShuttingDown = true;
+    console.log(`📴 Received ${signal}, starting graceful shutdown...`);
+
+    // 1. Stop accepting new connections
+    server.close(() => {
+      console.log('✅ HTTP server closed - no longer accepting new connections');
+    });
+
+    // 2. Close all active connections (give them time to finish)
+    const closeConnections = () => {
+      activeConnections.forEach((socket: any) => {
+        socket.destroy();
+      });
+      activeConnections.clear();
+    };
+
+    // 3. Wait for active requests to finish (max 10 seconds)
+    const shutdownTimeout = setTimeout(() => {
+      console.log('⚠️ Shutdown timeout reached, forcing close of active connections...');
+      closeConnections();
+      process.exit(1);
+    }, 10000);
+
+    // 4. Close database pool (already handled in db.ts)
+    try {
+      const { pool } = await import('./db');
+      if (pool) {
+        console.log('🔄 Closing database pool...');
+        await pool.end();
+        console.log('✅ Database pool closed');
+      }
+    } catch (error) {
+      console.warn('⚠️ Error closing database pool:', error);
+    }
+
+    // 5. Close queues (already handled in services/queue.ts)
+    try {
+      const { emailWorker, pdfWorker, aiWorker } = await import('./services/queue');
+      const closePromises = [];
+      if (emailWorker) closePromises.push(emailWorker.close());
+      if (pdfWorker) closePromises.push(pdfWorker.close());
+      if (aiWorker) closePromises.push(aiWorker.close());
+      await Promise.all(closePromises);
+      console.log('✅ Queue workers closed');
+    } catch (error) {
+      console.warn('⚠️ Error closing queue workers:', error);
+    }
+
+    // 6. Close active connections and exit
+    clearTimeout(shutdownTimeout);
+    closeConnections();
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  };
+
+  // Handle shutdown signals
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // Handle unhandled errors
+  process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+    console.error('❌ Unhandled Rejection at:', promise);
+    console.error('Reason:', reason);
+    
+    // In production, attempt graceful shutdown
+    if (process.env.NODE_ENV === 'production') {
+      console.error('⚠️ Attempting graceful shutdown due to unhandled rejection...');
+      gracefulShutdown('UNHANDLED_REJECTION').catch(() => {
+        console.error('❌ Graceful shutdown failed, forcing exit...');
+        process.exit(1);
+      });
+    }
+  });
+
+  process.on('uncaughtException', (error: Error) => {
+    console.error('❌ Uncaught Exception:', error);
+    console.error('Stack:', error.stack);
+    
+    // In production, attempt graceful shutdown
+    if (process.env.NODE_ENV === 'production') {
+      console.error('⚠️ Attempting graceful shutdown due to uncaught exception...');
+      gracefulShutdown('UNCAUGHT_EXCEPTION').catch(() => {
+        console.error('❌ Graceful shutdown failed, forcing exit...');
+        process.exit(1);
+      });
+    } else {
+      // In development, just exit to allow restart
+      process.exit(1);
+    }
+  });
+
   server.listen({
     port,
     host,
   }, async () => {
     log(`serving on port ${port} (host: ${host})`);
+    console.log('✅ Graceful shutdown handlers registered');
 
     // OPTIMIZED: Lazy load OpenAI Service - only check status if needed
     try {
