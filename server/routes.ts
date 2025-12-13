@@ -8545,12 +8545,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
               INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
           : sql`FROM controls c`;
         
+        // Add owner filter to conditions if present
+        if (filters.ownerId) {
+          whereConditions.push(sql`po_filter.id = ${filters.ownerId}`);
+        }
+        
         const baseWhere = whereConditions.length > 0 
           ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
-          : sql``;
-        
-        const ownerFilter = filters.ownerId 
-          ? sql`AND po_filter.id = ${filters.ownerId}`
           : sql``;
 
         // OPTIMIZED: Single aggregated query with CTEs
@@ -8581,7 +8582,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             c.updated_at
           ${baseFrom}
           ${baseWhere}
-          ${ownerFilter}
           ORDER BY c.code
           LIMIT ${limit} OFFSET ${offset}
         ),
@@ -8589,7 +8589,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           SELECT COUNT(DISTINCT c.id)::int as total
           ${baseFrom}
           ${baseWhere}
-          ${ownerFilter}
         ),
         risk_details_agg AS (
           SELECT 
