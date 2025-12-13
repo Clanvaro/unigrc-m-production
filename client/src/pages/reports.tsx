@@ -108,52 +108,57 @@ export default function Reports() {
     );
   }
 
-  // Create lookup maps for process names - with defensive checks
-  const macroprocesosMap = new Map(
-    Array.isArray(macroprocesos) 
-      ? macroprocesos.map((m: any) => [m?.id, m?.name || m?.code || 'Sin nombre'])
-      : []
-  );
-  const processesMap = new Map(
-    Array.isArray(processes)
-      ? processes.map((p: any) => [p?.id, p?.name || p?.code || 'Sin nombre'])
-      : []
-  );
-  const subprocesosMap = new Map(
-    Array.isArray(subprocesos)
-      ? subprocesos.map((s: any) => [s?.id, s?.name || s?.code || 'Sin nombre'])
-      : []
-  );
+  // Create lookup maps for process names - memoized to prevent React #310
+  const macroprocesosMap = useMemo(() => {
+    return new Map(
+      Array.isArray(macroprocesos) 
+        ? macroprocesos.map((m: any) => [m?.id, m?.name || m?.code || 'Sin nombre'])
+        : []
+    );
+  }, [macroprocesos]);
+
+  const processesMap = useMemo(() => {
+    return new Map(
+      Array.isArray(processes)
+        ? processes.map((p: any) => [p?.id, p?.name || p?.code || 'Sin nombre'])
+        : []
+    );
+  }, [processes]);
+
+  const subprocesosMap = useMemo(() => {
+    return new Map(
+      Array.isArray(subprocesos)
+        ? subprocesos.map((s: any) => [s?.id, s?.name || s?.code || 'Sin nombre'])
+        : []
+    );
+  }, [subprocesos]);
 
   // FIXED: Risk distribution data for charts - memoized for performance
-  // React error #310 fix: Ensure dependencies are stable and serializable
+  // React error #310 fix: Include risks array directly in dependencies
   const riskDistributionData = useMemo(() => {
     if (!Array.isArray(risks) || risks.length === 0) return [];
     try {
-      // Use a stable reference by creating a copy of the array length
-      const risksLength = risks.length;
-      const risksArray = risks; // Keep reference stable
-      
       return [
-        { name: "Bajo", value: risksArray.filter((r) => (r?.inherentRisk || 0) <= 6).length, color: "#22c55e" },
-        { name: "Medio", value: risksArray.filter((r) => {
+        { name: "Bajo", value: risks.filter((r) => (r?.inherentRisk || 0) <= 6).length, color: "#22c55e" },
+        { name: "Medio", value: risks.filter((r) => {
           const risk = r?.inherentRisk || 0;
           return risk >= 7 && risk <= 12;
         }).length, color: "#eab308" },
-        { name: "Alto", value: risksArray.filter((r) => {
+        { name: "Alto", value: risks.filter((r) => {
           const risk = r?.inherentRisk || 0;
           return risk >= 13 && risk <= 19;
         }).length, color: "#f97316" },
-        { name: "Crítico", value: risksArray.filter((r) => (r?.inherentRisk || 0) >= 20).length, color: "#ef4444" },
+        { name: "Crítico", value: risks.filter((r) => (r?.inherentRisk || 0) >= 20).length, color: "#ef4444" },
       ];
     } catch (error) {
       console.error("Error calculating risk distribution:", error);
       return [];
     }
-  }, [risks.length]); // FIXED: Use length instead of full array to avoid React #310
+  }, [risks]);
 
   // Risks by process data - Group by macroproceso, process, or subproceso
   // Map IDs to names using catalogs - memoized for performance
+  // React error #310 fix: Include all dependencies directly
   const risksByProcessData = useMemo(() => {
     if (!Array.isArray(risks)) return [];
     
@@ -212,10 +217,10 @@ export default function Reports() {
       console.error("Error calculating risks by process:", error);
       return [];
     }
-  }, [risks.length, macroprocesos.length, processes.length, subprocesos.length]); // FIXED: Use array lengths instead of Map sizes to avoid React #310
+  }, [risks, macroprocesosMap, processesMap, subprocesosMap]);
 
   // FIXED: Control effectiveness data - memoized for performance
-  // React error #310 fix: Use length instead of full array
+  // React error #310 fix: Include controls array directly in dependencies
   const controlEffectivenessData = useMemo(() => {
     if (!Array.isArray(controls) || controls.length === 0) return [];
     try {
@@ -231,10 +236,10 @@ export default function Reports() {
       console.error("Error calculating control effectiveness:", error);
       return [];
     }
-  }, [controls.length]); // FIXED: Use length instead of full array
+  }, [controls]);
 
   // FIXED: Action plan status data - memoized for performance
-  // React error #310 fix: Use length instead of full array
+  // React error #310 fix: Include actionPlans array directly in dependencies
   const actionPlanStatusData = useMemo(() => {
     if (!Array.isArray(actionPlans) || actionPlans.length === 0) return [];
     try {
@@ -257,7 +262,7 @@ export default function Reports() {
       console.error("Error calculating action plan status:", error);
       return [];
     }
-  }, [actionPlans.length]); // FIXED: Use length instead of full array
+  }, [actionPlans]);
 
   const handleExport = async (reportType: string) => {
     try {
