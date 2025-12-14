@@ -8751,7 +8751,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         LEFT JOIN control_owners_agg co_agg ON cb.id = co_agg.control_id
         CROSS JOIN controls_count cc
         ORDER BY cb.code
-        `);
+        `).catch((sqlError: any) => {
+          console.error(`[ERROR] SQL query failed in /api/controls/with-details:`, sqlError);
+          console.error(`[ERROR] SQL error code:`, sqlError?.code);
+          console.error(`[ERROR] SQL error detail:`, sqlError?.detail);
+          console.error(`[ERROR] SQL error hint:`, sqlError?.hint);
+          console.error(`[ERROR] SQL error message:`, sqlError?.message);
+          throw sqlError;
+        });
 
         // Apply max effectiveness limit
         let maxEffectivenessLimit = 100;
