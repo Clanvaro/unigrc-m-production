@@ -3794,6 +3794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const dbStartTime = Date.now();
 
           // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+          const dbQueryStart = Date.now();
           const [allLinks, allControls] = await Promise.all([
             storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
               console.error("[batch-relations] Error fetching risk process links:", err);
@@ -3804,37 +3805,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
               return [];
             })
           ]);
+          const dbQueryDuration = Date.now() - dbQueryStart;
+          console.log(`[PERF] [batch-relations] DB queries completed in ${dbQueryDuration}ms (${allLinks.length} links, ${allControls.length} controls)`);
 
-          // Apply per-risk limits to prevent huge responses
-          // Group by riskId and limit each group
+          // OPTIMIZED: Pre-allocate Maps with expected size to avoid rehashing
           const linksByRisk = new Map<string, typeof allLinks>();
           const controlsByRisk = new Map<string, typeof allControls>();
+          
+          // Pre-populate maps for all riskIds to ensure they exist even if empty
+          for (const riskId of limitedIds) {
+            linksByRisk.set(riskId, []);
+            controlsByRisk.set(riskId, []);
+          }
 
-          // Group process links by riskId
+          // OPTIMIZED: Single pass grouping with early termination
+          const groupingStart = Date.now();
+          
+          // Group process links by riskId (single pass, early termination per risk)
           for (const link of allLinks) {
-            if (!linksByRisk.has(link.riskId)) {
-              linksByRisk.set(link.riskId, []);
-            }
-            const group = linksByRisk.get(link.riskId)!;
-            if (group.length < maxLinksPerRisk) {
+            const group = linksByRisk.get(link.riskId);
+            if (group && group.length < maxLinksPerRisk) {
               group.push(link);
             }
           }
 
-          // Group controls by riskId
+          // Group controls by riskId (single pass, early termination per risk)
           for (const control of allControls) {
-            if (!controlsByRisk.has(control.riskId)) {
-              controlsByRisk.set(control.riskId, []);
-            }
-            const group = controlsByRisk.get(control.riskId)!;
-            if (group.length < maxLinksPerRisk) {
+            const group = controlsByRisk.get(control.riskId);
+            if (group && group.length < maxLinksPerRisk) {
               group.push(control);
             }
           }
+          
+          const groupingDuration = Date.now() - groupingStart;
+          console.log(`[PERF] [batch-relations] Grouping completed in ${groupingDuration}ms`);
 
-          // Flatten back to arrays
-          const filteredLinks = Array.from(linksByRisk.values()).flat();
-          const filteredControls = Array.from(controlsByRisk.values()).flat();
+          // OPTIMIZED: Flatten using pre-allocated arrays for better performance
+          const filteredLinks: typeof allLinks = [];
+          const filteredControls: typeof allControls = [];
+          
+          for (const riskId of limitedIds) {
+            const links = linksByRisk.get(riskId);
+            const controls = controlsByRisk.get(riskId);
+            if (links) filteredLinks.push(...links);
+            if (controls) filteredControls.push(...controls);
+          }
 
           const dbDuration = Date.now() - dbStartTime;
           const totalLinks = filteredLinks.length;
