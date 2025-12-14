@@ -8555,8 +8555,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
+      console.log(`[DEBUG] /api/controls/with-details filters:`, JSON.stringify(filters, null, 2));
 
-      return await withRetry(async () => {
+      try {
+        return await withRetry(async () => {
         // Build WHERE conditions for filtering
         const whereConditions: any[] = [sql`c.status <> 'deleted'`];
         
@@ -8620,7 +8622,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             c.frequency,
             c.effectiveness,
             c.effect_target,
-            c.effect_target,
             c.is_active,
             c.last_review,
             c.validation_status,
@@ -8683,7 +8684,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cb.type,
           cb.frequency,
           cb.effectiveness,
-          cb.effect_target,
           cb.effect_target,
           cb.is_active,
           cb.last_review,
@@ -8795,7 +8795,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
         
         res.json(response);
-      });
+        }, {
+          maxRetries: 3
+        });
+      } catch (retryError) {
+        // Re-throw to be caught by outer catch block with better error context
+        console.error(`[ERROR] /api/controls/with-details withRetry failed:`, retryError);
+        throw retryError;
+      }
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/controls/with-details failed after ${duration}ms:`, error);
