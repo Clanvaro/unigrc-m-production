@@ -8713,7 +8713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               COUNT(DISTINCT rc.risk_id)::int as risk_count,
               COALESCE(
                 json_agg(
-                  DISTINCT json_build_object(
+                  json_build_object(
                     'id', r.id,
                     'code', r.code
                   )
