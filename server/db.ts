@@ -118,11 +118,12 @@ if (databaseUrl) {
   // Cloud SQL with public IP requires SSL but may not require client certificates if configured properly
   // For Cloud SQL with public IP, use sslmode=require (not verify-full) to avoid client cert requirement
   // IMPORTANT: Always set rejectUnauthorized: false for Cloud SQL to avoid certificate verification errors
-  // If sslmode=disable, completely disable SSL
-  const sslConfig = isCloudSqlProxy
-    ? false  // Cloud SQL Proxy doesn't need SSL
-    : isCloudSql && databaseUrl?.includes('sslmode=disable')
-      ? false  // Disable SSL if explicitly requested
+  // If sslmode=disable, completely disable SSL (regardless of database type)
+  const sslModeDisabled = databaseUrl?.includes('sslmode=disable');
+  const sslConfig = sslModeDisabled
+    ? false  // Always disable SSL if sslmode=disable is explicitly set
+    : isCloudSqlProxy
+      ? false  // Cloud SQL Proxy doesn't need SSL
       : isRenderDb
         ? { rejectUnauthorized: false }  // Render requires SSL
         : isCloudSql
