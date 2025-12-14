@@ -3851,13 +3851,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (controls) filteredControls.push(...controls);
           }
 
-          const dbDuration = Date.now() - dbStartTime;
+          const totalDuration = Date.now() - dbStartTime;
           const totalLinks = filteredLinks.length;
           const totalControls = filteredControls.length;
           const truncatedLinks = allLinks.length > totalLinks;
           const truncatedControls = allControls.length > totalControls;
           
-          console.log(`[PERF] [batch-relations] DB query took ${dbDuration}ms - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
+          console.log(`[PERF] [batch-relations] Total processing: ${totalDuration}ms (DB: ${dbQueryDuration}ms, Grouping: ${groupingDuration}ms) - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
 
           return {
             riskProcessLinks: filteredLinks,
@@ -8641,6 +8641,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : sql``;
 
         // OPTIMIZED: Single aggregated query with CTEs
+        // Build complete FROM clause for count query
+        const countFrom = filters.ownerId 
+          ? sql`FROM controls c
+              INNER JOIN control_owners co_filter_count ON c.id = co_filter_count.control_id AND co_filter_count.is_active = true
+              INNER JOIN process_owners po_filter_count ON co_filter_count.process_owner_id = po_filter_count.id`
+          : sql`FROM controls c`;
+        
+        const countOwnerFilter = filters.ownerId 
+          ? sql`AND po_filter_count.id = ${filters.ownerId}`
+          : sql``;
+
         const controlsResult = await requireDb().execute(sql`
         WITH controls_base AS (
           SELECT 
@@ -8673,9 +8684,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ),
         controls_count AS (
           SELECT COUNT(DISTINCT c.id)::int as total
-          ${baseFrom}
+          ${countFrom}
           ${baseWhere}
-          ${ownerFilter}
+          ${countOwnerFilter}
         ),
         risk_details_agg AS (
           SELECT 
@@ -8755,11 +8766,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         // Validate query result
-        if (!controlsResult || !controlsResult.rows) {
-          throw new Error("Invalid query result: missing rows");
+        if (!controlsResult) {
+          throw new Error("Invalid query result: result is null or undefined");
+        }
+        
+        if (!controlsResult.rows || !Array.isArray(controlsResult.rows)) {
+          throw new Error("Invalid query result: missing or invalid rows array");
         }
 
-        const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any)?.total || 0 : 0;
+        // Extract total from first row, or default to 0 if no rows
+        let total = 0;
+        if (controlsResult.rows.length > 0) {
+          const firstRow = controlsResult.rows[0] as any;
+          total = firstRow?.total !== undefined && firstRow.total !== null 
+            ? parseInt(String(firstRow.total), 10) 
+            : 0;
+        }
         const controls = (controlsResult.rows as any[]).map((row: any) => {
         // Parse JSON fields safely
         let associatedRisks: { id: string; code: string }[] = [];
