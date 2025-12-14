@@ -8588,6 +8588,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CACHE MISS] /api/controls/with-details - fetching aggregated data`);
       console.log(`[DEBUG] /api/controls/with-details filters:`, JSON.stringify(filters, null, 2));
 
+      // OPTIMIZED: Get system config in parallel (or cache it) to avoid blocking
+      const maxEffectivenessLimitPromise = storage.getSystemConfig("max_effectiveness_limit")
+        .then(config => {
+          if (config) {
+            const parsed = parseInt(config.configValue);
+            return (parsed > 0 && parsed <= 100) ? parsed : 100;
+          }
+          return 100;
+        })
+        .catch(() => 100); // Default to 100 on error
+
       try {
         return await withRetry(async () => {
         // Build WHERE conditions for filtering
@@ -8702,7 +8713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               COUNT(DISTINCT rc.risk_id)::int as risk_count,
               COALESCE(
                 json_agg(
-                  json_build_object(
+                  DISTINCT json_build_object(
                     'id', r.id,
                     'code', r.code
                   )
@@ -8715,18 +8726,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             GROUP BY rc.control_id
           ),
           control_owners_agg AS (
-            SELECT DISTINCT ON (co.control_id)
-              co.control_id,
+            SELECT 
+              cb.id as control_id,
               json_build_object(
                 'id', po.id,
                 'fullName', COALESCE(po.name, ''),
                 'cargo', COALESCE(po.position, '')
               ) as owner
-            FROM control_owners co
-            INNER JOIN controls_base cb ON co.control_id = cb.id
-            INNER JOIN process_owners po ON co.process_owner_id = po.id
-            WHERE co.is_active = true
-            ORDER BY co.control_id, co.assigned_at DESC
+            FROM controls_base cb
+            LEFT JOIN LATERAL (
+              SELECT co.process_owner_id, co.assigned_at
+              FROM control_owners co
+              WHERE co.control_id = cb.id
+                AND co.is_active = true
+              ORDER BY co.assigned_at DESC
+              LIMIT 1
+            ) latest_co ON true
+            LEFT JOIN process_owners po ON latest_co.process_owner_id = po.id
           )
           SELECT 
             cb.id,
@@ -8771,17 +8787,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           throw sqlError;
         }
 
-        // Apply max effectiveness limit
-        let maxEffectivenessLimit = 100;
-        try {
-          const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
-          if (maxLimitConfig) {
-            const parsed = parseInt(maxLimitConfig.configValue);
-            maxEffectivenessLimit = (parsed > 0 && parsed <= 100) ? parsed : 100;
-          }
-        } catch (configError) {
-          console.warn(`[WARN] /api/controls/with-details: Failed to get max effectiveness limit config:`, configError);
-        }
+        // OPTIMIZED: Get max effectiveness limit (already fetched in parallel)
+        const maxEffectivenessLimit = await maxEffectivenessLimitPromise;
 
         // Validate query result
         if (!controlsResult) {
@@ -8881,7 +8888,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         };
 
-        await distributedCache.set(cacheKey, response, 60);
+        // OPTIMIZED: Increase cache TTL to 5 minutes (300s) for better performance
+        // Cache is invalidated granularly on mutations, so longer TTL is safe
+        await distributedCache.set(cacheKey, response, 300);
         const duration = Date.now() - requestStart;
         console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
         
