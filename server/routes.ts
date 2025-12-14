@@ -34,7 +34,7 @@ import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLat
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
-import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses } from "@shared/schema";
+import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses, riskCategories } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
 // OPTIMIZED: Lazy load heavy dependencies to reduce startup time
@@ -3582,23 +3582,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/lookups/risk-categories", isAuthenticated, async (req, res) => {
+    const startTime = Date.now();
     try {
       const cacheKey = `lookups:risk-categories:single-tenant`;
-      // Use getFromTieredCache for consistency with other lookups and better performance
+      // OPTIMIZED: Use getFromTieredCache with direct DB query to avoid double caching
+      // getRiskCategories() has its own cache, so we query directly to avoid cache overhead
       const cached = await getFromTieredCache(
         cacheKey,
         async () => {
-          const data = await storage.getRiskCategories();
-          return data.map((c: any) => ({
+          // OPTIMIZED: Query directly from database to avoid double caching
+          // getRiskCategories() has internal cache which adds latency
+          // Direct query is faster and avoids cache overhead for simple lookups
+          const categories = await withRetry(async () => {
+            return await db.select({
+              id: riskCategories.id,
+              name: riskCategories.name,
+              color: riskCategories.color
+            })
+            .from(riskCategories)
+            .where(eq(riskCategories.isActive, true))
+            .orderBy(riskCategories.name);
+          });
+          
+          return (categories.rows as any[]).map((c: any) => ({
             id: c.id,
             name: c.name,
             color: c.color
           }));
         },
-        300 // 5 minutes - risk categories change infrequently
+        600 // 10 minutes - risk categories change very infrequently, longer cache for better performance
       );
+      
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/lookups/risk-categories completed in ${duration}ms`);
+      }
+      
       res.json(cached);
     } catch (error) {
+      const duration = Date.now() - startTime;
+      console.error(`[ERROR] /api/lookups/risk-categories failed after ${duration}ms:`, error);
       res.status(500).json({ message: "Failed to fetch risk categories" });
     }
   });
