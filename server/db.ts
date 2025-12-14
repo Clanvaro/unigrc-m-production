@@ -41,10 +41,16 @@ const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler')
 if (isRenderDb) {
   console.log(`[DB Config] Using: Render PostgreSQL (Detected via ${process.env.RENDER === 'true' ? 'Env Var' : 'URL'}), host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 } else if (isCloudSql) {
-  const connectionType = isCloudSqlProxy ? 'Unix socket (Cloud SQL Proxy)' : 'IP pública';
-  console.log(`[DB Config] Using: Google Cloud SQL via ${connectionType}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
-  if (!isCloudSqlProxy) {
-    console.warn(`⚠️ WARNING: Using Cloud SQL with public IP - consider switching to Unix socket for better performance (<10ms vs 100-1000ms latency)`);
+  const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
+  const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
+  const connectionType = isCloudSqlProxy 
+    ? 'Unix socket (Cloud SQL Proxy)' 
+    : isPrivateIP 
+      ? 'IP privada (VPC)' 
+      : 'IP pública';
+  console.log(`[DB Config] Using: Google Cloud SQL via ${connectionType}, host: ${host}`);
+  if (!isCloudSqlProxy && !isPrivateIP) {
+    console.warn(`⚠️ WARNING: Using Cloud SQL with public IP - consider switching to Unix socket or Private IP for better performance (<10ms vs 100-1000ms latency)`);
   }
 } else {
   console.log(`[DB Config] Using: ${isPooled ? 'Neon Pooled connection' : 'Neon Direct connection'}, host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
