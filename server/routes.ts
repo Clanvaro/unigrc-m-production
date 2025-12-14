@@ -6391,24 +6391,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
 
-      // Cache TTL: shorter for pending (15s), longer for validated/rejected/observed (60s)
-      const cacheTTL = actualStatus === 'pending_validation' ? 15 : 60;
+      // Cache TTL: shorter for pending (30s), longer for validated/rejected/observed (300s = 5min)
+      // Increased cache TTL to reduce database load
+      const cacheTTL = actualStatus === 'pending_validation' ? 30 : 300;
       const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
-        console.log(`[CACHE HIT] ${cacheKey}`);
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
         return res.json(cached);
       }
 
-      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
-      const queryPromise = storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
+      console.log(`[CACHE MISS] ${cacheKey} - fetching data`);
+      const queryStart = Date.now();
+
+      // OPTIMIZED: Use withRetry with timeout wrapper to prevent 504 errors
+      // The query now has a default LIMIT of 1000 to prevent loading all records
+      const riskProcessLinks = await withRetry(async () => {
+        return await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+      }, {
+        maxRetries: 1 // Only retry once for timeout scenarios
       });
 
-      const riskProcessLinks = await Promise.race([queryPromise, timeoutPromise]);
+      const queryDuration = Date.now() - queryStart;
+      console.log(`[DB] /api/risk-processes/validation/${actualStatus} fetched ${riskProcessLinks.length} links in ${queryDuration}ms`);
+
+      if (queryDuration > 5000) {
+        console.warn(`⚠️ Slow /api/risk-processes/validation/${actualStatus} query: ${queryDuration}ms`);
+      }
 
       await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+
+      const totalDuration = Date.now() - startTime;
+      console.log(`[PERF] /api/risk-processes/validation/${actualStatus} COMPLETE in ${totalDuration}ms (${riskProcessLinks.length} links)`);
 
       res.json(riskProcessLinks);
     } catch (error) {
@@ -16562,8 +16577,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 60 seconds (L1: 30s, L2: 60s)
-      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 60);
+      // Cache for 5 minutes (L1: 2.5min, L2: 5min) - increased from 60s for better performance
+      await twoTierCache.set(cacheKey, macroprocesoswithRisks, 300);
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/macroprocesos COMPLETE in ${totalDuration}ms (${macroprocesoswithRisks.length} macroprocesos)`);

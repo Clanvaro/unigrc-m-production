@@ -391,7 +391,7 @@ export interface IStorage {
   // RiskProcessLink validation
   validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected", validationComments?: string): Promise<RiskProcessLink | undefined>;
   getPendingValidationRiskProcessLinks(): Promise<RiskProcessLinkWithDetails[]>;
-  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]>;
+  getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]>;
   getRiskProcessLinksByNotificationStatusPaginated(notified: boolean, limit: number, offset: number): Promise<{ data: RiskProcessLinkWithDetails[], total: number }>;
 
@@ -20837,12 +20837,16 @@ export class DatabaseStorage extends MemStorage {
     return results;
   }
 
-  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string): Promise<RiskProcessLinkWithDetails[]> {
+  async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]> {
     // Build WHERE conditions - filter out deleted risks for performance
     const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
 
+    // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
+    // This prevents 504 timeouts when there are many records
+    const queryLimit = limit || 1000;
+
     // First get the base data with process hierarchy
-    const baseResults = await db.select({
+    let query = db.select({
       riskProcessLink: riskProcessLinks,
       risk: risks,
       macroproceso: macroprocesos,
@@ -20866,7 +20870,10 @@ export class DatabaseStorage extends MemStorage {
       .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
       .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
       .where(and(...conditions))
-      .orderBy(riskProcessLinks.createdAt);
+      .orderBy(riskProcessLinks.createdAt)
+      .limit(queryLimit);
+
+    const baseResults = await query;
 
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
