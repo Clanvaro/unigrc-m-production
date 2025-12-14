@@ -22,10 +22,12 @@ const isRenderDb =
   false;
 
 // Detect if using Google Cloud SQL
+// Check for: IS_GCP_DEPLOYMENT flag, .googleapis.com, cloudsql, or private IP (10.x.x.x) when IS_GCP_DEPLOYMENT is true
 const isCloudSql =
   process.env.IS_GCP_DEPLOYMENT === 'true' ||
   databaseUrl?.includes('.googleapis.com') ||
   databaseUrl?.includes('cloudsql') ||
+  (process.env.IS_GCP_DEPLOYMENT === 'true' && /@10\.\d+\.\d+\.\d+/.test(databaseUrl || '')) ||
   false;
 
 // Detect if using Cloud SQL Proxy (Unix socket connection)
