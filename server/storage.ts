@@ -8993,10 +8993,10 @@ export class DatabaseStorage extends MemStorage {
     categoryNames?: string[];
   }>> {
     return withRetry(async () => {
-      // Use raw SQL to avoid Drizzle ambiguity issues with correlated subqueries
-      // Get risks with owner info from riskProcessLinks
+      // OPTIMIZED: Use LATERAL JOIN to get the most recent owner per risk
+      // This is more efficient than DISTINCT ON when there are many risk_process_links
       const result = await db.execute(sql`
-        SELECT DISTINCT ON (r.id)
+        SELECT 
           r.id,
           r.code,
           r.name,
@@ -9012,11 +9012,19 @@ export class DatabaseStorage extends MemStorage {
           po.name as "ownerName",
           po.email as "ownerEmail"
         FROM risks r
-        LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id
-        LEFT JOIN process_owners po ON rpl.responsible_override_id = po.id AND (po.is_active = true OR po.is_active IS NULL)
+        LEFT JOIN LATERAL (
+          SELECT rpl.responsible_override_id, rpl.created_at
+          FROM risk_process_links rpl
+          WHERE rpl.risk_id = r.id
+            AND rpl.responsible_override_id IS NOT NULL
+          ORDER BY rpl.created_at DESC NULLS LAST
+          LIMIT 1
+        ) latest_rpl ON true
+        LEFT JOIN process_owners po ON latest_rpl.responsible_override_id = po.id 
+          AND (po.is_active = true OR po.is_active IS NULL)
         WHERE r.deleted_at IS NULL
           AND r.status != 'deleted'
-        ORDER BY r.id, rpl.created_at DESC NULLS LAST
+        ORDER BY r.id
       `);
 
       // Map category array to categoryNames
@@ -15199,8 +15207,9 @@ export class DatabaseStorage extends MemStorage {
   // ============== ALL PROCESS-GERENCIA AND PROCESS-OBJETIVO RELATIONS ==============
   async getAllProcessGerenciasRelations(): Promise<any[]> {
     return await withRetry(async () => {
-      // Use raw SQL to avoid Drizzle ambiguity issues with multiple JOINs
-      const macroRelations = await db.execute(sql`
+      // OPTIMIZED: Combine all 3 queries into a single UNION ALL query
+      // This reduces database round-trips from 3 to 1, improving performance
+      const result = await db.execute(sql`
         SELECT 
           mg.macroproceso_id as "macroprocesoId",
           NULL::text as "processId",
@@ -15210,9 +15219,9 @@ export class DatabaseStorage extends MemStorage {
         INNER JOIN macroprocesos m ON mg.macroproceso_id = m.id
         INNER JOIN gerencias g ON mg.gerencia_id = g.id
         WHERE m.deleted_at IS NULL AND g.deleted_at IS NULL
-      `);
-
-      const processRelations = await db.execute(sql`
+        
+        UNION ALL
+        
         SELECT 
           NULL::text as "macroprocesoId",
           pg.process_id as "processId",
@@ -15222,9 +15231,9 @@ export class DatabaseStorage extends MemStorage {
         INNER JOIN processes p ON pg.process_id = p.id
         INNER JOIN gerencias g ON pg.gerencia_id = g.id
         WHERE p.deleted_at IS NULL AND g.deleted_at IS NULL
-      `);
-
-      const subprocesoRelations = await db.execute(sql`
+        
+        UNION ALL
+        
         SELECT 
           NULL::text as "macroprocesoId",
           NULL::text as "processId",
@@ -15236,11 +15245,7 @@ export class DatabaseStorage extends MemStorage {
         WHERE s.deleted_at IS NULL AND g.deleted_at IS NULL
       `);
 
-      return [
-        ...(macroRelations.rows as any[]),
-        ...(processRelations.rows as any[]),
-        ...(subprocesoRelations.rows as any[])
-      ];
+      return result.rows as any[];
     });
   }
 

@@ -2066,8 +2066,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       mark('response-built');
 
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      await distributedCache.set(cacheKey, response, 900);
+      // Cache for 10 minutes (600 seconds) - invalidated granularly on mutations
+      // Balanced with individual function caches (60s) for better consistency
+      await distributedCache.set(cacheKey, response, 600);
       mark('cache-set');
 
       console.log('[page-data-lite timing]', {
