@@ -2412,18 +2412,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
               `)
             ]);
 
-            // Build lookup maps for O(1) access (optimized: codes already included)
-            for (const row of controlData.rows as any[]) {
-              const codes = Array.isArray(row.control_codes) 
-                ? row.control_codes 
-                : (typeof row.control_codes === 'string' 
-                    ? JSON.parse(row.control_codes) 
-                    : []);
+            // Build lookup maps for O(1) access
+            for (const row of controlSummary.rows as any[]) {
               controlSummaryMap.set(row.risk_id, {
-                controlCount: row.control_count || 0,
-                avgEffectiveness: row.avg_effectiveness || 0,
-                controlsSummary: codes.slice(0, 3) // Ensure max 3
+                controlCount: row.control_count,
+                avgEffectiveness: row.avg_effectiveness,
+                controlsSummary: []
               });
+            }
+
+            // Group control codes by risk_id
+            for (const row of controlCodes.rows as any[]) {
+              const summary = controlSummaryMap.get(row.risk_id);
+              if (summary && summary.controlsSummary.length < 3) {
+                summary.controlsSummary.push({ code: row.code });
+              }
             }
 
             // Group processes by risk_id
@@ -17950,7 +17953,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No active tenant found" });
       }
 
-      // Use distributed cache with versioned key (60s TTL)
+      // OPTIMIZED: Increased cache TTL from 60s to 10 minutes (600s)
+      // Risk levels change infrequently and cache is invalidated on mutations
       const cacheKey = `gerencias-risk-levels:${CACHE_VERSION}:${tenantId}`;
       const cached = await distributedCache.get(cacheKey);
 
@@ -17959,12 +17963,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
+      const requestStart = Date.now();
       const riskLevelsMap = await storage.getGerenciasRiskLevels();
+      const duration = Date.now() - requestStart;
+      
       // Convert Map to object for JSON serialization
       const riskLevels = Object.fromEntries(riskLevelsMap);
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, riskLevels, 60);
+      // Cache for 10 minutes (600 seconds) - risk levels change infrequently
+      await distributedCache.set(cacheKey, riskLevels, 600);
+      
+      if (duration > 1000) {
+        console.log(`[PERF] /api/gerencias-risk-levels completed in ${duration}ms`);
+      }
 
       res.json(riskLevels);
     } catch (error) {
