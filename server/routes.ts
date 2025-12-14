@@ -6550,7 +6550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `validation:counts:${CACHE_VERSION}:${tenantId}`;
       
-      // Try cache first (30s TTL - counts change infrequently)
+      // OPTIMIZED: Increased cache TTL from 30s to 5 minutes (300s) - counts change infrequently
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         return res.json(cached);
@@ -6560,101 +6560,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
-      // Get counts in parallel using direct SQL COUNT queries (fastest approach)
-      // IMPORTANT: Filter out deleted risks by joining with risks table
-      // OPTIMIZED: Add timeout to prevent 504 errors (10 seconds max)
+      // OPTIMIZED: Combine queries using CASE WHEN to reduce from 6 queries to 3 queries
+      // This reduces database round-trips and improves performance
+      const queryStart = Date.now();
+      
+      // Combined query for risks (notified + not notified in one query)
+      const risksCountsPromise = requireDb().execute(sql`
+        SELECT 
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified
+        FROM risk_process_links rpl
+        INNER JOIN risks r ON rpl.risk_id = r.id
+        WHERE rpl.validation_status = 'pending_validation' AND r.deleted_at IS NULL
+      `).then(r => ({
+        notified: (r.rows[0] as any)?.notified || 0,
+        notNotified: (r.rows[0] as any)?.not_notified || 0
+      }));
+
+      // Combined query for controls (notified + not notified in one query)
+      const controlsCountsPromise = requireDb().execute(sql`
+        SELECT 
+          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
+          COUNT(*) FILTER (WHERE (validation_status IS NULL OR validation_status = 'pending_validation') AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
+        FROM controls
+        WHERE deleted_at IS NULL AND (validation_status IS NULL OR validation_status = 'pending_validation')
+      `).then(r => ({
+        notified: (r.rows[0] as any)?.notified || 0,
+        notNotified: (r.rows[0] as any)?.not_notified || 0
+      }));
+
+      // Combined query for action plans (notified + not notified in one query)
+      const actionPlansCountsPromise = requireDb().execute(sql`
+        SELECT 
+          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
+          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
+        FROM actions
+        WHERE deleted_at IS NULL AND validation_status = 'pending_validation'
+      `).then(r => ({
+        notified: (r.rows[0] as any)?.notified || 0,
+        notNotified: (r.rows[0] as any)?.not_notified || 0
+      }));
+
       const countsPromise = Promise.all([
-        // Risks notified (pending_validation + notificationSent = true + risk not deleted)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(riskProcessLinks)
-          .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-          .where(and(
-            eq(riskProcessLinks.validationStatus, 'pending_validation'),
-            eq(riskProcessLinks.notificationSent, true),
-            isNull(risks.deletedAt)
-          )).then(r => r[0]?.count || 0),
-        
-        // Risks not notified (pending_validation + notificationSent = false + risk not deleted)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(riskProcessLinks)
-          .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-          .where(and(
-            eq(riskProcessLinks.validationStatus, 'pending_validation'),
-            eq(riskProcessLinks.notificationSent, false),
-            isNull(risks.deletedAt)
-          )).then(r => r[0]?.count || 0),
-        
-        // Controls notified (pending_validation + notifiedAt IS NOT NULL)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(controls)
-          .where(and(
-            isNull(controls.deletedAt),
-            eq(controls.validationStatus, 'pending_validation'),
-            isNotNull(controls.notifiedAt)
-          )).then(r => r[0]?.count || 0),
-        
-        // Controls not notified (pending_validation + notifiedAt IS NULL)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(controls)
-          .where(and(
-            isNull(controls.deletedAt),
-            or(
-              isNull(controls.validationStatus),
-              and(
-                eq(controls.validationStatus, 'pending_validation'),
-                isNull(controls.notifiedAt)
-              )
-            )
-          )).then(r => r[0]?.count || 0),
-        
-        // Action plans notified (pending_validation + notifiedAt IS NOT NULL)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(actions)
-          .where(and(
-            isNull(actions.deletedAt),
-            eq(actions.validationStatus, 'pending_validation'),
-            isNotNull(actions.notifiedAt)
-          )).then(r => r[0]?.count || 0),
-        
-        // Action plans not notified (pending_validation + notifiedAt IS NULL)
-        requireDb().select({ count: sql<number>`cast(count(*) as integer)` })
-          .from(actions)
-          .where(and(
-            isNull(actions.deletedAt),
-            eq(actions.validationStatus, 'pending_validation'),
-            isNull(actions.notifiedAt)
-          )).then(r => r[0]?.count || 0),
+        risksCountsPromise,
+        controlsCountsPromise,
+        actionPlansCountsPromise
       ]);
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
       });
 
-      const [risksNotifiedCount, risksNotNotifiedCount, controlsNotifiedCount, controlsNotNotifiedCount, actionPlansNotifiedCount, actionPlansNotNotifiedCount] = await Promise.race([
+      const [risksCounts, controlsCounts, actionPlansCounts] = await Promise.race([
         countsPromise,
         timeoutPromise
       ]);
 
+      const queryDuration = Date.now() - queryStart;
       const duration = Date.now() - startTime;
-      console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms`);
+      console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms (queries: ${queryDuration}ms)`);
 
       const response = {
         risks: {
-          notified: risksNotifiedCount,
-          notNotified: risksNotNotifiedCount
+          notified: risksCounts.notified,
+          notNotified: risksCounts.notNotified
         },
         controls: {
-          notified: controlsNotifiedCount,
-          notNotified: controlsNotNotifiedCount
+          notified: controlsCounts.notified,
+          notNotified: controlsCounts.notNotified
         },
         actionPlans: {
-          notified: actionPlansNotifiedCount,
-          notNotified: actionPlansNotNotifiedCount
+          notified: actionPlansCounts.notified,
+          notNotified: actionPlansCounts.notNotified
         }
       };
 
-      // Cache for 30 seconds
-      await distributedCache.set(cacheKey, response, 30);
+      // OPTIMIZED: Cache for 5 minutes (300 seconds) - increased from 30s
+      await distributedCache.set(cacheKey, response, 300);
       res.json(response);
     } catch (error) {
       const duration = Date.now() - startTime;
