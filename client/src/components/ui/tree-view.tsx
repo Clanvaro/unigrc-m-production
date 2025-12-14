@@ -102,7 +102,18 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
           <div className="w-8" />
         )}
 
-        <div className="p-1 -m-1 touch-manipulation">
+        <div 
+          className="p-1 -m-1 touch-manipulation cursor-pointer select-none flex items-center"
+          onClick={(e) => {
+            e.stopPropagation();
+            const newState = !(isSelected || allChildrenSelected);
+            handleCheckboxChange(newState);
+          }}
+          onMouseDown={(e) => {
+            // Prevent text selection when clicking
+            e.preventDefault();
+          }}
+        >
           <Checkbox
             checked={isSelected || allChildrenSelected}
             ref={(input) => {
@@ -115,8 +126,13 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
             }}
             data-testid={`checkbox-${node.id}`}
             className={cn(
-              allChildrenSelected && "data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+              allChildrenSelected && "data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600",
+              "cursor-pointer"
             )}
+            onClick={(e) => {
+              // Stop propagation to prevent double-toggling
+              e.stopPropagation();
+            }}
           />
         </div>
 
@@ -125,7 +141,8 @@ function TreeNodeItem({ node, selectedIds, onToggle, renderNodeInfo }: TreeNodeI
             "flex-1 flex items-center justify-between min-w-0",
             hasChildren && "cursor-pointer"
           )}
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
             if (hasChildren) {
               handleToggle();
             }
