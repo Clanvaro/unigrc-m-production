@@ -3825,13 +3825,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const requestStartTime = Date.now();
 
-      // OPTIMIZED: Use two-tier cache (memory + Redis) with 60s TTL for better performance
+      // OPTIMIZED: Use two-tier cache (memory + Redis) with 5min TTL for better performance
+      // Increased from 60s to 300s (5min) - batch relations change infrequently
       const response = await getFromTieredCache(
         cacheKey,
         async () => {
           const dbStartTime = Date.now();
 
           // OPTIMIZED: Fetch ONLY the relations for the specified risks using WHERE IN
+          // Both queries execute in parallel for better performance
           const dbQueryStart = Date.now();
           const [allLinks, allControls] = await Promise.all([
             storage.getRiskProcessLinksByRiskIds(limitedIds).catch(err => {
@@ -3911,7 +3913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           };
         },
-        60 // Redis TTL: 60 seconds (increased from 15s)
+        300 // Redis TTL: 5 minutes (300 seconds) - increased from 60s for better cache hit rate
       );
 
       const totalDuration = Date.now() - requestStartTime;
