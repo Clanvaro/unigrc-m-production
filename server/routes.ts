@@ -2412,21 +2412,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               `)
             ]);
 
-            // Build lookup maps for O(1) access
-            for (const row of controlSummary.rows as any[]) {
+            // Build lookup maps for O(1) access (optimized: codes already included)
+            for (const row of controlData.rows as any[]) {
+              const codes = Array.isArray(row.control_codes) 
+                ? row.control_codes 
+                : (typeof row.control_codes === 'string' 
+                    ? JSON.parse(row.control_codes) 
+                    : []);
               controlSummaryMap.set(row.risk_id, {
-                controlCount: row.control_count,
-                avgEffectiveness: row.avg_effectiveness,
-                controlsSummary: []
+                controlCount: row.control_count || 0,
+                avgEffectiveness: row.avg_effectiveness || 0,
+                controlsSummary: codes.slice(0, 3) // Ensure max 3
               });
-            }
-
-            // Group control codes by risk_id
-            for (const row of controlCodes.rows as any[]) {
-              const summary = controlSummaryMap.get(row.risk_id);
-              if (summary && summary.controlsSummary.length < 3) {
-                summary.controlsSummary.push({ code: row.code });
-              }
             }
 
             // Group processes by risk_id
