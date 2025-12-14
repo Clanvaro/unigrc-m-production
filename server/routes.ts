@@ -2198,6 +2198,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return await withRetry(async () => {
           // OPTIMIZED: Query riskCategories directly to avoid double caching
           // Other catalogs already have optimized caching in storage methods
+          // FIXED: Ensure db is available before using it
+          const dbInstance = requireDb();
           const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategoriesResult] = await Promise.all([
             storage.getGerencias(),
             storage.getMacroprocesos(),
@@ -2206,7 +2208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             storage.getProcessOwners(),
             storage.getAllProcessGerenciasRelations(),
             // Direct query to avoid double caching in getRiskCategories()
-            db.select({
+            dbInstance.select({
               id: riskCategories.id,
               name: riskCategories.name,
               color: riskCategories.color,
