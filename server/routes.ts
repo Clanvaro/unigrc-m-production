@@ -2196,15 +2196,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // If catalogs not cached, fetch them in parallel with risks
       const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
         return await withRetry(async () => {
-          const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategories] = await Promise.all([
+          // OPTIMIZED: Query riskCategories directly to avoid double caching
+          // Other catalogs already have optimized caching in storage methods
+          const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategoriesResult] = await Promise.all([
             storage.getGerencias(),
             storage.getMacroprocesos(),
             storage.getProcesses(),
             storage.getSubprocesosWithOwners(),
             storage.getProcessOwners(),
             storage.getAllProcessGerenciasRelations(),
-            storage.getRiskCategories()
+            // Direct query to avoid double caching in getRiskCategories()
+            db.select({
+              id: riskCategories.id,
+              name: riskCategories.name,
+              color: riskCategories.color,
+              isActive: riskCategories.isActive
+            })
+            .from(riskCategories)
+            .where(eq(riskCategories.isActive, true))
+            .orderBy(riskCategories.name)
           ]);
+          
+          const riskCategories = riskCategoriesResult;
 
           // Filter out deleted records and map to minimal fields
           const result = {
@@ -2489,8 +2502,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           };
 
-          // OPTIMIZED: Increased cache from 30s to 2 min (120s) for better hit rate
-          await distributedCache.set(cacheKeyRisks, result, 120);
+          // OPTIMIZED: Increased cache from 2 min to 5 min (300s) for better hit rate
+          // Cache is invalidated granularly on mutations, so longer TTL is safe
+          await distributedCache.set(cacheKeyRisks, result, 300);
           return result;
         });
       })();
