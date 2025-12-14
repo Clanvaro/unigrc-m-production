@@ -8666,12 +8666,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           SELECT 
             rc.control_id,
             COUNT(DISTINCT rc.risk_id)::int as risk_count,
-            json_agg(
-              json_build_object(
-                'id', r.id,
-                'code', r.code
-              )
-            ) FILTER (WHERE r.id IS NOT NULL) as associated_risks
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', r.id,
+                  'code', r.code
+                )
+              ) FILTER (WHERE r.id IS NOT NULL),
+              '[]'::json
+            ) as associated_risks
           FROM risk_controls rc
           INNER JOIN controls_base cb ON rc.control_id = cb.id
           LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
@@ -8682,8 +8685,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             co.control_id,
             json_build_object(
               'id', po.id,
-              'fullName', po.name,
-              'cargo', po.position
+              'fullName', COALESCE(po.name, ''),
+              'cargo', COALESCE(po.position, '')
             ) as owner
           FROM control_owners co
           INNER JOIN controls_base cb ON co.control_id = cb.id
@@ -8736,7 +8739,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.warn(`[WARN] /api/controls/with-details: Failed to get max effectiveness limit config:`, configError);
         }
 
-        const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any).total : 0;
+        // Validate query result
+        if (!controlsResult || !controlsResult.rows) {
+          throw new Error("Invalid query result: missing rows");
+        }
+
+        const total = controlsResult.rows.length > 0 ? (controlsResult.rows[0] as any)?.total || 0 : 0;
         const controls = (controlsResult.rows as any[]).map((row: any) => {
         // Parse JSON fields safely
         let associatedRisks: { id: string; code: string }[] = [];
@@ -8816,6 +8824,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (retryError) {
         // Re-throw to be caught by outer catch block with better error context
         console.error(`[ERROR] /api/controls/with-details withRetry failed:`, retryError);
+        if (retryError instanceof Error) {
+          console.error(`[ERROR] withRetry error message:`, retryError.message);
+          console.error(`[ERROR] withRetry error stack:`, retryError.stack);
+          // Log SQL-specific error details
+          if ((retryError as any).code) {
+            console.error(`[ERROR] SQL error code:`, (retryError as any).code);
+          }
+          if ((retryError as any).detail) {
+            console.error(`[ERROR] SQL error detail:`, (retryError as any).detail);
+          }
+          if ((retryError as any).hint) {
+            console.error(`[ERROR] SQL error hint:`, (retryError as any).hint);
+          }
+        }
         throw retryError;
       }
     } catch (error) {
