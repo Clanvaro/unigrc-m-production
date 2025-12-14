@@ -14640,6 +14640,7 @@ export class DatabaseStorage extends MemStorage {
       }
 
       // Fast path: Use optimized SQL for average/worst_case
+      // OPTIMIZED: Use UNION ALL instead of UNION for better performance (no duplicate elimination needed)
       const result = await db.execute(sql`
         WITH gerencia_risk_mapping AS (
           -- Risks from macroprocesos (direct + child processes + child subprocesos)
@@ -14647,14 +14648,14 @@ export class DatabaseStorage extends MemStorage {
           FROM macroproceso_gerencias mg
           JOIN risks r ON r.macroproceso_id = mg.macroproceso_id AND r.deleted_at IS NULL
           
-          UNION
+          UNION ALL
           
           SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
           FROM macroproceso_gerencias mg
           JOIN processes p ON p.macroproceso_id = mg.macroproceso_id AND p.deleted_at IS NULL
           JOIN risks r ON r.process_id = p.id AND r.deleted_at IS NULL
           
-          UNION
+          UNION ALL
           
           SELECT DISTINCT mg.gerencia_id, r.id, r.inherent_risk
           FROM macroproceso_gerencias mg
@@ -14662,21 +14663,21 @@ export class DatabaseStorage extends MemStorage {
           JOIN subprocesos sp ON sp.proceso_id = p.id AND sp.deleted_at IS NULL
           JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
           
-          UNION
+          UNION ALL
           
           -- Risks from processes (direct + child subprocesos)
           SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
           FROM process_gerencias pg
           JOIN risks r ON r.process_id = pg.process_id AND r.deleted_at IS NULL
           
-          UNION
+          UNION ALL
           
           SELECT DISTINCT pg.gerencia_id, r.id, r.inherent_risk
           FROM process_gerencias pg
           JOIN subprocesos sp ON sp.proceso_id = pg.process_id AND sp.deleted_at IS NULL
           JOIN risks r ON r.subproceso_id = sp.id AND r.deleted_at IS NULL
           
-          UNION
+          UNION ALL
           
           -- Risks from subprocesos (direct)
           SELECT DISTINCT sg.gerencia_id, r.id, r.inherent_risk
