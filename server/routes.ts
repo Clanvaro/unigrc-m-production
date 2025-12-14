@@ -6446,9 +6446,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
 
-      // Cache TTL: shorter for pending (30s), longer for validated/rejected/observed (300s = 5min)
-      // Increased cache TTL to reduce database load
-      const cacheTTL = actualStatus === 'pending_validation' ? 30 : 300;
+      // OPTIMIZED: Increased cache TTL for all statuses to reduce database load
+      // pending_validation: 2 minutes (120s) - increased from 30s
+      // validated/rejected/observed: 5 minutes (300s) - unchanged
+      const cacheTTL = actualStatus === 'pending_validation' ? 120 : 300;
       const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
