@@ -21362,12 +21362,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/regulations", isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Convert date strings to Date objects before validation
       const user = (req as any).user;
+      const userId = user?.claims?.sub || getAuthenticatedUserId(req);
+      
+      // Generate code automatically if not provided (based on law + article)
+      let code = req.body.code;
+      if (!code) {
+        const lawPrefix = req.body.law ? req.body.law.substring(0, 3).toUpperCase().replace(/\s/g, '') : 'REG';
+        const articleSuffix = req.body.article ? `-ART${req.body.article}` : '';
+        const clauseSuffix = req.body.clause ? `-${req.body.clause}` : '';
+        code = `${lawPrefix}${articleSuffix}${clauseSuffix}-${Date.now().toString().slice(-6)}`;
+      }
+
       const processedData = {
         ...req.body,
-        createdBy: user?.claims?.sub || req.body.createdBy || 'user-1',
+        code: code,
+        name: req.body.name || req.body.description || 'Normativa sin nombre',
+        issuingOrganization: req.body.issuingOrganization || req.body.issuing_organization || 'No especificado',
+        sourceType: req.body.sourceType || req.body.source_type || 'external',
+        createdBy: userId,
         effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : undefined,
         promulgationDate: req.body.promulgationDate ? new Date(req.body.promulgationDate) : undefined,
         lastUpdateDate: req.body.lastUpdateDate ? new Date(req.body.lastUpdateDate) : undefined,
@@ -21376,6 +21392,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         criticality: req.body.criticality || 'medium',
         isActive: req.body.isActive !== undefined ? req.body.isActive : true,
       };
+
+      console.log(`[DEBUG] Creating regulation with data:`, JSON.stringify(processedData, null, 2));
 
       // FIXED: Better error logging for debugging
       try {
@@ -21392,25 +21410,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(201).json(regulation);
       } catch (validationError) {
         if (validationError instanceof z.ZodError) {
-          console.error("[ERROR] Regulation validation failed:", JSON.stringify(validationError.errors, null, 2));
+          const duration = Date.now() - requestStart;
+          console.error(`[ERROR] Regulation validation failed after ${duration}ms:`, JSON.stringify(validationError.errors, null, 2));
           console.error("[ERROR] Received data:", JSON.stringify(processedData, null, 2));
+          console.error("[ERROR] Original request body:", JSON.stringify(req.body, null, 2));
+          
+          // Build user-friendly error message
+          const missingFields = validationError.errors
+            .filter(e => e.code === 'invalid_type' && e.received === 'undefined')
+            .map(e => e.path.join('.'))
+            .join(', ');
+          
+          const errorMessage = missingFields 
+            ? `Faltan campos requeridos: ${missingFields}`
+            : "Datos de normativa inválidos. Verifique los campos requeridos.";
+          
           return res.status(400).json({ 
-            message: "Invalid regulation data", 
-            errors: validationError.errors,
-            receivedData: processedData
+            message: errorMessage,
+            errors: validationError.errors.map(e => ({
+              field: e.path.join('.'),
+              message: e.message,
+              code: e.code
+            })),
+            ...(process.env.NODE_ENV === 'development' ? { receivedData: processedData } : {})
           });
         }
         throw validationError;
       }
     } catch (error) {
+      const duration = Date.now() - requestStart;
       if (error instanceof ActiveTenantError) {
+        console.error(`[ERROR] ActiveTenantError after ${duration}ms:`, error.message);
         return res.status(400).json({ message: error.message });
       }
-      console.error("[ERROR] Error creating regulation:", error);
+      console.error(`[ERROR] Error creating regulation after ${duration}ms:`, error);
+      if (error instanceof Error) {
+        console.error('Error stack:', error.stack);
+        console.error('Error message:', error.message);
+      }
       console.error("[ERROR] Request body:", JSON.stringify(req.body, null, 2));
       res.status(400).json({ 
-        message: "Invalid regulation data",
-        error: error instanceof Error ? error.message : "Unknown error"
+        message: "No se pudo crear la normativa. Verifique los datos e intente nuevamente.",
+        error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
     }
   });
