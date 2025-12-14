@@ -8632,14 +8632,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
               INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
           : sql`FROM controls c`;
         
-        const baseWhere = whereConditions.length > 0 
-          ? sql`WHERE ${sql.join(whereConditions, sql` AND `)}`
+        // Build WHERE clause - combine base conditions with owner filter if needed
+        const allWhereConditions = [...whereConditions];
+        if (filters.ownerId) {
+          allWhereConditions.push(sql`po_filter.id = ${filters.ownerId}`);
+        }
+        
+        const baseWhere = allWhereConditions.length > 0 
+          ? sql`WHERE ${sql.join(allWhereConditions, sql` AND `)}`
           : sql``;
         
-        const ownerFilter = filters.ownerId 
-          ? sql`AND po_filter.id = ${filters.ownerId}`
-          : sql``;
-
         // OPTIMIZED: Single aggregated query with CTEs
         // Build complete FROM clause for count query
         const countFrom = filters.ownerId 
@@ -8648,117 +8650,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
               INNER JOIN process_owners po_filter_count ON co_filter_count.process_owner_id = po_filter_count.id`
           : sql`FROM controls c`;
         
-        const countOwnerFilter = filters.ownerId 
-          ? sql`AND po_filter_count.id = ${filters.ownerId}`
+        // Build count WHERE clause - same conditions but with count aliases
+        const countWhereConditions = [...whereConditions];
+        if (filters.ownerId) {
+          countWhereConditions.push(sql`po_filter_count.id = ${filters.ownerId}`);
+        }
+        const countWhere = countWhereConditions.length > 0
+          ? sql`WHERE ${sql.join(countWhereConditions, sql` AND `)}`
           : sql``;
 
-        const controlsResult = await requireDb().execute(sql`
-        WITH controls_base AS (
+        let controlsResult;
+        try {
+          controlsResult = await requireDb().execute(sql`
+          WITH controls_base AS (
+            SELECT 
+              c.id,
+              c.code,
+              c.name,
+              c.description,
+              c.type,
+              c.frequency,
+              c.effectiveness,
+              c.effect_target,
+              c.is_active,
+              c.last_review,
+              c.validation_status,
+              c.validated_at,
+              c.validated_by,
+              c.validation_comments,
+              c.created_by,
+              c.updated_by,
+              c.deleted_by,
+              c.deleted_at,
+              c.deletion_reason,
+              c.created_at,
+              c.updated_at
+            ${baseFrom}
+            ${baseWhere}
+            ORDER BY c.code
+            LIMIT ${limit} OFFSET ${offset}
+          ),
+          controls_count AS (
+            SELECT COUNT(DISTINCT c.id)::int as total
+            ${countFrom}
+            ${countWhere}
+          ),
+          risk_details_agg AS (
+            SELECT 
+              rc.control_id,
+              COUNT(DISTINCT rc.risk_id)::int as risk_count,
+              COALESCE(
+                json_agg(
+                  json_build_object(
+                    'id', r.id,
+                    'code', r.code
+                  )
+                ) FILTER (WHERE r.id IS NOT NULL),
+                '[]'::json
+              ) as associated_risks
+            FROM risk_controls rc
+            INNER JOIN controls_base cb ON rc.control_id = cb.id
+            LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
+            GROUP BY rc.control_id
+          ),
+          control_owners_agg AS (
+            SELECT DISTINCT ON (co.control_id)
+              co.control_id,
+              json_build_object(
+                'id', po.id,
+                'fullName', COALESCE(po.name, ''),
+                'cargo', COALESCE(po.position, '')
+              ) as owner
+            FROM control_owners co
+            INNER JOIN controls_base cb ON co.control_id = cb.id
+            INNER JOIN process_owners po ON co.process_owner_id = po.id
+            WHERE co.is_active = true
+            ORDER BY co.control_id, co.created_at DESC
+          )
           SELECT 
-            c.id,
-            c.code,
-            c.name,
-            c.description,
-            c.type,
-            c.frequency,
-            c.effectiveness,
-            c.effect_target,
-            c.is_active,
-            c.last_review,
-            c.validation_status,
-            c.validated_at,
-            c.validated_by,
-            c.validation_comments,
-            c.created_by,
-            c.updated_by,
-            c.deleted_by,
-            c.deleted_at,
-            c.deletion_reason,
-            c.created_at,
-            c.updated_at
-          ${baseFrom}
-          ${baseWhere}
-          ${ownerFilter}
-          ORDER BY c.code
-          LIMIT ${limit} OFFSET ${offset}
-        ),
-        controls_count AS (
-          SELECT COUNT(DISTINCT c.id)::int as total
-          ${countFrom}
-          ${baseWhere}
-          ${countOwnerFilter}
-        ),
-        risk_details_agg AS (
-          SELECT 
-            rc.control_id,
-            COUNT(DISTINCT rc.risk_id)::int as risk_count,
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id', r.id,
-                  'code', r.code
-                )
-              ) FILTER (WHERE r.id IS NOT NULL),
-              '[]'::json
-            ) as associated_risks
-          FROM risk_controls rc
-          INNER JOIN controls_base cb ON rc.control_id = cb.id
-          LEFT JOIN risks r ON rc.risk_id = r.id AND r.status <> 'deleted'
-          GROUP BY rc.control_id
-        ),
-        control_owners_agg AS (
-          SELECT DISTINCT ON (co.control_id)
-            co.control_id,
-            json_build_object(
-              'id', po.id,
-              'fullName', COALESCE(po.name, ''),
-              'cargo', COALESCE(po.position, '')
-            ) as owner
-          FROM control_owners co
-          INNER JOIN controls_base cb ON co.control_id = cb.id
-          INNER JOIN process_owners po ON co.process_owner_id = po.id
-          WHERE co.is_active = true
-          ORDER BY co.control_id, co.created_at DESC
-        )
-        SELECT 
-          cb.id,
-          cb.code,
-          cb.name,
-          cb.description,
-          cb.type,
-          cb.frequency,
-          cb.effectiveness,
-          cb.effect_target,
-          cb.is_active,
-          cb.last_review,
-          cb.validation_status,
-          cb.validated_at,
-          cb.validated_by,
-          cb.validation_comments,
-          cb.created_by,
-          cb.updated_by,
-          cb.deleted_by,
-          cb.deleted_at,
-          cb.deletion_reason,
-          cb.created_at,
-          cb.updated_at,
-          COALESCE(rd.risk_count, 0)::int as associated_risks_count,
-          COALESCE(rd.associated_risks, '[]'::json) as associated_risks,
-          co_agg.owner as control_owner,
-          cc.total
-        FROM controls_base cb
-        LEFT JOIN risk_details_agg rd ON cb.id = rd.control_id
-        LEFT JOIN control_owners_agg co_agg ON cb.id = co_agg.control_id
-        CROSS JOIN controls_count cc
-        ORDER BY cb.code
-        `).catch((sqlError: any) => {
+            cb.id,
+            cb.code,
+            cb.name,
+            cb.description,
+            cb.type,
+            cb.frequency,
+            cb.effectiveness,
+            cb.effect_target,
+            cb.is_active,
+            cb.last_review,
+            cb.validation_status,
+            cb.validated_at,
+            cb.validated_by,
+            cb.validation_comments,
+            cb.created_by,
+            cb.updated_by,
+            cb.deleted_by,
+            cb.deleted_at,
+            cb.deletion_reason,
+            cb.created_at,
+            cb.updated_at,
+            COALESCE(rd.risk_count, 0)::int as associated_risks_count,
+            COALESCE(rd.associated_risks, '[]'::json) as associated_risks,
+            co_agg.owner as control_owner,
+            cc.total
+          FROM controls_base cb
+          LEFT JOIN risk_details_agg rd ON cb.id = rd.control_id
+          LEFT JOIN control_owners_agg co_agg ON cb.id = co_agg.control_id
+          CROSS JOIN controls_count cc
+          ORDER BY cb.code
+          `);
+        } catch (sqlError: any) {
           console.error(`[ERROR] SQL query failed in /api/controls/with-details:`, sqlError);
           console.error(`[ERROR] SQL error code:`, sqlError?.code);
           console.error(`[ERROR] SQL error detail:`, sqlError?.detail);
           console.error(`[ERROR] SQL error hint:`, sqlError?.hint);
           console.error(`[ERROR] SQL error message:`, sqlError?.message);
+          console.error(`[ERROR] SQL error stack:`, sqlError?.stack);
+          console.error(`[ERROR] Query parameters - limit: ${limit}, offset: ${offset}, filters:`, JSON.stringify(filters, null, 2));
           throw sqlError;
-        });
+        }
 
         // Apply max effectiveness limit
         let maxEffectivenessLimit = 100;
@@ -8774,10 +8784,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Validate query result
         if (!controlsResult) {
+          console.error(`[ERROR] /api/controls/with-details: Query result is null or undefined`);
           throw new Error("Invalid query result: result is null or undefined");
         }
         
         if (!controlsResult.rows || !Array.isArray(controlsResult.rows)) {
+          console.error(`[ERROR] /api/controls/with-details: Invalid rows array`, {
+            hasRows: !!controlsResult.rows,
+            rowsType: typeof controlsResult.rows,
+            rowsIsArray: Array.isArray(controlsResult.rows),
+            resultKeys: Object.keys(controlsResult || {})
+          });
           throw new Error("Invalid query result: missing or invalid rows array");
         }
 
@@ -8789,7 +8806,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? parseInt(String(firstRow.total), 10) 
             : 0;
         }
-        const controls = (controlsResult.rows as any[]).map((row: any) => {
+        const controls = (controlsResult.rows as any[]).map((row: any, index: number) => {
+        try {
         // Parse JSON fields safely
         let associatedRisks: { id: string; code: string }[] = [];
         if (row.associated_risks) {
@@ -8799,7 +8817,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             try {
               associatedRisks = JSON.parse(row.associated_risks);
             } catch (e) {
-              console.warn(`[WARN] Failed to parse associated_risks for control ${row.id}:`, e);
+              console.warn(`[WARN] Failed to parse associated_risks for control ${row.id} (row ${index}):`, e);
             }
           }
         }
@@ -8812,7 +8830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             try {
               controlOwner = JSON.parse(row.control_owner);
             } catch (e) {
-              console.warn(`[WARN] Failed to parse control_owner for control ${row.id}:`, e);
+              console.warn(`[WARN] Failed to parse control_owner for control ${row.id} (row ${index}):`, e);
             }
           }
         }
@@ -8845,6 +8863,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             associatedRisks: associatedRisks,
             controlOwner: controlOwner
           };
+        } catch (rowError: any) {
+          console.error(`[ERROR] Failed to process row ${index} in /api/controls/with-details:`, rowError);
+          console.error(`[ERROR] Row data:`, JSON.stringify(row, null, 2));
+          throw new Error(`Failed to process control row ${index}: ${rowError.message}`);
+        }
         });
 
         const response = {
