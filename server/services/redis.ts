@@ -169,7 +169,8 @@ class UpstashRedisAdapter {
 
 type RedisClient = IoRedis | InMemoryCache | UpstashRedisAdapter;
 
-let redis: RedisClient;
+// FIXED: Initialize variables to prevent 'Cannot access before initialization' errors
+let redis: RedisClient | null = null;
 let usingRealRedis = false;
 
 const REDIS_URL = process.env.REDIS_URL;
@@ -229,7 +230,7 @@ export class DistributedCache {
   async set(key: string, data: any, ttl?: number): Promise<void> {
     try {
       // FIXED: Ensure redis is initialized before using it
-      if (!redis) {
+      if (!redis || redis === null) {
         console.warn('[CACHE] Redis not initialized, skipping set operation');
         return;
       }
@@ -248,7 +249,7 @@ export class DistributedCache {
   async get(key: string): Promise<any | null> {
     try {
       // FIXED: Ensure redis is initialized before using it
-      if (!redis) {
+      if (!redis || redis === null) {
         console.warn('[CACHE] Redis not initialized, returning null');
         return null;
       }
@@ -284,6 +285,10 @@ export class DistributedCache {
 
   async invalidatePattern(pattern: string): Promise<void> {
     try {
+      if (!redis || redis === null) {
+        console.warn('[CACHE] Redis not initialized, skipping invalidatePattern operation');
+        return;
+      }
       const keys = await redis.keys(pattern);
       if (keys.length > 0) {
         console.log(`[CACHE INVALIDATE PATTERN] Found ${keys.length} keys matching pattern "${pattern}":`, keys.slice(0, 10).join(', '));
