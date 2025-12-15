@@ -226,17 +226,30 @@ export { usingRealRedis };
 
 export class DistributedCache {
   private readonly defaultTTL = 5 * 60;
+  private redisClient: RedisClient | null = null;
+  
+  constructor() {
+    // FIXED: Initialize redisClient reference after redis is initialized
+    // This prevents 'Cannot access before initialization' errors
+    this.redisClient = redis || null;
+  }
+  
+  private getRedis(): RedisClient | null {
+    // FIXED: Always get the current redis instance to handle re-initialization
+    return redis || null;
+  }
   
   async set(key: string, data: any, ttl?: number): Promise<void> {
     try {
-      // FIXED: Ensure redis is initialized before using it
-      if (!redis || redis === null) {
+      // FIXED: Get current redis instance to handle re-initialization
+      const redisInstance = this.getRedis();
+      if (!redisInstance || redisInstance === null) {
         console.warn('[CACHE] Redis not initialized, skipping set operation');
         return;
       }
       const serializedData = JSON.stringify(data);
       const ttlSeconds = ttl || this.defaultTTL;
-      await redis.setex(key, ttlSeconds, serializedData);
+      await redisInstance.setex(key, ttlSeconds, serializedData);
     } catch (error) {
       // FIXED: More detailed error logging to help debug initialization issues
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -248,12 +261,13 @@ export class DistributedCache {
 
   async get(key: string): Promise<any | null> {
     try {
-      // FIXED: Ensure redis is initialized before using it
-      if (!redis || redis === null) {
+      // FIXED: Get current redis instance to handle re-initialization
+      const redisInstance = this.getRedis();
+      if (!redisInstance || redisInstance === null) {
         console.warn('[CACHE] Redis not initialized, returning null');
         return null;
       }
-      const data = await redis.get(key);
+      const data = await redisInstance.get(key);
       if (!data) return null;
       if (typeof data === 'string') {
         return JSON.parse(data);
@@ -285,14 +299,15 @@ export class DistributedCache {
 
   async invalidatePattern(pattern: string): Promise<void> {
     try {
-      if (!redis || redis === null) {
+      const redisInstance = this.getRedis();
+      if (!redisInstance || redisInstance === null) {
         console.warn('[CACHE] Redis not initialized, skipping invalidatePattern operation');
         return;
       }
-      const keys = await redis.keys(pattern);
+      const keys = await redisInstance.keys(pattern);
       if (keys.length > 0) {
         console.log(`[CACHE INVALIDATE PATTERN] Found ${keys.length} keys matching pattern "${pattern}":`, keys.slice(0, 10).join(', '));
-        await redis.del(...keys);
+        await redisInstance.del(...keys);
         console.log(`[CACHE INVALIDATE PATTERN] Deleted ${keys.length} keys matching pattern "${pattern}"`);
       } else {
         console.log(`[CACHE INVALIDATE PATTERN] No keys found matching pattern "${pattern}"`);
@@ -327,14 +342,20 @@ export class DistributedCache {
   }
   
   getStats() {
-    if (redis instanceof InMemoryCache) {
-      return redis.getStats();
+    const redisInstance = this.getRedis();
+    if (!redisInstance) {
+      return { initialized: false };
     }
-    if (redis instanceof UpstashRedisAdapter) {
-      return redis.getStats();
+    if (redisInstance instanceof InMemoryCache) {
+      return redisInstance.getStats();
+    }
+    if (redisInstance instanceof UpstashRedisAdapter) {
+      return redisInstance.getStats();
     }
     return { distributed: true };
   }
 }
 
+// FIXED: Initialize distributedCache after redis is initialized
+// This prevents 'Cannot access before initialization' errors
 export const distributedCache = new DistributedCache();
