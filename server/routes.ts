@@ -2581,7 +2581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CACHE MISS] /api/dashboard/risk-matrix - fetching aggregated data`);
 
       // Single optimized SQL query with CTEs for control factors and summaries
-      const risksResult = await db.execute(sql`
+      const risksResult = await requireDb().execute(sql`
         WITH risk_control_factors AS (
           SELECT 
             rc.risk_id,
@@ -2668,7 +2668,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (riskIds.length > 0) {
         const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
-        const controlCodesResult = await db.execute(sql`
+        const controlCodesResult = await requireDb().execute(sql`
           WITH ranked_controls AS (
             SELECT 
               rc.risk_id,
@@ -2987,7 +2987,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Efficient SQL query: Get risks with control summary in a single query using subqueries
-      const risksWithSummary = await db.execute(sql`
+      const risksWithSummary = await requireDb().execute(sql`
         SELECT 
           r.*,
           COALESCE(cs.control_count, 0) as control_count,
@@ -3013,7 +3013,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       `);
 
       // Get total count
-      const countResult = await db.execute(sql`
+      const countResult = await requireDb().execute(sql`
         SELECT COUNT(*)::int as total FROM risks WHERE status <> 'deleted'
       `);
       const total = (countResult.rows[0] as any)?.total || 0;
@@ -3111,7 +3111,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Query risks with control summaries using batch queries
       const [risksResult, countResult] = await Promise.all([
-        db.execute(sql`
+        requireDb().execute(sql`
           SELECT 
             r.id,
             r.code,
@@ -3126,7 +3126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ORDER BY r.created_at DESC
           LIMIT ${limit} OFFSET ${offset}
         `),
-        db.execute(sql`
+        requireDb().execute(sql`
           SELECT COUNT(*)::int as total 
           FROM risks r
           ${whereClause}
@@ -3144,7 +3144,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
 
         // Query 1: Control summaries (count, avg effectiveness)
-        const controlSummary = await db.execute(sql`
+        const controlSummary = await requireDb().execute(sql`
           SELECT 
             rc.risk_id,
             COUNT(rc.id)::int as control_count,
@@ -3156,7 +3156,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `);
 
         // Query 2: Control codes (limited to 5 per risk)
-        const controlCodes = await db.execute(sql`
+        const controlCodes = await requireDb().execute(sql`
           WITH ranked_controls AS (
             SELECT 
               rc.risk_id,
@@ -3610,7 +3610,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // getRiskCategories() has internal cache which adds latency
           // Direct query is faster and avoids cache overhead for simple lookups
           const categories = await withRetry(async () => {
-            return await db.select({
+            return await requireDb().select({
               id: riskCategories.id,
               name: riskCategories.name,
               color: riskCategories.color
@@ -10321,7 +10321,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Single aggregated query with CTEs and JOINs
       // Get action plans with reschedule counts, risk-process links, and gerencias in one query
-      const actionPlansResult = await db.execute(sql`
+      const actionPlansResult = await requireDb().execute(sql`
         WITH action_plans_base AS (
           SELECT 
             a.id,
