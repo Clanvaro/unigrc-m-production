@@ -284,12 +284,17 @@ export class DistributedCache {
 
   async invalidate(key?: string): Promise<void> {
     try {
+      const redisInstance = this.getRedis();
+      if (!redisInstance || redisInstance === null) {
+        console.warn('[CACHE] Redis not initialized, skipping invalidate operation');
+        return;
+      }
       if (key) {
-        await redis.del(key);
+        await redisInstance.del(key);
       } else {
-        const keys = await redis.keys('*');
+        const keys = await redisInstance.keys('*');
         if (keys.length > 0) {
-          await redis.del(...keys);
+          await redisInstance.del(...keys);
         }
       }
     } catch (error) {
