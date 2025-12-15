@@ -11222,6 +11222,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/action-plans/validation/observed", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Get active tenant ID for cache key
       const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -11229,52 +11230,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No active tenant found" });
       }
 
-      // Cache for 60s (observed data changes less frequently)
+      // OPTIMIZED: Cache for 5 minutes (observed data changes less frequently)
       const cacheKey = `validation:action-plans:observed:${CACHE_VERSION}:${tenantId}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        console.log(`[CACHE HIT] ${cacheKey}`);
-        return res.json(cached);
+      
+      // OPTIMIZED: Try cache with timeout
+      try {
+        const cached = await Promise.race([
+          distributedCache.get(cacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+        if (cached !== null) {
+          const duration = Date.now() - requestStart;
+          if (duration > 100) {
+            console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
+          }
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
       }
 
-      // Get all action plans that have been observed in validation
-      const observedPlans = await requireDb()
-        .select()
-        .from(actions)
-        .where(and(
-          isNull(actions.deletedAt),
-          eq(actions.validationStatus, 'observed')
-        ));
+      // OPTIMIZED: Execute all queries in parallel
+      const [observedPlans, allProcesses, allAssociatedRisks] = await Promise.all([
+        // OPTIMIZED: Select only essential columns from actions
+        requireDb()
+          .select({
+            id: actions.id,
+            code: actions.code,
+            name: actions.name,
+            description: actions.description,
+            status: actions.status,
+            validationStatus: actions.validationStatus,
+            processId: actions.processId,
+            assignedTo: actions.assignedTo,
+            deadline: actions.deadline,
+            createdAt: actions.createdAt,
+            updatedAt: actions.updatedAt,
+          })
+          .from(actions)
+          .where(and(
+            isNull(actions.deletedAt),
+            eq(actions.validationStatus, 'observed')
+          )),
 
-      // Get all processes
-      const allProcesses = await requireDb().select().from(processes);
-      const processMap = new Map(allProcesses.map(p => [p.id, p]));
+        // OPTIMIZED: Select only essential columns from processes
+        requireDb()
+          .select({
+            id: processes.id,
+            name: processes.name,
+          })
+          .from(processes),
 
-      // Get all associated risks
-      const allAssociatedRisks = await requireDb()
-        .select({
-          actionId: actionPlanRisks.actionId,
-          riskId: actionPlanRisks.riskId,
-          isPrimary: actionPlanRisks.isPrimary,
-          riskCode: risks.code,
-          riskName: risks.name,
-        })
-        .from(actionPlanRisks)
-        .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id));
+        // OPTIMIZED: Get all associated risks with filter for deleted risks
+        requireDb()
+          .select({
+            actionId: actionPlanRisks.actionId,
+            riskId: actionPlanRisks.riskId,
+            isPrimary: actionPlanRisks.isPrimary,
+            riskCode: risks.code,
+            riskName: risks.name,
+          })
+          .from(actionPlanRisks)
+          .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+          .where(isNull(risks.deletedAt))
+      ]);
 
-      // Add associated risks and process info to each action plan
-      const plansWithRisks = observedPlans.map(plan => {
-        const associatedRisksForPlan = allAssociatedRisks.filter(ar => ar.actionId === plan.id);
-        const process = plan.processId ? processMap.get(plan.processId) : null;
-        return {
-          ...plan,
-          process: process ? { name: process.name } : null,
-          associatedRisks: associatedRisksForPlan
-        };
-      });
+      // OPTIMIZED: Pre-build Maps for O(1) lookups instead of O(n) filtering
+      const processMap = new Map(allProcesses.map(p => [p.id, { name: p.name }]));
+      
+      // OPTIMIZED: Group risks by actionId using Map for O(n) instead of O(n*m) filtering
+      const risksByActionId = new Map<string, Array<{ riskId: string; isPrimary: boolean; riskCode: string; riskName: string }>>();
+      for (const ar of allAssociatedRisks) {
+        if (!risksByActionId.has(ar.actionId)) {
+          risksByActionId.set(ar.actionId, []);
+        }
+        risksByActionId.get(ar.actionId)!.push({
+          riskId: ar.riskId,
+          isPrimary: ar.isPrimary,
+          riskCode: ar.riskCode || '',
+          riskName: ar.riskName || '',
+        });
+      }
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, plansWithRisks, 60);
+      // OPTIMIZED: Map to response format (minimal object construction)
+      const plansWithRisks = observedPlans.map(plan => ({
+        ...plan,
+        process: plan.processId ? processMap.get(plan.processId) || null : null,
+        associatedRisks: risksByActionId.get(plan.id) || []
+      }));
+
+      // OPTIMIZED: Cache for 5 minutes (300s) - observed data changes less frequently
+      try {
+        await Promise.race([
+          distributedCache.set(cacheKey, plansWithRisks, 300),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/action-plans/validation/observed COMPLETE in ${duration}ms (${plansWithRisks.length} plans)`);
+      }
+
       res.json(plansWithRisks);
     } catch (error) {
       console.error("Failed to fetch observed action plans:", error);
