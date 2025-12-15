@@ -199,8 +199,15 @@ if (databaseUrl) {
   const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
   console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=100, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
-    const connectionType = isCloudSqlProxy ? 'Unix socket' : 'IP pública';
-    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}`);
+    // FIXED: Detect private IP correctly for logging
+    const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
+    const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
+    const connectionType = isCloudSqlProxy 
+      ? 'Unix socket (Cloud SQL Proxy)' 
+      : isPrivateIP
+        ? 'IP privada (VPC)'
+        : 'IP pública';
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}, host: ${host}`);
     if (!isCloudSqlProxy) {
       console.warn(`⚠️ RECOMMENDATION: Switch to Unix socket connection for Cloud SQL to reduce latency from 100-1000ms to <10ms`);
     }
@@ -968,8 +975,17 @@ function startPoolWarming() {
                            error?.code === 'ECONNRESET';
           
           if (isTimeout) {
-            const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            console.warn(`⚠️ Ping timeout/error (${error?.message || error}) - connection will be recycled naturally (connectionType: ${connectionType})`);
+            // FIXED: Detect private IP correctly for logging
+            const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
+            const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
+            const connectionType = isCloudSqlProxy 
+              ? 'Unix socket (Cloud SQL Proxy)' 
+              : isCloudSql && isPrivateIP
+                ? 'IP privada (VPC)'
+                : isCloudSql
+                  ? 'IP pública'
+                  : 'unknown';
+            console.warn(`⚠️ Ping timeout/error (${error?.message || error}) - connection will be recycled naturally (connectionType: ${connectionType}, host: ${host})`);
             // Don't force close - let the pool handle it naturally via maxUses and idleTimeout
           } else {
             console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
