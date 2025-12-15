@@ -7,11 +7,13 @@ import * as schema from "@shared/schema";
 let pool: Pool | null = null;
 let db: ReturnType<typeof drizzle> | null = null;
 
-// Database URL priority: RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
+// Database URL priority: PGBOUNCER_URL > RENDER_DATABASE_URL > POOLED_DATABASE_URL > DATABASE_URL
+// PGBOUNCER_URL is for PgBouncer connection pooler (recommended for Cloud Run + Cloud SQL)
 // RENDER_DATABASE_URL is for Render PostgreSQL hosting (always-on, no cold start)
 // POOLED_DATABASE_URL is for Neon pooled connections (better scalability)
 // DATABASE_URL is the fallback direct Neon connection
-const databaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+const pgbouncerUrl = process.env.PGBOUNCER_URL;
+const databaseUrl = pgbouncerUrl || process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
 
 // Detect if using Render PostgreSQL (non-Neon)
 // Improved detection: Check for 'render.com' in hostname OR specific Render env vars
@@ -34,11 +36,18 @@ const isCloudSql =
 // Cloud SQL Proxy uses format: postgresql://user:pass@/db?host=/cloudsql/...
 const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
 
+// Detect if using PgBouncer (dedicated connection pooler)
+const isUsingPgBouncer = !!pgbouncerUrl;
+
 // Detect pooler based on actual connection string content (not env var name)
 const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
 
 // Log which database is being used
-if (isRenderDb) {
+if (isUsingPgBouncer) {
+  const pgbouncerHost = pgbouncerUrl?.split('@')[1]?.split('/')[0] || 'unknown';
+  console.log(`[DB Config] Using: PgBouncer connection pooler at ${pgbouncerHost}`);
+  console.log(`[DB Config] PgBouncer mode: Cloud Run will use more client connections (poolMax=10) since PgBouncer handles real pooling`);
+} else if (isRenderDb) {
   console.log(`[DB Config] Using: Render PostgreSQL (Detected via ${process.env.RENDER === 'true' ? 'Env Var' : 'URL'}), host: ${databaseUrl?.split('@')[1]?.split('/')[0] || 'unknown'}`);
 } else if (isCloudSql) {
   const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
@@ -149,7 +158,16 @@ if (databaseUrl) {
 
   // Calculate pool max for Cloud SQL based on environment
   let poolMax: number;
-  if (isCloudSql) {
+  if (isUsingPgBouncer) {
+    // PgBouncer mode: PgBouncer handles the real pooling to Cloud SQL
+    // Cloud Run only needs "client" connections to PgBouncer, which can be higher
+    // PgBouncer will pool these client connections to a smaller set of DB connections
+    // Formula: Cloud Run poolMax=10 × concurrency=1 = 10 client connections to PgBouncer
+    // PgBouncer pools these to ~25 DB connections (configurable in pgbouncer.ini)
+    const pgbouncerMax = parseInt(process.env.DB_POOL_MAX || '10', 10);
+    poolMax = pgbouncerMax;
+    console.log(`[DB Config] PgBouncer mode: Cloud Run poolMax=${poolMax} (PgBouncer handles real pooling to DB)`);
+  } else if (isCloudSql) {
     // OPTIMIZED: Reduced pool max from 20 to 4 for Cloud Run stability
     // Formula: max instances (5) × pool max (4) = 20 total connections (stable)
     // This prevents pool exhaustion and improves connection reuse
