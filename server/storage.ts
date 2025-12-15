@@ -9085,42 +9085,46 @@ export class DatabaseStorage extends MemStorage {
     };
   }> {
     return withRetry(async () => {
-      // Single query to get all statistics
-      const stats = await db
-        .select({
-          status: risks.status,
-          inherentRisk: risks.inherentRisk,
-          isDeleted: sql<boolean>`${risks.deletedAt} IS NOT NULL`,
-        })
-        .from(risks);
+      // OPTIMIZED: Use SQL aggregation instead of fetching all records
+      // This reduces data transfer and memory usage significantly
+      const result = await db.execute(sql`
+        SELECT 
+          COUNT(*)::int as total,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'active')::int as active,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'inactive')::int as inactive,
+          COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int as deleted,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'active')::int as status_active,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'inactive')::int as status_inactive,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'validated')::int as status_validated,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'rejected')::int as status_rejected,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND inherent_risk >= 1 AND inherent_risk <= 6)::int as risk_low,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND inherent_risk >= 7 AND inherent_risk <= 12)::int as risk_medium,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND inherent_risk >= 13 AND inherent_risk <= 19)::int as risk_high,
+          COUNT(*) FILTER (WHERE deleted_at IS NULL AND inherent_risk >= 20)::int as risk_critical
+        FROM risks
+      `);
 
-      // Calculate aggregates
-      const total = stats.length;
-      const active = stats.filter(s => s.status === 'active' && !s.isDeleted).length;
-      const inactive = stats.filter(s => s.status === 'inactive' && !s.isDeleted).length;
-      const deleted = stats.filter(s => s.isDeleted).length;
+      const row = result.rows[0] as any;
 
+      // Build byStatus object from aggregated counts
       const byStatus: Record<string, number> = {};
-      stats.forEach(s => {
-        if (!s.isDeleted) {
-          byStatus[s.status] = (byStatus[s.status] || 0) + 1;
-        }
-      });
-
-      const byRiskLevel = {
-        low: stats.filter(s => !s.isDeleted && s.inherentRisk >= 1 && s.inherentRisk <= 6).length,
-        medium: stats.filter(s => !s.isDeleted && s.inherentRisk >= 7 && s.inherentRisk <= 12).length,
-        high: stats.filter(s => !s.isDeleted && s.inherentRisk >= 13 && s.inherentRisk <= 19).length,
-        critical: stats.filter(s => !s.isDeleted && s.inherentRisk >= 20).length,
-      };
+      if (row.status_active > 0) byStatus['active'] = row.status_active;
+      if (row.status_inactive > 0) byStatus['inactive'] = row.status_inactive;
+      if (row.status_validated > 0) byStatus['validated'] = row.status_validated;
+      if (row.status_rejected > 0) byStatus['rejected'] = row.status_rejected;
 
       return {
-        total,
-        active,
-        inactive,
-        deleted,
+        total: row.total || 0,
+        active: row.active || 0,
+        inactive: row.inactive || 0,
+        deleted: row.deleted || 0,
         byStatus,
-        byRiskLevel,
+        byRiskLevel: {
+          low: row.risk_low || 0,
+          medium: row.risk_medium || 0,
+          high: row.risk_high || 0,
+          critical: row.risk_critical || 0,
+        },
       };
     });
   }

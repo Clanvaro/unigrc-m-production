@@ -1970,17 +1970,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
 
-      // Try cache first
+      // Try cache first with detailed Redis timing
+      const cacheGetStart = Date.now();
       const cached = await distributedCache.get(cacheKey);
+      const cacheGetDuration = Date.now() - cacheGetStart;
+      
       if (cached) {
         mark('cache-hit');
-        console.log('[page-data-lite timing]', {
+        console.log('[page-data-lite] CACHE HIT', {
           total: Date.now() - start,
+          redisGetMs: cacheGetDuration,
           steps,
         });
         return res.json(cached);
       }
       mark('cache-miss');
+      console.log('[page-data-lite] CACHE MISS', {
+        redisGetMs: cacheGetDuration,
+        step: 'cache-check',
+      });
 
       // Create promises (no await yet) - paralelizar todo
       // Wrap each promise with error handling to identify which one fails
@@ -2068,8 +2076,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Cache for 10 minutes (600 seconds) - invalidated granularly on mutations
       // Balanced with individual function caches (60s) for better consistency
+      const cacheSetStart = Date.now();
       await distributedCache.set(cacheKey, response, 600);
+      const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
+      
+      console.log('[page-data-lite] CACHE SET', {
+        redisSetMs: cacheSetDuration,
+        responseSizeKB: Math.round(JSON.stringify(response).length / 1024),
+      });
 
       console.log('[page-data-lite timing]', {
         total: Date.now() - start,
