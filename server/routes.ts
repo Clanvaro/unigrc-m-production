@@ -2209,15 +2209,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return await withRetry(async () => {
           // OPTIMIZED: Query riskCategories directly to avoid double caching
           // Other catalogs already have optimized caching in storage methods
-          // FIXED: Ensure db is available before using it
-          const dbInstance = requireDb();
+          // FIXED: Ensure db is available before using it and add error handling
+          let dbInstance;
+          try {
+            dbInstance = requireDb();
+          } catch (dbError) {
+            console.error('[ERROR] Database not available in catalogsPromise:', dbError);
+            throw new Error('Database not available');
+          }
+          
+          // FIXED: Wrap each storage call in try-catch to prevent initialization errors
           const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategoriesResult] = await Promise.all([
-            storage.getGerencias(),
-            storage.getMacroprocesos(),
-            storage.getProcesses(),
-            storage.getSubprocesosWithOwners(),
-            storage.getProcessOwners(),
-            storage.getAllProcessGerenciasRelations(),
+            storage.getGerencias().catch(err => {
+              console.error('[ERROR] Failed to get gerencias:', err);
+              return [];
+            }),
+            storage.getMacroprocesos().catch(err => {
+              console.error('[ERROR] Failed to get macroprocesos:', err);
+              return [];
+            }),
+            storage.getProcesses().catch(err => {
+              console.error('[ERROR] Failed to get processes:', err);
+              return [];
+            }),
+            storage.getSubprocesosWithOwners().catch(err => {
+              console.error('[ERROR] Failed to get subprocesos:', err);
+              return [];
+            }),
+            storage.getProcessOwners().catch(err => {
+              console.error('[ERROR] Failed to get processOwners:', err);
+              return [];
+            }),
+            storage.getAllProcessGerenciasRelations().catch(err => {
+              console.error('[ERROR] Failed to get processGerenciasRelations:', err);
+              return [];
+            }),
             // Direct query to avoid double caching in getRiskCategories()
             dbInstance.select({
               id: riskCategories.id,
@@ -2228,9 +2254,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .from(riskCategories)
             .where(eq(riskCategories.isActive, true))
             .orderBy(riskCategories.name)
+            .catch(err => {
+              console.error('[ERROR] Failed to get riskCategories:', err);
+              return [];
+            })
           ]);
           
-          const riskCategories = riskCategoriesResult;
+          const riskCategories = riskCategoriesResult || [];
 
           // Filter out deleted records and map to minimal fields
           const result = {
@@ -2256,7 +2286,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
 
           // OPTIMIZED: Increased catalog cache from 5 min to 30 min (1800s)
-          await distributedCache.set(cacheKeyCatalogs, result, 1800);
+          // FIXED: Add error handling for cache set operations
+          try {
+            await Promise.race([
+              distributedCache.set(cacheKeyCatalogs, result, 1800),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+            ]);
+          } catch (cacheError) {
+            console.warn(`[CACHE] Failed to set catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+            // Continue without caching - result is still returned
+          }
           return result;
         });
       })();
@@ -2542,8 +2581,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       })();
 
-      // Execute both in parallel
-      const [catalogsResult, risksResult] = await Promise.all([catalogsPromise, risksPromise]);
+      // Execute both in parallel with error handling
+      // FIXED: Add individual error handling to prevent one failure from crashing the entire endpoint
+      let catalogsResult: any = null;
+      let risksResult: any = null;
+      
+      try {
+        [catalogsResult, risksResult] = await Promise.all([
+          catalogsPromise.catch(err => {
+            console.error('[ERROR] catalogsPromise failed:', err);
+            // Return empty catalogs structure on error
+            return {
+              gerencias: [],
+              macroprocesos: [],
+              processes: [],
+              subprocesos: [],
+              processOwners: [],
+              processGerencias: [],
+              riskCategories: []
+            };
+          }),
+          risksPromise.catch(err => {
+            console.error('[ERROR] risksPromise failed:', err);
+            // Return empty risks structure on error
+            return {
+              data: [],
+              pagination: {
+                limit,
+                offset,
+                total: 0,
+                hasMore: false
+              }
+            };
+          })
+        ]);
+      } catch (error) {
+        console.error('[ERROR] Promise.all failed in /api/risks/bootstrap:', error);
+        // Fallback to empty results
+        if (!catalogsResult) {
+          catalogsResult = {
+            gerencias: [],
+            macroprocesos: [],
+            processes: [],
+            subprocesos: [],
+            processOwners: [],
+            processGerencias: [],
+            riskCategories: []
+          };
+        }
+        if (!risksResult) {
+          risksResult = {
+            data: [],
+            pagination: {
+              limit,
+              offset,
+              total: 0,
+              hasMore: false
+            }
+          };
+        }
+      }
 
       const response = {
         risks: risksResult,
