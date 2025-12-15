@@ -936,8 +936,17 @@ function startPoolWarming() {
 
           // Log slow pings for monitoring (but don't close connections aggressively)
           if (pingDuration > 1000) {
-            const connectionType = isCloudSqlProxy ? 'Unix socket' : (isCloudSql ? 'IP pública' : 'unknown');
-            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}) - connection will recycle naturally via maxUses`);
+            // FIXED: Detect private IP correctly for logging
+            const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
+            const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
+            const connectionType = isCloudSqlProxy 
+              ? 'Unix socket (Cloud SQL Proxy)' 
+              : isCloudSql && isPrivateIP
+                ? 'IP privada (VPC)'
+                : isCloudSql
+                  ? 'IP pública'
+                  : 'unknown';
+            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}, host: ${host}) - connection will recycle naturally via maxUses`);
           }
           
           // OPTIMIZED: Let connections recycle naturally via maxUses instead of closing aggressively
