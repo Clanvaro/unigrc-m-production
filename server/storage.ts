@@ -8965,28 +8965,29 @@ export class DatabaseStorage extends MemStorage {
       // Build WHERE clause
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-      // OPTIMIZED: Use a single query with window function for better performance
-      // This avoids two separate queries and allows PostgreSQL to optimize better
-      // Get paginated results and total count in one query (more efficient than two separate queries)
-      const paginatedRisks = await db
-        .select()
-        .from(risks)
-        .where(whereClause)
-        .limit(limit)
-        .offset(offset)
-        .orderBy(desc(risks.createdAt));
+      // OPTIMIZED: Execute count and data queries in parallel for better performance
+      // This allows PostgreSQL to optimize both queries simultaneously
+      const [paginatedRisks, countResult] = await Promise.all([
+        // Get paginated results
+        db
+          .select()
+          .from(risks)
+          .where(whereClause)
+          .limit(limit)
+          .offset(offset)
+          .orderBy(desc(risks.createdAt)),
 
-      // OPTIMIZED: Only count if we need to (for pagination info)
-      // Use a faster COUNT(*) with the same WHERE clause
-      // PostgreSQL can optimize this better with the composite index
-      const [{ count }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(risks)
-        .where(whereClause);
+        // Get total count for pagination
+        db
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(risks)
+          .where(whereClause)
+          .then(r => r[0]?.count || 0)
+      ]);
 
       return {
         risks: paginatedRisks,
-        total: count
+        total: countResult
       };
     });
   }

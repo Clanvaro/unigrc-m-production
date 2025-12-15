@@ -3045,6 +3045,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Risks
   app.get("/api/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Get active tenant ID
       const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -3076,19 +3077,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create cache key including all filters
       const cacheKey = `risks:${tenantId}:${limit}:${offset}:${JSON.stringify(filters)}`;
 
-      // Try cache first (unless bypassed)
+      // OPTIMIZED: Try cache first with timeout (unless bypassed)
       if (!bypassCache) {
-        const cached = await distributedCache.get(cacheKey);
-        if (cached !== null) {
-          console.log(`[CACHE HIT] /api/risks key=${cacheKey.slice(0, 50)}... count=${(cached as any)?.data?.length || 0}`);
-          res.setHeader('X-Cache', 'HIT');
-          return res.json(cached);
+        try {
+          const cached = await Promise.race([
+            distributedCache.get(cacheKey),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          ]);
+          if (cached !== null) {
+            const duration = Date.now() - requestStart;
+            if (duration > 100) {
+              console.log(`[CACHE HIT] /api/risks key=${cacheKey.slice(0, 50)}... count=${(cached as any)?.data?.length || 0} in ${duration}ms`);
+            }
+            res.setHeader('X-Cache', 'HIT');
+            return res.json(cached);
+          }
+        } catch (cacheError) {
+          console.warn(`[CACHE] Failed to get cache (${cacheKey.slice(0, 50)}...):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
         }
       }
 
       console.log(`[CACHE ${bypassCache ? 'BYPASS' : 'MISS'}] /api/risks key=${cacheKey.slice(0, 50)}...`);
 
-      // Cache miss - query database (single-tenant mode - no tenantId needed)
+      // OPTIMIZED: Cache miss - query database with performance monitoring
       const queryStart = Date.now();
       const { risks: paginatedRisks, total } = await storage.getRisksPaginated(filters, limit, offset);
       const queryDuration = Date.now() - queryStart;
@@ -3111,15 +3122,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
-      // Cache for 15 seconds (invalidated automatically on mutations) - skip if bypassed
+      // OPTIMIZED: Cache for 60 seconds (invalidated automatically on mutations) - skip if bypassed
+      // Increased from 15s to 60s for better cache hit rate
       if (!bypassCache) {
-        await distributedCache.set(cacheKey, response, 15);
+        try {
+          await Promise.race([
+            distributedCache.set(cacheKey, response, 60),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          ]);
+        } catch (cacheError) {
+          console.warn(`[CACHE] Failed to set cache (${cacheKey.slice(0, 50)}...):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        }
+      }
+
+      const totalDuration = Date.now() - requestStart;
+      if (totalDuration > 1000) {
+        console.log(`[PERF] /api/risks COMPLETE in ${totalDuration}ms (${paginatedRisks.length} risks, total: ${total})`);
       }
 
       res.setHeader('X-Cache', bypassCache ? 'BYPASS' : 'MISS');
       res.json(response);
     } catch (error) {
-      console.error("[ERROR] /api/risks failed:", error);
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/risks failed after ${duration}ms:`, error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
       console.error("[ERROR] /api/risks details:", { errorMessage, errorStack });
