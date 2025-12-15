@@ -5010,6 +5010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/controls/validation/not-notified", noCacheMiddleware, requirePermission("validate_risks"), async (req, res) => {
+    const requestStart = Date.now();
     try {
       const { limit, offset } = normalizePaginationParams(req.query);
 
@@ -5017,84 +5018,167 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
-      // 1. Get Total Count (Fast)
-      const [{ count }] = await requireDb()
-        .select({ count: sql<number>`count(*)` })
-        .from(controls)
-        .leftJoin(controlOwners, and(
-          eq(controls.id, controlOwners.controlId),
-          eq(controlOwners.isActive, true)
-        ))
-        .where(and(
-          isNull(controls.deletedAt),
-          or(
-            isNull(controls.validationStatus),
-            and(
-              eq(controls.validationStatus, 'pending_validation'),
-              isNull(controls.notifiedAt)
-            )
-          )
-        ));
+      // OPTIMIZED: Cache key with pagination params
+      const cacheKey = `controls:validation:not-notified:${limit}:${offset}`;
+      
+      // OPTIMIZED: Try cache first (60s TTL for validation data)
+      try {
+        const cached = await Promise.race([
+          distributedCache.get(cacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+        if (cached !== null) {
+          const duration = Date.now() - requestStart;
+          if (duration > 100) {
+            console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
+          }
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
 
-      // 2. Get Paginated Data (Optimized)
-      const notNotifiedControls = await requireDb()
-        .select({
-          control: controls,
-          owner: processOwners,
-        })
-        .from(controls)
-        .leftJoin(controlOwners, and(
-          eq(controls.id, controlOwners.controlId),
-          eq(controlOwners.isActive, true)
-        ))
-        .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
-        .where(and(
-          isNull(controls.deletedAt),
-          or(
-            isNull(controls.validationStatus),
-            and(
-              eq(controls.validationStatus, 'pending_validation'),
-              isNull(controls.notifiedAt)
+      // OPTIMIZED: Execute count and data queries in parallel
+      const [countResult, notNotifiedControls] = await Promise.all([
+        // 1. Get Total Count (Fast)
+        requireDb()
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(controls)
+          .leftJoin(controlOwners, and(
+            eq(controls.id, controlOwners.controlId),
+            eq(controlOwners.isActive, true)
+          ))
+          .where(and(
+            isNull(controls.deletedAt),
+            or(
+              isNull(controls.validationStatus),
+              and(
+                eq(controls.validationStatus, 'pending_validation'),
+                isNull(controls.notifiedAt)
+              )
             )
-          )
-        ))
-        .limit(limit)
-        .offset(offset);
+          ))
+          .then(r => r[0]?.count || 0),
 
+        // 2. Get Paginated Data (Optimized - select only essential columns)
+        requireDb()
+          .select({
+            // OPTIMIZED: Select only essential columns instead of entire control object
+            controlId: controls.id,
+            controlCode: controls.code,
+            controlName: controls.name,
+            controlDescription: controls.description,
+            controlType: controls.type,
+            controlStatus: controls.status,
+            controlValidationStatus: controls.validationStatus,
+            controlNotifiedAt: controls.notifiedAt,
+            controlCreatedAt: controls.createdAt,
+            controlUpdatedAt: controls.updatedAt,
+            // Owner columns
+            ownerId: processOwners.id,
+            ownerName: processOwners.name,
+            ownerEmail: processOwners.email,
+          })
+          .from(controls)
+          .leftJoin(controlOwners, and(
+            eq(controls.id, controlOwners.controlId),
+            eq(controlOwners.isActive, true)
+          ))
+          .leftJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+          .where(and(
+            isNull(controls.deletedAt),
+            or(
+              isNull(controls.validationStatus),
+              and(
+                eq(controls.validationStatus, 'pending_validation'),
+                isNull(controls.notifiedAt)
+              )
+            )
+          ))
+          .limit(limit)
+          .offset(offset)
+      ]);
+
+      // OPTIMIZED: Map to response format (minimal object construction)
       const controlsWithOwner = notNotifiedControls.map(row => ({
-        ...row.control,
-        owner: row.owner ? { id: row.owner.id, name: row.owner.name, email: row.owner.email } : null
+        id: row.controlId,
+        code: row.controlCode,
+        name: row.controlName,
+        description: row.controlDescription,
+        type: row.controlType,
+        status: row.controlStatus,
+        validationStatus: row.controlValidationStatus,
+        notifiedAt: row.controlNotifiedAt,
+        createdAt: row.controlCreatedAt,
+        updatedAt: row.controlUpdatedAt,
+        owner: row.ownerId ? { 
+          id: row.ownerId, 
+          name: row.ownerName, 
+          email: row.ownerEmail 
+        } : null
       }));
 
-      // Get associated risks for paginated controls ONLY
+      // OPTIMIZED: Get associated risks for paginated controls ONLY (select only essential columns)
       const controlIds = controlsWithOwner.map(c => c.id);
+      let controlsWithRisks = controlsWithOwner;
+      
       if (controlIds.length > 0) {
         const associatedRisks = await requireDb()
           .select({
             controlId: riskControls.controlId,
-            risk: risks,
+            // OPTIMIZED: Select only essential risk columns
+            riskId: risks.id,
+            riskCode: risks.code,
+            riskName: risks.name,
+            riskInherentRisk: risks.inherentRisk,
           })
           .from(riskControls)
           .leftJoin(risks, eq(riskControls.riskId, risks.id))
-          .where(inArray(riskControls.controlId, controlIds));
+          .where(and(
+            inArray(riskControls.controlId, controlIds),
+            isNull(risks.deletedAt)
+          ));
 
-        // Map risks to controls
-        const controlsWithRisks = controlsWithOwner.map(control => ({
+        // OPTIMIZED: Map risks to controls (pre-allocate Map for O(n) instead of O(n*m))
+        const risksByControlId = new Map<string, Array<{ id: string; code: string; name: string; inherentRisk: string | null }>>();
+        for (const ar of associatedRisks) {
+          if (ar.riskId) {
+            if (!risksByControlId.has(ar.controlId)) {
+              risksByControlId.set(ar.controlId, []);
+            }
+            risksByControlId.get(ar.controlId)!.push({
+              id: ar.riskId,
+              code: ar.riskCode || '',
+              name: ar.riskName || '',
+              inherentRisk: ar.riskInherentRisk,
+            });
+          }
+        }
+
+        controlsWithRisks = controlsWithOwner.map(control => ({
           ...control,
-          associatedRisks: associatedRisks
-            .filter(ar => ar.controlId === control.id && ar.risk)
-            .map(ar => ({
-              id: ar.risk!.id,
-              code: ar.risk!.code,
-              name: ar.risk!.name,
-              inherentRisk: ar.risk!.inherentRisk,
-            }))
+          associatedRisks: risksByControlId.get(control.id) || []
         }));
-
-        res.json(createPaginatedResponse(controlsWithRisks, Number(count), limit, offset));
-      } else {
-        res.json(createPaginatedResponse(controlsWithOwner, Number(count), limit, offset));
       }
+
+      const response = createPaginatedResponse(controlsWithRisks, Number(countResult), limit, offset);
+
+      // OPTIMIZED: Cache response (60s TTL for validation data)
+      try {
+        await Promise.race([
+          distributedCache.set(cacheKey, response, 60),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/controls/validation/not-notified COMPLETE in ${duration}ms (${controlsWithRisks.length} controls, total: ${countResult})`);
+      }
+
+      res.json(response);
     } catch (error) {
       console.error("Failed to fetch not-notified controls:", error);
       res.status(500).json({ message: "Failed to fetch not-notified controls" });
