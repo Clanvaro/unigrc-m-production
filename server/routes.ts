@@ -8796,13 +8796,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = await getFromTieredCache(
         cacheKey,
         async () => {
-          // Fetch controls from database with details (including controlOwner)
-          const { controls: paginatedControls, total } = await storage.getControlsPaginatedWithDetails(filters, limit, offset);
+          // OPTIMIZED: Execute getControlsPaginatedWithDetails and getSystemConfig in parallel
+          const [controlsResult, maxLimitConfig] = await Promise.all([
+            storage.getControlsPaginatedWithDetails(filters, limit, offset),
+            storage.getSystemConfig("max_effectiveness_limit").catch(() => null)
+          ]);
+
+          const { controls: paginatedControls, total } = controlsResult;
 
           // Apply current maximum effectiveness limit dynamically
           let controlsWithEffectivenessLimit = paginatedControls;
           try {
-            const maxLimitConfig = await storage.getSystemConfig("max_effectiveness_limit");
             const maxEffectivenessLimit = maxLimitConfig ? parseInt(maxLimitConfig.configValue) : 100;
 
             // FIXED: Validate maxEffectivenessLimit to prevent it from being 0 or invalid
@@ -8832,7 +8836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           };
         },
-        60 // OPTIMIZED: Increased cache TTL from 15s to 60s for better performance
+        120 // OPTIMIZED: Increased cache TTL from 60s to 120s (2 minutes) for better performance
       );
 
       const duration = Date.now() - startTime;

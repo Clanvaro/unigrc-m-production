@@ -7918,12 +7918,12 @@ export class DatabaseStorage extends MemStorage {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
+    // OPTIMIZED: Build count query and main query in parallel for better performance
     // FIXED: If owner filter provided, we need to join controlOwners to filter
-    // Build count query - may need owner join if filtering by owner
     let countQuery;
     if (filters.ownerId) {
       countQuery = db
-        .select({ count: sql<number>`count(DISTINCT ${controls.id})::int` })
+        .select({ count: sql<number>`cast(count(DISTINCT ${controls.id}) as integer)` })
         .from(controls)
         .innerJoin(controlOwners, and(
           eq(controls.id, controlOwners.controlId),
@@ -7933,16 +7933,17 @@ export class DatabaseStorage extends MemStorage {
         .where(and(
           whereClause,
           eq(processOwners.id, filters.ownerId)
-        ));
+        ))
+        .then(r => r[0]?.count || 0);
     } else {
       countQuery = db
-        .select({ count: sql<number>`count(*)::int` })
+        .select({ count: sql<number>`cast(count(*) as integer)` })
         .from(controls)
-        .where(whereClause);
+        .where(whereClause)
+        .then(r => r[0]?.count || 0);
     }
 
-    const [{ count }] = await countQuery;
-
+    // OPTIMIZED: Execute count and main query in parallel
     // FIXED: Get paginated controls with risk count
     // Move risks.status != 'deleted' to WHERE clause instead of CASE to fix count accuracy
     let mainQuery;
@@ -7962,7 +7963,8 @@ export class DatabaseStorage extends MemStorage {
         .leftJoin(riskControls, eq(controls.id, riskControls.controlId))
         .leftJoin(risks, and(
           eq(riskControls.riskId, risks.id),
-          ne(risks.status, 'deleted')
+          ne(risks.status, 'deleted'),
+          isNull(risks.deletedAt)
         ))
         .where(and(
           whereClause,
@@ -7982,7 +7984,8 @@ export class DatabaseStorage extends MemStorage {
         .leftJoin(riskControls, eq(controls.id, riskControls.controlId))
         .leftJoin(risks, and(
           eq(riskControls.riskId, risks.id),
-          ne(risks.status, 'deleted')
+          ne(risks.status, 'deleted'),
+          isNull(risks.deletedAt)
         ))
         .where(whereClause)
         .groupBy(controls.id)
@@ -7991,7 +7994,11 @@ export class DatabaseStorage extends MemStorage {
         .offset(offset);
     }
 
-    const controlsWithCount = await mainQuery;
+    // OPTIMIZED: Execute count and main query in parallel
+    const [count, controlsWithCount] = await Promise.all([
+      countQuery,
+      mainQuery
+    ]);
 
     // Extract control IDs for fetching related data
     const controlIds = controlsWithCount.map(({ control }) => control.id);
@@ -8000,19 +8007,38 @@ export class DatabaseStorage extends MemStorage {
       return { controls: [], total: count };
     }
 
-    // Get associated risk details ONLY for paginated controls (optimized)
-    const riskDetails = await db
-      .select({
-        controlId: riskControls.controlId,
-        riskId: risks.id,
-        riskCode: risks.code
-      })
-      .from(riskControls)
-      .innerJoin(risks, eq(riskControls.riskId, risks.id))
-      .where(and(
-        inArray(riskControls.controlId, controlIds),
-        ne(risks.status, 'deleted')
-      ));
+    // OPTIMIZED: Execute risk details and control owners queries in parallel
+    const [riskDetails, controlOwnersData] = await Promise.all([
+      // Get associated risk details ONLY for paginated controls (optimized)
+      db
+        .select({
+          controlId: riskControls.controlId,
+          riskId: risks.id,
+          riskCode: risks.code
+        })
+        .from(riskControls)
+        .innerJoin(risks, eq(riskControls.riskId, risks.id))
+        .where(and(
+          inArray(riskControls.controlId, controlIds),
+          ne(risks.status, 'deleted'),
+          isNull(risks.deletedAt)
+        )),
+
+      // Get control owners ONLY for paginated controls (optimized)
+      db
+        .select({
+          controlId: controlOwners.controlId,
+          ownerId: processOwners.id,
+          ownerName: processOwners.name,
+          ownerPosition: processOwners.position
+        })
+        .from(controlOwners)
+        .innerJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
+        .where(and(
+          inArray(controlOwners.controlId, controlIds),
+          eq(controlOwners.isActive, true)
+        ))
+    ]);
 
     // Build risk codes map
     const riskCodesMap = new Map<string, { id: string; code: string }[]>();
@@ -8025,21 +8051,6 @@ export class DatabaseStorage extends MemStorage {
         code: detail.riskCode
       });
     }
-
-    // Get control owners ONLY for paginated controls (optimized)
-    const controlOwnersData = await db
-      .select({
-        controlId: controlOwners.controlId,
-        ownerId: processOwners.id,
-        ownerName: processOwners.name,
-        ownerPosition: processOwners.position
-      })
-      .from(controlOwners)
-      .innerJoin(processOwners, eq(controlOwners.processOwnerId, processOwners.id))
-      .where(and(
-        inArray(controlOwners.controlId, controlIds),
-        eq(controlOwners.isActive, true)
-      ));
 
     // Create owner map (only first owner per control)
     const ownerMap = new Map<string, { id: string; fullName: string; cargo: string }>();
