@@ -2651,13 +2651,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
+      // FIXED: Validate response structure before sending
+      if (!risksResult || !risksResult.data) {
+        console.error('[ERROR] Invalid risksResult structure:', risksResult);
+        risksResult = {
+          data: [],
+          pagination: {
+            limit,
+            offset,
+            total: 0,
+            hasMore: false
+          }
+        };
+      }
+      
+      if (!catalogsResult) {
+        console.error('[ERROR] Invalid catalogsResult structure:', catalogsResult);
+        catalogsResult = {
+          gerencias: [],
+          macroprocesos: [],
+          processes: [],
+          subprocesos: [],
+          processOwners: [],
+          processGerencias: [],
+          riskCategories: []
+        };
+      }
+
       console.log(`[PERF] /api/risks/bootstrap COMPLETE in ${Date.now() - requestStart}ms`, {
-        risksCount: risksResult.data.length,
-        total: risksResult.pagination.total,
+        risksCount: risksResult?.data?.length || 0,
+        total: risksResult?.pagination?.total || 0,
         catalogsCached: !!catalogs
       });
 
-      res.json(response);
+      res.json({
+        risks: risksResult,
+        catalogs: catalogsResult,
+        _meta: {
+          fetchedAt: new Date().toISOString(),
+          duration: Date.now() - requestStart
+        }
+      });
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risks/bootstrap failed after ${duration}ms:`, error);

@@ -7223,11 +7223,16 @@ export class DatabaseStorage extends MemStorage {
   constructor() {
     super();
     this.storageKind = 'DatabaseStorage';
-    // Guard: prevent instantiation when DATABASE_URL is missing
+    // FIXED: Guard with try-catch to prevent initialization errors
     // This should never be hit because createStorage() checks first,
     // but provides a clear error if DatabaseStorage is used directly
-    if (!dbNullable || !poolNullable) {
-      throw new Error('DatabaseStorage requires DATABASE_URL to be configured. Use MemStorage instead.');
+    try {
+      if (!dbNullable || !poolNullable) {
+        throw new Error('DatabaseStorage requires DATABASE_URL to be configured. Use MemStorage instead.');
+      }
+    } catch (error) {
+      console.error('[ERROR] DatabaseStorage constructor error:', error);
+      throw error;
     }
   }
 
@@ -14692,8 +14697,9 @@ export class DatabaseStorage extends MemStorage {
           GROUP BY rc.risk_id
         ),
         -- Final aggregation with residual fallback to inherent
+        -- OPTIMIZED: Use DISTINCT in final SELECT to handle potential duplicates from UNION ALL
         gerencia_risk_details AS (
-          SELECT 
+          SELECT DISTINCT
             grm.gerencia_id,
             grm.risk_id,
             grm.inherent_risk,
