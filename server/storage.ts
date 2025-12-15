@@ -187,7 +187,7 @@ import {
 } from "@shared/schema";
 import { expandScopeEntities } from "@shared/scope-expansion";
 import { randomUUID, createHash } from "crypto";
-import { db as dbNullable, pool as poolNullable, withRetry, batchQueries, isPoolHealthy, waitForPoolCapacity } from "./db";
+import { db as dbNullable, pool as poolNullable, withRetry, batchQueries } from "./db";
 import { eq, ne, and, or, desc, sql, inArray, like, isNull, isNotNull, aliasedTable } from "drizzle-orm";
 
 // Non-null aliases for use within DatabaseStorage (guarded by constructor check)
@@ -19465,20 +19465,8 @@ export class DatabaseStorage extends MemStorage {
 
   async getProcessOwners(): Promise<ProcessOwner[]> {
     return withRetry(async () => {
-      // OPTIMIZED: Check pool health before executing query to prevent accumulation of delays
-      // Wait briefly for pool capacity if pool is saturated
-      // This prevents queries from queuing up when many pages are open
-      if (!isPoolHealthy()) {
-        const hasCapacity = await waitForPoolCapacity(1000); // Reduced to 1s to fail fast
-        if (!hasCapacity) {
-          // Don't proceed if pool is saturated - throw error to trigger retry or circuit breaker
-          throw new Error('Pool saturated - cannot execute getProcessOwners query');
-        }
-      }
-
       // OPTIMIZED: Add timeout wrapper to prevent this query from blocking pool
       // This query should be fast (<500ms) with the composite index on (isActive, name)
-      // Reduced timeout to 3s to prevent accumulation of delays
       const queryPromise = db.select({
         id: processOwners.id,
         name: processOwners.name,
@@ -19492,14 +19480,13 @@ export class DatabaseStorage extends MemStorage {
       .where(eq(processOwners.isActive, true))
       .orderBy(processOwners.name);
 
-      // Add aggressive timeout to prevent accumulation of delays when pool is busy
-      // 3s timeout ensures query doesn't block pool for too long
+      // Add timeout to prevent accumulation of delays when pool is busy
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('getProcessOwners query timeout after 3 seconds')), 3000);
+        setTimeout(() => reject(new Error('getProcessOwners query timeout after 5 seconds')), 5000);
       });
 
       return await Promise.race([queryPromise, timeoutPromise]);
-    }, { maxRetries: 2 }); // Reduced retries to fail faster when pool is saturated
+    });
   }
 
   async getProcessOwner(id: string): Promise<ProcessOwner | undefined> {
