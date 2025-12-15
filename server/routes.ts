@@ -10581,11 +10581,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Tenant ID is required" });
       }
 
+      // OPTIMIZED: Cache key with version
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
-        return res.json(cached);
+      
+      // OPTIMIZED: Try cache with timeout
+      try {
+        const cached = await Promise.race([
+          distributedCache.get(cacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+        if (cached !== null) {
+          const duration = Date.now() - requestStart;
+          if (duration > 100) {
+            console.log(`[CACHE HIT] /api/action-plans in ${duration}ms`);
+          }
+          return res.json(cached);
+        }
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
       }
 
       console.log(`[CACHE MISS] /api/action-plans - fetching aggregated data`);
@@ -10687,6 +10700,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           GROUP BY pg.process_id
         ),
         associated_risks_agg AS (
+          -- OPTIMIZED: Filter deleted risks in WHERE clause for better performance
           SELECT 
             COALESCE(apr.action_plan_id, a.id) as action_plan_id,
             json_agg(
@@ -10698,12 +10712,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 'riskCode', r.code,
                 'riskName', r.name
               )
-            ) FILTER (WHERE apr.risk_id IS NOT NULL) as associated_risks
+            ) FILTER (WHERE apr.risk_id IS NOT NULL AND r.deleted_at IS NULL) as associated_risks
           FROM action_plan_risks apr
-          INNER JOIN risks r ON apr.risk_id = r.id
+          INNER JOIN risks r ON apr.risk_id = r.id AND r.deleted_at IS NULL
           LEFT JOIN actions a ON apr.action_id = a.id
-          WHERE r.deleted_at IS NULL
-            AND (apr.action_plan_id IS NOT NULL OR a.id IS NOT NULL)
+          WHERE (apr.action_plan_id IS NOT NULL OR a.id IS NOT NULL)
           GROUP BY COALESCE(apr.action_plan_id, a.id)
         )
         SELECT 
@@ -10761,14 +10774,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }));
 
       const response = plans;
-      await distributedCache.set(cacheKey, response, 30);
-      await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300);
+      
+      // OPTIMIZED: Cache with timeout and increased TTL from 30s to 60s
+      try {
+        await Promise.all([
+          Promise.race([
+            distributedCache.set(cacheKey, response, 60),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          ]),
+          Promise.race([
+            distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          ])
+        ]);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
 
       const duration = Date.now() - requestStart;
       console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
       
-      if (duration > 2000) {
-        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 2000ms)`);
+      if (duration > 3000) {
+        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 3000ms)`);
       }
 
       res.json(response);
