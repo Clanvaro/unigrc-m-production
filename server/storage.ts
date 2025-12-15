@@ -8917,6 +8917,11 @@ export class DatabaseStorage extends MemStorage {
       conditions.push(isNull(risks.deletedAt));
       conditions.push(ne(risks.status, 'deleted'));
 
+      // OPTIMIZED: Apply status filter if provided (e.g., 'active' to exclude deleted)
+      if (filters.status && filters.status !== 'deleted') {
+        conditions.push(eq(risks.status, filters.status));
+      }
+
       // Apply filters
       if (filters.search) {
         const searchPattern = `%${filters.search.toLowerCase()}%`;

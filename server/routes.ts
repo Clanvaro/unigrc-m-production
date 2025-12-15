@@ -3438,6 +3438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/risks-with-details", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Extract and validate tenantId
       const tenantId = (req as any).user?.activeTenantId;
@@ -3445,23 +3446,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No active tenant" });
       }
 
-      // Use two-tier cache for better performance (L1: memory <1ms, L2: Redis <100ms)
+      // OPTIMIZED: Use two-tier cache for better performance (L1: memory <1ms, L2: Redis <100ms)
       // Versioned key matches invalidation in cache-helpers.ts
       const cacheKey = `risks-with-details:${CACHE_VERSION}:${tenantId}`;
       const activeRisks = await getFromTieredCache(
         cacheKey,
         async () => {
-          // Fetch basic risks only for list view - use paginated endpoint for performance (single-tenant mode)
-          const { risks: paginatedRisks, total } = await storage.getRisksPaginated({}, 1000, 0);
+          // OPTIMIZED: Fetch basic risks with filters to exclude deleted in query (not in memory)
+          // Use paginated endpoint for performance (single-tenant mode)
+          // Filter deleted risks in the query itself for better performance
+          const { risks: paginatedRisks, total } = await storage.getRisksPaginated(
+            { status: 'active' }, // OPTIMIZED: Filter deleted in query instead of memory
+            1000, 
+            0
+          );
 
+          // OPTIMIZED: Additional filter for safety (but query should already exclude deleted)
           // Filter out soft-deleted records (only return active records)
-          return paginatedRisks.filter((risk: any) => risk.status !== 'deleted');
+          return paginatedRisks.filter((risk: any) => 
+            risk.status !== 'deleted' && !risk.deletedAt
+          );
         },
         900 // 15 minutes TTL - invalidated granularly on mutations
       );
 
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/risks-with-details COMPLETE in ${duration}ms (${activeRisks.length} risks)`);
+      }
+
       res.json(activeRisks);
     } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/risks-with-details failed after ${duration}ms:`, error);
       res.status(500).json({ message: "Failed to fetch risks with details" });
     }
   });
