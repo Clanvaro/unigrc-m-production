@@ -1458,9 +1458,13 @@ logger.log('info', 'Application started');
 │         NEON POSTGRESQL                       │
 │         Serverless Database                   │
 │                                               │
-│  Connection Pooling: Yes                      │
+│  Connection Pooling: Yes (pg Pool)            │
+│  Pool Size: 4 por instancia (DB_POOL_MAX)     │
+│  Pool Monitoring: Logs de métricas            │
+│  Query Batching: Batches de 2 para evitar     │
+│                  pool starvation               │
 │  Auto-scaling: Yes                            │
-│  Backups: Automatic                           │
+│  Backups: Automatic                            │
 │  Region: Configurable                         │
 └───────────────────┬───────────────────────────┘
                     │

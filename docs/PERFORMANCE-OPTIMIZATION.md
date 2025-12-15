@@ -95,17 +95,36 @@ Real-time Data:
 
 ### 4. **Database Optimization**
 
-#### **Connection Pooling** (Neon Serverless)
+#### **Connection Pooling** (Cloud SQL / Neon Serverless)
 
+**Configuración actual (Cloud SQL):**
 ```typescript
-const NEON_POOL_CONFIG = {
-  max: 10,              // Maximum connections
+const POOL_CONFIG = {
+  max: 4,               // Maximum connections per instance (configurable via DB_POOL_MAX)
   min: 2,               // Minimum connections
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  maxUses: 7500,        // Rotate for serverless
-  statement_timeout: 30000
+  idleTimeoutMillis: 60000,  // 60s for Cloud SQL
+  connectionTimeoutMillis: 60000,  // 60s for Cloud SQL
+  statement_timeout: 30000,  // 30s query timeout
+  maxUses: 100,        // Rotate connections after 100 uses
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 3000
 };
+```
+
+**⚠️ IMPORTANTE: Pool Starvation Prevention**
+
+Con `pool=4` y `concurrency=10` en Cloud Run, múltiples requests pueden saturar el pool:
+- **Problema:** 10 requests simultáneos × 2 queries = 20 queries para 4 conexiones
+- **Solución:** Limitar queries concurrentes por request (batches de 2)
+- **Fórmula:** `pool_size >= concurrency × queries_por_request`
+
+**Recomendación:**
+```bash
+# Opción 1: Reducir concurrency (más seguro)
+gcloud run services update unigrc-backend --concurrency=1
+
+# Opción 2: Aumentar pool (si Cloud SQL lo permite)
+DB_POOL_MAX=8  # Luego usar concurrency=2-3
 ```
 
 #### **Strategic Indexes** (50+ indexes)
@@ -118,6 +137,29 @@ Run: `psql $DATABASE_URL -f scripts/apply-performance-indexes.sql`
 - `idx_risk_controls_composite` - Risk-Control joins
 - `idx_processes_macroproceso_id` - Hierarchy navigation
 - `idx_audits_status` - Audit filtering
+- `idx_risk_process_links_risk_created` - LATERAL JOIN optimization (getRisksLite)
+
+#### **Query Optimization: Agregación SQL**
+
+**Antes (ineficiente):**
+```typescript
+// Traía TODOS los registros y calculaba en memoria
+const stats = await db.select({ status, inherentRisk, isDeleted }).from(risks);
+const active = stats.filter(s => s.status === 'active' && !s.isDeleted).length;
+```
+
+**Después (optimizado):**
+```sql
+-- Una sola query con agregación SQL
+SELECT 
+  COUNT(*)::int as total,
+  COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'active')::int as active,
+  COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'inactive')::int as inactive,
+  -- ... más agregados
+FROM risks
+```
+
+**Impacto:** Reduce tiempo de 5-30s a <100ms, reduce transferencia de MB a KB
 
 #### **Query Optimization Patterns**
 
@@ -323,7 +365,9 @@ curl -H "Accept-Encoding: gzip" http://localhost:5000/api/risks
 1. Check database indexes: `\di` in psql
 2. Verify cache is enabled: `DISABLE_CACHE=false`
 3. Monitor slow queries: Enable query logging
-4. Check connection pool: Increase `DB_POOL_MAX`
+4. Check connection pool: Increase `DB_POOL_MAX` or reduce `concurrency`
+5. **Pool Starvation:** Check logs for `waiting > 0` or `total=4/4` - reduce concurrency or increase pool
+6. **Query Concurrency:** Endpoints con muchas queries deben usar batches (ver `/api/risks/page-data-lite`)
 
 ### Memory Leaks
 

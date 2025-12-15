@@ -86,16 +86,24 @@ CREATE INDEX idx_risks_inherent_residual ON risks(inherent_risk DESC, residual_r
 CREATE INDEX idx_risk_controls_composite ON risk_controls(risk_id, control_id);
 ```
 
-**Connection Pool Optimizado:**
+**Connection Pool Optimizado (Cloud SQL):**
 ```typescript
 {
-  max: 10,                    // Máx conexiones
+  max: 4,                     // Máx conexiones por instancia (configurable via DB_POOL_MAX)
   min: 2,                     // Mín conexiones
-  idleTimeoutMillis: 30000,   // 30s idle
-  maxUses: 7500,              // Rotación serverless
-  statement_timeout: 30000    // 30s timeout
+  idleTimeoutMillis: 60000,   // 60s idle (Cloud SQL)
+  connectionTimeoutMillis: 60000,  // 60s timeout (Cloud SQL)
+  statement_timeout: 30000,   // 30s query timeout
+  maxUses: 100,               // Rotación después de 100 usos
+  keepAlive: true,            // Mantener conexiones vivas
+  keepAliveInitialDelayMillis: 3000
 }
 ```
+
+**⚠️ Pool Starvation Prevention:**
+- Endpoints con múltiples queries usan **batches de 2** en lugar de `Promise.all()`
+- Fórmula: `pool_size >= concurrency × queries_por_request`
+- Logging de pool metrics antes/después de queries para diagnóstico
 
 ---
 
@@ -228,11 +236,12 @@ npx vitest run tests/load
 3. Idle timeout: 60s
 4. HTTP/2: Habilitado
 
-### **RDS/Neon Database**
-1. Connection pooling: PgBouncer
-2. Read replicas: Para analytics
-3. Max connections: 10 por instancia
-4. Transaction pooling: Habilitado
+### **Cloud SQL / Neon Database**
+1. Connection pooling: Configurado en `server/db.ts`
+2. Pool size: 4 por instancia (configurable via `DB_POOL_MAX`)
+3. Cloud Run concurrency: 1-2 (recomendado para pool=4)
+4. Query batching: Endpoints con múltiples queries usan batches de 2
+5. Pool monitoring: Logs de métricas antes/después de queries
 
 ---
 
@@ -278,7 +287,10 @@ LIMIT 10;
 - [x] ✅ Compresión HTTP implementada
 - [x] ✅ Cache headers CDN configurados
 - [x] ✅ 50+ índices de DB creados
-- [x] ✅ Connection pooling optimizado
+- [x] ✅ Connection pooling optimizado (Cloud SQL)
+- [x] ✅ Pool starvation prevention (query batching)
+- [x] ✅ Agregación SQL en getRiskStats() (5-30s → <100ms)
+- [x] ✅ Logging de pool metrics para diagnóstico
 - [x] ✅ Query optimization patterns documentados
 - [x] ✅ Tests de performance creados (10+ tests)
 - [x] ✅ Métricas mejoradas: 5-10x throughput
@@ -308,5 +320,12 @@ LIMIT 10;
 
 **Estado:** ✅ **COMPLETO Y LISTO PARA PRODUCCIÓN**  
 **Impacto:** 🚀 **5-10x mejora en throughput, 33-60% reducción de latencia**  
-**Compatibilidad:** ☁️ **Optimizado para AWS (ALB, CloudFront, RDS, Neon)**  
-**Última Actualización:** Octubre 2025
+**Compatibilidad:** ☁️ **Optimizado para Google Cloud Run + Cloud SQL**  
+**Últimas Optimizaciones (Diciembre 2024):**
+- ✅ Fix pool starvation en `/api/risks/page-data-lite` (88-195s → <5s)
+- ✅ Agregación SQL en `getRiskStats()` (5-30s → <100ms)
+- ✅ Logging detallado de pool metrics y Redis
+- ✅ Limitación de concurrencia de queries (batches de 2)
+- ✅ Documentación de configuración Cloud Run (concurrency vs pool)
+
+**Última Actualización:** Diciembre 2024
