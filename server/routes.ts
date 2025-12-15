@@ -1990,70 +1990,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
         step: 'cache-check',
       });
 
-      // Create promises (no await yet) - paralelizar todo
-      // Wrap each promise with error handling to identify which one fails
-      const risksPromise = storage.getRisksLite().catch(err => {
-        console.error('[page-data-lite] getRisksLite failed:', err);
-        throw new Error(`getRisksLite failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const ownersPromise = storage.getProcessOwners().catch(err => {
-        console.error('[page-data-lite] getProcessOwners failed:', err);
-        throw new Error(`getProcessOwners failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const statsPromise = storage.getRiskStats().catch(err => {
-        console.error('[page-data-lite] getRiskStats failed:', err);
-        throw new Error(`getRiskStats failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const gerenciasPromise = storage.getGerencias().catch(err => {
-        console.error('[page-data-lite] getGerencias failed:', err);
-        throw new Error(`getGerencias failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const macroprocesosPromise = storage.getMacroprocesos().catch(err => {
-        console.error('[page-data-lite] getMacroprocesos failed:', err);
-        throw new Error(`getMacroprocesos failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const subprocesosPromise = storage.getSubprocesosWithOwners().catch(err => {
-        console.error('[page-data-lite] getSubprocesosWithOwners failed:', err);
-        throw new Error(`getSubprocesosWithOwners failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const processesPromise = storage.getProcesses().catch(err => {
-        console.error('[page-data-lite] getProcesses failed:', err);
-        throw new Error(`getProcesses failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const riskCategoriesPromise = storage.getRiskCategories().catch(err => {
-        console.error('[page-data-lite] getRiskCategories failed:', err);
-        throw new Error(`getRiskCategories failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const processGerenciasRelationsPromise = storage.getAllProcessGerenciasRelations().catch(err => {
-        console.error('[page-data-lite] getAllProcessGerenciasRelations failed:', err);
-        throw new Error(`getAllProcessGerenciasRelations failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Log pool metrics before starting queries to detect pool starvation
+      const poolMetricsBefore = getPoolMetrics();
+      console.log('[page-data-lite] Pool metrics BEFORE queries', {
+        total: poolMetricsBefore?.totalCount || 0,
+        max: poolMetricsBefore?.maxConnections || 0,
+        idle: poolMetricsBefore?.idleCount || 0,
+        active: (poolMetricsBefore?.totalCount || 0) - (poolMetricsBefore?.idleCount || 0),
+        waiting: poolMetricsBefore?.waitingCount || 0,
+        utilization: poolMetricsBefore ? `${Math.round(((poolMetricsBefore.totalCount - poolMetricsBefore.idleCount) / poolMetricsBefore.maxConnections) * 100)}%` : 'unknown'
       });
 
-      mark('promises-created');
+      // OPTIMIZED: Execute queries in batches to avoid pool saturation
+      // With pool=4 and 9 queries, executing all in parallel causes connection starvation
+      // Execute in batches of 2-3 queries to respect pool limits
+      const CONCURRENT_QUERIES = 2; // Max queries in parallel (respects pool=4)
+      
+      // Define all queries with error handling
+      const queries = [
+        { name: 'getRisksLite', fn: () => storage.getRisksLite() },
+        { name: 'getProcessOwners', fn: () => storage.getProcessOwners() },
+        { name: 'getRiskStats', fn: () => storage.getRiskStats() },
+        { name: 'getGerencias', fn: () => storage.getGerencias() },
+        { name: 'getMacroprocesos', fn: () => storage.getMacroprocesos() },
+        { name: 'getSubprocesosWithOwners', fn: () => storage.getSubprocesosWithOwners() },
+        { name: 'getProcesses', fn: () => storage.getProcesses() },
+        { name: 'getRiskCategories', fn: () => storage.getRiskCategories() },
+        { name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() },
+      ];
 
-      // Execute all in parallel
-      const [
-        risks,
-        owners,
-        stats,
-        gerencias,
-        macroprocesos,
-        subprocesos,
-        processes,
-        riskCategories,
-        processGerenciasRelations
-      ] = await Promise.all([
-        risksPromise,
-        ownersPromise,
-        statsPromise,
-        gerenciasPromise,
-        macroprocesosPromise,
-        subprocesosPromise,
-        processesPromise,
-        riskCategoriesPromise,
-        processGerenciasRelationsPromise
-      ]);
+      // Execute queries in batches with concurrency limit
+      const results: any[] = [];
+      for (let i = 0; i < queries.length; i += CONCURRENT_QUERIES) {
+        const batch = queries.slice(i, i + CONCURRENT_QUERIES);
+        const batchStart = Date.now();
+        
+        const batchResults = await Promise.all(
+          batch.map(async (query) => {
+            const queryStart = Date.now();
+            try {
+              const result = await query.fn();
+              const queryDuration = Date.now() - queryStart;
+              if (queryDuration > 1000) {
+                console.log(`[page-data-lite] ${query.name} took ${queryDuration}ms`);
+              }
+              return { name: query.name, result, error: null };
+            } catch (err) {
+              const queryDuration = Date.now() - queryStart;
+              console.error(`[page-data-lite] ${query.name} failed after ${queryDuration}ms:`, err);
+              throw new Error(`${query.name} failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })
+        );
+        
+        results.push(...batchResults);
+        const batchDuration = Date.now() - batchStart;
+        
+        // Log pool metrics after each batch
+        const poolMetricsAfter = getPoolMetrics();
+        console.log(`[page-data-lite] Batch ${Math.floor(i / CONCURRENT_QUERIES) + 1} completed in ${batchDuration}ms`, {
+          batchSize: batch.length,
+          poolTotal: poolMetricsAfter?.totalCount || 0,
+          poolActive: (poolMetricsAfter?.totalCount || 0) - (poolMetricsAfter?.idleCount || 0),
+          poolWaiting: poolMetricsAfter?.waitingCount || 0,
+        });
+      }
+
       mark('db-done');
+
+      // Log pool metrics after all queries to detect pool starvation
+      const poolMetricsAfter = getPoolMetrics();
+      const dbQueriesDuration = Date.now() - start;
+      console.log('[page-data-lite] Pool metrics AFTER queries', {
+        total: poolMetricsAfter?.totalCount || 0,
+        max: poolMetricsAfter?.maxConnections || 0,
+        idle: poolMetricsAfter?.idleCount || 0,
+        active: (poolMetricsAfter?.totalCount || 0) - (poolMetricsAfter?.idleCount || 0),
+        waiting: poolMetricsAfter?.waitingCount || 0,
+        utilization: poolMetricsAfter ? `${Math.round(((poolMetricsAfter.totalCount - poolMetricsAfter.idleCount) / poolMetricsAfter.maxConnections) * 100)}%` : 'unknown',
+        dbQueriesTimeMs: dbQueriesDuration
+      });
+
+      // Extract results by name
+      const resultsMap = new Map(results.map(r => [r.name, r.result]));
+      const risks = resultsMap.get('getRisksLite');
+      const owners = resultsMap.get('getProcessOwners');
+      const stats = resultsMap.get('getRiskStats');
+      const gerencias = resultsMap.get('getGerencias');
+      const macroprocesos = resultsMap.get('getMacroprocesos');
+      const subprocesos = resultsMap.get('getSubprocesosWithOwners');
+      const processes = resultsMap.get('getProcesses');
+      const riskCategories = resultsMap.get('getRiskCategories');
+      const processGerenciasRelations = resultsMap.get('getAllProcessGerenciasRelations');
 
       // Filter out soft-deleted records
       const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');

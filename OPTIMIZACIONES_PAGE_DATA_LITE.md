@@ -44,6 +44,59 @@ FROM risks
 
 **Beneficio:** Permite identificar si Redis/Upstash es el cuello de botella
 
+### 3. **Limitación de Concurrencia de Queries** ✅
+
+**Problema identificado:**
+- Pool de conexiones limitado a 4 conexiones
+- Cloud Run con concurrency=10 permite múltiples requests simultáneos
+- Endpoint ejecutaba 9 queries en paralelo con `Promise.all()`
+- Esto causaba **pool starvation**: requests esperando conexiones disponibles (88-195s de espera)
+
+**Solución implementada:**
+- Ejecutar queries en **batches de 2 queries** en lugar de todas en paralelo
+- Respeta el límite del pool (pool=4, max 2 queries concurrentes por request)
+- Agregado logging de métricas del pool antes y después de las queries
+
+**Código:**
+```typescript
+// Antes: 9 queries en paralelo
+await Promise.all([risksPromise, ownersPromise, statsPromise, ...]);
+
+// Después: Batches de 2 queries
+const CONCURRENT_QUERIES = 2;
+for (let i = 0; i < queries.length; i += CONCURRENT_QUERIES) {
+  const batch = queries.slice(i, i + CONCURRENT_QUERIES);
+  await Promise.all(batch.map(q => q.fn()));
+}
+```
+
+**Impacto esperado:**
+- Elimina pool starvation
+- Reduce tiempo de espera de conexiones de 88-195s a <5s
+- Permite que múltiples requests compartan el pool sin saturarlo
+
+### 4. **Logging de Pool Metrics** ✅
+
+**Agregado:**
+- Métricas del pool **antes** de ejecutar queries
+- Métricas del pool **después** de cada batch de queries
+- Métricas del pool **después** de todas las queries
+
+**Logs muestran:**
+```
+[page-data-lite] Pool metrics BEFORE queries {
+  total: 4, max: 4, idle: 2, active: 2, waiting: 0, utilization: '50%'
+}
+[page-data-lite] Batch 1 completed in 250ms {
+  poolTotal: 4, poolActive: 2, poolWaiting: 0
+}
+[page-data-lite] Pool metrics AFTER queries {
+  total: 4, max: 4, idle: 3, active: 1, waiting: 0, utilization: '25%'
+}
+```
+
+**Beneficio:** Permite confirmar si el problema es pool starvation (waiting > 0 o total=4/4 constante)
+
 ---
 
 ## 📋 Optimizaciones Pendientes (Recomendadas)
@@ -110,36 +163,42 @@ db.select({
 
 ## 🔧 Configuración de Infraestructura
 
-### 5. **Ajustar Concurrency y Max Instances en Cloud Run**
+### 5. **Ajustar Concurrency en Cloud Run** ⚠️ CRÍTICO
 
-**Recomendación temporal para diagnóstico:**
+**Problema:**
+- Cloud Run tiene `concurrency=10` (permite 10 requests simultáneos por instancia)
+- Pool de conexiones es `pool=4` (solo 4 conexiones disponibles)
+- Con 10 requests simultáneos × 2 queries por request = 20 queries intentando usar 4 conexiones
+- Esto causa **pool starvation masivo**
 
-```yaml
-# app.yaml o configuración de Cloud Run
-service: unigrc-backend
-runtime: nodejs20
+**Solución recomendada:**
 
-autoscaling:
-  min_instances: 1
-  max_instances: 5  # ← Reducir de 10+ a 5 temporalmente
-
-resources:
-  cpu: 2
-  memory: 4Gi
-
-# En variables de entorno o configuración:
-CONCURRENCY: 5  # ← Reducir de 80 a 5 temporalmente
-```
-
-**Cómo aplicar:**
 ```bash
+# Reducir concurrency a 1-2 para respetar pool=4
 gcloud run services update unigrc-backend \
-  --max-instances=5 \
-  --concurrency=5 \
+  --concurrency=1 \
   --region=us-central1
 ```
 
-**Objetivo:** Si con esto `page-data-lite` baja de 160s a 2-5s, confirma que era saturación del pool/Cloud SQL.
+**O si necesitas más throughput, aumentar pool primero:**
+```bash
+# Opción 1: Aumentar pool a 8-10 (si Cloud SQL lo permite)
+# Luego puedes mantener concurrency=2-3
+DB_POOL_MAX=8
+
+# Opción 2: Reducir concurrency a 1-2 (más seguro)
+--concurrency=1
+```
+
+**Fórmula:**
+```
+pool_size >= concurrency × queries_por_request
+4 >= 10 × 2  ❌ (causa starvation)
+4 >= 1 × 2   ✅ (funciona)
+8 >= 2 × 2   ✅ (mejor balance)
+```
+
+**Objetivo:** Eliminar pool starvation confirmado por logs (waiting > 0)
 
 ### 6. **Verificar Configuración de Pool de Conexiones**
 
@@ -205,11 +264,13 @@ gcloud logging read "resource.type=cloud_run_revision AND jsonPayload.redisGetMs
 
 ## 🚀 Próximos Pasos
 
-1. ✅ **Implementado:** Optimización de `getRiskStats()`
-2. ✅ **Implementado:** Logging de Redis
-3. ⏳ **Pendiente:** Crear índices para `getRisksLite()`
-4. ⏳ **Pendiente:** Ajustar concurrency/max-instances en Cloud Run
-5. ⏳ **Pendiente:** Monitorear logs de Redis para identificar cuellos de botella
+1. ✅ **Implementado:** Optimización de `getRiskStats()` con agregación SQL
+2. ✅ **Implementado:** Logging detallado de Redis
+3. ✅ **Implementado:** Limitación de concurrencia de queries (batches de 2)
+4. ✅ **Implementado:** Logging de pool metrics antes/después
+5. ⚠️ **CRÍTICO:** Ajustar `concurrency` en Cloud Run a 1-2 (o aumentar pool)
+6. ⏳ **Pendiente:** Crear índices para `getRisksLite()`
+7. ⏳ **Pendiente:** Monitorear logs para confirmar eliminación de pool starvation
 
 ---
 
