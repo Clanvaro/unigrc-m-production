@@ -2191,7 +2191,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheKeyCatalogs = `risks-bootstrap:catalogs:${CACHE_VERSION}`;
 
       // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
-      let catalogs = await distributedCache.get(cacheKeyCatalogs);
+      // FIXED: Add error handling for cache operations to prevent initialization errors
+      let catalogs: any = null;
+      try {
+        catalogs = await Promise.race([
+          distributedCache.get(cacheKeyCatalogs),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        ]);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to get catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        // Continue without cache - will fetch from DB
+        catalogs = null;
+      }
 
       // If catalogs not cached, fetch them in parallel with risks
       const catalogsPromise = catalogs ? Promise.resolve(catalogs) : (async () => {
@@ -2254,7 +2265,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Pattern: Simple risks query + batch control summary query + in-memory calculation
       const risksPromise = (async () => {
         // Try risks cache first
-        const cachedRisks = await distributedCache.get(cacheKeyRisks);
+        // FIXED: Add error handling for cache operations to prevent initialization errors
+        let cachedRisks: any = null;
+        try {
+          cachedRisks = await Promise.race([
+            distributedCache.get(cacheKeyRisks),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          ]);
+        } catch (cacheError) {
+          console.warn(`[CACHE] Failed to get risks cache (${cacheKeyRisks}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+          // Continue without cache - will fetch from DB
+          cachedRisks = null;
+        }
         if (cachedRisks) {
           console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - requestStart}ms`);
           return cachedRisks;
@@ -2506,7 +2528,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // OPTIMIZED: Increased cache from 2 min to 5 min (300s) for better hit rate
           // Cache is invalidated granularly on mutations, so longer TTL is safe
-          await distributedCache.set(cacheKeyRisks, result, 300);
+          // FIXED: Add error handling for cache set operations
+          try {
+            await Promise.race([
+              distributedCache.set(cacheKeyRisks, result, 300),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+            ]);
+          } catch (cacheError) {
+            console.warn(`[CACHE] Failed to set risks cache (${cacheKeyRisks}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+            // Continue without caching - result is still returned
+          }
           return result;
         });
       })();
