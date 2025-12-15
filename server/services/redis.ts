@@ -228,16 +228,30 @@ export class DistributedCache {
   
   async set(key: string, data: any, ttl?: number): Promise<void> {
     try {
+      // FIXED: Ensure redis is initialized before using it
+      if (!redis) {
+        console.warn('[CACHE] Redis not initialized, skipping set operation');
+        return;
+      }
       const serializedData = JSON.stringify(data);
       const ttlSeconds = ttl || this.defaultTTL;
       await redis.setex(key, ttlSeconds, serializedData);
     } catch (error) {
-      console.error('Cache set error:', error);
+      // FIXED: More detailed error logging to help debug initialization issues
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorName = error instanceof Error ? error.name : 'Error';
+      console.error(`[CACHE] Set error for key ${key}:`, errorName, errorMessage);
+      // Don't throw - graceful degradation
     }
   }
 
   async get(key: string): Promise<any | null> {
     try {
+      // FIXED: Ensure redis is initialized before using it
+      if (!redis) {
+        console.warn('[CACHE] Redis not initialized, returning null');
+        return null;
+      }
       const data = await redis.get(key);
       if (!data) return null;
       if (typeof data === 'string') {
@@ -245,7 +259,10 @@ export class DistributedCache {
       }
       return data;
     } catch (error) {
-      console.error('Cache get error:', error);
+      // FIXED: More detailed error logging to help debug initialization issues
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorName = error instanceof Error ? error.name : 'Error';
+      console.error(`[CACHE] Get error for key ${key}:`, errorName, errorMessage);
       return null;
     }
   }
