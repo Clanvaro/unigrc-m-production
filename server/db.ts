@@ -105,12 +105,13 @@ if (databaseUrl) {
   
   // Statement timeout: Shorter than connection timeout to prevent queries from blocking the pool
   // If a query takes longer than this, it will be cancelled, freeing the connection for other queries
-  // This prevents slow queries from exhausting the connection pool
+  // This prevents slow queries from exhausting the connection pool and causing accumulation of delays
+  // OPTIMIZED: Reduced timeouts to prevent queries from blocking pool when many pages are open
   // Cloud SQL: 30s (connection timeout is 60s, so queries have 30s before being cancelled)
-  // Render/Others: 10-15s (connection timeout is 30-60s)
+  // Render/Others: 8-10s (reduced from 10-15s to prevent accumulation of delays)
   const statementTimeout = isCloudSql 
     ? 30000  // 30s for Cloud SQL (connection timeout is 60s)
-    : (isRenderDb ? 10000 : (isProduction ? 15000 : 10000));
+    : (isRenderDb ? 8000 : (isProduction ? 10000 : 8000)); // Reduced from 10-15s to 8-10s
 
   // Render PostgreSQL requires SSL with sslmode=require in connection string
   // The connection string already includes sslmode=require, so we just need to enable SSL
@@ -161,7 +162,9 @@ if (databaseUrl) {
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
   } else {
-    poolMax = isPooled ? 10 : 6; // Neon pooled vs direct
+    // OPTIMIZED: Increased pool for Neon pooled to handle more concurrent requests
+    // This prevents queue buildup when multiple pages are opened simultaneously
+    poolMax = isPooled ? 15 : 6; // Neon pooled: 15 (was 10), direct: 6
   }
 
   const poolMin = isCloudSql ? 2 : (isRenderDb ? 5 : 2);
@@ -1068,6 +1071,95 @@ export async function getHealthStatus(): Promise<{
     uptime,
     timestamp: new Date().toISOString()
   };
+}
+
+/**
+ * Check if pool is healthy and has capacity for new queries
+ * Returns true if pool has available capacity, false if saturated
+ * This helps prevent accumulation of delays when pool is busy
+ */
+export function isPoolHealthy(): boolean {
+  if (!pool) return false;
+  
+  const metrics = getPoolMetrics();
+  if (!metrics) return true; // Assume healthy if we can't get metrics
+  
+  const activeConnections = metrics.totalCount - metrics.idleCount;
+  const utilizationPct = activeConnections / metrics.maxConnections;
+  
+  // Consider pool unhealthy if:
+  // 1. More than 90% of connections are active
+  // 2. There are queries waiting in queue
+  if (utilizationPct >= 0.9 || metrics.waitingCount > 5) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * Wait for pool to have capacity before executing query
+ * This prevents accumulation of delays when many pages are open
+ */
+export async function waitForPoolCapacity(maxWaitMs: number = 5000): Promise<boolean> {
+  if (!pool) return false;
+  
+  const startTime = Date.now();
+  while (Date.now() - startTime < maxWaitMs) {
+    if (isPoolHealthy()) {
+      return true;
+    }
+    // Wait 100ms before checking again
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  // Pool still saturated after waiting
+  const metrics = getPoolMetrics();
+  console.warn(`⚠️ Pool still saturated after ${maxWaitMs}ms wait:`, {
+    active: metrics ? metrics.totalCount - metrics.idleCount : 'unknown',
+    max: metrics?.maxConnections || 'unknown',
+    waiting: metrics?.waitingCount || 'unknown'
+  });
+  
+  return false;
+}
+
+/**
+ * Circuit breaker: Check if pool is critically saturated and should reject requests
+ * Returns true if requests should be rejected to prevent accumulation of delays
+ */
+export function shouldRejectRequest(): boolean {
+  if (!pool) return false;
+  
+  const metrics = getPoolMetrics();
+  if (!metrics) return false; // Don't reject if we can't check
+  
+  const activeConnections = metrics.totalCount - metrics.idleCount;
+  const utilizationPct = activeConnections / metrics.maxConnections;
+  
+  // Reject requests if:
+  // 1. Pool is 95%+ utilized (critical saturation)
+  // 2. More than 10 queries are waiting (queue buildup)
+  // This prevents accumulation of delays when many pages are open
+  if (utilizationPct >= 0.95 || metrics.waitingCount > 10) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Get pool saturation level for monitoring
+ * Returns a value between 0 (empty) and 1 (fully saturated)
+ */
+export function getPoolSaturation(): number {
+  if (!pool) return 0;
+  
+  const metrics = getPoolMetrics();
+  if (!metrics) return 0;
+  
+  const activeConnections = metrics.totalCount - metrics.idleCount;
+  return activeConnections / metrics.maxConnections;
 }
 
 // OPTIMIZED: Pool warming is now lazy - starts on first API request

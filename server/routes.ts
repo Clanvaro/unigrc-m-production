@@ -30,7 +30,7 @@ import {
   invalidateMacroprocesoHierarchy,
   CACHE_VERSION
 } from './cache-helpers';
-import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry } from "./db";
+import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, shouldRejectRequest, getPoolSaturation } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
@@ -675,6 +675,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     startPoolWarmingIfNeeded();
     next();
   });
+
+  // OPTIMIZED: Circuit breaker middleware for endpoints that use database
+  // This prevents accumulation of delays when many pages are open
+  // Only applies to endpoints that actually need database (not health checks, etc.)
+  const circuitBreakerMiddleware = (req: any, res: any, next: any) => {
+    // Skip circuit breaker for health/readiness endpoints
+    if (req.path === '/api/health' || req.path === '/api/readiness' || req.path.startsWith('/api/admin/')) {
+      return next();
+    }
+
+    // Check if pool is critically saturated
+    if (shouldRejectRequest()) {
+      const saturation = getPoolSaturation();
+      const metrics = getPoolMetrics();
+      console.warn(`🚨 Circuit breaker: Rejecting ${req.method} ${req.path} - Pool saturation: ${Math.round(saturation * 100)}%, waiting: ${metrics?.waitingCount || 0}`);
+      return res.status(503).json({
+        message: "Service temporarily unavailable - database pool is saturated. Please try again in a moment.",
+        error: "POOL_SATURATED",
+        retryAfter: 2 // seconds
+      });
+    }
+
+    next();
+  };
+
+  // Apply circuit breaker to all API routes except health/readiness
+  app.use('/api', circuitBreakerMiddleware);
 
   // Database optimization endpoint (Admin only in real scenario, open for now to fix perf)
   app.post("/api/admin/optimize-db", async (req, res) => {
@@ -24247,6 +24274,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     try {
+      // OPTIMIZED: Check pool health before processing to detect accumulation of delays
+      const poolMetricsBefore = getPoolMetrics();
+      
       // Single-tenant mode: tenantId not required
       let tenantId: string | undefined;
       try {
@@ -24258,8 +24288,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Use two-tier cache (L1 memory + L2 Redis) for better performance
-      // TTL 5 min - process owners change infrequently
+      // TTL 10 min - process owners change very infrequently
+      // OPTIMIZED: Check cache first before checking pool - cached responses don't need pool
       const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
+      
+      // Try memory cache first (fastest, no pool needed)
+      const memCached = lookupMemoryCache.get(cacheKey);
+      if (memCached && Date.now() - memCached.timestamp < MEMORY_CACHE_TTL) {
+        const duration = Date.now() - startTime;
+        if (duration < 10) {
+          console.log(`[CACHE HIT] /api/process-owners in ${duration}ms (memory)`);
+        }
+        return res.json(memCached.data);
+      }
+      
+      // Try Redis cache (fast, minimal pool usage)
+      const redisCached = await distributedCache.get(cacheKey);
+      if (redisCached) {
+        lookupMemoryCache.set(cacheKey, { data: redisCached, timestamp: Date.now() });
+        const duration = Date.now() - startTime;
+        if (duration < 50) {
+          console.log(`[CACHE HIT] /api/process-owners in ${duration}ms (redis)`);
+        }
+        return res.json(redisCached);
+      }
+      
+      // Only query database if cache miss - this is where pool is needed
       const processOwners = await getFromTieredCache(
         cacheKey,
         async () => {
@@ -24269,20 +24323,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
           return owners;
         },
-        300 // 5 minutes - process owners change infrequently
+        600 // 10 minutes - process owners change very infrequently
       );
 
       const duration = Date.now() - startTime;
+      const poolMetricsAfter = getPoolMetrics();
+      
+      // Enhanced logging to detect accumulation of delays
       if (duration > 1000) {
-        console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
+        const poolInfo = poolMetricsAfter ? {
+          active: poolMetricsAfter.totalCount - poolMetricsAfter.idleCount,
+          max: poolMetricsAfter.maxConnections,
+          waiting: poolMetricsAfter.waitingCount,
+          utilization: `${Math.round(((poolMetricsAfter.totalCount - poolMetricsAfter.idleCount) / poolMetricsAfter.maxConnections) * 100)}%`
+        } : null;
+        console.warn(`[SLOW] /api/process-owners took ${duration}ms`, poolInfo ? `Pool: ${poolInfo.utilization} active, ${poolInfo.waiting} waiting` : '');
       } else if (duration < 10) {
         console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
+      }
+      
+      // Log warning if pool saturation increased during request (indicates accumulation)
+      if (poolMetricsBefore && poolMetricsAfter) {
+        const waitingBefore = poolMetricsBefore.waitingCount;
+        const waitingAfter = poolMetricsAfter.waitingCount;
+        if (waitingAfter > waitingBefore && waitingAfter > 3) {
+          console.warn(`⚠️ Pool queue increased during request: ${waitingBefore} → ${waitingAfter} waiting queries`);
+        }
       }
 
       res.json(processOwners);
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
+      const poolMetrics = getPoolMetrics();
+      const poolInfo = poolMetrics ? {
+        active: poolMetrics.totalCount - poolMetrics.idleCount,
+        max: poolMetrics.maxConnections,
+        waiting: poolMetrics.waitingCount
+      } : null;
+      console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error, poolInfo ? `Pool: ${poolInfo.active}/${poolInfo.max} active, ${poolInfo.waiting} waiting` : '');
 
       if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
         return res.status(500).json({
