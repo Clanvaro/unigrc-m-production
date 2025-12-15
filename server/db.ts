@@ -150,10 +150,13 @@ if (databaseUrl) {
   // Calculate pool max for Cloud SQL based on environment
   let poolMax: number;
   if (isCloudSql) {
+    // OPTIMIZED: Reduced pool max from 20 to 4 for Cloud Run stability
+    // Formula: max instances (5) × pool max (4) = 20 total connections (stable)
+    // This prevents pool exhaustion and improves connection reuse
     // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
-    // Default: Conservative 10 connections (adjust based on Cloud SQL instance size)
+    // Default: Conservative 4 connections per instance (adjust based on Cloud SQL instance size)
     // Review Cloud SQL logs to detect too many connections and adjust accordingly
-    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '20', 10);
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '4', 10);
     poolMax = cloudSqlMax;
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
