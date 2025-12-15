@@ -407,7 +407,11 @@ export async function withRetry<T>(
   operation: () => Promise<T>,
   options: { maxRetries?: number; retryableErrors?: string[] } = {}
 ): Promise<T> {
-  if (!db || !pool) {
+  // FIXED: Use requireDb() to ensure db is initialized before checking
+  // This prevents "Cannot access 'Ee' before initialization" errors
+  try {
+    requireDb();
+  } catch (error) {
     throw new Error('Database not configured - cannot perform operation');
   }
 
@@ -461,7 +465,13 @@ export async function withRetry<T>(
                               error.message?.includes('Connection terminated due to connection timeout');
         
         if (isTimeoutError) {
-          const metrics = getPoolMetrics();
+          // FIXED: Use try-catch to prevent errors if pool is not initialized
+          let metrics = null;
+          try {
+            metrics = getPoolMetrics();
+          } catch (metricsError) {
+            // Ignore metrics errors if pool is not initialized
+          }
           console.error(`❌ Database timeout error (attempt ${attempt}/${maxRetries}):`, {
             code: error.code || 'NO_CODE',
             message: error.message?.substring(0, 200),
@@ -471,7 +481,9 @@ export async function withRetry<T>(
             poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown'
           });
         } else {
-        console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
+          // FIXED: Log error message safely to prevent initialization errors
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', errorMessage);
         }
         throw error;
       }
@@ -487,10 +499,14 @@ export async function withRetry<T>(
       });
 
       // On connection errors, try to warm the pool before retry
+      // FIXED: Check if pool is initialized before warming
       if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET' || error.message?.includes('timeout'))) {
         console.log('🔄 Warming pool before retry...');
         try {
-          await warmPool(2);
+          // FIXED: Ensure pool is initialized before warming
+          if (pool) {
+            await warmPool(2);
+          }
         } catch (warmError) {
           // Ignore warming errors, proceed with retry
         }
