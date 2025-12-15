@@ -20857,14 +20857,45 @@ export class DatabaseStorage extends MemStorage {
     // This prevents 504 timeouts when there are many records
     const queryLimit = limit || 1000;
 
-    // First get the base data with process hierarchy
-    let query = db.select({
-      riskProcessLink: riskProcessLinks,
-      risk: risks,
-      macroproceso: macroprocesos,
-      process: processes,
-      subproceso: subprocesos,
-      validatedByUser: users,
+    // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
+    // FIXED: Use requireDb() instead of db directly to prevent initialization errors
+    const dbInstance = requireDb();
+    let query = dbInstance.select({
+      // RiskProcessLink fields (only essential ones)
+      rplId: riskProcessLinks.id,
+      rplRiskId: riskProcessLinks.riskId,
+      rplMacroprocesoId: riskProcessLinks.macroprocesoId,
+      rplProcessId: riskProcessLinks.processId,
+      rplSubprocesoId: riskProcessLinks.subprocesoId,
+      rplResponsibleOverrideId: riskProcessLinks.responsibleOverrideId,
+      rplValidatedBy: riskProcessLinks.validatedBy,
+      rplValidationStatus: riskProcessLinks.validationStatus,
+      rplValidationComments: riskProcessLinks.validationComments,
+      rplValidatedAt: riskProcessLinks.validatedAt,
+      rplNotified: riskProcessLinks.notified,
+      rplCreatedAt: riskProcessLinks.createdAt,
+      rplUpdatedAt: riskProcessLinks.updatedAt,
+      // Risk fields (only essential ones)
+      riskId: risks.id,
+      riskCode: risks.code,
+      riskName: risks.name,
+      riskStatus: risks.status,
+      // Macroproceso fields (only id and name)
+      macroId: macroprocesos.id,
+      macroName: macroprocesos.name,
+      macroOwnerId: macroprocesos.ownerId,
+      // Process fields (only id and name)
+      procId: processes.id,
+      procName: processes.name,
+      procOwnerId: processes.ownerId,
+      // Subproceso fields (only id and name)
+      subId: subprocesos.id,
+      subName: subprocesos.name,
+      subOwnerId: subprocesos.ownerId,
+      // Validated by user fields (only essential ones)
+      valUserId: users.id,
+      valUserFullName: users.fullName,
+      valUserEmail: users.email,
       // Get the responsible owner ID using COALESCE logic
       responsibleOwnerId: sql<string>`
         COALESCE(
@@ -20888,9 +20919,10 @@ export class DatabaseStorage extends MemStorage {
     const baseResults = await query;
 
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
+    // FIXED: Use requireDb() instead of db directly
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
     const owners = ownerIds.length > 0
-      ? await db.select({
+      ? await dbInstance.select({
         id: processOwners.id,
         fullName: processOwners.name,
         email: processOwners.email
@@ -20900,15 +20932,47 @@ export class DatabaseStorage extends MemStorage {
       : [];
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
 
-    // Map results with owner lookups
+    // OPTIMIZED: Map results with minimal object construction
     const results = baseResults.map((result) => ({
-      ...result.riskProcessLink,
-      risk: result.risk!,
-      macroproceso: result.macroproceso || undefined,
-      process: result.process || undefined,
-      subproceso: result.subproceso || undefined,
+      // RiskProcessLink fields
+      id: result.rplId,
+      riskId: result.rplRiskId,
+      macroprocesoId: result.rplMacroprocesoId,
+      processId: result.rplProcessId,
+      subprocesoId: result.rplSubprocesoId,
+      responsibleOverrideId: result.rplResponsibleOverrideId,
+      validatedBy: result.rplValidatedBy,
+      validationStatus: result.rplValidationStatus,
+      validationComments: result.rplValidationComments,
+      validatedAt: result.rplValidatedAt,
+      notified: result.rplNotified,
+      createdAt: result.rplCreatedAt,
+      updatedAt: result.rplUpdatedAt,
+      // Related entities (minimal objects)
+      risk: {
+        id: result.riskId!,
+        code: result.riskCode!,
+        name: result.riskName!,
+        status: result.riskStatus!
+      },
+      macroproceso: result.macroId ? {
+        id: result.macroId,
+        name: result.macroName!
+      } : undefined,
+      process: result.procId ? {
+        id: result.procId,
+        name: result.procName!
+      } : undefined,
+      subproceso: result.subId ? {
+        id: result.subId,
+        name: result.subName!
+      } : undefined,
       responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-      validatedByUser: result.validatedByUser || undefined,
+      validatedByUser: result.valUserId ? {
+        id: result.valUserId,
+        fullName: result.valUserFullName,
+        email: result.valUserEmail
+      } : undefined,
     }));
 
     return results;
