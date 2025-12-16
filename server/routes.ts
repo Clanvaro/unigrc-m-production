@@ -4984,20 +4984,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Invalidate validation and risk caches (granular - fast)
+      // Do this in background to avoid blocking the response
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      await Promise.all([
+      
+      // Invalidate caches in background (don't wait for completion)
+      Promise.all([
         invalidateValidationCaches(),
         invalidateRiskDataCaches(),
         // Invalidate specific validation status caches
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
-        distributedCache.set(`validation:risks:pending:${tenantId}`, null, 0),
-        distributedCache.set(`validation:risks:validated:${tenantId}`, null, 0),
-        distributedCache.set(`validation:risks:rejected:${tenantId}`, null, 0),
-        distributedCache.set(`validation:risks:observed:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:pending:${CACHE_VERSION}:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:validated:${CACHE_VERSION}:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:rejected:${CACHE_VERSION}:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:observed:${CACHE_VERSION}:${tenantId}`, null, 0),
         // Invalidate pattern for all validation status endpoints
+        distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${tenantId}`),
         distributedCache.invalidatePattern(`validation:risks:*:${tenantId}`)
-      ]);
+      ]).catch(err => {
+        console.error('[validateRisk] Error invalidating caches (non-critical):', err);
+      });
 
+      // Return success response immediately
       res.json(risk);
     } catch (error) {
       console.error("Risk validation error:", error);

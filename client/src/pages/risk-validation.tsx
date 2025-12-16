@@ -494,15 +494,25 @@ export default function RiskValidationPage() {
   // Legacy validation mutation (can be removed later)
   const validateMutation = useMutation({
     mutationFn: async ({ riskId, status, comments }: { riskId: string; status: "validated" | "observed" | "rejected"; comments?: string }) => {
-      await apiRequest(`/api/risks/${riskId}/validate`, 'POST', {
-        validationStatus: status,
-        validationComments: comments,
-      });
+      try {
+        const result = await apiRequest(`/api/risks/${riskId}/validate`, 'POST', {
+          validationStatus: status,
+          validationComments: comments,
+        });
+        return result;
+      } catch (error: any) {
+        console.error('[validateMutation] Error validating risk:', error);
+        // Re-throw with more context
+        throw new Error(error?.message || `Error al validar riesgo: ${error?.status || 'Unknown error'}`);
+      }
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('[validateMutation] Risk validated successfully:', data);
+      // Invalidate all related queries
       queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/validated"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/rejected"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/observed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks"] });
       // FIXED: Also invalidate bootstrap cache to ensure risk list shows updated validation status
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
@@ -515,6 +525,9 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
       // CRITICAL: Invalidate batch-relations cache so risk list shows updated validation status
       queryClient.invalidateQueries({ queryKey: ["/api/risks/batch-relations"], exact: false });
+      // Invalidate validation counts
+      queryClient.invalidateQueries({ queryKey: ["/api/validation/counts"] });
+      
       toast({
         title: "Riesgo validado",
         description: `El riesgo ha sido ${validationAction === "validated" ? "aprobado" : "rechazado"} exitosamente.`,
@@ -524,12 +537,18 @@ export default function RiskValidationPage() {
       setSelectedRisk(null);
       setValidationAction(null);
     },
-    onError: () => {
+    onError: (error: Error) => {
+      console.error('[validateMutation] Error in onError:', error);
+      const errorMessage = error?.message || "No se pudo validar el riesgo.";
       toast({
         title: "Error",
-        description: "No se pudo validar el riesgo.",
+        description: errorMessage,
         variant: "destructive",
       });
+      // Even on error, try to refresh the data in case the validation partially succeeded
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks/validation/validated"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/validation/counts"] });
     },
   });
 
