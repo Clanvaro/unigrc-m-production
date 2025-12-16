@@ -20763,7 +20763,6 @@ export class DatabaseStorage extends MemStorage {
   // RiskProcessLink validation methods
   async validateRiskProcessLink(id: string, validatedBy: string, validationStatus: "validated" | "rejected" | "observed", validationComments?: string): Promise<RiskProcessLink | undefined> {
     return withRetry(async () => {
-      try {
       // OPTIMIZED: Only select columns needed for history tracking
       const currentLink = await db.select({
         id: riskProcessLinks.id,
@@ -20793,6 +20792,11 @@ export class DatabaseStorage extends MemStorage {
         .where(eq(riskProcessLinks.id, id))
         .returning();
 
+      if (!updated) {
+        console.error('Failed to update risk process link:', id);
+        throw new Error(`Failed to update risk process link: ${id}`);
+      }
+
       // Guardar automáticamente en el historial
       try {
         await this.createValidationHistoryEntry({
@@ -20812,19 +20816,6 @@ export class DatabaseStorage extends MemStorage {
       }
 
       return updated;
-      } catch (error) {
-        console.error('Error validating risk process link:', error);
-        console.error('Error details:', {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : undefined,
-          riskProcessLinkId: id,
-          validatedBy,
-          validationStatus
-        });
-        // Re-throw error so it can be handled by the route handler
-        throw error;
-      }
     }, {
       maxRetries: 2,
       retryDelay: 1000
