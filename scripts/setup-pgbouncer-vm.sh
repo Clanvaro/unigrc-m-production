@@ -71,12 +71,12 @@ echo "⚙️ Configurando PgBouncer..."
 MD5_HASH=$(echo -n "${DB_PASSWORD}${DB_USER}" | md5sum | awk '{print $1}')
 
 # Crear configuración temporal
-# IMPORTANTE: Cloud SQL usa SCRAM authentication, así que:
+# IMPORTANTE: Cloud SQL usa SCRAM authentication
 # - auth_type = trust para cliente->PgBouncer (seguro dentro de VPC)
-# - Credenciales en [databases] para PgBouncer->Cloud SQL (SCRAM automático)
+# - Usar .pgpass file para PgBouncer->Cloud SQL (SCRAM automático)
 cat > /tmp/pgbouncer.ini <<EOF
 [databases]
-${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME} user=${DB_USER} password=${DB_PASSWORD}
+${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME} user=${DB_USER}
 
 [pgbouncer]
 listen_addr = 0.0.0.0
