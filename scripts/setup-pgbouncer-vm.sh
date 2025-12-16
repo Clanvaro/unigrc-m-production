@@ -71,9 +71,10 @@ echo "⚙️ Configurando PgBouncer..."
 MD5_HASH=$(echo -n "${DB_PASSWORD}${DB_USER}" | md5sum | awk '{print $1}')
 
 # Crear configuración temporal
-# IMPORTANTE: Cloud SQL usa SCRAM authentication
-# - auth_type = trust para cliente->PgBouncer (seguro dentro de VPC)
-# - Usar .pgpass file para PgBouncer->Cloud SQL (SCRAM automático)
+# IMPORTANTE: Cloud SQL usa SCRAM-SHA-256 authentication
+# - auth_type = scram-sha-256 para manejar SCRAM correctamente
+# - Password en texto plano en userlist.txt (requerido para conexiones backend)
+# - NO incluir password en [databases]
 cat > /tmp/pgbouncer.ini <<EOF
 [databases]
 ${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME} user=${DB_USER}
@@ -81,7 +82,7 @@ ${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME} user=${DB_
 [pgbouncer]
 listen_addr = 0.0.0.0
 listen_port = 6432
-auth_type = trust
+auth_type = scram-sha-256
 auth_file = /etc/pgbouncer/userlist.txt
 pool_mode = transaction
 max_client_conn = 1000
@@ -102,8 +103,10 @@ logfile = /var/log/pgbouncer/pgbouncer.log
 EOF
 
 # Crear userlist.txt
+# IMPORTANTE: Para SCRAM-SHA-256, el password debe estar en texto plano
+# (no puede usar SCRAM hashes para conexiones backend)
 cat > /tmp/userlist.txt <<EOF
-"${DB_USER}" "md5${MD5_HASH}"
+"${DB_USER}" "${DB_PASSWORD}"
 "pgbouncer" "pgbouncer"
 EOF
 
