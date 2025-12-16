@@ -30,7 +30,10 @@
     "apply-validation-indexes": "tsx scripts/apply-validation-indexes.ts",
     "apply-controls-indexes": "tsx scripts/apply-controls-indexes.ts",
     "apply-page-data-lite-indexes": "tsx scripts/apply-page-data-lite-indexes.ts",
-    "verify-calculation": "tsx scripts/verify-calculation.ts"
+    "verify-calculation": "tsx scripts/verify-calculation.ts",
+    "firebase:deploy": "firebase deploy --only hosting",
+    "firebase:deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "firebase:serve": "firebase serve"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
