@@ -111,6 +111,11 @@ export const corsConfig: CorsOptions = {
       return callback(null, true);
     }
     
+    // Check Firebase Hosting patterns (*.web.app, *.firebaseapp.com, custom domains)
+    if (origin.endsWith('.web.app') || origin.endsWith('.firebaseapp.com') || origin.includes('unigrc.app')) {
+      return callback(null, true);
+    }
+    
     // Check AWS patterns (*.amazonaws.com, *.elasticbeanstalk.com)
     if (isProduction && (
       origin.endsWith('.amazonaws.com') ||
