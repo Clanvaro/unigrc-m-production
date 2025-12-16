@@ -47,7 +47,7 @@ const csrfOptions = {
   cookieName: isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token',
   cookieOptions: {
     httpOnly: false, // Must be false so JavaScript can read the token
-    sameSite: isProduction ? ('strict' as const) : ('lax' as const), // Lax for development, strict for production
+    sameSite: isProduction ? ('none' as const) : ('lax' as const), // 'none' for cross-site cookies when behind Firebase Hosting proxy
     path: '/',
     secure: isProduction, // Only secure in production (requires HTTPS)
   },
@@ -134,12 +134,12 @@ export function getCSRFToken(req: Request, res: Response): void {
     // Also manually set the cookie to ensure it's sent with correct settings
     res.cookie(cookieName, csrfToken, {
       httpOnly: false,
-      sameSite: isProduction ? 'strict' : 'lax',
+      sameSite: isProduction ? ('none' as const) : ('lax' as const),
       path: '/',
       secure: isProduction
     });
     
-    logger.info(`CSRF token generated and cookie set: ${cookieName} with SameSite=${isProduction ? 'strict' : 'lax'}`);
+    logger.info(`CSRF token generated and cookie set: ${cookieName} with SameSite=${isProduction ? 'none' : 'lax'}`);
     
     res.json({ 
       message: 'CSRF token cookie set successfully',

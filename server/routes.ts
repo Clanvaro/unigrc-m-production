@@ -1178,7 +1178,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const cookieName = '__Host-psifi.x-csrf-token';
           res.cookie(cookieName, newCsrfToken, {
             httpOnly: false,
-            sameSite: 'strict',
+            sameSite: 'none', // 'none' for cross-site cookies when behind Firebase Hosting proxy
             path: '/',
             secure: true
           });
