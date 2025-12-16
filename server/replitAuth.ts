@@ -81,6 +81,7 @@ export function getSession() {
   }
 
   return session({
+    name: '__session', // CRITICAL: Firebase Hosting only allows '__session' cookie to pass through proxy
     secret: process.env.SESSION_SECRET!,
     store: sessionStore, // undefined = use default MemoryStore
     resave: false,
@@ -315,7 +316,7 @@ export async function setupAuth(app: Express) {
 
             // Clear the session cookie after destroying the session
             const isProduction = process.env.NODE_ENV === 'production';
-            res.clearCookie('connect.sid', {
+            res.clearCookie('__session', {
               path: '/',
               sameSite: isProduction ? ('none' as const) : ('lax' as const),
               secure: isProduction,
