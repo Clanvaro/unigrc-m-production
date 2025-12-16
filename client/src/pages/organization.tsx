@@ -2175,7 +2175,7 @@ function ProcessMapContent() {
 }
 
 function GerenciasContent() {
-  const [viewMode, setViewMode] = useState<'organigrama' | 'lista'>('organigrama');
+  const [viewMode, setViewMode] = useState<'organigrama' | 'lista'>('lista');
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingGerencia, setEditingGerencia] = useState<Gerencia | null>(null);
   const [deleteConfirmGerencia, setDeleteConfirmGerencia] = useState<Gerencia | null>(null);
