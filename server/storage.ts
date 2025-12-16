@@ -20887,9 +20887,8 @@ export class DatabaseStorage extends MemStorage {
     const queryLimit = limit || 1000;
 
     // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
-    // FIXED: Use requireDb() instead of db directly to prevent initialization errors
-    const dbInstance = requireDb();
-    let query = dbInstance.select({
+    // Use db directly (already imported and initialized)
+    let query = db.select({
       // RiskProcessLink fields (only essential ones)
       rplId: riskProcessLinks.id,
       rplRiskId: riskProcessLinks.riskId,
