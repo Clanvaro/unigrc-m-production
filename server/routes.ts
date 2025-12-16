@@ -1207,7 +1207,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
     } catch (error) {
+      // Enhanced error logging for debugging
       console.error('[Local Auth] Login error:', error);
+      console.error('[Local Auth] Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined,
+        email: req.body?.email || 'unknown',
+        timings
+      });
+      
+      // Return more specific error messages based on error type
+      if (error instanceof Error) {
+        // Database connection errors
+        if (error.message.includes('connect') || error.message.includes('ECONNREFUSED') || error.message.includes('timeout')) {
+          console.error('[Local Auth] Database connection error detected');
+          return res.status(500).json({
+            message: 'Error de conexión a la base de datos. Por favor intenta nuevamente.'
+          });
+        }
+        // PgBouncer specific errors
+        if (error.message.includes('pgbouncer')) {
+          console.error('[Local Auth] PgBouncer error detected');
+          return res.status(500).json({
+            message: 'Error de conexión al servidor. Por favor intenta nuevamente.'
+          });
+        }
+      }
+      
       return res.status(500).json({
         message: 'Error al procesar el login'
       });
