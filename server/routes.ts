@@ -3894,7 +3894,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .orderBy(riskCategories.name);
           });
           
-          return (categories.rows as any[]).map((c: any) => ({
+          // Drizzle ORM returns array directly, not { rows: [] }
+          return categories.map((c: any) => ({
             id: c.id,
             name: c.name,
             color: c.color
