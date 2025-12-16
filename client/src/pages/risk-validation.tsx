@@ -49,8 +49,13 @@ import {
   ActionPlanDetailDialog
 } from "@/components/validation/ValidationDetailDialogs";
 import { isUUID, displayResponsible } from "@/components/validation/ValidationUtils";
+import { usePermissions } from "@/hooks/usePermissions";
 
 export default function RiskValidationPage() {
+  const { currentUser } = usePermissions();
+  // Get tenant/user identifier for cache key (single-tenant mode uses fixed value)
+  const tenantId = currentUser?.id || 'single-tenant';
+  
   const [selectedRisk, setSelectedRisk] = useState<Risk | null>(null);
   const [selectedRiskProcessLink, setSelectedRiskProcessLink] = useState<any | null>(null);
   const [selectedControl, setSelectedControl] = useState<Control | null>(null);
