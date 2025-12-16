@@ -20879,16 +20879,17 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]> {
-    // Build WHERE conditions - filter out deleted risks for performance
-    const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
+    return withRetry(async () => {
+      // Build WHERE conditions - filter out deleted risks for performance
+      const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
 
-    // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
-    // This prevents 504 timeouts when there are many records
-    const queryLimit = limit || 1000;
+      // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
+      // This prevents 504 timeouts when there are many records
+      const queryLimit = limit || 1000;
 
-    // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
-    // Use db directly (already imported and initialized)
-    let query = db.select({
+      // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
+      // Use db directly (already imported and initialized)
+      let query = db.select({
       // RiskProcessLink fields (only essential ones)
       rplId: riskProcessLinks.id,
       rplRiskId: riskProcessLinks.riskId,
