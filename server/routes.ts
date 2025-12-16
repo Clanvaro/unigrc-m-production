@@ -4894,15 +4894,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/risks/validation/:status", requirePermission("validate_risks"), async (req, res) => {
     try {
       // Extract and validate tenantId
-      const tenantId = (req as any).user?.activeTenantId;
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
       if (!tenantId) {
         return res.status(400).json({ message: "No active tenant" });
       }
 
-      const risks = await storage.getRisksByValidationStatus(req.params.status, tenantId);
+      const status = req.params.status;
+      const cacheKey = `validation:risks:${status}:${CACHE_VERSION}:${tenantId}`;
+
+      // Try cache first
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        return res.json(cached);
+      }
+
+      // Cache miss - query database
+      const risks = await storage.getRisksByValidationStatus(status, tenantId);
+
+      // Cache for 30 seconds (validation status changes frequently)
+      await distributedCache.set(cacheKey, risks, 30);
+
       res.json(risks);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch risks by validation status" });
+      console.error("[risks/validation/:status] Error:", error);
+      res.status(500).json({ 
+        message: "Failed to fetch risks by validation status",
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
@@ -4934,12 +4952,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const risk = await storage.validateRisk(
-        req.params.id,
-        validatedBy,
-        validatedData.validationStatus,
-        validatedData.validationComments
-      );
+      let risk;
+      try {
+        risk = await storage.validateRisk(
+          req.params.id,
+          validatedBy,
+          validatedData.validationStatus,
+          validatedData.validationComments
+        );
+      } catch (error) {
+        console.error("[validateRisk] Error in endpoint:", error);
+        if (error instanceof Error) {
+          if (error.message.includes('not found') || error.message.includes('deleted')) {
+            return res.status(404).json({ 
+              message: error.message || "Risk not found or has been deleted" 
+            });
+          }
+          return res.status(500).json({ 
+            message: "Failed to validate risk",
+            error: error.message 
+          });
+        }
+        return res.status(500).json({ 
+          message: "Failed to validate risk",
+          error: String(error)
+        });
+      }
 
       if (!risk) {
         return res.status(404).json({ message: "Risk not found" });
@@ -4950,8 +4988,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await Promise.all([
         invalidateValidationCaches(),
         invalidateRiskDataCaches(),
+        // Invalidate specific validation status caches
         distributedCache.set(`risk-matrix-aggregated:${tenantId}`, null, 0),
-        distributedCache.set(`validation:risks:pending:${tenantId}`, null, 0)
+        distributedCache.set(`validation:risks:pending:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:validated:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:rejected:${tenantId}`, null, 0),
+        distributedCache.set(`validation:risks:observed:${tenantId}`, null, 0),
+        // Invalidate pattern for all validation status endpoints
+        distributedCache.invalidatePattern(`validation:risks:*:${tenantId}`)
       ]);
 
       res.json(risk);

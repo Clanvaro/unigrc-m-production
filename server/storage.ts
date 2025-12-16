@@ -337,7 +337,7 @@ export interface IStorage {
 
   // Risk Validation
   getPendingValidationRisks(): Promise<Risk[]>;
-  getRisksByValidationStatus(status: string): Promise<Risk[]>;
+  getRisksByValidationStatus(status: string, tenantId?: string): Promise<Risk[]>;
   // Ownership validation methods
   resolveMacroprocesoForRisk(riskId: string): Promise<string | null>;
   getMacroOwnerUserId(macroprocesoId: string): Promise<string | null>;
@@ -2788,9 +2788,11 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getRisksByValidationStatus(status: string): Promise<Risk[]> {
+  async getRisksByValidationStatus(status: string, tenantId?: string): Promise<Risk[]> {
     return Array.from(this.risks.values()).filter(risk =>
-      risk.validationStatus === status
+      risk.validationStatus === status &&
+      !risk.deletedAt &&
+      risk.status !== 'deleted'
     );
   }
 
@@ -19962,8 +19964,14 @@ export class DatabaseStorage extends MemStorage {
     return await db.select().from(risks).where(eq(risks.validationStatus, "pending_validation"));
   }
 
-  async getRisksByValidationStatus(status: string): Promise<Risk[]> {
-    return await db.select().from(risks).where(eq(risks.validationStatus, status));
+  async getRisksByValidationStatus(status: string, tenantId?: string): Promise<Risk[]> {
+    return await db.select()
+      .from(risks)
+      .where(and(
+        eq(risks.validationStatus, status),
+        isNull(risks.deletedAt),
+        sql`${risks.status} != 'deleted'`
+      ));
   }
 
   // Database implementation of ownership validation methods
@@ -20077,6 +20085,20 @@ export class DatabaseStorage extends MemStorage {
       const result = await db.transaction(async (tx) => {
         const validatedAt = new Date();
 
+        // First, verify the risk exists and is not deleted
+        const existingRisk = await tx.select()
+          .from(risks)
+          .where(and(
+            eq(risks.id, id),
+            isNull(risks.deletedAt),
+            sql`${risks.status} != 'deleted'`
+          ))
+          .limit(1);
+
+        if (!existingRisk.length) {
+          throw new Error(`Risk ${id} not found or has been deleted`);
+        }
+
         // Update the risk table
         const [updatedRisk] = await tx.update(risks)
           .set({
@@ -20085,30 +20107,42 @@ export class DatabaseStorage extends MemStorage {
             validatedAt,
             validationComments: validationComments || null
           })
-          .where(eq(risks.id, id))
+          .where(and(
+            eq(risks.id, id),
+            isNull(risks.deletedAt),
+            sql`${risks.status} != 'deleted'`
+          ))
           .returning();
 
         if (!updatedRisk) {
-          throw new Error('Risk not found');
+          throw new Error(`Failed to update risk ${id}`);
         }
 
         // Update all risk_process_links for this risk with the same validation data
-        await tx.update(riskProcessLinks)
+        // Only update links that are not deleted
+        const updateResult = await tx.update(riskProcessLinks)
           .set({
             validationStatus,
             validatedBy,
             validatedAt,
             validationComments: validationComments || null
           })
-          .where(eq(riskProcessLinks.riskId, id));
+          .where(eq(riskProcessLinks.riskId, id))
+          .returning();
+
+        console.log(`[validateRisk] Updated ${updateResult.length} risk_process_links for risk ${id}`);
 
         return updatedRisk;
       });
 
       return result;
     } catch (error) {
-      console.error('Error validating risk:', error);
-      return undefined;
+      console.error('[validateRisk] Error validating risk:', error);
+      if (error instanceof Error) {
+        console.error('[validateRisk] Error message:', error.message);
+        console.error('[validateRisk] Error stack:', error.stack);
+      }
+      throw error; // Re-throw to let the caller handle it
     }
   }
 
