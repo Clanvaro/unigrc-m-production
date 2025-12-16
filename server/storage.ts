@@ -20927,9 +20927,11 @@ export class DatabaseStorage extends MemStorage {
       ];
       
       // For validated status, ensure validatedAt is not null (actually validated)
-      if (status === 'validated') {
-        conditions.push(isNotNull(riskProcessLinks.validatedAt));
-      }
+      // NOTE: Removed this check to include all validated risks, even if validatedAt is null
+      // This can happen if risks were validated before validatedAt was tracked
+      // if (status === 'validated') {
+      //   conditions.push(isNotNull(riskProcessLinks.validatedAt));
+      // }
 
       // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
       // This prevents 504 timeouts when there are many records
