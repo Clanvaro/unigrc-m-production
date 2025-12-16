@@ -71,14 +71,17 @@ echo "⚙️ Configurando PgBouncer..."
 MD5_HASH=$(echo -n "${DB_PASSWORD}${DB_USER}" | md5sum | awk '{print $1}')
 
 # Crear configuración temporal
+# IMPORTANTE: Cloud SQL usa SCRAM authentication, así que:
+# - auth_type = trust para cliente->PgBouncer (seguro dentro de VPC)
+# - Credenciales en [databases] para PgBouncer->Cloud SQL (SCRAM automático)
 cat > /tmp/pgbouncer.ini <<EOF
 [databases]
-${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME}
+${DB_NAME} = host=${CLOUD_SQL_PRIVATE_IP} port=5432 dbname=${DB_NAME} user=${DB_USER} password=${DB_PASSWORD}
 
 [pgbouncer]
 listen_addr = 0.0.0.0
 listen_port = 6432
-auth_type = md5
+auth_type = trust
 auth_file = /etc/pgbouncer/userlist.txt
 pool_mode = transaction
 max_client_conn = 1000
@@ -94,6 +97,8 @@ log_disconnections = 1
 log_pooler_errors = 1
 admin_users = pgbouncer
 stats_users = pgbouncer
+pidfile = /var/run/postgresql/pgbouncer.pid
+logfile = /var/log/pgbouncer/pgbouncer.log
 EOF
 
 # Crear userlist.txt
@@ -118,6 +123,9 @@ gcloud compute ssh "$VM_NAME" \
 sudo apt-get update
 sudo apt-get install -y pgbouncer postgresql-client
 
+# Crear usuario pgbouncer si no existe
+sudo useradd -r -s /bin/false pgbouncer 2>/dev/null || true
+
 # Copiar configuración
 sudo cp /tmp/pgbouncer.ini /etc/pgbouncer/pgbouncer.ini
 sudo cp /tmp/userlist.txt /etc/pgbouncer/userlist.txt
@@ -126,12 +134,17 @@ sudo chown postgres:postgres /etc/pgbouncer/userlist.txt
 sudo chmod 640 /etc/pgbouncer/pgbouncer.ini
 sudo chmod 640 /etc/pgbouncer/userlist.txt
 
+# Configurar systemd para ejecutar como usuario postgres
+sudo sed -i 's/^User=.*/User=postgres/' /etc/systemd/system/pgbouncer.service 2>/dev/null || true
+sudo systemctl daemon-reload
+
 # Reiniciar PgBouncer
-sudo systemctl restart pgbouncer
+sudo systemctl restart pgbouncer || sudo -u postgres pgbouncer -d /etc/pgbouncer/pgbouncer.ini &
 sudo systemctl enable pgbouncer
 
-# Verificar estado
-sudo systemctl status pgbouncer --no-pager
+# Esperar un momento y verificar estado
+sleep 2
+sudo systemctl status pgbouncer --no-pager || pgrep -u postgres pgbouncer && echo 'PgBouncer corriendo como proceso postgres'
 "
 
 # 4. Configurar firewall
