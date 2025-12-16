@@ -21004,6 +21004,10 @@ export class DatabaseStorage extends MemStorage {
     }));
 
     return results;
+    }, {
+      maxRetries: 2,
+      retryDelay: 1000
+    });
   }
 
   async getRiskProcessLinksByNotificationStatus(notified: boolean): Promise<RiskProcessLinkWithDetails[]> {
