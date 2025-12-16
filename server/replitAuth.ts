@@ -89,7 +89,9 @@ export function getSession() {
       httpOnly: true,
       secure: isProduction, // Only require HTTPS in production
       maxAge: sessionTtl,
-      sameSite: 'lax', // Lax is required for OAuth flows to work correctly
+      // Use 'none' for cross-site cookies when behind Firebase Hosting proxy
+      // This allows cookies to work when frontend (cl.unigrc.app) and backend (Cloud Run) are on different domains
+      sameSite: isProduction ? ('none' as const) : ('lax' as const),
     },
   });
 }
@@ -315,7 +317,7 @@ export async function setupAuth(app: Express) {
             const isProduction = process.env.NODE_ENV === 'production';
             res.clearCookie('connect.sid', {
               path: '/',
-              sameSite: 'lax',
+              sameSite: isProduction ? ('none' as const) : ('lax' as const),
               secure: isProduction,
               httpOnly: true
             });
