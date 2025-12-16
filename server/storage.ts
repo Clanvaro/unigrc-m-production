@@ -20947,10 +20947,9 @@ export class DatabaseStorage extends MemStorage {
     const baseResults = await query;
 
     // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
-    // FIXED: Use requireDb() instead of db directly
     const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
     const owners = ownerIds.length > 0
-      ? await dbInstance.select({
+      ? await db.select({
         id: processOwners.id,
         fullName: processOwners.name,
         email: processOwners.email
