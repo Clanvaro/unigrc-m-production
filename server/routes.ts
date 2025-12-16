@@ -6576,7 +6576,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(riskProcess);
     } catch (error) {
       console.error("Error validating risk process:", error);
-      res.status(500).json({ message: "Failed to validate risk-process association" });
+      console.error("Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined,
+        riskProcessLinkId: req.params.id,
+        validationStatus: req.body?.validationStatus
+      });
+      res.status(500).json({ 
+        message: "Failed to validate risk-process association",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 
