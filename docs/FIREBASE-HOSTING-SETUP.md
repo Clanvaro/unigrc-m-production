@@ -77,7 +77,7 @@ npm run firebase:deploy
 1. Ve a [Firebase Console](https://console.firebase.google.com/)
 2. Selecciona tu proyecto `unigrc-m`
 3. Ve a **Hosting** → **Agregar dominio personalizado**
-4. Ingresa `unigrc.app`
+4. Ingresa `cl.unigrc.app` (subdominio para la aplicación)
 5. Firebase te dará registros DNS para configurar
 
 ### Paso 2: Configurar DNS en GoDaddy
@@ -88,21 +88,16 @@ Firebase te proporcionará registros tipo A o CNAME. Configúralos en GoDaddy:
 2. Ve a **Mis Productos** → **Dominios** → `unigrc.app` → **DNS**
 3. Agrega los registros que Firebase te proporcionó
 
-**Ejemplo de registros DNS:**
+**Para el subdominio `cl.unigrc.app`, Firebase normalmente usa CNAME:**
+
 ```
-Tipo: A
-Nombre: @
-Valor: [IP proporcionada por Firebase]
+Tipo: CNAME
+Nombre: cl
+Valor: [valor CNAME proporcionado por Firebase, algo como: unigrc-m.web.app]
 TTL: 3600
 ```
 
-O si Firebase usa CNAME:
-```
-Tipo: CNAME
-Nombre: @
-Valor: [valor CNAME de Firebase]
-TTL: 3600
-```
+**Nota:** Si Firebase te da registros tipo A, úsalos en lugar de CNAME. El nombre del registro debe ser `cl` (no `@`).
 
 ### Paso 3: Verificar dominio
 
@@ -117,10 +112,10 @@ Una vez verificado:
 
 Con Firebase Hosting configurado:
 
-- `https://unigrc.app/` → Frontend (servido desde Firebase CDN)
-- `https://unigrc.app/api/**` → Backend Cloud Run (proxy automático)
-- `https://unigrc.app/risks` → Frontend SPA route
-- `https://unigrc.app/validation` → Frontend SPA route
+- `https://cl.unigrc.app/` → Frontend (servido desde Firebase CDN)
+- `https://cl.unigrc.app/api/**` → Backend Cloud Run (proxy automático)
+- `https://cl.unigrc.app/risks` → Frontend SPA route
+- `https://cl.unigrc.app/validation` → Frontend SPA route
 
 ## Costos
 
@@ -186,10 +181,10 @@ firebase hosting:sites:get unigrc-app
 ## Próximos Pasos
 
 1. ✅ Desplegar frontend a Firebase Hosting
-2. ✅ Configurar dominio `unigrc.app` en Firebase Console
-3. ✅ Configurar DNS en GoDaddy
+2. ✅ Configurar subdominio `cl.unigrc.app` en Firebase Console
+3. ✅ Configurar DNS en GoDaddy (registro CNAME para `cl`)
 4. ✅ Verificar que todo funciona
-5. ✅ (Opcional) Configurar dominio `www.unigrc.app` también
+5. ✅ (Opcional) Configurar redirección de `unigrc.app` → `cl.unigrc.app` si deseas
 
 ## Referencias
 
