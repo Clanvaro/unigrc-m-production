@@ -7050,17 +7050,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // This reduces database round-trips and improves performance
       const queryStart = Date.now();
       
-      // Combined query for risks (notified + not notified in one query)
+      // Combined query for risks (all statuses in one query)
       const risksCountsPromise = requireDb().execute(sql`
         SELECT 
           COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified,
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'validated' AND rpl.validated_at IS NOT NULL AND r.deleted_at IS NULL)::int AS validated,
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'observed' AND r.deleted_at IS NULL)::int AS observed,
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected' AND r.deleted_at IS NULL)::int AS rejected
         FROM risk_process_links rpl
         INNER JOIN risks r ON rpl.risk_id = r.id
-        WHERE rpl.validation_status = 'pending_validation' AND r.deleted_at IS NULL
+        WHERE r.deleted_at IS NULL
       `).then(r => ({
         notified: (r.rows[0] as any)?.notified || 0,
-        notNotified: (r.rows[0] as any)?.not_notified || 0
+        notNotified: (r.rows[0] as any)?.not_notified || 0,
+        validated: (r.rows[0] as any)?.validated || 0,
+        observed: (r.rows[0] as any)?.observed || 0,
+        rejected: (r.rows[0] as any)?.rejected || 0
       }));
 
       // Combined query for controls (notified + not notified in one query)
@@ -7109,7 +7115,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const response = {
         risks: {
           notified: risksCounts.notified,
-          notNotified: risksCounts.notNotified
+          notNotified: risksCounts.notNotified,
+          validated: risksCounts.validated,
+          observed: risksCounts.observed,
+          rejected: risksCounts.rejected,
+          total: risksCounts.notified + risksCounts.notNotified + risksCounts.validated + risksCounts.observed + risksCounts.rejected
         },
         controls: {
           notified: controlsCounts.notified,

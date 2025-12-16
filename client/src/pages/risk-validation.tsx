@@ -259,7 +259,7 @@ export default function RiskValidationPage() {
 
   // OPTIMIZED: Always fetch validation counts for summary cards (not tab-dependent)
   const { data: validationCounts } = useQuery<{
-    risks: { notified: number; notNotified: number };
+    risks: { notified: number; notNotified: number; validated?: number; observed?: number; rejected?: number; total?: number };
     controls: { notified: number; notNotified: number };
     actionPlans: { notified: number; notNotified: number };
   }>({
@@ -2010,7 +2010,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold" data-testid="stat-approved-risks">
-                  {filteredValidatedRiskProcessLinks.length}
+                  {validationCounts?.risks.validated ?? filteredValidatedRiskProcessLinks.length}
                 </div>
               </CardContent>
             </Card>
@@ -2024,7 +2024,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold" data-testid="stat-observed-risks">
-                  {filteredObservedRiskProcessLinks.length}
+                  {validationCounts?.risks.observed ?? filteredObservedRiskProcessLinks.length}
                 </div>
               </CardContent>
             </Card>
@@ -2038,7 +2038,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold" data-testid="stat-rejected-risks">
-                  {filteredRejectedRiskProcessLinks.length}
+                  {validationCounts?.risks.rejected ?? filteredRejectedRiskProcessLinks.length}
                 </div>
               </CardContent>
             </Card>
@@ -2056,7 +2056,12 @@ export default function RiskValidationPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-3xl font-bold" data-testid="stat-total-risks">
-                        {(notifiedRisksPaginationInfo?.total || 0) + (notNotifiedRisksPaginationInfo?.total || 0) + filteredValidatedRiskProcessLinks.length + filteredObservedRiskProcessLinks.length + filteredRejectedRiskProcessLinks.length}
+                        {validationCounts?.risks.total ?? 
+                          ((notifiedRisksPaginationInfo?.total || 0) + 
+                           (notNotifiedRisksPaginationInfo?.total || 0) + 
+                           (validationCounts?.risks.validated || filteredValidatedRiskProcessLinks.length) + 
+                           (validationCounts?.risks.observed || filteredObservedRiskProcessLinks.length) + 
+                           (validationCounts?.risks.rejected || filteredRejectedRiskProcessLinks.length))}
                       </div>
                     </CardContent>
                   </Card>
