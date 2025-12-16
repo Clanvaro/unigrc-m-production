@@ -4997,9 +4997,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         distributedCache.set(`validation:risks:validated:${CACHE_VERSION}:${tenantId}`, null, 0),
         distributedCache.set(`validation:risks:rejected:${CACHE_VERSION}:${tenantId}`, null, 0),
         distributedCache.set(`validation:risks:observed:${CACHE_VERSION}:${tenantId}`, null, 0),
+        // CRITICAL: Invalidate risk-process-links validation caches
+        distributedCache.set(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:validated`, null, 0),
+        distributedCache.set(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:rejected`, null, 0),
+        distributedCache.set(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:observed`, null, 0),
+        distributedCache.set(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`, null, 0),
         // Invalidate pattern for all validation status endpoints
         distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${tenantId}`),
-        distributedCache.invalidatePattern(`validation:risks:*:${tenantId}`)
+        distributedCache.invalidatePattern(`validation:risks:*:${tenantId}`),
+        distributedCache.invalidatePattern(`validation:risk-processes:${CACHE_VERSION}:*:${tenantId}:*`),
+        distributedCache.invalidatePattern(`validation:risk-processes:*:${tenantId}:*`)
       ]).catch(err => {
         console.error('[validateRisk] Error invalidating caches (non-critical):', err);
       });

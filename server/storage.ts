@@ -20919,8 +20919,17 @@ export class DatabaseStorage extends MemStorage {
 
   async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]> {
     return withRetry(async () => {
-      // Build WHERE conditions - filter out deleted risks for performance
-      const conditions = [eq(riskProcessLinks.validationStatus, status), isNull(risks.deletedAt)];
+      // Build WHERE conditions - filter out deleted risks and processes for performance
+      const conditions = [
+        eq(riskProcessLinks.validationStatus, status), 
+        isNull(risks.deletedAt),
+        sql`${risks.status} != 'deleted'`
+      ];
+      
+      // For validated status, ensure validatedAt is not null (actually validated)
+      if (status === 'validated') {
+        conditions.push(isNotNull(riskProcessLinks.validatedAt));
+      }
 
       // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
       // This prevents 504 timeouts when there are many records
@@ -20976,9 +20985,18 @@ export class DatabaseStorage extends MemStorage {
     })
       .from(riskProcessLinks)
       .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
+      .leftJoin(macroprocesos, and(
+        eq(riskProcessLinks.macroprocesoId, macroprocesos.id),
+        isNull(macroprocesos.deletedAt)
+      ))
+      .leftJoin(processes, and(
+        eq(riskProcessLinks.processId, processes.id),
+        isNull(processes.deletedAt)
+      ))
+      .leftJoin(subprocesos, and(
+        eq(riskProcessLinks.subprocesoId, subprocesos.id),
+        isNull(subprocesos.deletedAt)
+      ))
       .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
       .where(and(...conditions))
       .orderBy(riskProcessLinks.createdAt)
