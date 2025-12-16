@@ -29,6 +29,7 @@
     "measure-baseline": "tsx scripts/measure-baseline.ts",
     "apply-validation-indexes": "tsx scripts/apply-validation-indexes.ts",
     "apply-controls-indexes": "tsx scripts/apply-controls-indexes.ts",
+    "apply-page-data-lite-indexes": "tsx scripts/apply-page-data-lite-indexes.ts",
     "verify-calculation": "tsx scripts/verify-calculation.ts"
   },
   "dependencies": {

@@ -2031,7 +2031,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // OPTIMIZED: Execute queries in batches to avoid pool saturation
       // With pool=4 and 9 queries, executing all in parallel causes connection starvation
       // Execute in batches of 2-3 queries to respect pool limits
-      const CONCURRENT_QUERIES = 2; // Max queries in parallel (respects pool=4)
+      // Dynamic batch size: use 3 for first batches, 2 for last to balance load
+      const getBatchSize = (batchIndex: number, totalBatches: number) => {
+        // First batches use 3, last batch uses remaining queries
+        return batchIndex < totalBatches - 1 ? 3 : 2;
+      };
       
       // Define all queries with error handling
       const queries = [
@@ -2046,25 +2050,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
         { name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() },
       ];
 
+      // Track individual query timings for detailed instrumentation
+      const queryTimings: Record<string, { duration: number; cacheHit?: boolean; cacheMiss?: boolean }> = {};
+      const totalBatches = Math.ceil(queries.length / 3);
+
       // Execute queries in batches with concurrency limit
       const results: any[] = [];
-      for (let i = 0; i < queries.length; i += CONCURRENT_QUERIES) {
-        const batch = queries.slice(i, i + CONCURRENT_QUERIES);
+      let queryIndex = 0;
+      for (let batchNum = 0; queryIndex < queries.length; batchNum++) {
+        const batchSize = getBatchSize(batchNum, totalBatches);
+        const batch = queries.slice(queryIndex, queryIndex + batchSize);
         const batchStart = Date.now();
         
         const batchResults = await Promise.all(
           batch.map(async (query) => {
             const queryStart = Date.now();
+            
             try {
               const result = await query.fn();
               const queryDuration = Date.now() - queryStart;
-              if (queryDuration > 1000) {
-                console.log(`[page-data-lite] ${query.name} took ${queryDuration}ms`);
-              }
+              
+              // Store timing for detailed logging
+              queryTimings[query.name] = {
+                duration: queryDuration
+              };
+              
+              // Log every query timing for full visibility (helps identify slow queries)
+              console.log(`[page-data-lite] Query: ${query.name}`, {
+                durationMs: queryDuration,
+                resultCount: Array.isArray(result) ? result.length : typeof result === 'object' ? Object.keys(result).length : 1
+              });
+              
               return { name: query.name, result, error: null };
             } catch (err) {
               const queryDuration = Date.now() - queryStart;
-              console.error(`[page-data-lite] ${query.name} failed after ${queryDuration}ms:`, err);
+              queryTimings[query.name] = {
+                duration: queryDuration
+              };
+              console.error(`[page-data-lite] Query FAILED: ${query.name}`, {
+                durationMs: queryDuration,
+                error: err instanceof Error ? err.message : String(err)
+              });
               throw new Error(`${query.name} failed: ${err instanceof Error ? err.message : String(err)}`);
             }
           })
@@ -2075,12 +2101,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Log pool metrics after each batch
         const poolMetricsAfter = getPoolMetrics();
-        console.log(`[page-data-lite] Batch ${Math.floor(i / CONCURRENT_QUERIES) + 1} completed in ${batchDuration}ms`, {
+        console.log(`[page-data-lite] Batch ${batchNum + 1}/${totalBatches} completed`, {
           batchSize: batch.length,
+          batchDurationMs: batchDuration,
+          queriesInBatch: batch.map(q => q.name),
+          queryTimings: batch.map(q => ({ name: q.name, duration: queryTimings[q.name]?.duration || 0 })),
           poolTotal: poolMetricsAfter?.totalCount || 0,
           poolActive: (poolMetricsAfter?.totalCount || 0) - (poolMetricsAfter?.idleCount || 0),
           poolWaiting: poolMetricsAfter?.waitingCount || 0,
         });
+        
+        queryIndex += batchSize;
       }
 
       mark('db-done');
@@ -2088,6 +2119,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Log pool metrics after all queries to detect pool starvation
       const poolMetricsAfter = getPoolMetrics();
       const dbQueriesDuration = Date.now() - start;
+      
+      // Calculate total query time and identify slowest queries
+      const totalQueryTime = Object.values(queryTimings).reduce((sum, t) => sum + t.duration, 0);
+      const slowestQueries = Object.entries(queryTimings)
+        .sort((a, b) => b[1].duration - a[1].duration)
+        .slice(0, 3)
+        .map(([name, timing]) => ({ name, durationMs: timing.duration }));
+      
       console.log('[page-data-lite] Pool metrics AFTER queries', {
         total: poolMetricsAfter?.totalCount || 0,
         max: poolMetricsAfter?.maxConnections || 0,
@@ -2096,6 +2135,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         waiting: poolMetricsAfter?.waitingCount || 0,
         utilization: poolMetricsAfter ? `${Math.round(((poolMetricsAfter.totalCount - poolMetricsAfter.idleCount) / poolMetricsAfter.maxConnections) * 100)}%` : 'unknown',
         dbQueriesTimeMs: dbQueriesDuration
+      });
+      
+      // Log detailed query performance summary
+      console.log('[page-data-lite] Query Performance Summary', {
+        totalQueries: queries.length,
+        totalQueryTimeMs: totalQueryTime,
+        averageQueryTimeMs: Math.round(totalQueryTime / queries.length),
+        slowestQueries,
+        allQueryTimings: queryTimings
       });
 
       // Extract results by name

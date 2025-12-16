@@ -42,7 +42,7 @@ export class TwoTierCache {
     // Configuration
     private readonly L1_DEFAULT_TTL = 30 * 1000; // 30 seconds
     private readonly L2_DEFAULT_TTL = 5 * 60; // 5 minutes (in seconds for Redis)
-    private readonly L2_TIMEOUT = 100; // 100ms timeout for L2 cache
+    private readonly L2_TIMEOUT = 250; // 250ms timeout for L2 cache (increased from 100ms for Upstash latency tolerance)
     private readonly CLEANUP_INTERVAL = 60 * 1000; // Clean L1 every minute
 
     private cleanupTimer: NodeJS.Timeout;
