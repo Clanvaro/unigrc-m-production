@@ -11460,70 +11460,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
       }
 
-      // OPTIMIZED: Execute all queries in parallel
-      const [observedPlans, allProcesses, allAssociatedRisks] = await Promise.all([
-        // OPTIMIZED: Select only essential columns from actions
-        requireDb()
-          .select({
-            id: actions.id,
-            code: actions.code,
-            name: actions.name,
-            description: actions.description,
-            status: actions.status,
-            validationStatus: actions.validationStatus,
-            processId: actions.processId,
-            assignedTo: actions.assignedTo,
-            deadline: actions.deadline,
-            createdAt: actions.createdAt,
-            updatedAt: actions.updatedAt,
-          })
-          .from(actions)
-          .where(and(
-            isNull(actions.deletedAt),
-            eq(actions.validationStatus, 'observed')
-          )),
+      // OPTIMIZED: Execute all queries in parallel with error handling
+      let observedPlans, allProcesses, allAssociatedRisks;
+      try {
+        [observedPlans, allProcesses, allAssociatedRisks] = await Promise.all([
+          // OPTIMIZED: Select only essential columns from actions
+          requireDb()
+            .select({
+              id: actions.id,
+              code: actions.code,
+              name: actions.name,
+              description: actions.description,
+              status: actions.status,
+              validationStatus: actions.validationStatus,
+              processId: actions.processId,
+              assignedTo: actions.assignedTo,
+              deadline: actions.deadline,
+              createdAt: actions.createdAt,
+              updatedAt: actions.updatedAt,
+            })
+            .from(actions)
+            .where(and(
+              isNull(actions.deletedAt),
+              eq(actions.validationStatus, 'observed')
+            )),
 
-        // OPTIMIZED: Select only essential columns from processes
-        requireDb()
-          .select({
-            id: processes.id,
-            name: processes.name,
-          })
-          .from(processes),
+          // OPTIMIZED: Select only essential columns from processes
+          requireDb()
+            .select({
+              id: processes.id,
+              name: processes.name,
+            })
+            .from(processes),
 
-        // OPTIMIZED: Get all associated risks with filter for deleted risks
-        requireDb()
-          .select({
-            actionId: actionPlanRisks.actionId,
-            riskId: actionPlanRisks.riskId,
-            isPrimary: actionPlanRisks.isPrimary,
-            riskCode: risks.code,
-            riskName: risks.name,
-          })
-          .from(actionPlanRisks)
-          .innerJoin(risks, eq(actionPlanRisks.riskId, risks.id))
-          .where(isNull(risks.deletedAt))
-      ]);
+          // OPTIMIZED: Get all associated risks with filter for deleted risks
+          // Use LEFT JOIN to handle cases where risk might be deleted but association still exists
+          requireDb()
+            .select({
+              actionId: actionPlanRisks.actionId,
+              riskId: actionPlanRisks.riskId,
+              isPrimary: actionPlanRisks.isPrimary,
+              riskCode: risks.code,
+              riskName: risks.name,
+            })
+            .from(actionPlanRisks)
+            .leftJoin(risks, eq(actionPlanRisks.riskId, risks.id))
+            .where(isNull(risks.deletedAt))
+        ]);
+      } catch (queryError) {
+        console.error("[action-plans/validation/observed] Query error:", queryError);
+        if (queryError instanceof Error) {
+          console.error("Error message:", queryError.message);
+          console.error("Error stack:", queryError.stack);
+        }
+        throw queryError;
+      }
 
       // OPTIMIZED: Pre-build Maps for O(1) lookups instead of O(n) filtering
-      const processMap = new Map(allProcesses.map(p => [p.id, { name: p.name }]));
+      const processMap = new Map((allProcesses || []).map(p => [p.id, { name: p.name }]));
       
       // OPTIMIZED: Group risks by actionId using Map for O(n) instead of O(n*m) filtering
+      // Filter out null risks (from LEFT JOIN where risk was deleted)
       const risksByActionId = new Map<string, Array<{ riskId: string; isPrimary: boolean; riskCode: string; riskName: string }>>();
-      for (const ar of allAssociatedRisks) {
+      for (const ar of (allAssociatedRisks || [])) {
+        // Skip if risk is null (deleted risk from LEFT JOIN)
+        if (!ar.riskId || !ar.riskCode) {
+          continue;
+        }
         if (!risksByActionId.has(ar.actionId)) {
           risksByActionId.set(ar.actionId, []);
         }
         risksByActionId.get(ar.actionId)!.push({
           riskId: ar.riskId,
-          isPrimary: ar.isPrimary,
+          isPrimary: ar.isPrimary || false,
           riskCode: ar.riskCode || '',
           riskName: ar.riskName || '',
         });
       }
 
       // OPTIMIZED: Map to response format (minimal object construction)
-      const plansWithRisks = observedPlans.map(plan => ({
+      const plansWithRisks = (observedPlans || []).map(plan => ({
         ...plan,
         process: plan.processId ? processMap.get(plan.processId) || null : null,
         associatedRisks: risksByActionId.get(plan.id) || []
@@ -11546,8 +11562,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(plansWithRisks);
     } catch (error) {
-      console.error("Failed to fetch observed action plans:", error);
-      res.status(500).json({ message: "Failed to fetch observed action plans" });
+      console.error("[action-plans/validation/observed] Failed to fetch observed action plans:", error);
+      if (error instanceof Error) {
+        console.error("Error details:", {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        });
+      }
+      res.status(500).json({ 
+        message: "Failed to fetch observed action plans",
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
