@@ -184,7 +184,9 @@ if (databaseUrl) {
 
   const poolMin = isCloudSql ? 2 : (isRenderDb ? 5 : 2);
 
-  pool = new Pool({
+  // PgBouncer doesn't support statement_timeout as a connection parameter
+  // It has its own query timeout mechanism, so we omit it when using PgBouncer
+  const poolConfig: any = {
     connectionString: normalizedDatabaseUrl,
     max: poolMax,
     min: poolMin,
@@ -195,7 +197,6 @@ if (databaseUrl) {
     // This gives more time when pool is busy, reducing "Connection terminated due to connection timeout" errors
     // Also increased for other DBs to handle pool saturation better
     connectionTimeoutMillis: isCloudSql ? 60000 : Math.max(connectionTimeout, 30000), // Min 30s to handle pool saturation
-    statement_timeout: statementTimeout,
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
@@ -211,7 +212,14 @@ if (databaseUrl) {
     // This will throw an error if a connection can't be acquired within this time
     // Set to 30s to match connectionTimeout, but this is for acquiring from pool, not creating new connection
     // Note: pg Pool doesn't have acquireTimeoutMillis, but we handle this in our retry logic
-  });
+  };
+
+  // Only add statement_timeout if NOT using PgBouncer
+  if (!isUsingPgBouncer) {
+    poolConfig.statement_timeout = statementTimeout;
+  }
+
+  pool = new Pool(poolConfig);
   db = drizzle(pool, { schema, logger: true });
 
   const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
