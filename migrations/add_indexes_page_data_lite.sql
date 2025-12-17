@@ -6,11 +6,11 @@
 BEGIN;
 
 -- ============= RISK_PROCESS_LINKS - Optimización LATERAL JOIN =============
--- Índice compuesto para el LATERAL JOIN en getRisksLite()
+-- Índice específico para el LATERAL JOIN en getRisksLite()
 -- Optimiza la búsqueda del risk_process_link más reciente con responsible_override_id
--- Usa índice parcial para reducir tamaño y mejorar performance
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rpl_risk_created_desc_partial
-ON risk_process_links(risk_id, created_at DESC NULLS LAST)
+-- Este índice permite que el ORDER BY ... LIMIT 1 por risk deje de escanear toda la tabla
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rpl_riskid_createdat_desc
+ON risk_process_links (risk_id, created_at DESC)
 WHERE responsible_override_id IS NOT NULL;
 
 -- Índice adicional para mejorar aún más la performance del LATERAL JOIN

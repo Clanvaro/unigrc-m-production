@@ -41,13 +41,13 @@ async function applyPageDataLiteIndexes() {
         // ============= RISK_PROCESS_LINKS - Optimización LATERAL JOIN =============
         console.log('   Creating indexes for risk_process_links...');
         
-        console.log('   Creating idx_rpl_risk_created_desc_partial...');
+        console.log('   Creating idx_rpl_riskid_createdat_desc...');
         await db.execute(sql`
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rpl_risk_created_desc_partial
-            ON risk_process_links(risk_id, created_at DESC NULLS LAST)
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rpl_riskid_createdat_desc
+            ON risk_process_links (risk_id, created_at DESC)
             WHERE responsible_override_id IS NOT NULL;
         `);
-        console.log('   ✅ idx_rpl_risk_created_desc_partial created\n');
+        console.log('   ✅ idx_rpl_riskid_createdat_desc created\n');
 
         console.log('   Creating idx_rpl_risk_responsible_created_desc_partial...');
         await db.execute(sql`
@@ -129,7 +129,7 @@ async function applyPageDataLiteIndexes() {
         const duration = Date.now() - startTime;
         console.log(`✅ Migration completed successfully in ${duration}ms\n`);
         console.log('📊 Indexes created:');
-        console.log('   - idx_rpl_risk_created_desc_partial (risk_process_links)');
+        console.log('   - idx_rpl_riskid_createdat_desc (risk_process_links) - Optimizes LATERAL JOIN in getRisksLite()');
         console.log('   - idx_rpl_risk_responsible_created_desc_partial (risk_process_links)');
         console.log('   - idx_macroproceso_gerencias_macroproceso_id');
         console.log('   - idx_macroproceso_gerencias_gerencia_id');
