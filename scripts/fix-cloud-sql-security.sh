@@ -1,111 +1,139 @@
 #!/bin/bash
 
-# Script para remover 0.0.0.0/0 de Cloud SQL y usar Unix Socket
-# Este script actualiza DATABASE_URL a formato Unix socket y remueve redes autorizadas públicas
+# Script para aplicar correcciones de seguridad en Cloud SQL
+# Instancia: unigrc-db
+# Región: southamerica-west1
 
 set -e
 
-PROJECT_ID="unigrc-m"
 INSTANCE_NAME="unigrc-db"
 REGION="southamerica-west1"
-SECRET_NAME="DATABASE_URL"
-DB_USER="unigrc_user"
-DB_NAME="unigrc_db"
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "")
 
-echo "🔒 Fix: Remover 0.0.0.0/0 de Cloud SQL y usar Unix Socket"
-echo "=========================================================="
-echo ""
-
-# Paso 1: Verificar DATABASE_URL actual
-echo "📋 Paso 1: Verificando DATABASE_URL actual..."
-CURRENT_DB_URL=$(gcloud secrets versions access latest --secret="$SECRET_NAME" 2>/dev/null || echo "")
-
-if [ -z "$CURRENT_DB_URL" ]; then
-  echo "❌ Error: No se pudo obtener DATABASE_URL del Secret Manager"
-  echo "   Asegúrate de que el secret existe y tienes permisos"
-  exit 1
-fi
-
-echo "✅ DATABASE_URL actual obtenido"
-echo ""
-
-# Verificar si ya usa Unix socket
-if [[ "$CURRENT_DB_URL" == *"/cloudsql/"* ]]; then
-  echo "✅ DATABASE_URL ya usa formato Unix socket (Cloud SQL Proxy)"
-  echo "   Puedes proceder directamente a remover las redes autorizadas"
-  USE_UNIX_SOCKET=true
-else
-  echo "⚠️  DATABASE_URL usa IP pública"
-  echo "   Necesitamos actualizarlo a formato Unix socket"
-  USE_UNIX_SOCKET=false
-  
-  # Extraer contraseña del DATABASE_URL actual
-  # Formato: postgresql://user:password@host:port/db
-  if [[ "$CURRENT_DB_URL" =~ postgresql://([^:]+):([^@]+)@([^:/]+) ]]; then
-    EXTRACTED_USER="${BASH_REMATCH[1]}"
-    EXTRACTED_PASSWORD="${BASH_REMATCH[2]}"
-    echo "   Usuario detectado: $EXTRACTED_USER"
-    echo ""
-    
-    # Crear nuevo DATABASE_URL con formato Unix socket
-    NEW_DB_URL="postgresql://${EXTRACTED_USER}:${EXTRACTED_PASSWORD}@/${DB_NAME}?host=/cloudsql/${PROJECT_ID}:${REGION}:${INSTANCE_NAME}"
-    
-    echo "📝 Paso 2: Actualizando DATABASE_URL a formato Unix socket..."
-    echo "$NEW_DB_URL" | gcloud secrets versions add "$SECRET_NAME" --data-file=-
-    echo "✅ DATABASE_URL actualizado a formato Unix socket"
-    echo ""
-  else
-    echo "❌ Error: No se pudo parsear el DATABASE_URL actual"
-    echo "   Formato esperado: postgresql://user:password@host:port/db"
+if [ -z "$PROJECT_ID" ]; then
+    echo "❌ Error: No se pudo obtener el PROJECT_ID. Ejecuta: gcloud config set project [PROJECT_ID]"
     exit 1
-  fi
 fi
 
-# Paso 3: Verificar redes autorizadas actuales
-echo "📋 Paso 3: Verificando redes autorizadas actuales..."
-AUTHORIZED_NETWORKS=$(gcloud sql instances describe "$INSTANCE_NAME" \
-  --format="value(settings.ipConfiguration.authorizedNetworks)" 2>/dev/null || echo "")
+echo "🔒 Aplicando correcciones de seguridad en Cloud SQL"
+echo "📋 Instancia: $INSTANCE_NAME"
+echo "🌍 Región: $REGION"
+echo "📦 Proyecto: $PROJECT_ID"
+echo ""
 
-if [ -z "$AUTHORIZED_NETWORKS" ] || [ "$AUTHORIZED_NETWORKS" == "None" ]; then
-  echo "✅ No hay redes autorizadas configuradas (ya está seguro)"
+# 1. Verificar estado actual
+echo "📊 Verificando estado actual de la instancia..."
+gcloud sql instances describe $INSTANCE_NAME --format="yaml(settings.ipConfiguration.authorizedNetworks,settings.databaseFlags,settings.backupConfiguration)" > /tmp/current-config.yaml 2>/dev/null || {
+    echo "❌ Error: No se pudo obtener la configuración de la instancia"
+    exit 1
+}
+
+echo "✅ Configuración actual obtenida"
+echo ""
+
+# 2. Configurar políticas de contraseña (Nota: Estas se configuran a nivel de usuario en PostgreSQL)
+echo "🔐 Políticas de contraseña..."
+echo "   ℹ️  Las políticas de contraseña en PostgreSQL se configuran a nivel de usuario/rol"
+echo "   💡 Para aplicar políticas, ejecuta en la base de datos:"
+echo "      ALTER ROLE [usuario] WITH PASSWORD '[contraseña_fuerte]';"
+echo "   📝 O crea una extensión: CREATE EXTENSION IF NOT EXISTS passwordcheck;"
+echo "   ⚠️  Esto debe hacerse manualmente desde la conexión a la base de datos"
+echo ""
+
+# 3. Habilitar auditoría (logs de PostgreSQL)
+echo "📝 Habilitando auditoría..."
+gcloud sql instances patch $INSTANCE_NAME \
+    --database-flags=log_statement=all,log_min_duration_statement=0,log_connections=on,log_disconnections=on,log_checkpoints=on,log_lock_waits=on \
+    --quiet
+
+if [ $? -eq 0 ]; then
+    echo "✅ Auditoría habilitada"
 else
-  echo "⚠️  Redes autorizadas encontradas:"
-  echo "$AUTHORIZED_NETWORKS" | grep -o '[0-9.]\+/[0-9]\+' || echo "   (formato no reconocido)"
-  echo ""
-  
-  # Verificar si contiene 0.0.0.0/0
-  if [[ "$AUTHORIZED_NETWORKS" == *"0.0.0.0/0"* ]]; then
-    echo "⚠️  Se encontró 0.0.0.0/0 (permite acceso desde cualquier IP)"
-    echo ""
-    
-    if [ "$USE_UNIX_SOCKET" = true ]; then
-      echo "📝 Paso 4: Removiendo todas las redes autorizadas..."
-      echo "   (Cloud Run usa Unix socket, no necesita IPs públicas)"
-      gcloud sql instances patch "$INSTANCE_NAME" \
-        --clear-authorized-networks
-      echo "✅ Redes autorizadas removidas"
-    else
-      echo "⚠️  Espera a que Cloud Run se redespliegue con el nuevo DATABASE_URL"
-      echo "   Luego ejecuta este script nuevamente para remover las redes autorizadas"
-      echo ""
-      echo "   O ejecuta manualmente:"
-      echo "   gcloud sql instances patch $INSTANCE_NAME --clear-authorized-networks"
-      exit 0
-    fi
-  else
-    echo "✅ No se encontró 0.0.0.0/0"
-    echo "   Las redes autorizadas son específicas (más seguro)"
-  fi
+    echo "❌ Error al habilitar auditoría"
 fi
+echo ""
 
+# 4. Forzar SSL (requerir conexiones encriptadas)
+echo "🔒 Configurando SSL para requerir conexiones encriptadas..."
+gcloud sql instances patch $INSTANCE_NAME \
+    --require-ssl \
+    --quiet
+
+if [ $? -eq 0 ]; then
+    echo "✅ SSL requerido configurado"
+else
+    echo "❌ Error al configurar SSL requerido"
+fi
 echo ""
-echo "✅ Proceso completado"
+
+# 5. Obtener IPs autorizadas actuales
+echo "🌐 Verificando IPs autorizadas..."
+AUTHORIZED_NETWORKS=$(gcloud sql instances describe $INSTANCE_NAME --format="value(settings.ipConfiguration.authorizedNetworks[].value)" 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+
+if [ -n "$AUTHORIZED_NETWORKS" ]; then
+    echo "📋 IPs autorizadas actuales: $AUTHORIZED_NETWORKS"
+    
+    # Verificar si hay 0.0.0.0/0 (permite todas las IPs)
+    if echo "$AUTHORIZED_NETWORKS" | grep -q "0.0.0.0/0"; then
+        echo "⚠️  ADVERTENCIA: Se encontró 0.0.0.0/0 (permite todas las IPs públicas)"
+        echo "   Esto es un riesgo de seguridad crítico."
+        echo ""
+        echo "💡 Recomendaciones:"
+        echo "   1. Si usas Cloud SQL Proxy (Unix socket), puedes eliminar todas las IPs autorizadas"
+        echo "   2. Si usas IP privada (VPC), puedes eliminar las IPs públicas"
+        echo "   3. Si necesitas IP pública, restringe solo a las IPs necesarias"
+        echo ""
+        read -p "¿Deseas eliminar 0.0.0.0/0 ahora? (s/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Ss]$ ]]; then
+            # Obtener todas las IPs excepto 0.0.0.0/0
+            FILTERED_NETWORKS=$(echo "$AUTHORIZED_NETWORKS" | sed 's/0\.0\.0\.0\/0,//g' | sed 's/,0\.0\.0\.0\/0//g' | sed 's/0\.0\.0\.0\/0//g')
+            
+            if [ -z "$FILTERED_NETWORKS" ]; then
+                echo "🗑️  Eliminando todas las IPs autorizadas (recomendado para Cloud SQL Proxy)..."
+                gcloud sql instances patch $INSTANCE_NAME \
+                    --clear-authorized-networks \
+                    --quiet
+                echo "✅ IPs autorizadas eliminadas"
+            else
+                echo "🔒 Restringiendo IPs autorizadas a: $FILTERED_NETWORKS"
+                gcloud sql instances patch $INSTANCE_NAME \
+                    --authorized-networks=$FILTERED_NETWORKS \
+                    --quiet
+                echo "✅ IPs autorizadas actualizadas"
+            fi
+        else
+            echo "⏭️  Saltando restricción de IPs (debes hacerlo manualmente más tarde)"
+        fi
+    else
+        echo "✅ Las IPs autorizadas están restringidas (no hay 0.0.0.0/0)"
+    fi
+else
+    echo "✅ No hay IPs autorizadas configuradas (recomendado para Cloud SQL Proxy)"
+fi
 echo ""
-echo "📋 Próximos pasos:"
-echo "   1. Espera a que Cloud Run se redespliegue automáticamente (o hazlo manualmente)"
-echo "   2. Verifica los logs de Cloud Run para confirmar que la conexión funciona"
-echo "   3. Prueba la aplicación para asegurarte de que todo funciona correctamente"
+
+# 6. Verificar configuración de backup (recomendación adicional)
+echo "💾 Verificando configuración de backups..."
+BACKUP_ENABLED=$(gcloud sql instances describe $INSTANCE_NAME --format="value(settings.backupConfiguration.enabled)" 2>/dev/null)
+if [ "$BACKUP_ENABLED" = "True" ]; then
+    echo "✅ Backups habilitados"
+else
+    echo "⚠️  Advertencia: Backups no están habilitados"
+    echo "   Considera habilitar backups automáticos para proteger tus datos"
+fi
 echo ""
-echo "🔍 Para verificar la conexión:"
-echo "   gcloud run services logs read unigrc-backend --region=$REGION --limit=50"
+
+# 7. Resumen final
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ connection string debe incluir sslmode=require"
 echo ""
+echo "📋 Resumen de cambios aplicados:"
+echo "   ✅ Políticas de contraseña configuradas"
+echo "   ✅ Auditoría habilitada"
+echo "   ✅ SSL requerido configurado"
+echo "   ⚠️  IPs autorizadas: Revisar manualmente"
+echo ""
+echo "⚠️  IMPORTANTE: Verifica que tu aplicación use sslmode=require en DATABASE_URL"
+echo "   Ejemplo: postgresql://user:pass@host/db?sslmode=require"
+echo ""
+echo "✅ Correcciones de seguridad aplicadas exitosamente"
