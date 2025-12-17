@@ -87,6 +87,18 @@ class InMemoryCache {
     return remaining > 0 ? remaining : -1;
   }
   
+  async setnx(key: string, value: string, ttlSeconds: number): Promise<number> {
+    // SETNX: Set if not exists
+    if (this.cache.has(key)) {
+      return 0; // Key already exists
+    }
+    this.cache.set(key, {
+      data: value,
+      expiresAt: Date.now() + (ttlSeconds * 1000)
+    });
+    return 1; // Key was set
+  }
+  
   async flushdb(): Promise<string> {
     this.cache.clear();
     return 'OK';
@@ -150,6 +162,13 @@ class UpstashRedisAdapter {
   
   async ttl(key: string): Promise<number> {
     return await this.client.ttl(key);
+  }
+  
+  async setnx(key: string, value: string, ttlSeconds: number): Promise<number> {
+    // SETNX with expiration: Use SET with NX option
+    // Upstash Redis supports SET with NX and EX options
+    const result = await this.client.set(key, value, { nx: true, ex: ttlSeconds });
+    return result === 'OK' ? 1 : 0;
   }
   
   async flushdb(): Promise<string> {
@@ -319,6 +338,20 @@ export class DistributedCache {
       }
     } catch (error) {
       console.error('Cache invalidatePattern error:', error);
+    }
+  }
+
+  async setnx(key: string, value: string, ttlSeconds: number): Promise<number> {
+    try {
+      const redisInstance = this.getRedis();
+      if (!redisInstance || redisInstance === null) {
+        console.warn('[CACHE] Redis not initialized, skipping setnx operation');
+        return 0;
+      }
+      return await redisInstance.setnx(key, value, ttlSeconds);
+    } catch (error) {
+      console.error(`[CACHE] Setnx error for key ${key}:`, error);
+      return 0; // Fail gracefully - assume lock not acquired
     }
   }
 

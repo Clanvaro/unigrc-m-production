@@ -2017,6 +2017,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         step: 'cache-check',
       });
 
+      // SINGLE FLIGHT PATTERN: Prevent cache stampede/herd effect
+      // If cache expires and multiple requests arrive, only one should compute
+      const lockKey = `risks-page-data-lite:lock:${tenantId}`;
+      const lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
+      
+      if (lockAcquired === 0) {
+        // Another request is computing, wait and retry cache get
+        console.log('[page-data-lite] Lock acquired by another request, waiting...');
+        await new Promise(resolve => setTimeout(resolve, 150)); // Wait 150ms
+        
+        // Retry cache get - the other request should have populated it
+        const retryCacheGetStart = Date.now();
+        const retryCached = await distributedCache.get(cacheKey);
+        const retryCacheGetDuration = Date.now() - retryCacheGetStart;
+        
+        if (retryCached) {
+          mark('cache-hit-after-lock');
+          console.log('[page-data-lite] CACHE HIT (after lock wait)', {
+            total: Date.now() - start,
+            redisGetMs: retryCacheGetDuration,
+            waitMs: 150,
+            steps,
+          });
+          return res.json(retryCached);
+        }
+        
+        // Still no cache after wait - proceed with computation (fallback)
+        console.log('[page-data-lite] Still no cache after lock wait, proceeding with computation');
+      } else {
+        console.log('[page-data-lite] Lock acquired, computing fresh data');
+      }
+
       // Log pool metrics before starting queries to detect pool starvation
       const poolMetricsBefore = getPoolMetrics();
       console.log('[page-data-lite] Pool metrics BEFORE queries', {
@@ -2028,38 +2060,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         utilization: poolMetricsBefore ? `${Math.round(((poolMetricsBefore.totalCount - poolMetricsBefore.idleCount) / poolMetricsBefore.maxConnections) * 100)}%` : 'unknown'
       });
 
-      // OPTIMIZED: Execute queries in batches to avoid pool saturation
-      // With pool=4 and 9 queries, executing all in parallel causes connection starvation
-      // Execute in batches of 2-3 queries to respect pool limits
-      // Dynamic batch size: use 3 for first batches, 2 for last to balance load
-      const getBatchSize = (batchIndex: number, totalBatches: number) => {
-        // First batches use 3, last batch uses remaining queries
-        return batchIndex < totalBatches - 1 ? 3 : 2;
-      };
-      
-      // Define all queries with error handling
-      const queries = [
-        { name: 'getRisksLite', fn: () => storage.getRisksLite() },
-        { name: 'getProcessOwners', fn: () => storage.getProcessOwners() },
-        { name: 'getRiskStats', fn: () => storage.getRiskStats() },
-        { name: 'getGerencias', fn: () => storage.getGerencias() },
-        { name: 'getMacroprocesos', fn: () => storage.getMacroprocesos() },
-        { name: 'getSubprocesosWithOwners', fn: () => storage.getSubprocesosWithOwners() },
-        { name: 'getProcesses', fn: () => storage.getProcesses() },
-        { name: 'getRiskCategories', fn: () => storage.getRiskCategories() },
-        { name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() },
+      // OPTIMIZED BATCHING: Organize queries by expected execution time
+      // Batch 1: Heaviest queries (getRisksLite, getAllProcessGerenciasRelations) - run separately or together
+      // Batch 2: Medium queries (getSubprocesosWithOwners, getProcesses)
+      // Batch 3: Light queries (getGerencias, getMacroprocesos, getRiskCategories)
+      // Batch 4: Fast aggregated query (getRiskStats) - can run with others
+      const batches = [
+        // Batch 1: Heaviest - getRisksLite (LATERAL JOIN) - run alone for best performance
+        [{ name: 'getRisksLite', fn: () => storage.getRisksLite() }],
+        // Batch 2: Heavy - getAllProcessGerenciasRelations (UNION ALL) - run alone
+        [{ name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() }],
+        // Batch 3: Medium - getSubprocesosWithOwners + getProcesses
+        [
+          { name: 'getSubprocesosWithOwners', fn: () => storage.getSubprocesosWithOwners() },
+          { name: 'getProcesses', fn: () => storage.getProcesses() }
+        ],
+        // Batch 4: Light - getGerencias + getMacroprocesos + getRiskCategories + getProcessOwners + getRiskStats
+        [
+          { name: 'getGerencias', fn: () => storage.getGerencias() },
+          { name: 'getMacroprocesos', fn: () => storage.getMacroprocesos() },
+          { name: 'getRiskCategories', fn: () => storage.getRiskCategories() },
+          { name: 'getProcessOwners', fn: () => storage.getProcessOwners() },
+          { name: 'getRiskStats', fn: () => storage.getRiskStats() }
+        ],
       ];
 
       // Track individual query timings for detailed instrumentation
       const queryTimings: Record<string, { duration: number; cacheHit?: boolean; cacheMiss?: boolean }> = {};
-      const totalBatches = Math.ceil(queries.length / 3);
+      const totalBatches = batches.length;
 
-      // Execute queries in batches with concurrency limit
+      // Execute queries in optimized batches
       const results: any[] = [];
-      let queryIndex = 0;
-      for (let batchNum = 0; queryIndex < queries.length; batchNum++) {
-        const batchSize = getBatchSize(batchNum, totalBatches);
-        const batch = queries.slice(queryIndex, queryIndex + batchSize);
+      for (let batchNum = 0; batchNum < batches.length; batchNum++) {
+        const batch = batches[batchNum];
         const batchStart = Date.now();
         
         const batchResults = await Promise.all(
@@ -2110,8 +2143,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           poolActive: (poolMetricsAfter?.totalCount || 0) - (poolMetricsAfter?.idleCount || 0),
           poolWaiting: poolMetricsAfter?.waitingCount || 0,
         });
-        
-        queryIndex += batchSize;
       }
 
       mark('db-done');
@@ -2138,10 +2169,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Log detailed query performance summary
+      const totalQueries = Object.keys(queryTimings).length;
       console.log('[page-data-lite] Query Performance Summary', {
-        totalQueries: queries.length,
+        totalQueries,
         totalQueryTimeMs: totalQueryTime,
-        averageQueryTimeMs: Math.round(totalQueryTime / queries.length),
+        averageQueryTimeMs: totalQueries > 0 ? Math.round(totalQueryTime / totalQueries) : 0,
         slowestQueries,
         allQueryTimings: queryTimings
       });
@@ -2183,6 +2215,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await distributedCache.set(cacheKey, response, 600);
       const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
+      
+      // Release lock after cache is set
+      try {
+        await distributedCache.invalidate(lockKey);
+      } catch (lockError) {
+        console.warn('[page-data-lite] Failed to release lock:', lockError);
+      }
       
       console.log('[page-data-lite] CACHE SET', {
         redisSetMs: cacheSetDuration,

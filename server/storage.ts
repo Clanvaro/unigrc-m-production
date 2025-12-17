@@ -15215,23 +15215,58 @@ export class DatabaseStorage extends MemStorage {
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
     return await withRetry(async () => {
-      // Use Drizzle ORM pattern (same as getProcessesWithOwners) for consistency
-      const results = await db
-        .select({
-          subproceso: subprocesos,
-          owner: processOwners,
-        })
-        .from(subprocesos)
-        .leftJoin(processOwners, and(
-          eq(subprocesos.ownerId, processOwners.id),
-          eq(processOwners.isActive, true)
-        ))
-        .where(isNull(subprocesos.deletedAt))
-        .orderBy(desc(subprocesos.createdAt));
+      // OPTIMIZED: Use raw SQL with specific columns instead of SELECT *
+      // This reduces data transfer and serialization time
+      // Avoids invalid SQL like "process_owners.* as owner"
+      const result = await db.execute(sql`
+        SELECT
+          s.id,
+          s.name,
+          s.description,
+          s.code,
+          s.process_id as "processId",
+          s.owner_id as "ownerId",
+          s.gerencia_id as "gerenciaId",
+          s.created_at as "createdAt",
+          s.updated_at as "updatedAt",
+          s.deleted_at as "deletedAt",
+          po.id as owner_id,
+          po.name as owner_name,
+          po.email as owner_email,
+          po.position as owner_position,
+          po.company as owner_company,
+          po.is_active as owner_is_active,
+          po.created_at as owner_created_at,
+          po.updated_at as owner_updated_at
+        FROM subprocesos s
+        LEFT JOIN process_owners po
+          ON s.owner_id = po.id AND po.is_active = true
+        WHERE s.deleted_at IS NULL
+        ORDER BY s.created_at DESC
+      `);
 
-      return results.map(result => ({
-        ...result.subproceso,
-        owner: result.owner,
+      // Map results to expected format
+      return (result.rows as any[]).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        code: row.code,
+        processId: row.processId,
+        ownerId: row.ownerId,
+        gerenciaId: row.gerenciaId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        deletedAt: row.deletedAt,
+        owner: row.owner_id ? {
+          id: row.owner_id,
+          name: row.owner_name,
+          email: row.owner_email,
+          position: row.owner_position,
+          company: row.owner_company,
+          isActive: row.owner_is_active,
+          createdAt: row.owner_created_at,
+          updatedAt: row.owner_updated_at,
+        } : null,
       }));
     });
   }
