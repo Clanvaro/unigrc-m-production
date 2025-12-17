@@ -13,12 +13,7 @@ let db: ReturnType<typeof drizzle> | null = null;
 // POOLED_DATABASE_URL is for Neon pooled connections (better scalability)
 // DATABASE_URL is the fallback direct Neon connection
 const pgbouncerUrl = process.env.PGBOUNCER_URL;
-const fallbackDatabaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
-
-// Try PgBouncer first, but fallback to direct connection if it fails
-// This prevents startup failures when PgBouncer is unavailable
-let databaseUrl = pgbouncerUrl || fallbackDatabaseUrl;
-let isUsingPgBouncer = !!pgbouncerUrl;
+const databaseUrl = pgbouncerUrl || process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
 
 // Detect if using Render PostgreSQL (non-Neon)
 // Improved detection: Check for 'render.com' in hostname OR specific Render env vars
@@ -41,7 +36,8 @@ const isCloudSql =
 // Cloud SQL Proxy uses format: postgresql://user:pass@/db?host=/cloudsql/...
 const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
 
-// isUsingPgBouncer is now set above based on whether pgbouncerUrl exists
+// Detect if using PgBouncer (dedicated connection pooler)
+const isUsingPgBouncer = !!pgbouncerUrl;
 
 // Detect pooler based on actual connection string content (not env var name)
 const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
@@ -222,68 +218,6 @@ if (databaseUrl) {
   // Only add statement_timeout if NOT using PgBouncer
   if (!isUsingPgBouncer) {
     poolConfig.statement_timeout = statementTimeout;
-  }
-
-  // Test PgBouncer connection and fallback to direct connection if it fails
-  if (isUsingPgBouncer && fallbackDatabaseUrl) {
-    try {
-      console.log('[DB Config] Testing PgBouncer connection...');
-      const testPool = new Pool({ ...poolConfig, max: 1 });
-      // Test connection with a short timeout (5 seconds)
-      const testClient = await Promise.race([
-        testPool.connect(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), 5000))
-      ]) as any;
-      
-      if (testClient) {
-        testClient.release();
-        await testPool.end();
-        console.log('✅ PgBouncer connection test successful');
-      }
-    } catch (pgbouncerError: any) {
-      console.warn(`⚠️ PgBouncer connection test failed: ${pgbouncerError?.message || String(pgbouncerError)}`);
-      console.warn(`⚠️ Falling back to direct database connection (DATABASE_URL)`);
-      
-      // Fallback to direct connection
-      databaseUrl = fallbackDatabaseUrl;
-      isUsingPgBouncer = false;
-      
-      // Recalculate connection settings for direct connection
-      const fallbackIsCloudSql = 
-        process.env.IS_GCP_DEPLOYMENT === 'true' ||
-        databaseUrl?.includes('.googleapis.com') ||
-        databaseUrl?.includes('cloudsql') ||
-        (process.env.IS_GCP_DEPLOYMENT === 'true' && /@10\.\d+\.\d+\.\d+/.test(databaseUrl || '')) ||
-        false;
-      
-      const fallbackIsCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
-      
-      // Update normalized URL for fallback
-      if (fallbackIsCloudSql && !fallbackIsCloudSqlProxy && !databaseUrl.includes('sslmode=')) {
-        normalizedDatabaseUrl = databaseUrl.includes('?')
-          ? `${databaseUrl}&sslmode=require`
-          : `${databaseUrl}?sslmode=require`;
-      }
-      
-      // Update pool config for direct connection
-      poolConfig.connectionString = normalizedDatabaseUrl;
-      if (!fallbackIsCloudSqlProxy) {
-        poolConfig.statement_timeout = statementTimeout;
-      }
-      
-      // Recalculate pool max for direct connection
-      if (fallbackIsCloudSql) {
-        poolMax = parseInt(process.env.DB_POOL_MAX || '4', 10);
-      } else if (isRenderDb) {
-        poolMax = 20;
-      } else {
-        poolMax = isPooled ? 10 : 6;
-      }
-      poolConfig.max = poolMax;
-      poolConfig.min = fallbackIsCloudSql ? 2 : (isRenderDb ? 5 : 2);
-      
-      console.log(`[DB Config] Using direct connection fallback: pool=${poolConfig.min}-${poolMax}`);
-    }
   }
 
   pool = new Pool(poolConfig);
