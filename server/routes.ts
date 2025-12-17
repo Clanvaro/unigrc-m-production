@@ -11696,74 +11696,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
       }
 
-      // OPTIMIZED: Execute all queries in parallel with error handling
+      // OPTIMIZED: Execute all queries in parallel with error handling and retry logic
       let observedPlans, allProcesses, allAssociatedRisks;
       try {
         [observedPlans, allProcesses, allAssociatedRisks] = await Promise.all([
-          // OPTIMIZED: Select only essential columns from actions
-          requireDb()
-            .select({
-              id: actions.id,
-              code: actions.code,
-              name: actions.name,
-              description: actions.description,
-              status: actions.status,
-              validationStatus: actions.validationStatus,
-              processId: actions.processId,
-              assignedTo: actions.assignedTo,
-              deadline: actions.deadline,
-              createdAt: actions.createdAt,
-              updatedAt: actions.updatedAt,
-            })
-            .from(actions)
-            .where(and(
-              isNull(actions.deletedAt),
-              eq(actions.validationStatus, 'observed')
-            )),
+          // OPTIMIZED: Select only essential columns from actions with retry
+          withRetry(async () => {
+            return await requireDb()
+              .select({
+                id: actions.id,
+                code: actions.code,
+                name: actions.name,
+                description: actions.description,
+                status: actions.status,
+                validationStatus: actions.validationStatus,
+                processId: actions.processId,
+                assignedTo: actions.assignedTo,
+                deadline: actions.deadline,
+                createdAt: actions.createdAt,
+                updatedAt: actions.updatedAt,
+              })
+              .from(actions)
+              .where(and(
+                isNull(actions.deletedAt),
+                eq(actions.validationStatus, 'observed')
+              ));
+          }),
 
-          // OPTIMIZED: Select only essential columns from processes
-          requireDb()
-            .select({
-              id: processes.id,
-              name: processes.name,
-            })
-            .from(processes),
+          // OPTIMIZED: Select only essential columns from processes with retry
+          withRetry(async () => {
+            return await requireDb()
+              .select({
+                id: processes.id,
+                name: processes.name,
+              })
+              .from(processes)
+              .where(isNull(processes.deletedAt));
+          }),
 
           // OPTIMIZED: Get all associated risks with filter for deleted risks
           // Use LEFT JOIN to handle cases where risk might be deleted but association still exists
           // FIXED: Move deletedAt filter to the JOIN condition to properly handle LEFT JOIN
-          requireDb()
-            .select({
-              actionId: actionPlanRisks.actionId,
-              riskId: actionPlanRisks.riskId,
-              isPrimary: actionPlanRisks.isPrimary,
-              riskCode: risks.code,
-              riskName: risks.name,
-            })
-            .from(actionPlanRisks)
-            .leftJoin(risks, and(
-              eq(actionPlanRisks.riskId, risks.id),
-              isNull(risks.deletedAt),
-              sql`${risks.status} != 'deleted'`
-            ))
+          withRetry(async () => {
+            return await requireDb()
+              .select({
+                actionId: actionPlanRisks.actionId,
+                riskId: actionPlanRisks.riskId,
+                isPrimary: actionPlanRisks.isPrimary,
+                riskCode: risks.code,
+                riskName: risks.name,
+              })
+              .from(actionPlanRisks)
+              .leftJoin(risks, and(
+                eq(actionPlanRisks.riskId, risks.id),
+                isNull(risks.deletedAt),
+                sql`${risks.status} != 'deleted'`
+              ));
+          })
         ]);
-      } catch (queryError) {
+      } catch (queryError: any) {
         console.error("[action-plans/validation/observed] Query error:", queryError);
         if (queryError instanceof Error) {
           console.error("Error message:", queryError.message);
           console.error("Error stack:", queryError.stack);
+          console.error("Error name:", queryError.name);
+        } else {
+          console.error("Error type:", typeof queryError);
+          console.error("Error value:", String(queryError));
         }
         throw queryError;
       }
 
+      // Ensure we have valid arrays even if queries returned undefined/null
+      const safeObservedPlans = Array.isArray(observedPlans) ? observedPlans : [];
+      const safeAllProcesses = Array.isArray(allProcesses) ? allProcesses : [];
+      const safeAllAssociatedRisks = Array.isArray(allAssociatedRisks) ? allAssociatedRisks : [];
+
       // OPTIMIZED: Pre-build Maps for O(1) lookups instead of O(n) filtering
       // FIXED: Add null checks to prevent TypeError
       const processMap = new Map();
-      if (allProcesses && Array.isArray(allProcesses)) {
-        for (const p of allProcesses) {
-          if (p && p.id && p.name) {
-            processMap.set(String(p.id), { name: String(p.name) });
-          }
+      for (const p of safeAllProcesses) {
+        if (p && typeof p === 'object' && p.id && p.name) {
+          processMap.set(String(p.id), { name: String(p.name) });
         }
       }
       
@@ -11771,40 +11785,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Filter out null risks (from LEFT JOIN where risk was deleted)
       // FIXED: Add comprehensive null/undefined checks to prevent TypeError
       const risksByActionId = new Map<string, Array<{ riskId: string; isPrimary: boolean; riskCode: string; riskName: string }>>();
-      if (allAssociatedRisks && Array.isArray(allAssociatedRisks)) {
-        for (const ar of allAssociatedRisks) {
-          // Skip if ar is null/undefined or missing required fields
-          if (!ar || typeof ar !== 'object') {
-            console.warn('[action-plans/validation/observed] Skipping invalid risk association:', ar);
-            continue;
-          }
-          
-          // Skip if risk is null (deleted risk from LEFT JOIN) or missing required fields
-          if (!ar.actionId || !ar.riskId || !ar.riskCode) {
-            continue;
-          }
-          
-          // Ensure actionId is a string (drizzle might return it as number or other type)
-          const actionId = String(ar.actionId);
-          
-          if (!risksByActionId.has(actionId)) {
-            risksByActionId.set(actionId, []);
-          }
-          
-          const riskEntry = {
-            riskId: String(ar.riskId),
-            isPrimary: Boolean(ar.isPrimary),
-            riskCode: String(ar.riskCode || ''),
-            riskName: String(ar.riskName || ''),
-          };
-          
-          risksByActionId.get(actionId)!.push(riskEntry);
+      for (const ar of safeAllAssociatedRisks) {
+        // Skip if ar is null/undefined or missing required fields
+        if (!ar || typeof ar !== 'object') {
+          console.warn('[action-plans/validation/observed] Skipping invalid risk association:', ar);
+          continue;
         }
+        
+        // Skip if risk is null (deleted risk from LEFT JOIN) or missing required fields
+        if (!ar.actionId || !ar.riskId || !ar.riskCode) {
+          continue;
+        }
+        
+        // Ensure actionId is a string (drizzle might return it as number or other type)
+        const actionId = String(ar.actionId);
+        
+        if (!risksByActionId.has(actionId)) {
+          risksByActionId.set(actionId, []);
+        }
+        
+        const riskEntry = {
+          riskId: String(ar.riskId),
+          isPrimary: Boolean(ar.isPrimary),
+          riskCode: String(ar.riskCode || ''),
+          riskName: String(ar.riskName || ''),
+        };
+        
+        risksByActionId.get(actionId)!.push(riskEntry);
       }
 
       // OPTIMIZED: Map to response format (minimal object construction)
       // FIXED: Add null checks and ensure plan.id is converted to string for Map lookup
-      const plansWithRisks = (observedPlans || []).map(plan => {
+      const plansWithRisks = safeObservedPlans.map(plan => {
         // Validate plan object
         if (!plan || typeof plan !== 'object') {
           console.warn('[action-plans/validation/observed] Skipping invalid plan:', plan);
@@ -11819,7 +11831,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           process: processId ? (processMap.get(processId) || null) : null,
           associatedRisks: risksByActionId.get(planId) || []
         };
-      }).filter(plan => plan !== null); // Remove any null entries
+      }).filter((plan): plan is NonNullable<typeof plan> => plan !== null); // Remove any null entries with type guard
 
       // OPTIMIZED: Cache for 5 minutes (300s) - observed data changes less frequently
       try {
