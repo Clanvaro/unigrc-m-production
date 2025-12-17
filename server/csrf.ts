@@ -119,36 +119,54 @@ export function getCSRFToken(req: Request, res: Response): void {
   try {
     const isProduction = process.env.NODE_ENV === 'production';
     
-    // Log diagnostic information
-    logger.info(`[CSRF] Generating token - Production: ${isProduction}, HasSession: ${!!req.session}, SessionID: ${req.session?.id || 'none'}`);
+    // Enhanced diagnostic logging
+    const hasSession = !!req.session;
+    const sessionId = req.session?.id || 'none';
+    const secretAvailable = !!process.env.CSRF_SECRET;
+    const secretLength = process.env.CSRF_SECRET?.length || 0;
+    
+    logger.info(`[CSRF] Generating token - Production: ${isProduction}, HasSession: ${hasSession}, SessionID: ${sessionId}, SecretAvailable: ${secretAvailable}, SecretLength: ${secretLength}`);
     
     // Verify CSRF_SECRET is available
     const secret = process.env.CSRF_SECRET;
-    if (!secret && isProduction) {
-      logger.error('[CSRF] CSRF_SECRET is not set in production!');
+    if (!secret) {
+      logger.warn(`[CSRF] CSRF_SECRET is not set! Production: ${isProduction}, AllEnvKeys: ${Object.keys(process.env).filter(k => k.includes('CSRF') || k.includes('SECRET')).join(',')}`);
+      
       // Don't throw - use fallback instead
       const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
       const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
-      res.cookie(cookieName, fallbackToken, {
-        httpOnly: false,
-        sameSite: 'lax',
-        path: '/',
-        secure: isProduction
-      });
-      logger.warn('[CSRF] Using fallback token due to missing CSRF_SECRET');
-      return res.json({ 
-        message: 'CSRF token cookie set successfully (fallback - missing secret)',
-        cookieName,
-        csrfToken: fallbackToken
-      });
+      
+      try {
+        res.cookie(cookieName, fallbackToken, {
+          httpOnly: false,
+          sameSite: 'lax',
+          path: '/',
+          secure: isProduction
+        });
+        logger.warn('[CSRF] Using fallback token due to missing CSRF_SECRET');
+        return res.json({ 
+          message: 'CSRF token cookie set successfully (fallback - missing secret)',
+          cookieName,
+          csrfToken: fallbackToken
+        });
+      } catch (cookieError: any) {
+        logger.error(`[CSRF] Failed to set fallback cookie: ${cookieError?.message || String(cookieError)}`);
+        // Continue to try generateCsrfToken anyway
+      }
     }
     
     // Generate the CSRF token - this will set the cookie automatically
     let csrfToken: string;
     try {
+      logger.info('[CSRF] Calling generateCsrfToken...');
       csrfToken = generateCsrfToken(req, res);
+      logger.info(`[CSRF] Token generated successfully, length: ${csrfToken?.length || 0}`);
     } catch (genError: any) {
-      logger.error(`[CSRF] Error generating token: ${genError?.message || String(genError)}`);
+      const errorMsg = genError?.message || String(genError);
+      const errorStack = genError?.stack || 'No stack trace';
+      logger.error(`[CSRF] Error generating token: ${errorMsg}`);
+      logger.error(`[CSRF] Error stack: ${errorStack}`);
+      logger.error(`[CSRF] Error type: ${genError?.constructor?.name || typeof genError}`);
       // Fall through to fallback token generation
       throw genError;
     }
