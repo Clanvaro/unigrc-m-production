@@ -265,6 +265,8 @@ export default function Risks() {
     staleTime: 1000 * 60 * 5, // 5 minutes - invalidated on mutations
     gcTime: 1000 * 60 * 15, // 15 minutes cache retention
     refetchOnWindowFocus: false,
+    refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh (within staleTime) - prevents slow reloads
+    refetchOnReconnect: false, // OPTIMIZED: No refetch on reconnect - data is cached
     keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
   });
 

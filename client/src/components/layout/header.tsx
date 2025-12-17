@@ -165,6 +165,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     staleTime: 60_000, // 1 minute - reduces refetch frequency while keeping data fresh
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh - prevents duplicate requests with bootstrap
     enabled: location === "/risks"
   });
 
