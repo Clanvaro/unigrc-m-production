@@ -12,8 +12,13 @@ let db: ReturnType<typeof drizzle> | null = null;
 // RENDER_DATABASE_URL is for Render PostgreSQL hosting (always-on, no cold start)
 // POOLED_DATABASE_URL is for Neon pooled connections (better scalability)
 // DATABASE_URL is the fallback direct Neon connection
+// NOTE: If PGBOUNCER_URL exists but DATABASE_URL uses Unix socket (/cloudsql/), prefer DATABASE_URL for better performance
 const pgbouncerUrl = process.env.PGBOUNCER_URL;
-const databaseUrl = pgbouncerUrl || process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+const directDatabaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+// Prefer Unix socket (DATABASE_URL with /cloudsql/) over PgBouncer if available
+const databaseUrl = (directDatabaseUrl?.includes('/cloudsql/')) 
+  ? directDatabaseUrl 
+  : (pgbouncerUrl || directDatabaseUrl);
 
 // Detect if using Render PostgreSQL (non-Neon)
 // Improved detection: Check for 'render.com' in hostname OR specific Render env vars
