@@ -2191,20 +2191,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const riskCategories = resultsMap.get('getRiskCategories');
       const processGerenciasRelations = resultsMap.get('getAllProcessGerenciasRelations');
 
-      // Filter out soft-deleted records
-      const activeGerencias = gerencias.filter((g: any) => g.status !== 'deleted');
-      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
-      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
-      const activeProcesses = processes.filter((p: any) => p.status !== 'deleted');
-
+      // OPTIMIZED: No need to filter in memory - filtering is now done in SQL queries
+      // getGerencias(), getMacroprocesos(), getProcesses() already filter status !== 'deleted' in SQL
+      // getSubprocesosWithOwners() filters deleted_at IS NULL in SQL
       const response = {
         risks,
         owners,
         stats,
-        gerencias: activeGerencias,
-        macroprocesos: activeMacroprocesos,
-        subprocesos: activeSubprocesos,
-        processes: activeProcesses,
+        gerencias: gerencias || [],
+        macroprocesos: macroprocesos || [],
+        subprocesos: subprocesos || [],
+        processes: processes || [],
         riskCategories,
         processGerencias: processGerenciasRelations
       };
