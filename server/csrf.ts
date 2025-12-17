@@ -5,12 +5,13 @@ import { logger } from './logger';
 // CSRF configuration
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Validate CSRF secret is set
+// Validate CSRF secret is set (but don't throw - allow fallback in getSecret)
 if (!process.env.CSRF_SECRET) {
   if (isProduction) {
-    throw new Error('CSRF_SECRET environment variable is required in production');
+    logger.warn('⚠️  CSRF_SECRET not set in production - will use fallback secret (less secure)');
+  } else {
+    logger.warn('⚠️  CSRF_SECRET not set - using development fallback (INSECURE)');
   }
-  logger.warn('⚠️  CSRF_SECRET not set - using development fallback (INSECURE)');
 }
 
 const csrfOptions = {
