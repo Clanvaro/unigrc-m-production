@@ -1992,10 +1992,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       mark('start');
 
+      // Declare variables outside try block so they're available in catch
+      let lockKey: string | undefined;
+      let shouldReleaseLock = false;
+
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       mark('tenant-resolved');
 
       const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
+      lockKey = `risks-page-data-lite:lock:${tenantId}`; // Set lockKey after tenantId is resolved
 
       // Try cache first with detailed Redis timing
       const cacheGetStart = Date.now();
@@ -2019,9 +2024,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // SINGLE FLIGHT PATTERN: Prevent cache stampede/herd effect
       // If cache expires and multiple requests arrive, only one should compute
-      const lockKey = `risks-page-data-lite:lock:${tenantId}`;
       let lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
-      let shouldReleaseLock = false;
       
       if (lockAcquired === 0) {
         // Another request is computing, wait and retry cache get
@@ -2244,7 +2247,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Release lock on error if we acquired it
-      if (shouldReleaseLock) {
+      if (shouldReleaseLock && lockKey) {
         try {
           await distributedCache.invalidate(lockKey);
         } catch (lockError) {
