@@ -21072,11 +21072,14 @@ export class DatabaseStorage extends MemStorage {
       rplNotified: riskProcessLinks.notified,
       rplCreatedAt: riskProcessLinks.createdAt,
       rplUpdatedAt: riskProcessLinks.updatedAt,
-      // Risk fields (only essential ones)
+      // Risk fields (include fields needed for filtering and display)
       riskId: risks.id,
       riskCode: risks.code,
       riskName: risks.name,
       riskStatus: risks.status,
+      riskInherentRisk: risks.inherentRisk,
+      riskResidualRisk: risks.residualRisk,
+      riskProcessOwner: risks.processOwner,
       // Macroproceso fields (only id and name)
       macroId: macroprocesos.id,
       macroName: macroprocesos.name,
@@ -21158,7 +21161,10 @@ export class DatabaseStorage extends MemStorage {
         id: result.riskId!,
         code: result.riskCode!,
         name: result.riskName!,
-        status: result.riskStatus!
+        status: result.riskStatus!,
+        inherentRisk: result.riskInherentRisk ?? null,
+        residualRisk: result.riskResidualRisk ?? null,
+        processOwner: result.riskProcessOwner ?? null
       },
       macroproceso: result.macroId ? {
         id: result.macroId,

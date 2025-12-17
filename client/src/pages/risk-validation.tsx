@@ -1350,7 +1350,12 @@ export default function RiskValidationPage() {
 
     // Get residual risk or fallback to inherent risk
     const riskValue = rpl.risk.residualRisk ?? rpl.risk.inherentRisk;
-    if (riskValue === null || riskValue === undefined) return false;
+    // FIXED: If risk value is null/undefined, allow it to pass through (don't filter out)
+    // This prevents approved risks from being hidden when they don't have risk level data
+    if (riskValue === null || riskValue === undefined) {
+      // If filter is set but risk has no level, include it anyway to prevent hiding valid data
+      return true;
+    }
 
     const riskLevelText = getRiskLevelText(riskValue);
     // Case-insensitive comparison (header sends "bajo", "medio", "alto", "crítico")
@@ -1375,6 +1380,12 @@ export default function RiskValidationPage() {
   }));
 
   const filteredValidatedRiskProcessLinks = validatedRiskProcessLinks.filter(rpl => {
+    // FIXED: Ensure risk object exists before filtering
+    if (!rpl.risk) {
+      console.warn('[Risk Validation] Risk-process link missing risk object:', rpl.id);
+      return false; // Skip links without risk data
+    }
+    
     if (selectedProcessId) {
       const matchesProcess =
         rpl.macroprocesoId === selectedProcessId ||
