@@ -13,7 +13,12 @@ let db: ReturnType<typeof drizzle> | null = null;
 // POOLED_DATABASE_URL is for Neon pooled connections (better scalability)
 // DATABASE_URL is the fallback direct Neon connection
 const pgbouncerUrl = process.env.PGBOUNCER_URL;
-const databaseUrl = pgbouncerUrl || process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+const fallbackDatabaseUrl = process.env.RENDER_DATABASE_URL || process.env.POOLED_DATABASE_URL || process.env.DATABASE_URL;
+
+// Try PgBouncer first, but fallback to direct connection if it fails
+// This prevents startup failures when PgBouncer is unavailable
+let databaseUrl = pgbouncerUrl || fallbackDatabaseUrl;
+let isUsingPgBouncer = !!pgbouncerUrl;
 
 // Detect if using Render PostgreSQL (non-Neon)
 // Improved detection: Check for 'render.com' in hostname OR specific Render env vars
@@ -36,8 +41,7 @@ const isCloudSql =
 // Cloud SQL Proxy uses format: postgresql://user:pass@/db?host=/cloudsql/...
 const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
 
-// Detect if using PgBouncer (dedicated connection pooler)
-const isUsingPgBouncer = !!pgbouncerUrl;
+// isUsingPgBouncer is now set above based on whether pgbouncerUrl exists
 
 // Detect pooler based on actual connection string content (not env var name)
 const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler') || databaseUrl?.includes('pooler.') || false);
