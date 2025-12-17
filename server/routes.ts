@@ -15221,15 +15221,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/system-config/risk-decimals", async (req, res) => {
     try {
-      const decimalsConfig = await storage.getRiskDecimalsConfig();
-      res.json(decimalsConfig);
+      // Verify storage is available
+      if (!storage) {
+        console.error("[system-config/risk-decimals] Storage not initialized");
+        return res.json({ enabled: false, precision: 0 });
+      }
+      
+      // Wrap in additional try-catch to ensure we always return a response
+      let decimalsConfig;
+      try {
+        decimalsConfig = await storage.getRiskDecimalsConfig();
+      } catch (innerError: any) {
+        console.error("[system-config/risk-decimals] Inner error:", innerError?.message || String(innerError));
+        console.error("[system-config/risk-decimals] Stack:", innerError?.stack);
+        // Use defaults if inner call fails
+        decimalsConfig = { enabled: false, precision: 0 };
+      }
+      
+      // Ensure we always send a response
+      if (!res.headersSent) {
+        res.json(decimalsConfig || { enabled: false, precision: 0 });
+      }
     } catch (error: any) {
-      console.error("[system-config/risk-decimals] Error:", error?.message || String(error));
+      console.error("[system-config/risk-decimals] Outer error:", error?.message || String(error));
+      console.error("[system-config/risk-decimals] Stack:", error?.stack);
       // Return default values instead of 500 error to prevent login issues
-      res.json({
-        enabled: false,
-        precision: 0
-      });
+      if (!res.headersSent) {
+        res.json({
+          enabled: false,
+          precision: 0
+        });
+      }
     }
   });
 

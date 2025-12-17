@@ -172,20 +172,43 @@ export function getCSRFToken(req: Request, res: Response): void {
       logger.error(`[CSRF] Error generating token: ${errorMsg}`);
       logger.error(`[CSRF] Error stack: ${errorStack}`);
       logger.error(`[CSRF] Error type: ${genError?.constructor?.name || typeof genError}`);
-      // Fall through to fallback token generation
-      throw genError;
+      
+      // Try fallback token instead of throwing
+      const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
+      const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
+      
+      try {
+        res.cookie(cookieName, fallbackToken, {
+          httpOnly: false,
+          sameSite: 'lax',
+          path: '/',
+          secure: isProduction
+        });
+        logger.warn('[CSRF] Using fallback token due to generation error');
+        return res.json({ 
+          message: 'CSRF token cookie set successfully (fallback - generation error)',
+          cookieName,
+          csrfToken: fallbackToken
+        });
+      } catch (fallbackCookieError: any) {
+        logger.error(`[CSRF] Fallback cookie also failed: ${fallbackCookieError?.message || String(fallbackCookieError)}`);
+        // Fall through to outer catch block
+        throw genError;
+      }
     }
     
     const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
     
     // Also manually set the cookie to ensure it's sent with correct settings
     try {
-      res.cookie(cookieName, csrfToken, {
-        httpOnly: false,
-        sameSite: isProduction ? ('none' as const) : ('lax' as const),
-        path: '/',
-        secure: isProduction
-      });
+      if (!res.headersSent) {
+        res.cookie(cookieName, csrfToken, {
+          httpOnly: false,
+          sameSite: isProduction ? ('none' as const) : ('lax' as const),
+          path: '/',
+          secure: isProduction
+        });
+      }
     } catch (cookieError: any) {
       logger.error(`[CSRF] Error setting cookie: ${cookieError?.message || String(cookieError)}`);
       // Continue anyway - token was already set by generateCsrfToken
@@ -193,12 +216,14 @@ export function getCSRFToken(req: Request, res: Response): void {
     
     logger.info(`CSRF token generated and cookie set: ${cookieName} with SameSite=${isProduction ? 'none' : 'lax'}`);
     
-    res.json({ 
-      message: 'CSRF token cookie set successfully',
-      cookieName,
-      // Return the token value so frontend can store it in memory as backup
-      csrfToken: csrfToken
-    });
+    if (!res.headersSent) {
+      res.json({ 
+        message: 'CSRF token cookie set successfully',
+        cookieName,
+        // Return the token value so frontend can store it in memory as backup
+        csrfToken: csrfToken
+      });
+    }
   } catch (error: any) {
     // Safely extract error info
     let errorMessage: string | undefined;
@@ -216,42 +241,46 @@ export function getCSRFToken(req: Request, res: Response): void {
     }
     
     // Try to provide a fallback token if possible
-    try {
-      const isProduction = process.env.NODE_ENV === 'production';
-      const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
-      
-      // Generate a simple fallback token
-      const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
-      
-      res.cookie(cookieName, fallbackToken, {
-        httpOnly: false,
-        sameSite: 'lax',
-        path: '/',
-        secure: isProduction
-      });
-      
-      logger.warn('Using fallback CSRF token due to error');
-      
-      res.json({ 
-        message: 'CSRF token cookie set successfully (fallback)',
-        cookieName,
-        csrfToken: fallbackToken
-      });
-    } catch (fallbackError: any) {
-      // Safely extract fallback error info
-      let fallbackErrorMessage: string | undefined;
+    if (!res.headersSent) {
       try {
-        fallbackErrorMessage = fallbackError?.message;
-      } catch (e) {
-        fallbackErrorMessage = String(fallbackError);
+        const isProduction = process.env.NODE_ENV === 'production';
+        const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
+        
+        // Generate a simple fallback token
+        const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
+        
+        res.cookie(cookieName, fallbackToken, {
+          httpOnly: false,
+          sameSite: 'lax',
+          path: '/',
+          secure: isProduction
+        });
+        
+        logger.warn('[CSRF] Using fallback CSRF token due to error');
+        
+        res.json({ 
+          message: 'CSRF token cookie set successfully (fallback)',
+          cookieName,
+          csrfToken: fallbackToken
+        });
+      } catch (fallbackError: any) {
+        // Safely extract fallback error info
+        let fallbackErrorMessage: string | undefined;
+        try {
+          fallbackErrorMessage = fallbackError?.message;
+        } catch (e) {
+          fallbackErrorMessage = String(fallbackError);
+        }
+        
+        logger.error(`[CSRF] Fallback CSRF token generation also failed: ${fallbackErrorMessage || 'Unknown error'}`);
+        if (!res.headersSent) {
+          res.status(500).json({ 
+            message: 'Error handling CSRF token request',
+            code: 'CSRF_ERROR',
+            error: errorMessage || 'Unknown error'
+          });
+        }
       }
-      
-      logger.error(`Fallback CSRF token generation also failed: ${fallbackErrorMessage || 'Unknown error'}`);
-      res.status(500).json({ 
-        message: 'Error handling CSRF token request',
-        code: 'CSRF_ERROR',
-        error: errorMessage || 'Unknown error'
-      });
     }
   }
 }
