@@ -166,16 +166,36 @@ export function getCSRFToken(req: Request, res: Response): void {
   try {
     const isProduction = process.env.NODE_ENV === 'production';
     
+    // Anti-500 silent patch: Early validation of CSRF_SECRET
+    const secret = process.env.CSRF_SECRET;
+    if (!secret || secret.trim().length < 32) {
+      const diagnosticInfo = {
+        hasSecret: !!secret,
+        length: secret?.length || 0,
+        isEmpty: !secret || secret.trim().length === 0,
+        isTooShort: secret ? secret.trim().length < 32 : true
+      };
+      console.error('[CSRF] CSRF_SECRET missing/too short', diagnosticInfo);
+      logger.error(`[CSRF] CSRF_SECRET validation failed: ${JSON.stringify(diagnosticInfo)}`);
+      
+      if (!res.headersSent) {
+        return res.status(503).json({ 
+          error: 'CSRF misconfigured',
+          code: 'CSRF_SECRET_INVALID',
+          message: 'CSRF_SECRET is missing or too short (minimum 32 characters required)',
+          diagnostic: diagnosticInfo
+        });
+      }
+      return;
+    }
+    
     // Enhanced diagnostic logging
     const hasSession = !!req.session;
     const sessionId = req.session?.id || 'none';
-    const secretAvailable = !!process.env.CSRF_SECRET;
-    const secretLength = process.env.CSRF_SECRET?.length || 0;
+    const secretAvailable = !!secret;
+    const secretLength = secret.length;
     
     logger.info(`[CSRF] Generating token - Production: ${isProduction}, HasSession: ${hasSession}, SessionID: ${sessionId}, SecretAvailable: ${secretAvailable}, SecretLength: ${secretLength}`);
-    
-    // Verify CSRF_SECRET is available
-    const secret = process.env.CSRF_SECRET;
     if (!secret) {
       logger.warn(`[CSRF] CSRF_SECRET is not set! Production: ${isProduction}, AllEnvKeys: ${Object.keys(process.env).filter(k => k.includes('CSRF') || k.includes('SECRET')).join(',')}`);
       
