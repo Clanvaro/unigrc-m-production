@@ -961,22 +961,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
           user: null,
           permissions: []
         };
-        return res.json(unauthResponse);
+        if (!res.headersSent) {
+          return res.json(unauthResponse);
+        }
+        return;
       }
 
       // Get effective user ID
       const userId = user?.id || (process.env.NODE_ENV === 'development' ? ((req.session as any)?.switchedUserId || 'user-1') : null);
 
       if (!userId) {
-        return res.json({
-          authenticated: false,
-          user: null,
-          permissions: []
-        });
+        if (!res.headersSent) {
+          return res.json({
+            authenticated: false,
+            user: null,
+            permissions: []
+          });
+        }
+        return;
       }
 
       // OPTIMIZATION: Check in-memory cache first (5 min TTL)
-      const cached = authCache.get(userId);
+      let cached;
+      try {
+        cached = authCache.get(userId);
+      } catch (cacheError: any) {
+        console.error('[getCurrentUserHandler] Cache error:', cacheError?.message || String(cacheError));
+        cached = null; // Continue without cache
+      }
+      
       if (cached) {
         const response = {
           authenticated: true,
@@ -996,26 +1009,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Cache miss - fetch from database
-      const [dbUser, userPermissions] = await Promise.all([
-        storage.getUser(userId),
-        storage.getUserPermissions(userId)
-      ]);
-
-      if (!dbUser) {
-        return res.json({
-          authenticated: false,
-          user: null,
-          permissions: []
-        });
+      let dbUser, userPermissions;
+      try {
+        [dbUser, userPermissions] = await Promise.all([
+          storage.getUser(userId),
+          storage.getUserPermissions(userId)
+        ]);
+      } catch (dbError: any) {
+        console.error('[getCurrentUserHandler] Database error:', dbError?.message || String(dbError));
+        // Return unauthenticated response instead of 500
+        if (!res.headersSent) {
+          return res.json({
+            authenticated: false,
+            user: null,
+            permissions: []
+          });
+        }
+        return;
       }
 
-      // Store in cache for next request
-      authCache.set(userId, {
-        user: dbUser,
-        tenants: [],
-        permissions: userPermissions || [],
-        cachedAt: Date.now()
-      });
+      if (!dbUser) {
+        if (!res.headersSent) {
+          return res.json({
+            authenticated: false,
+            user: null,
+            permissions: []
+          });
+        }
+        return;
+      }
+
+      // Store in cache for next request (don't fail if cache fails)
+      try {
+        authCache.set(userId, {
+          user: dbUser,
+          tenants: [],
+          permissions: userPermissions || [],
+          cachedAt: Date.now()
+        });
+      } catch (cacheError: any) {
+        console.warn('[getCurrentUserHandler] Cache set error (non-fatal):', cacheError?.message || String(cacheError));
+        // Continue without caching
+      }
 
       const response = {
         authenticated: true,
@@ -1032,14 +1067,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         permissions: userPermissions || []
       };
 
-      return res.json(response);
-    } catch (error) {
-      console.error('Error in getCurrentUser handler:', error);
-      return res.json({
-        authenticated: false,
-        user: null,
-        permissions: []
-      });
+      if (!res.headersSent) {
+        return res.json(response);
+      }
+    } catch (error: any) {
+      console.error('[getCurrentUserHandler] Outer error:', error?.message || String(error));
+      console.error('[getCurrentUserHandler] Stack:', error?.stack);
+      // Return unauthenticated response instead of 500
+      if (!res.headersSent) {
+        return res.json({
+          authenticated: false,
+          user: null,
+          permissions: []
+        });
+      }
     }
   };
 
