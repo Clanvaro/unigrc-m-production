@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,6 +125,12 @@ export default function RiskValidationPage() {
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    onSuccess: (data) => {
+      console.log('[Risk Validation] Loaded validated risk-process links:', data.length);
+    },
+    onError: (error) => {
+      console.error('[Risk Validation] Error loading validated risk-process links:', error);
+    }
   });
 
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
@@ -1379,24 +1385,39 @@ export default function RiskValidationPage() {
     return true;
   }));
 
-  const filteredValidatedRiskProcessLinks = validatedRiskProcessLinks.filter(rpl => {
-    // FIXED: Ensure risk object exists before filtering
-    if (!rpl.risk) {
-      console.warn('[Risk Validation] Risk-process link missing risk object:', rpl.id);
-      return false; // Skip links without risk data
+  const filteredValidatedRiskProcessLinks = useMemo(() => {
+    const filtered = validatedRiskProcessLinks.filter(rpl => {
+      // FIXED: Ensure risk object exists before filtering
+      if (!rpl.risk) {
+        console.warn('[Risk Validation] Risk-process link missing risk object:', rpl.id);
+        return false; // Skip links without risk data
+      }
+      
+      if (selectedProcessId) {
+        const matchesProcess =
+          rpl.macroprocesoId === selectedProcessId ||
+          rpl.processId === selectedProcessId ||
+          rpl.subprocesoId === selectedProcessId;
+        if (!matchesProcess) return false;
+      }
+      if (!matchesOwnerFilter(rpl)) return false;
+      if (!matchesRiskLevelFilterForRisk(rpl)) return false;
+      return true;
+    });
+    
+    // Debug logging when filtering by validated status
+    if (statusFilter === "validated") {
+      console.log('[Risk Validation] Filtering validated risks:', {
+        total: validatedRiskProcessLinks.length,
+        filtered: filtered.length,
+        ownerFilter,
+        riskLevelFilter,
+        selectedProcessId
+      });
     }
     
-    if (selectedProcessId) {
-      const matchesProcess =
-        rpl.macroprocesoId === selectedProcessId ||
-        rpl.processId === selectedProcessId ||
-        rpl.subprocesoId === selectedProcessId;
-      if (!matchesProcess) return false;
-    }
-    if (!matchesOwnerFilter(rpl)) return false;
-    if (!matchesRiskLevelFilterForRisk(rpl)) return false;
-    return true;
-  });
+    return filtered;
+  }, [validatedRiskProcessLinks, selectedProcessId, ownerFilter, riskLevelFilter, statusFilter, matchesOwnerFilter, matchesRiskLevelFilterForRisk]);
 
   const filteredRejectedRiskProcessLinks = rejectedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
@@ -2324,87 +2345,96 @@ export default function RiskValidationPage() {
             )}
 
             {/* Validated Risks */}
-            {(statusFilter === "all" || statusFilter === "validated") && filteredValidatedRiskProcessLinks.length > 0 && (
+            {(statusFilter === "all" || statusFilter === "validated") && (
               <div>
                 <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
                   <CheckCircle className="h-5 w-5 text-green-500" />
                   <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length})</span>
                 </h2>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                          <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredValidatedRiskProcessLinks.map((rpl) => (
-                          rpl.risk && (
-                            <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${rpl.risk.id}`}>
-                              <td className="px-4 py-3">
-                                <button
-                                  onClick={() => setViewingRisk(rpl.risk)}
-                                  className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                  data-testid={`button-view-validated-risk-${rpl.risk.id}`}
-                                >
-                                  {rpl.risk.code || "N/A"}
-                                </button>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="font-medium text-sm">{rpl.risk.name}</div>
-                              </td>
-                              <td className="px-4 py-3 text-sm">
-                                {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                              </td>
-                              <td className="px-4 py-3 text-sm">
-                                {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
-                              </td>
-                              <td className="px-4 py-3">
-                                <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                                  {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
-                                </Badge>
-                              </td>
-                              <td className="px-4 py-3 text-sm">
-                                {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
-                              </td>
-                              <td className="px-4 py-3 text-sm">
-                                {rpl.validationComments || "-"}
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex items-center justify-end">
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => {
-                                      setSelectedHistoryRiskProcessLink({
-                                        id: rpl.id,
-                                        riskCode: rpl.risk.code,
-                                        riskName: rpl.risk.name
-                                      });
-                                      setHistoryModalOpen(true);
-                                    }}
-                                    data-testid={`button-history-validated-risk-${rpl.risk.id}`}
-                                    title="Ver historial de validaciones"
+                {filteredValidatedRiskProcessLinks.length > 0 ? (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                            <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredValidatedRiskProcessLinks.map((rpl) => (
+                            rpl.risk && (
+                              <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${rpl.risk.id}`}>
+                                <td className="px-4 py-3">
+                                  <button
+                                    onClick={() => setViewingRisk(rpl.risk)}
+                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                    data-testid={`button-view-validated-risk-${rpl.risk.id}`}
                                   >
-                                    <History className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        ))}
-                      </tbody>
-                    </table>
+                                    {rpl.risk.code || "N/A"}
+                                  </button>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="font-medium text-sm">{rpl.risk.name}</div>
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
+                                    {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
+                                </td>
+                                <td className="px-4 py-3 text-sm">
+                                  {rpl.validationComments || "-"}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        setSelectedHistoryRiskProcessLink({
+                                          id: rpl.id,
+                                          riskCode: rpl.risk.code,
+                                          riskName: rpl.risk.name
+                                        });
+                                        setHistoryModalOpen(true);
+                                      }}
+                                      data-testid={`button-history-validated-risk-${rpl.risk.id}`}
+                                      title="Ver historial de validaciones"
+                                    >
+                                      <History className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
+                    <p>No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
+                    {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
+                      <p className="text-sm mt-2">Intenta ajustar los filtros para ver más resultados.</p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
