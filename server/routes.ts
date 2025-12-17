@@ -2755,12 +2755,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Execute both in parallel with error handling
       // FIXED: Add individual error handling to prevent one failure from crashing the entire endpoint
+      // FIXED: Ensure catalogsPromise is always defined before using it
       let catalogsResult: any = null;
       let risksResult: any = null;
       
+      // Ensure catalogsPromise is defined (fallback to empty promise if undefined)
+      const safeCatalogsPromise = catalogsPromise || Promise.resolve({
+        gerencias: [],
+        macroprocesos: [],
+        processes: [],
+        subprocesos: [],
+        processOwners: [],
+        processGerencias: [],
+        riskCategories: []
+      });
+      
       try {
         [catalogsResult, risksResult] = await Promise.all([
-          catalogsPromise.catch(err => {
+          safeCatalogsPromise.catch(err => {
             console.error('[ERROR] catalogsPromise failed:', err);
             // Return empty catalogs structure on error
             return {
@@ -4241,7 +4253,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const groupingStart = Date.now();
           
           // Group process links by riskId (single pass, early termination per risk)
+          // FIXED: Add null/undefined checks to prevent TypeError
           for (const link of allLinks) {
+            if (!link || !link.riskId) continue; // Skip invalid links
             const group = linksByRisk.get(link.riskId);
             if (group && group.length < maxLinksPerRisk) {
               group.push(link);
@@ -4249,7 +4263,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // Group controls by riskId (single pass, early termination per risk)
+          // FIXED: Add null/undefined checks to prevent TypeError
           for (const control of allControls) {
+            if (!control || !control.riskId) continue; // Skip invalid controls
             const group = controlsByRisk.get(control.riskId);
             if (group && group.length < maxLinksPerRisk) {
               group.push(control);
