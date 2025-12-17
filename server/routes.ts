@@ -2020,7 +2020,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SINGLE FLIGHT PATTERN: Prevent cache stampede/herd effect
       // If cache expires and multiple requests arrive, only one should compute
       const lockKey = `risks-page-data-lite:lock:${tenantId}`;
-      const lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
+      let lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
+      let shouldReleaseLock = false;
       
       if (lockAcquired === 0) {
         // Another request is computing, wait and retry cache get
@@ -2047,6 +2048,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log('[page-data-lite] Still no cache after lock wait, proceeding with computation');
       } else {
         console.log('[page-data-lite] Lock acquired, computing fresh data');
+        shouldReleaseLock = true; // Mark that we need to release lock on completion/error
       }
 
       // Log pool metrics before starting queries to detect pool starvation
@@ -2240,6 +2242,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err instanceof Error) {
         console.error('Stack trace:', err.stack);
       }
+      
+      // Release lock on error if we acquired it
+      if (shouldReleaseLock) {
+        try {
+          await distributedCache.invalidate(lockKey);
+        } catch (lockError) {
+          console.warn('[page-data-lite] Failed to release lock on error:', lockError);
+        }
+      }
+      
       res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });
     }
   });
