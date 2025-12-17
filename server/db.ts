@@ -449,55 +449,80 @@ export async function withRetry<T>(
     } catch (error: any) {
       lastError = error;
 
+      // Safely extract error message and code to avoid "Cannot access before initialization" errors
+      let errorCode: string | undefined;
+      let errorMessage: string | undefined;
+      let errorStack: string | undefined;
+      
+      try {
+        errorCode = error?.code;
+        errorMessage = error?.message;
+        errorStack = error?.stack;
+      } catch (e) {
+        // If accessing error properties throws, use fallback values
+        errorCode = 'UNKNOWN_ERROR';
+        errorMessage = String(error);
+        errorStack = undefined;
+      }
+
       // Check if it's a recoverable connection/network error
       const isRecoverable =
         // PostgreSQL error codes
-        error.code === '57P01' || // admin shutdown
-        error.code === '08006' || // connection failure
-        error.code === '08001' || // unable to connect
-        error.code === '08004' || // connection rejected
-        error.code === '53300' || // too many connections
-        error.code === '57014' || // query canceled (timeout)
+        errorCode === '57P01' || // admin shutdown
+        errorCode === '08006' || // connection failure
+        errorCode === '08001' || // unable to connect
+        errorCode === '08004' || // connection rejected
+        errorCode === '53300' || // too many connections
+        errorCode === '57014' || // query canceled (timeout)
         // Node.js network error codes
-        error.code === 'ENETUNREACH' || // Network unreachable
-        error.code === 'ECONNRESET' ||  // Connection reset by peer
-        error.code === 'ETIMEDOUT' ||   // Connection timed out
-        error.code === 'ECONNREFUSED' || // Connection refused
-        error.code === 'EPIPE' ||       // Broken pipe
-        error.code === 'EHOSTUNREACH' || // Host unreachable
-        error.code === 'EAI_AGAIN' ||   // DNS temporary failure
-        error.code === 'ENOTFOUND' ||   // DNS lookup failed
+        errorCode === 'ENETUNREACH' || // Network unreachable
+        errorCode === 'ECONNRESET' ||  // Connection reset by peer
+        errorCode === 'ETIMEDOUT' ||   // Connection timed out
+        errorCode === 'ECONNREFUSED' || // Connection refused
+        errorCode === 'EPIPE' ||       // Broken pipe
+        errorCode === 'EHOSTUNREACH' || // Host unreachable
+        errorCode === 'EAI_AGAIN' ||   // DNS temporary failure
+        errorCode === 'ENOTFOUND' ||   // DNS lookup failed
         // Message-based detection for edge cases (including timeout-specific patterns)
-        error.message?.includes('connection') ||
-        error.message?.includes('timeout') ||
-        error.message?.includes('Connection terminated') ||
-        error.message?.includes('ENETUNREACH') ||
-        error.message?.includes('socket hang up') ||
-        error.message?.includes('SSL') ||
-        error.message?.includes('ECONNRESET') ||
+        (errorMessage && (
+          errorMessage.includes('connection') ||
+          errorMessage.includes('timeout') ||
+          errorMessage.includes('Connection terminated') ||
+          errorMessage.includes('ENETUNREACH') ||
+          errorMessage.includes('socket hang up') ||
+          errorMessage.includes('SSL') ||
+          errorMessage.includes('ECONNRESET')
+        )) ||
         // Check against retryable error patterns
-        allRetryablePatterns.some(pattern => 
-          error.message?.includes(pattern) || error.code === pattern
-        );
+        (errorMessage && allRetryablePatterns.some(pattern => 
+          errorMessage.includes(pattern) || errorCode === pattern
+        ));
 
       if (!isRecoverable || attempt === maxRetries) {
         // Enhanced error logging with pool metrics for timeout errors
-        const isTimeoutError = error.message?.includes('timeout') || 
-                              error.code === 'ETIMEDOUT' || 
-                              error.message?.includes('Connection terminated due to connection timeout');
+        const isTimeoutError = (errorMessage && (
+          errorMessage.includes('timeout') || 
+          errorMessage.includes('Connection terminated due to connection timeout')
+        )) || errorCode === 'ETIMEDOUT';
         
         if (isTimeoutError) {
           const metrics = getPoolMetrics();
           console.error(`❌ Database timeout error (attempt ${attempt}/${maxRetries}):`, {
-            code: error.code || 'NO_CODE',
-            message: error.message?.substring(0, 200),
+            code: errorCode || 'NO_CODE',
+            message: errorMessage?.substring(0, 200) || 'Unknown error',
             poolActive: metrics?.totalCount - metrics?.idleCount,
             poolMax: metrics?.maxConnections,
             poolWaiting: metrics?.waitingCount,
-            poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown'
+            poolUtilization: metrics ? `${Math.round(((metrics.totalCount - metrics.idleCount) / metrics.maxConnections) * 100)}%` : 'unknown',
+            stack: errorStack?.substring(0, 500)
           });
         } else {
-        console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, error.code || 'NO_CODE', error.message);
+          console.error(`❌ Database operation failed (attempt ${attempt}/${maxRetries}):`, {
+            code: errorCode || 'NO_CODE',
+            message: errorMessage || 'Unknown error',
+            stack: errorStack?.substring(0, 500),
+            errorType: error?.constructor?.name || typeof error
+          });
         }
         throw error;
       }
@@ -506,14 +531,31 @@ export async function withRetry<T>(
       const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
       const cappedDelay = Math.min(delay, 4000); // Cap at 4 seconds
 
+      // Safely extract error info for retry log
+      let retryErrorCode: string | undefined;
+      let retryErrorMessage: string | undefined;
+      try {
+        retryErrorCode = error?.code;
+        retryErrorMessage = error?.message;
+      } catch (e) {
+        retryErrorCode = 'ERROR';
+        retryErrorMessage = String(error);
+      }
+
       console.warn(`⚠️ DB retry ${attempt}/${maxRetries} after ${cappedDelay}ms:`, {
-        error: error.code || 'ERROR',
-        message: error.message?.substring(0, 100),
-        isTimeout: error.message?.includes('timeout') || error.code === 'ETIMEDOUT'
+        error: retryErrorCode || 'ERROR',
+        message: retryErrorMessage?.substring(0, 100) || 'Unknown error',
+        isTimeout: (retryErrorMessage && retryErrorMessage.includes('timeout')) || retryErrorCode === 'ETIMEDOUT'
       });
 
       // On connection errors, try to warm the pool before retry
-      if (attempt === 2 && (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET' || error.message?.includes('timeout'))) {
+      const shouldWarmPool = attempt === 2 && (
+        errorCode === 'ETIMEDOUT' || 
+        errorCode === 'ECONNRESET' || 
+        (errorMessage && errorMessage.includes('timeout'))
+      );
+      
+      if (shouldWarmPool) {
         console.log('🔄 Warming pool before retry...');
         try {
           await warmPool(2);
