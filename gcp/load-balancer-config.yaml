@@ -1,0 +1,72 @@
+# Configuración declarativa del Load Balancer para frontend
+# Este archivo documenta la configuración del Load Balancer
+# Los recursos se crean usando los scripts en scripts/setup-load-balancer.sh
+
+# Backend Bucket para archivos estáticos
+backendBucket:
+  name: unigrc-frontend-prod-backend
+  bucketName: unigrc-frontend-prod
+  enableCdn: true
+
+# Backend Service para Cloud Run (API)
+backendService:
+  name: unigrc-backend-service
+  protocol: HTTP
+  timeoutSec: 300
+  enableCdn: true
+  backends:
+    - group: projects/unigrc-m/regions/southamerica-west1/networkEndpointGroups/unigrc-backend-neg
+      balancingMode: UTILIZATION
+      maxUtilization: 0.8
+
+# URL Map
+urlMap:
+  name: unigrc-frontend-url-map
+  defaultBackendBucket: unigrc-frontend-prod-backend
+  pathMatchers:
+    - name: api-matcher
+      defaultService: unigrc-backend-service
+      pathRules:
+        - paths: ["/api/*"]
+          service: unigrc-backend-service
+
+# Target HTTPS Proxy
+targetHttpsProxy:
+  name: unigrc-frontend-https-proxy
+  urlMap: unigrc-frontend-url-map
+  sslCertificates:
+    - cl-unigrc-app-ssl-cert
+
+# Target HTTP Proxy (para redirección a HTTPS)
+targetHttpProxy:
+  name: unigrc-frontend-http-proxy
+  urlMap: unigrc-frontend-url-map
+
+# Forwarding Rules
+forwardingRules:
+  https:
+    name: unigrc-frontend-https-rule
+    target: unigrc-frontend-https-proxy
+    portRange: 443
+    ipProtocol: TCP
+    loadBalancingScheme: EXTERNAL
+  
+  http:
+    name: unigrc-frontend-http-rule
+    target: unigrc-frontend-http-proxy
+    portRange: 80
+    ipProtocol: TCP
+    loadBalancingScheme: EXTERNAL
+
+# Cloud CDN Configuration
+cdn:
+  enabled: true
+  cacheKeyPolicy:
+    includeHost: true
+    includeProtocol: true
+    includeQueryString: false
+  cachePolicy:
+    defaultTtl: 3600
+    maxTtl: 86400
+    clientTtl: 3600
+

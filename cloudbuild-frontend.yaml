@@ -1,58 +1,71 @@
 # Cloud Build configuration for Frontend
+# Migrated from Docker/Cloud Run to Cloud Storage + CDN
 # Triggered on push to main branch
 
 steps:
-  # Build the frontend Docker image
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - 'build'
-      - '-t'
-      - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:$COMMIT_SHA'
-      - '-t'
-      - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:latest'
-      - '-f'
-      - 'Dockerfile.frontend'
-      - '.'
-    id: 'build-frontend-image'
+  # Install dependencies
+  - name: 'node:20'
+    entrypoint: 'npm'
+    args: ['ci', '--legacy-peer-deps']
+    id: 'install-dependencies'
 
-  # Push the image to Artifact Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  # Build the frontend with Vite (only frontend, not backend)
+  - name: 'node:20'
+    entrypoint: 'bash'
     args:
-      - 'push'
-      - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:$COMMIT_SHA'
-    id: 'push-frontend-image-sha'
+      - '-c'
+      - |
+        export NODE_ENV=production
+        export VITE_API_URL=https://unigrc-backend-524018293934.southamerica-west1.run.app
+        echo "🔨 Building frontend..."
+        npx vite build
+        echo "✅ Frontend built"
+    id: 'build-frontend'
 
-  - name: 'gcr.io/cloud-builders/docker'
+  # Upload to Cloud Storage (production bucket)
+  - name: 'gcr.io/cloud-builders/gsutil'
     args:
-      - 'push'
-      - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:latest'
-    id: 'push-frontend-image-latest'
+      - 'rsync'
+      - '-r'
+      - '-d'
+      - 'dist/public'
+      - 'gs://unigrc-frontend-prod'
+    id: 'upload-to-storage'
 
-  # Deploy to Cloud Run
+  # Set cache headers for static assets
+  - name: 'gcr.io/cloud-builders/gsutil'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Set no-cache for index.html
+        gsutil setmeta -h "Cache-Control: no-cache, no-store, must-revalidate" gs://unigrc-frontend-prod/index.html
+        
+        # Set long cache for JS/CSS files
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.js || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.css || true
+        
+        # Set long cache for fonts and images
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.woff2 || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.woff || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.ttf || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.png || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.jpg || true
+        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.svg || true
+    id: 'set-cache-headers'
+
+  # Invalidate CDN cache for index.html
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'gcloud'
     args:
-      - 'run'
-      - 'deploy'
-      - 'unigrc-frontend'
-      - '--image=southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:$COMMIT_SHA'
-      - '--region=southamerica-west1'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--port=8080'
-      - '--memory=512Mi'
-      - '--cpu=1'
-      - '--max-instances=10'
-      - '--timeout=300'
-      - '--set-env-vars=API_URL=https://unigrc-backend-524018293934.southamerica-west1.run.app'
-      - '--update-annotations=run.googleapis.com/cpu-throttling=false'
-      - '--min-instances=1'
-    id: 'deploy-frontend'
-
-# Store images in Artifact Registry
-images:
-  - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:$COMMIT_SHA'
-  - 'southamerica-west1-docker.pkg.dev/$PROJECT_ID/unigrc/frontend:latest'
+      - 'compute'
+      - 'url-maps'
+      - 'invalidate-cdn-cache'
+      - 'unigrc-frontend-url-map'
+      - '--path=/index.html'
+      - '--project=$PROJECT_ID'
+    id: 'invalidate-cdn'
+    waitFor: ['upload-to-storage']
 
 # Build timeout
 timeout: '1800s'
@@ -61,3 +74,8 @@ timeout: '1800s'
 options:
   machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
+
+# Substitutions (opcional, para diferentes entornos)
+substitutions:
+  _ENVIRONMENT: 'prod'
+  _BUCKET_NAME: 'unigrc-frontend-prod'

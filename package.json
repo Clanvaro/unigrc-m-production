@@ -35,7 +35,15 @@
     "firebase:setup": "bash scripts/setup-firebase-hosting.sh",
     "firebase:deploy": "firebase deploy --only hosting",
     "firebase:deploy:hosting": "npm run build && firebase deploy --only hosting",
-    "firebase:serve": "firebase serve"
+    "firebase:serve": "firebase serve",
+    "deploy:gcs:prod": "bash scripts/deploy-frontend-gcs.sh prod",
+    "deploy:gcs:staging": "bash scripts/deploy-frontend-gcs.sh staging",
+    "invalidate-cdn": "bash scripts/invalidate-cdn.sh",
+    "setup:gcs": "bash scripts/setup-gcs-bucket.sh",
+    "setup:lb": "bash scripts/setup-load-balancer.sh",
+    "setup:ssl": "bash scripts/setup-ssl-certificate.sh",
+    "test:staging": "bash scripts/test-staging-deploy.sh",
+    "check:migration": "bash scripts/check-migration-status.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
