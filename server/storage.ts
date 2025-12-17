@@ -7260,7 +7260,14 @@ export class DatabaseStorage extends MemStorage {
 
     // If another request is already loading, wait for it
     if (this.loadingPromise) {
-      await this.loadingPromise;
+      try {
+        await this.loadingPromise;
+      } catch (error) {
+        // If loading fails, mark as initialized to prevent infinite retries
+        // and allow fallback to default values
+        this.localCacheInitialized = true;
+        console.warn('[loadSystemConfigCache] Loading promise failed, using defaults:', error);
+      }
       return;
     }
 
@@ -7269,6 +7276,11 @@ export class DatabaseStorage extends MemStorage {
 
     try {
       await this.loadingPromise;
+    } catch (error) {
+      // If loading fails, mark as initialized to prevent infinite retries
+      // and allow fallback to default values
+      this.localCacheInitialized = true;
+      console.warn('[loadSystemConfigCache] Failed to load config cache, using defaults:', error);
     } finally {
       this.loadingPromise = null;
     }
