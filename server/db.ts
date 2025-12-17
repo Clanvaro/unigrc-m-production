@@ -89,18 +89,19 @@ if (databaseUrl) {
     // If sslmode=disable, ensure SSL is disabled in config
     console.log('[DB Config] Cloud SQL with sslmode=disable - SSL will be disabled');
   } else if (isCloudSql && !databaseUrl.includes('sslmode=')) {
-    // For Cloud SQL with public IP, use sslmode=prefer to allow SSL but not require strict verification
+    // For Cloud SQL with public IP, use sslmode=require since Cloud SQL now requires SSL
     normalizedDatabaseUrl = databaseUrl.includes('?')
-      ? `${databaseUrl}&sslmode=prefer`
-      : `${databaseUrl}?sslmode=prefer`;
-    console.log('[DB Config] Added sslmode=prefer to Cloud SQL connection string');
+      ? `${databaseUrl}&sslmode=require`
+      : `${databaseUrl}?sslmode=require`;
+    console.log('[DB Config] Added sslmode=require to Cloud SQL connection string (SSL required)');
   } else if (isCloudSql && databaseUrl.includes('sslmode=require')) {
     // If sslmode=require is already set, keep it but ensure rejectUnauthorized: false in sslConfig
     // The sslConfig will handle certificate verification, not the connection string
     console.log('[DB Config] Cloud SQL with sslmode=require - SSL config will disable certificate verification');
   } else if (isCloudSql && databaseUrl.includes('sslmode=prefer')) {
-    // If sslmode=prefer is set, that's fine - SSL config will handle certificate verification
-    console.log('[DB Config] Cloud SQL with sslmode=prefer - SSL config will disable certificate verification');
+    // Upgrade prefer to require since Cloud SQL now requires SSL
+    normalizedDatabaseUrl = normalizedDatabaseUrl.replace('sslmode=prefer', 'sslmode=require');
+    console.log('[DB Config] Upgraded sslmode=prefer to sslmode=require (SSL required)');
   }
 
   // Render PostgreSQL has always-on connections but may have SSL handshake latency
