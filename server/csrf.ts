@@ -6,12 +6,17 @@ import { logger } from './logger';
 const isProduction = process.env.NODE_ENV === 'production';
 
 // Validate CSRF secret is set (but don't throw - allow fallback in getSecret)
-if (!process.env.CSRF_SECRET) {
+// Log detailed information about secret availability at startup
+const csrfSecretAtStartup = process.env.CSRF_SECRET;
+if (!csrfSecretAtStartup) {
   if (isProduction) {
     logger.warn('⚠️  CSRF_SECRET not set in production - will use fallback secret (less secure)');
+    logger.warn(`⚠️  Available env vars with 'SECRET' or 'CSRF': ${Object.keys(process.env).filter(k => k.includes('SECRET') || k.includes('CSRF')).join(', ') || 'none'}`);
   } else {
     logger.warn('⚠️  CSRF_SECRET not set - using development fallback (INSECURE)');
   }
+} else {
+  logger.info(`✅ CSRF_SECRET loaded at startup (length: ${csrfSecretAtStartup.length})`);
 }
 
 const csrfOptions = {
