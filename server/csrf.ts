@@ -33,23 +33,29 @@ const csrfOptions = {
     return secret;
   },
   getSessionIdentifier: (req: Request) => {
-    // In development, use a consistent identifier
-    // In production, use actual session ID for better security
-    if (isProduction) {
-      // Try to get session ID, but provide a fallback if session is not initialized
-      if (req.session?.id) {
-        return req.session.id as string;
+    try {
+      // In development, use a consistent identifier
+      // In production, use actual session ID for better security
+      if (isProduction) {
+        // Try to get session ID, but provide a fallback if session is not initialized
+        if (req.session?.id) {
+          return req.session.id as string;
+        }
+        // If no session, create a temporary identifier based on request
+        // This allows CSRF tokens to work even before login
+        const tempId = req.headers['x-request-id'] || 
+                       req.ip || 
+                       `temp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        return `session-${tempId}`;
       }
-      // If no session, create a temporary identifier based on request
-      // This allows CSRF tokens to work even before login
-      const tempId = req.headers['x-request-id'] || 
-                     req.ip || 
-                     `temp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-      return `session-${tempId}`;
+      // Use user ID if available, otherwise use a fixed development identifier
+      const user = (req as any).user;
+      return user?.claims?.sub || 'development-session';
+    } catch (error: any) {
+      // Fallback if session identifier generation fails
+      logger.warn(`[CSRF] Error generating session identifier, using fallback: ${error?.message || String(error)}`);
+      return `fallback-session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     }
-    // Use user ID if available, otherwise use a fixed development identifier
-    const user = (req as any).user;
-    return user?.claims?.sub || 'development-session';
   },
   // Use __Host- prefix only in production (requires HTTPS)
   cookieName: isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token',
@@ -68,11 +74,47 @@ const csrfOptions = {
   },
 };
 
-const {
-  invalidCsrfTokenError,
-  doubleCsrfProtection,
-  generateCsrfToken,
-} = doubleCsrf(csrfOptions);
+// Initialize CSRF with error handling
+let invalidCsrfTokenError: any;
+let doubleCsrfProtection: RequestHandler;
+let generateCsrfToken: (req: Request, res: Response) => string;
+
+try {
+  const csrfModule = doubleCsrf(csrfOptions);
+  invalidCsrfTokenError = csrfModule.invalidCsrfTokenError;
+  doubleCsrfProtection = csrfModule.doubleCsrfProtection;
+  generateCsrfToken = csrfModule.generateCsrfToken;
+  logger.info('[CSRF] CSRF module initialized successfully');
+} catch (initError: any) {
+  logger.error(`[CSRF] Failed to initialize CSRF module: ${initError?.message || String(initError)}`);
+  logger.error(`[CSRF] Stack: ${initError?.stack || 'No stack trace'}`);
+  
+  // Create fallback implementations to prevent complete failure
+  invalidCsrfTokenError = class extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'InvalidCsrfTokenError';
+    }
+  };
+  
+  doubleCsrfProtection = (req: Request, res: Response, next: NextFunction) => {
+    logger.warn('[CSRF] CSRF protection disabled due to initialization error');
+    next();
+  };
+  
+  generateCsrfToken = (req: Request, res: Response): string => {
+    logger.warn('[CSRF] Using fallback token generation due to initialization error');
+    const fallbackToken = Buffer.from(`${Date.now()}-${Math.random()}`).toString('base64');
+    const cookieName = isProduction ? '__Host-psifi.x-csrf-token' : 'psifi.x-csrf-token';
+    res.cookie(cookieName, fallbackToken, {
+      httpOnly: false,
+      sameSite: isProduction ? ('none' as const) : ('lax' as const),
+      path: '/',
+      secure: isProduction
+    });
+    return fallbackToken;
+  };
+}
 
 // Export generateCsrfToken for use in other modules (e.g., after login)
 export { generateCsrfToken };
@@ -164,6 +206,15 @@ export function getCSRFToken(req: Request, res: Response): void {
     let csrfToken: string;
     try {
       logger.info('[CSRF] Calling generateCsrfToken...');
+      logger.info(`[CSRF] Request details - Method: ${req.method}, Path: ${req.path}, HasSession: ${!!req.session}, SessionID: ${req.session?.id || 'none'}`);
+      
+      // Verify secret is available before calling generateCsrfToken
+      const secretBeforeGen = process.env.CSRF_SECRET;
+      if (!secretBeforeGen) {
+        logger.warn('[CSRF] CSRF_SECRET not available when calling generateCsrfToken, will use fallback');
+        throw new Error('CSRF_SECRET not available');
+      }
+      
       csrfToken = generateCsrfToken(req, res);
       logger.info(`[CSRF] Token generated successfully, length: ${csrfToken?.length || 0}`);
     } catch (genError: any) {
