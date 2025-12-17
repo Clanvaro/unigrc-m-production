@@ -224,6 +224,68 @@ if (databaseUrl) {
     poolConfig.statement_timeout = statementTimeout;
   }
 
+  // Test PgBouncer connection and fallback to direct connection if it fails
+  if (isUsingPgBouncer && fallbackDatabaseUrl) {
+    try {
+      console.log('[DB Config] Testing PgBouncer connection...');
+      const testPool = new Pool({ ...poolConfig, max: 1 });
+      // Test connection with a short timeout (5 seconds)
+      const testClient = await Promise.race([
+        testPool.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Connection timeout')), 5000))
+      ]) as any;
+      
+      if (testClient) {
+        testClient.release();
+        await testPool.end();
+        console.log('✅ PgBouncer connection test successful');
+      }
+    } catch (pgbouncerError: any) {
+      console.warn(`⚠️ PgBouncer connection test failed: ${pgbouncerError?.message || String(pgbouncerError)}`);
+      console.warn(`⚠️ Falling back to direct database connection (DATABASE_URL)`);
+      
+      // Fallback to direct connection
+      databaseUrl = fallbackDatabaseUrl;
+      isUsingPgBouncer = false;
+      
+      // Recalculate connection settings for direct connection
+      const fallbackIsCloudSql = 
+        process.env.IS_GCP_DEPLOYMENT === 'true' ||
+        databaseUrl?.includes('.googleapis.com') ||
+        databaseUrl?.includes('cloudsql') ||
+        (process.env.IS_GCP_DEPLOYMENT === 'true' && /@10\.\d+\.\d+\.\d+/.test(databaseUrl || '')) ||
+        false;
+      
+      const fallbackIsCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
+      
+      // Update normalized URL for fallback
+      if (fallbackIsCloudSql && !fallbackIsCloudSqlProxy && !databaseUrl.includes('sslmode=')) {
+        normalizedDatabaseUrl = databaseUrl.includes('?')
+          ? `${databaseUrl}&sslmode=require`
+          : `${databaseUrl}?sslmode=require`;
+      }
+      
+      // Update pool config for direct connection
+      poolConfig.connectionString = normalizedDatabaseUrl;
+      if (!fallbackIsCloudSqlProxy) {
+        poolConfig.statement_timeout = statementTimeout;
+      }
+      
+      // Recalculate pool max for direct connection
+      if (fallbackIsCloudSql) {
+        poolMax = parseInt(process.env.DB_POOL_MAX || '4', 10);
+      } else if (isRenderDb) {
+        poolMax = 20;
+      } else {
+        poolMax = isPooled ? 10 : 6;
+      }
+      poolConfig.max = poolMax;
+      poolConfig.min = fallbackIsCloudSql ? 2 : (isRenderDb ? 5 : 2);
+      
+      console.log(`[DB Config] Using direct connection fallback: pool=${poolConfig.min}-${poolMax}`);
+    }
+  }
+
   pool = new Pool(poolConfig);
   db = drizzle(pool, { schema, logger: true });
 
