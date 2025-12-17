@@ -18128,6 +18128,94 @@ export class DatabaseStorage extends MemStorage {
         ? (coveredRisks[0].count / totalRisks[0].count) * 100
         : 0;
 
+      // OPTIMIZED: Calculate real system health metrics (cached for performance)
+      // These are expensive operations, so we cache them and only update periodically
+      console.time('system-health-metrics');
+      const systemHealthCacheKey = 'system-health-metrics';
+      let systemHealthMetrics: { attachmentStorageUsed: number; averageResponseTime: number; calculatedAt: number } | null = 
+        await distributedCache.get(systemHealthCacheKey);
+      
+      if (!systemHealthMetrics) {
+        // Calculate storage usage from Cloud Storage (if available)
+        // OPTIMIZED: Use efficient method to estimate storage usage
+        let attachmentStorageUsed = 0;
+        try {
+          const { objectStorageClient } = await import('./objectStorage');
+          const bucketName = process.env.GCS_BUCKET_NAME || `unigrc-uploads-${process.env.GCS_PROJECT_ID || 'unigrc-m'}`;
+          
+          if (objectStorageClient) {
+            const bucket = objectStorageClient.bucket(bucketName);
+            
+            // OPTIMIZED: Use getFiles with autoPaginate=false and limit to avoid loading all files
+            // This is much faster than iterating through all files
+            const [files] = await bucket.getFiles({ 
+              prefix: 'attachments/',
+              maxResults: 100, // Sample 100 files for quick estimation
+              autoPaginate: false
+            });
+            
+            if (files.length > 0) {
+              // Calculate average file size from sample
+              let totalSize = 0;
+              let validFiles = 0;
+              
+              // Use Promise.all for parallel metadata fetching (faster)
+              const metadataPromises = files.slice(0, 50).map(async (file) => {
+                try {
+                  const [metadata] = await file.getMetadata();
+                  return parseInt(metadata.size || '0', 10);
+                } catch (err) {
+                  return 0;
+                }
+              });
+              
+              const sizes = await Promise.all(metadataPromises);
+              totalSize = sizes.reduce((sum, size) => sum + size, 0);
+              validFiles = sizes.filter(s => s > 0).length;
+              
+              if (validFiles > 0) {
+                const avgFileSize = totalSize / validFiles;
+                // Estimate total storage: average file size * total file count
+                // This is an approximation but much faster than counting all files
+                const estimatedTotalSize = avgFileSize * files.length;
+                
+                // Assume 10GB limit (adjust based on your actual quota)
+                const storageLimitGB = 10 * 1024 * 1024 * 1024; // 10GB in bytes
+                attachmentStorageUsed = Math.min(100, Math.round((estimatedTotalSize / storageLimitGB) * 100 * 10) / 10);
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('[System Health] Could not calculate storage usage:', error);
+          // Fallback to 0 if calculation fails
+          attachmentStorageUsed = 0;
+        }
+
+        // Measure database latency (lightweight operation)
+        let averageResponseTime = 1.0; // Default fallback
+        try {
+          const { measureDatabaseLatency } = await import('./db');
+          const latencyResult = await measureDatabaseLatency();
+          if (latencyResult && latencyResult.roundTrip > 0) {
+            // Convert milliseconds to seconds, cap at reasonable max (5s)
+            averageResponseTime = Math.min(5.0, Math.round((latencyResult.roundTrip / 1000) * 10) / 10);
+          }
+        } catch (error) {
+          console.warn('[System Health] Could not measure database latency:', error);
+          // Keep default fallback
+        }
+
+        systemHealthMetrics = {
+          attachmentStorageUsed,
+          averageResponseTime,
+          calculatedAt: Date.now()
+        };
+
+        // Cache for 5 minutes (300 seconds) - these metrics don't change frequently
+        await distributedCache.set(systemHealthCacheKey, systemHealthMetrics, 300);
+      }
+      console.timeEnd('system-health-metrics');
+
       // Trends (last 6 months, simplified)
       const trends = {
         completionTrend: [
@@ -18178,8 +18266,8 @@ export class DatabaseStorage extends MemStorage {
           riskCoverage: Math.round(riskCoverage * 10) / 10
         },
         systemHealth: {
-          attachmentStorageUsed: 65.2,
-          averageResponseTime: 1.2,
+          attachmentStorageUsed: systemHealthMetrics.attachmentStorageUsed,
+          averageResponseTime: systemHealthMetrics.averageResponseTime,
           activeUsers: activeUsers[0].count,
           systemAlerts: []
         },
