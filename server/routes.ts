@@ -11633,6 +11633,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // OPTIMIZED: Get all associated risks with filter for deleted risks
           // Use LEFT JOIN to handle cases where risk might be deleted but association still exists
+          // FIXED: Move deletedAt filter to the JOIN condition to properly handle LEFT JOIN
           requireDb()
             .select({
               actionId: actionPlanRisks.actionId,
@@ -11642,8 +11643,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               riskName: risks.name,
             })
             .from(actionPlanRisks)
-            .leftJoin(risks, eq(actionPlanRisks.riskId, risks.id))
-            .where(isNull(risks.deletedAt))
+            .leftJoin(risks, and(
+              eq(actionPlanRisks.riskId, risks.id),
+              isNull(risks.deletedAt),
+              sql`${risks.status} != 'deleted'`
+            ))
         ]);
       } catch (queryError) {
         console.error("[action-plans/validation/observed] Query error:", queryError);
@@ -11655,33 +11659,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // OPTIMIZED: Pre-build Maps for O(1) lookups instead of O(n) filtering
-      const processMap = new Map((allProcesses || []).map(p => [p.id, { name: p.name }]));
+      // FIXED: Add null checks to prevent TypeError
+      const processMap = new Map();
+      if (allProcesses && Array.isArray(allProcesses)) {
+        for (const p of allProcesses) {
+          if (p && p.id && p.name) {
+            processMap.set(String(p.id), { name: String(p.name) });
+          }
+        }
+      }
       
       // OPTIMIZED: Group risks by actionId using Map for O(n) instead of O(n*m) filtering
       // Filter out null risks (from LEFT JOIN where risk was deleted)
+      // FIXED: Add comprehensive null/undefined checks to prevent TypeError
       const risksByActionId = new Map<string, Array<{ riskId: string; isPrimary: boolean; riskCode: string; riskName: string }>>();
-      for (const ar of (allAssociatedRisks || [])) {
-        // Skip if risk is null (deleted risk from LEFT JOIN)
-        if (!ar.riskId || !ar.riskCode) {
-          continue;
+      if (allAssociatedRisks && Array.isArray(allAssociatedRisks)) {
+        for (const ar of allAssociatedRisks) {
+          // Skip if ar is null/undefined or missing required fields
+          if (!ar || typeof ar !== 'object') {
+            console.warn('[action-plans/validation/observed] Skipping invalid risk association:', ar);
+            continue;
+          }
+          
+          // Skip if risk is null (deleted risk from LEFT JOIN) or missing required fields
+          if (!ar.actionId || !ar.riskId || !ar.riskCode) {
+            continue;
+          }
+          
+          // Ensure actionId is a string (drizzle might return it as number or other type)
+          const actionId = String(ar.actionId);
+          
+          if (!risksByActionId.has(actionId)) {
+            risksByActionId.set(actionId, []);
+          }
+          
+          const riskEntry = {
+            riskId: String(ar.riskId),
+            isPrimary: Boolean(ar.isPrimary),
+            riskCode: String(ar.riskCode || ''),
+            riskName: String(ar.riskName || ''),
+          };
+          
+          risksByActionId.get(actionId)!.push(riskEntry);
         }
-        if (!risksByActionId.has(ar.actionId)) {
-          risksByActionId.set(ar.actionId, []);
-        }
-        risksByActionId.get(ar.actionId)!.push({
-          riskId: ar.riskId,
-          isPrimary: ar.isPrimary || false,
-          riskCode: ar.riskCode || '',
-          riskName: ar.riskName || '',
-        });
       }
 
       // OPTIMIZED: Map to response format (minimal object construction)
-      const plansWithRisks = (observedPlans || []).map(plan => ({
-        ...plan,
-        process: plan.processId ? processMap.get(plan.processId) || null : null,
-        associatedRisks: risksByActionId.get(plan.id) || []
-      }));
+      // FIXED: Add null checks and ensure plan.id is converted to string for Map lookup
+      const plansWithRisks = (observedPlans || []).map(plan => {
+        // Validate plan object
+        if (!plan || typeof plan !== 'object') {
+          console.warn('[action-plans/validation/observed] Skipping invalid plan:', plan);
+          return null;
+        }
+        
+        const planId = String(plan.id || '');
+        const processId = plan.processId ? String(plan.processId) : null;
+        
+        return {
+          ...plan,
+          process: processId ? (processMap.get(processId) || null) : null,
+          associatedRisks: risksByActionId.get(planId) || []
+        };
+      }).filter(plan => plan !== null); // Remove any null entries
 
       // OPTIMIZED: Cache for 5 minutes (300s) - observed data changes less frequently
       try {
