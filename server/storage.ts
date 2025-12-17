@@ -13642,16 +13642,28 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== SYSTEM CONFIGURATION - Use Database with Redis Cache ==============
   async getSystemConfig(configKey: string): Promise<SystemConfig | undefined> {
-    // Load cache from Redis/DB if not initialized
-    await this.loadSystemConfigCache();
+    try {
+      // Load cache from Redis/DB if not initialized
+      await this.loadSystemConfigCache();
+    } catch (error: any) {
+      // If cache loading fails, log but don't throw - return undefined to allow defaults
+      console.warn(`[getSystemConfig] Failed to load cache for ${configKey}, using undefined:`, error?.message || String(error));
+    }
 
     // Return from local cache (populated from Redis or DB)
+    // Returns undefined if not found, which allows callers to use defaults
     return this.systemConfigLocalCache.get(configKey);
   }
 
   async getAllSystemConfigs(): Promise<SystemConfig[]> {
-    // Load cache from Redis/DB if not initialized
-    await this.loadSystemConfigCache();
+    try {
+      // Load cache from Redis/DB if not initialized
+      await this.loadSystemConfigCache();
+    } catch (error: any) {
+      // If cache loading fails, return empty array instead of throwing
+      console.warn('[getAllSystemConfigs] Failed to load cache, returning empty array:', error?.message || String(error));
+      return [];
+    }
 
     // Return all configs from local cache
     return Array.from(this.systemConfigLocalCache.values()).filter(c => c.isActive);
