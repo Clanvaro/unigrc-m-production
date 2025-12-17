@@ -6,6 +6,7 @@ import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
+import { Pool } from "pg";
 import { storage } from "./storage";
 import { authCache } from "./auth-cache";
 
@@ -43,19 +44,74 @@ export function getSession() {
     // Remove channel_binding parameter if present (can cause issues with some drivers)
     databaseUrl = databaseUrl.replace(/[&?]channel_binding=[^&]*/g, '');
 
-    // Ensure sslmode=require is present for Render PostgreSQL connections
+    // Detect if using Cloud SQL (same logic as db.ts)
+    // IMPORTANT: Detect Cloud SQL by IP private range (10.x.x.x) even if IS_GCP_DEPLOYMENT is not set
+    // This handles cases where Cloud Run connects via VPC with private IP
+    const isCloudSql = 
+      process.env.IS_GCP_DEPLOYMENT === 'true' ||
+      databaseUrl?.includes('.googleapis.com') ||
+      databaseUrl?.includes('cloudsql') ||
+      /@10\.\d+\.\d+\.\d+/.test(databaseUrl || '') || // Private IP range (VPC) - always Cloud SQL in GCP
+      false;
+    
+    const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
     const isRenderDb = databaseUrl.includes('render.com') || databaseUrl.includes('oregon-postgres.render.com');
-    if (isRenderDb && !databaseUrl.includes('sslmode=')) {
-      databaseUrl = databaseUrl.includes('?')
-        ? `${databaseUrl}&sslmode=require`
-        : `${databaseUrl}?sslmode=require`;
+
+    // CRITICAL: After security changes, Cloud SQL REQUIRES SSL for all connections (public IP and private IP/VPC)
+    // Cloud SQL Proxy (Unix socket) doesn't need SSL, but all other Cloud SQL connections do
+    // Ensure sslmode=require is present for Cloud SQL (after security changes) and Render PostgreSQL
+    if (!databaseUrl.includes('sslmode=')) {
+      if (isCloudSql && !isCloudSqlProxy) {
+        // Cloud SQL with IP (public or private/VPC) requires SSL after security changes
+        databaseUrl = databaseUrl.includes('?')
+          ? `${databaseUrl}&sslmode=require`
+          : `${databaseUrl}?sslmode=require`;
+        console.log('[Session] Added sslmode=require for Cloud SQL (required after security changes - applies to both public and private IP)');
+      } else if (isRenderDb) {
+        // Render PostgreSQL requires SSL
+        databaseUrl = databaseUrl.includes('?')
+          ? `${databaseUrl}&sslmode=require`
+          : `${databaseUrl}?sslmode=require`;
+        console.log('[Session] Added sslmode=require for Render PostgreSQL');
+      }
+    } else if (isCloudSql && !isCloudSqlProxy && databaseUrl.includes('sslmode=disable')) {
+      // If sslmode=disable is set for Cloud SQL, upgrade to require (security requirement)
+      databaseUrl = databaseUrl.replace('sslmode=disable', 'sslmode=require');
+      console.log('[Session] Upgraded sslmode=disable to sslmode=require for Cloud SQL (security requirement)');
     }
 
     console.log('[Session] Initializing PostgreSQL session store');
     console.log('[Session] Database URL configured: Yes (hidden)');
 
+    // Configure SSL for Cloud SQL (required after security changes)
+    // connect-pg-simple accepts a Pool instance with SSL configured
+    let sessionPool: Pool | undefined = undefined;
+    if (isCloudSql && !isCloudSqlProxy) {
+      // Ensure sslmode=require is in the connection string for the Pool
+      let poolConnectionString = databaseUrl;
+      if (!poolConnectionString.includes('sslmode=')) {
+        poolConnectionString = poolConnectionString.includes('?')
+          ? `${poolConnectionString}&sslmode=require`
+          : `${poolConnectionString}?sslmode=require`;
+      }
+      
+      // Create a Pool with SSL configuration for Cloud SQL
+      sessionPool = new Pool({
+        connectionString: poolConnectionString,
+        ssl: {
+          rejectUnauthorized: false // Cloud SQL requires SSL but doesn't need cert verification
+        },
+        max: 2, // Small pool for session store
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 20000,
+      });
+      console.log('[Session] Using Pool with SSL for Cloud SQL session store (sslmode=require + SSL config)');
+    }
+
     sessionStore = new pgStore({
-      conString: databaseUrl,
+      // Use Pool if configured (for SSL), otherwise use connection string
+      pool: sessionPool,
+      conString: sessionPool ? undefined : databaseUrl,
       createTableIfMissing: false,
       ttl: sessionTtl,
       tableName: "sessions",
