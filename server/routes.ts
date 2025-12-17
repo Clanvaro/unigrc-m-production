@@ -2065,23 +2065,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         utilization: poolMetricsBefore ? `${Math.round(((poolMetricsBefore.totalCount - poolMetricsBefore.idleCount) / poolMetricsBefore.maxConnections) * 100)}%` : 'unknown'
       });
 
-      // OPTIMIZED BATCHING: Organize queries by expected execution time
-      // Batch 1: Heaviest queries (getRisksLite, getAllProcessGerenciasRelations) - run separately or together
-      // Batch 2: Medium queries (getSubprocesosWithOwners, getProcesses)
-      // Batch 3: Light queries (getGerencias, getMacroprocesos, getRiskCategories)
-      // Batch 4: Fast aggregated query (getRiskStats) - can run with others
+      // OPTIMIZED BATCHING: Execute queries in parallel batches for maximum parallelism
+      // Strategy: Group heaviest queries together, then execute all lighter queries in parallel
+      // This reduces total execution time from sequential batches to 2 parallel batches
       const batches = [
-        // Batch 1: Heaviest - getRisksLite (LATERAL JOIN) - run alone for best performance
-        [{ name: 'getRisksLite', fn: () => storage.getRisksLite() }],
-        // Batch 2: Heavy - getAllProcessGerenciasRelations (UNION ALL) - run alone
-        [{ name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() }],
-        // Batch 3: Medium - getSubprocesosWithOwners + getProcesses
+        // Batch 1: Heaviest queries run in parallel (2 queries) - both are independent and can run simultaneously
+        [
+          { name: 'getRisksLite', fn: () => storage.getRisksLite() },
+          { name: 'getAllProcessGerenciasRelations', fn: () => storage.getAllProcessGerenciasRelations() }
+        ],
+        // Batch 2: All medium/light queries in parallel (7 queries) - all independent, maximum parallelism
         [
           { name: 'getSubprocesosWithOwners', fn: () => storage.getSubprocesosWithOwners() },
-          { name: 'getProcesses', fn: () => storage.getProcesses() }
-        ],
-        // Batch 4: Light - getGerencias + getMacroprocesos + getRiskCategories + getProcessOwners + getRiskStats
-        [
+          { name: 'getProcesses', fn: () => storage.getProcesses() },
           { name: 'getGerencias', fn: () => storage.getGerencias() },
           { name: 'getMacroprocesos', fn: () => storage.getMacroprocesos() },
           { name: 'getRiskCategories', fn: () => storage.getRiskCategories() },
@@ -2214,10 +2210,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       mark('response-built');
 
-      // Cache for 10 minutes (600 seconds) - invalidated granularly on mutations
-      // Balanced with individual function caches (60s) for better consistency
+      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
+      // Increased from 10 min to 15 min for better hit rate (safe because mutations invalidate immediately)
       const cacheSetStart = Date.now();
-      await distributedCache.set(cacheKey, response, 600);
+      await distributedCache.set(cacheKey, response, 900);
       const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
       

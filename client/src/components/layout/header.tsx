@@ -162,11 +162,15 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
-    staleTime: 60_000, // 1 minute - reduces refetch frequency while keeping data fresh
+    staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - reduces refetch frequency while keeping data fresh (invalidated on mutations)
+    gcTime: 10 * 60 * 1000, // ⬆️ 10 minutes - keep in cache longer for better performance
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh - prevents duplicate requests with bootstrap
-    enabled: location === "/risks"
+    enabled: location === "/risks",
+    retry: 1, // Only retry once on error
+    retryDelay: 1000,
+    placeholderData: (previousData) => previousData, // Keep previous data while loading (stale-while-revalidate pattern)
   });
 
   // Common data queries (used by multiple filter sections)

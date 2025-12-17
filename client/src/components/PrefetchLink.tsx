@@ -33,6 +33,7 @@ const routePrefetchMap: Record<string, () => Promise<any>> = {
  */
 const apiPrefetchMap: Record<string, () => void> = {
   '/risks': () => {
+    // Prefetch bootstrap data (risks list)
     queryClient.prefetchQuery({
       queryKey: ["/api/risks/bootstrap", { limit: 50, offset: 0 }],
       queryFn: async () => {
@@ -40,7 +41,20 @@ const apiPrefetchMap: Record<string, () => void> = {
         if (!response.ok) throw new Error('Failed to prefetch');
         return response.json();
       },
-      staleTime: 1000 * 60, // Keep prefetched data fresh for 1 minute
+      staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - matches header.tsx staleTime
+    });
+    
+    // Prefetch page-data-lite (catalogs and filters) - critical for fast initial render
+    const tenantId = 'single-tenant'; // Default tenant ID
+    queryClient.prefetchQuery({
+      queryKey: ['risks-page-data-lite', tenantId],
+      queryFn: async () => {
+        const response = await fetch("/api/risks/page-data-lite");
+        if (!response.ok) throw new Error("Failed to prefetch page data");
+        return response.json();
+      },
+      staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - matches header.tsx staleTime
+      gcTime: 10 * 60 * 1000, // ⬆️ 10 minutes - keep in cache
     });
   },
 };

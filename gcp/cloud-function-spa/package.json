@@ -1,0 +1,13 @@
+{
+  "name": "spa-server",
+  "version": "1.0.0",
+  "description": "Cloud Function to serve SPA from Cloud Storage",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/storage": "^7.17.1"
+  },
+  "engines": {
+    "node": "20"
+  }
+}
+
