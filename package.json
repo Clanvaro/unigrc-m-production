@@ -43,7 +43,9 @@
     "setup:lb": "bash scripts/setup-load-balancer.sh",
     "setup:ssl": "bash scripts/setup-ssl-certificate.sh",
     "test:staging": "bash scripts/test-staging-deploy.sh",
-    "check:migration": "bash scripts/check-migration-status.sh"
+    "check:migration": "bash scripts/check-migration-status.sh",
+    "verify:delete-frontend": "bash scripts/verify-before-delete-frontend.sh",
+    "delete:cloud-run-frontend": "bash scripts/delete-cloud-run-frontend.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
