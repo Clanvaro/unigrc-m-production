@@ -2054,6 +2054,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         shouldReleaseLock = true; // Mark that we need to release lock on completion/error
       }
 
+      // MEASURE DB CONNECT/PING: Test database connection latency before queries
+      const dbPingStart = Date.now();
+      let dbPingResult: { connect: number; query: number; roundTrip: number } | null = null;
+      try {
+        const pingResult = await measureDatabaseLatency();
+        dbPingResult = {
+          connect: pingResult.connect,
+          query: pingResult.query,
+          roundTrip: pingResult.roundTrip
+        };
+      } catch (pingError) {
+        console.warn('[page-data-lite] DB ping failed:', pingError);
+      }
+      const dbPingDuration = Date.now() - dbPingStart;
+      mark('db-ping');
+
       // Log pool metrics before starting queries to detect pool starvation
       const poolMetricsBefore = getPoolMetrics();
       console.log('[page-data-lite] Pool metrics BEFORE queries', {
@@ -2062,7 +2078,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         idle: poolMetricsBefore?.idleCount || 0,
         active: (poolMetricsBefore?.totalCount || 0) - (poolMetricsBefore?.idleCount || 0),
         waiting: poolMetricsBefore?.waitingCount || 0,
-        utilization: poolMetricsBefore ? `${Math.round(((poolMetricsBefore.totalCount - poolMetricsBefore.idleCount) / poolMetricsBefore.maxConnections) * 100)}%` : 'unknown'
+        utilization: poolMetricsBefore ? `${Math.round(((poolMetricsBefore.totalCount - poolMetricsBefore.idleCount) / poolMetricsBefore.maxConnections) * 100)}%` : 'unknown',
+        dbPing: dbPingResult ? {
+          connectMs: dbPingResult.connect,
+          queryMs: dbPingResult.query,
+          roundTripMs: dbPingResult.roundTrip
+        } : null
       });
 
       // OPTIMIZED BATCHING: Execute queries in parallel batches for maximum parallelism
@@ -2087,8 +2108,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ];
 
       // Track individual query timings for detailed instrumentation
-      const queryTimings: Record<string, { duration: number; cacheHit?: boolean; cacheMiss?: boolean }> = {};
+      const queryTimings: Record<string, { duration: number; resultSize?: number; cacheHit?: boolean; cacheMiss?: boolean }> = {};
       const totalBatches = batches.length;
+      const dbQueriesStart = Date.now();
 
       // Execute queries in optimized batches
       const results: any[] = [];
@@ -2104,14 +2126,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const result = await query.fn();
               const queryDuration = Date.now() - queryStart;
               
-              // Store timing for detailed logging
+              // Calculate result size (approximate JSON size)
+              let resultSize = 0;
+              try {
+                const jsonStr = JSON.stringify(result);
+                resultSize = Buffer.byteLength(jsonStr, 'utf8');
+              } catch (e) {
+                // If stringify fails, estimate from object
+                resultSize = Array.isArray(result) ? result.length * 100 : 100;
+              }
+              
+              // Store timing and size for detailed logging
               queryTimings[query.name] = {
-                duration: queryDuration
+                duration: queryDuration,
+                resultSize: resultSize
               };
               
               // Log every query timing for full visibility (helps identify slow queries)
               console.log(`[page-data-lite] Query: ${query.name}`, {
                 durationMs: queryDuration,
+                resultSizeKB: Math.round(resultSize / 1024),
                 resultCount: Array.isArray(result) ? result.length : typeof result === 'object' ? Object.keys(result).length : 1
               });
               
@@ -2139,25 +2173,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           batchSize: batch.length,
           batchDurationMs: batchDuration,
           queriesInBatch: batch.map(q => q.name),
-          queryTimings: batch.map(q => ({ name: q.name, duration: queryTimings[q.name]?.duration || 0 })),
+          queryTimings: batch.map(q => ({ 
+            name: q.name, 
+            duration: queryTimings[q.name]?.duration || 0,
+            resultSizeKB: queryTimings[q.name]?.resultSize ? Math.round(queryTimings[q.name].resultSize! / 1024) : 0
+          })),
           poolTotal: poolMetricsAfter?.totalCount || 0,
           poolActive: (poolMetricsAfter?.totalCount || 0) - (poolMetricsAfter?.idleCount || 0),
           poolWaiting: poolMetricsAfter?.waitingCount || 0,
         });
       }
-
-      mark('db-done');
+      
+      const dbQueriesDuration = Date.now() - dbQueriesStart;
+      mark('db-queries-complete');
 
       // Log pool metrics after all queries to detect pool starvation
       const poolMetricsAfter = getPoolMetrics();
-      const dbQueriesDuration = Date.now() - start;
       
       // Calculate total query time and identify slowest queries
       const totalQueryTime = Object.values(queryTimings).reduce((sum, t) => sum + t.duration, 0);
+      const totalResultSize = Object.values(queryTimings).reduce((sum, t) => sum + (t.resultSize || 0), 0);
       const slowestQueries = Object.entries(queryTimings)
         .sort((a, b) => b[1].duration - a[1].duration)
         .slice(0, 3)
-        .map(([name, timing]) => ({ name, durationMs: timing.duration }));
+        .map(([name, timing]) => ({ 
+          name, 
+          durationMs: timing.duration,
+          resultSizeKB: timing.resultSize ? Math.round(timing.resultSize / 1024) : 0
+        }));
       
       console.log('[page-data-lite] Pool metrics AFTER queries', {
         total: poolMetricsAfter?.totalCount || 0,
@@ -2174,9 +2217,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('[page-data-lite] Query Performance Summary', {
         totalQueries,
         totalQueryTimeMs: totalQueryTime,
+        totalResultSizeKB: Math.round(totalResultSize / 1024),
         averageQueryTimeMs: totalQueries > 0 ? Math.round(totalQueryTime / totalQueries) : 0,
         slowestQueries,
-        allQueryTimings: queryTimings
+        allQueryTimings: Object.entries(queryTimings).map(([name, timing]) => ({
+          name,
+          durationMs: timing.duration,
+          resultSizeKB: timing.resultSize ? Math.round(timing.resultSize / 1024) : 0
+        }))
       });
 
       // Extract results by name
@@ -2207,6 +2255,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       mark('response-built');
 
+      // MEASURE JSON STRINGIFY TIME: Critical for large responses
+      const jsonStringifyStart = Date.now();
+      const responseJson = JSON.stringify(response);
+      const jsonStringifyDuration = Date.now() - jsonStringifyStart;
+      const responseSizeBytes = Buffer.byteLength(responseJson, 'utf8');
+      const responseSizeKB = Math.round(responseSizeBytes / 1024);
+      mark('json-stringify');
+
       // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
       // Increased from 10 min to 15 min for better hit rate (safe because mutations invalidate immediately)
       const cacheSetStart = Date.now();
@@ -2221,14 +2277,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn('[page-data-lite] Failed to release lock:', lockError);
       }
       
+      const totalDuration = Date.now() - start;
+      
+      // COMPREHENSIVE PERFORMANCE BREAKDOWN: Identify bottlenecks
+      const breakdown = {
+        // Cold start / initialization
+        tenantResolution: steps.find(s => s.name === 'tenant-resolved')?.t || 0,
+        dbPing: dbPingDuration,
+        
+        // Database operations
+        dbQueries: dbQueriesDuration,
+        dbQueriesBreakdown: {
+          totalQueryTime: totalQueryTime,
+          parallelizationOverhead: dbQueriesDuration - totalQueryTime, // Time saved by parallelization
+          slowestQuery: slowestQueries[0]?.name || 'none',
+          slowestQueryTime: slowestQueries[0]?.durationMs || 0
+        },
+        
+        // Data processing
+        jsonStringify: jsonStringifyDuration,
+        responseBuilding: (steps.find(s => s.name === 'response-built')?.t || 0) - (steps.find(s => s.name === 'db-queries-complete')?.t || 0),
+        
+        // Caching
+        cacheGet: cacheGetDuration,
+        cacheSet: cacheSetDuration,
+        
+        // Response size
+        responseSizeKB: responseSizeKB,
+        responseSizeBytes: responseSizeBytes,
+        totalResultSizeKB: Math.round(totalResultSize / 1024),
+        
+        // Total
+        total: totalDuration
+      };
+      
+      // Calculate percentages to identify bottlenecks
+      const dbTimePercent = Math.round((dbQueriesDuration / totalDuration) * 100);
+      const jsonTimePercent = Math.round((jsonStringifyDuration / totalDuration) * 100);
+      const cacheTimePercent = Math.round(((cacheGetDuration + cacheSetDuration) / totalDuration) * 100);
+      const otherTimePercent = 100 - dbTimePercent - jsonTimePercent - cacheTimePercent;
+      
+      console.log('[page-data-lite] PERFORMANCE BREAKDOWN', {
+        ...breakdown,
+        percentages: {
+          dbQueries: `${dbTimePercent}%`,
+          jsonStringify: `${jsonTimePercent}%`,
+          cache: `${cacheTimePercent}%`,
+          other: `${otherTimePercent}%`
+        },
+        bottleneck: dbTimePercent > 70 ? 'DB_QUERIES' : 
+                    jsonTimePercent > 20 ? 'JSON_STRINGIFY' :
+                    cacheTimePercent > 20 ? 'CACHE' : 'OTHER',
+        steps: steps.map(s => ({ name: s.name, t: s.t }))
+      });
+      
       console.log('[page-data-lite] CACHE SET', {
         redisSetMs: cacheSetDuration,
-        responseSizeKB: Math.round(JSON.stringify(response).length / 1024),
-      });
-
-      console.log('[page-data-lite timing]', {
-        total: Date.now() - start,
-        steps,
+        responseSizeKB: responseSizeKB,
       });
 
       res.json(response);
