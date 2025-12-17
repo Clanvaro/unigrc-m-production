@@ -147,9 +147,21 @@ export function getCSRFToken(req: Request, res: Response): void {
       // Return the token value so frontend can store it in memory as backup
       csrfToken: csrfToken
     });
-  } catch (error) {
-    logger.error(`Error handling CSRF token request: ${error instanceof Error ? error.message : String(error)}`);
-    logger.error(`Error stack: ${error instanceof Error ? error.stack : 'No stack trace'}`);
+  } catch (error: any) {
+    // Safely extract error info
+    let errorMessage: string | undefined;
+    let errorStack: string | undefined;
+    try {
+      errorMessage = error?.message;
+      errorStack = error?.stack;
+    } catch (e) {
+      errorMessage = String(error);
+    }
+    
+    logger.error(`Error handling CSRF token request: ${errorMessage || 'Unknown error'}`);
+    if (errorStack) {
+      logger.error(`Error stack: ${errorStack}`);
+    }
     
     // Try to provide a fallback token if possible
     try {
@@ -173,12 +185,20 @@ export function getCSRFToken(req: Request, res: Response): void {
         cookieName,
         csrfToken: fallbackToken
       });
-    } catch (fallbackError) {
-      logger.error(`Fallback CSRF token generation also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+    } catch (fallbackError: any) {
+      // Safely extract fallback error info
+      let fallbackErrorMessage: string | undefined;
+      try {
+        fallbackErrorMessage = fallbackError?.message;
+      } catch (e) {
+        fallbackErrorMessage = String(fallbackError);
+      }
+      
+      logger.error(`Fallback CSRF token generation also failed: ${fallbackErrorMessage || 'Unknown error'}`);
       res.status(500).json({ 
         message: 'Error handling CSRF token request',
         code: 'CSRF_ERROR',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: errorMessage || 'Unknown error'
       });
     }
   }

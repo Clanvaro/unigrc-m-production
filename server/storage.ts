@@ -3725,15 +3725,24 @@ export class MemStorage implements IStorage {
   }
 
   async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
-    const [enabledConfig, precisionConfig] = await Promise.all([
-      this.getSystemConfig('risk_decimals_enabled'),
-      this.getSystemConfig('risk_decimals_precision')
-    ]);
+    try {
+      const [enabledConfig, precisionConfig] = await Promise.all([
+        this.getSystemConfig('risk_decimals_enabled'),
+        this.getSystemConfig('risk_decimals_precision')
+      ]);
 
-    return {
-      enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
-      precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
-    };
+      return {
+        enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
+        precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
+      };
+    } catch (error: any) {
+      // Return default values if database is unavailable
+      console.warn('[getRiskDecimalsConfig] Error fetching config, using defaults:', error?.message || String(error));
+      return {
+        enabled: false,
+        precision: 0
+      };
+    }
   }
 
   async getProbabilityWeights(): Promise<{ frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number }> {
@@ -7281,7 +7290,13 @@ export class DatabaseStorage extends MemStorage {
       }
 
       // Cache miss - load from DB and populate Redis
-      const allConfigs = await db.select().from(systemConfig).where(eq(systemConfig.isActive, true));
+      // Use withRetry to handle SSL/connection errors gracefully
+      const allConfigs = await withRetry(async () => {
+        return await db.select().from(systemConfig).where(eq(systemConfig.isActive, true));
+      }, {
+        maxRetries: 2 // Only retry twice for system config
+      });
+      
       const configMap: Record<string, SystemConfig> = {};
       this.systemConfigLocalCache.clear();
 
@@ -7294,9 +7309,31 @@ export class DatabaseStorage extends MemStorage {
       await setSystemConfigCache(configMap);
       this.localCacheInitialized = true;
       console.log(`📦 System config loaded from DB and cached in Redis (${allConfigs.length} keys)`);
-    } catch (error) {
-      console.error('Error loading system config cache:', error);
-      throw error; // Propagate error to callers so they don't hang on rejected promise
+    } catch (error: any) {
+      // Safely extract error info
+      let errorMessage: string | undefined;
+      let errorCode: string | undefined;
+      try {
+        errorMessage = error?.message;
+        errorCode = error?.code;
+      } catch (e) {
+        errorMessage = String(error);
+      }
+      
+      console.error('Error loading system config cache:', {
+        message: errorMessage,
+        code: errorCode,
+        type: error?.constructor?.name || typeof error
+      });
+      
+      // Don't throw - allow fallback to default values
+      // Mark as initialized to prevent infinite retries
+      this.localCacheInitialized = true;
+      
+      // If cache is empty, log warning but continue with empty cache
+      if (this.systemConfigLocalCache.size === 0) {
+        console.warn('⚠️ System config cache empty after error - will use defaults');
+      }
     }
   }
 
@@ -13673,15 +13710,24 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
-    const [enabledConfig, precisionConfig] = await Promise.all([
-      this.getSystemConfig('risk_decimals_enabled'),
-      this.getSystemConfig('risk_decimals_precision')
-    ]);
+    try {
+      const [enabledConfig, precisionConfig] = await Promise.all([
+        this.getSystemConfig('risk_decimals_enabled'),
+        this.getSystemConfig('risk_decimals_precision')
+      ]);
 
-    return {
-      enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
-      precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
-    };
+      return {
+        enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
+        precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
+      };
+    } catch (error: any) {
+      // Return default values if database is unavailable
+      console.warn('[getRiskDecimalsConfig] Error fetching config, using defaults:', error?.message || String(error));
+      return {
+        enabled: false,
+        precision: 0
+      };
+    }
   }
 
   async getProbabilityWeights(): Promise<{ frequency: number, exposureAndScope: number, complexity: number, changeVolatility: number, vulnerabilities: number }> {

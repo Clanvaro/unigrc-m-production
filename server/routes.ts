@@ -15223,8 +15223,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const decimalsConfig = await storage.getRiskDecimalsConfig();
       res.json(decimalsConfig);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch risk decimals configuration" });
+    } catch (error: any) {
+      console.error("[system-config/risk-decimals] Error:", error?.message || String(error));
+      // Return default values instead of 500 error to prevent login issues
+      res.json({
+        enabled: false,
+        precision: 0
+      });
     }
   });
 
