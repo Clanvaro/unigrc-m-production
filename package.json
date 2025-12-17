@@ -30,6 +30,7 @@
     "apply-validation-indexes": "tsx scripts/apply-validation-indexes.ts",
     "apply-controls-indexes": "tsx scripts/apply-controls-indexes.ts",
     "apply-page-data-lite-indexes": "tsx scripts/apply-page-data-lite-indexes.ts",
+    "apply-rpl-index": "tsx scripts/apply-rpl-index.ts",
     "verify-calculation": "tsx scripts/verify-calculation.ts",
     "firebase:setup": "bash scripts/setup-firebase-hosting.sh",
     "firebase:deploy": "firebase deploy --only hosting",
