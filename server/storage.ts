@@ -21139,8 +21139,8 @@ export class DatabaseStorage extends MemStorage {
       // Build WHERE conditions - filter out deleted risks and processes for performance
       const conditions = [
         eq(riskProcessLinks.validationStatus, status), 
-        isNull(risks.deletedAt),
-        sql`${risks.status} != 'deleted'`
+        isNull(risks.deletedAt)
+        // sql`${risks.status} != 'deleted'` // FIXED: Removed to match validation counts logic (status might be desync with deletedAt)
       ];
       
       // For validated status, ensure validatedAt is not null (actually validated)
