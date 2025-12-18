@@ -2242,19 +2242,26 @@ function GerenciasContent() {
           );
         });
 
-        await Promise.all(
-          uniqueAssociations.map((association) => {
-            // Prioridad: subproceso > proceso > macroproceso (el más específico primero)
-            if (association.subprocesoId) {
-              return apiRequest(`/api/subprocesos/${association.subprocesoId}/gerencias`, "POST", { gerenciaId: createdGerencia.id });
-            } else if (association.processId) {
-              return apiRequest(`/api/processes/${association.processId}/gerencias`, "POST", { gerenciaId: createdGerencia.id });
-            } else if (association.macroprocesoId) {
-              return apiRequest(`/api/macroprocesos/${association.macroprocesoId}/gerencias`, "POST", { gerenciaId: createdGerencia.id });
-            }
-            return Promise.resolve();
-          })
-        );
+        const createPromises = uniqueAssociations.map((association) => {
+          // Prioridad: subproceso > proceso > macroproceso (el más específico primero)
+          if (association.subprocesoId) {
+            return apiRequest(`/api/subprocesos/${association.subprocesoId}/gerencias`, "POST", { gerenciaId: createdGerencia.id })
+              .catch(err => { if (!err?.message?.includes('ya está asignada')) throw err; });
+          } else if (association.processId) {
+            return apiRequest(`/api/processes/${association.processId}/gerencias`, "POST", { gerenciaId: createdGerencia.id })
+              .catch(err => { if (!err?.message?.includes('ya está asignada')) throw err; });
+          } else if (association.macroprocesoId) {
+            return apiRequest(`/api/macroprocesos/${association.macroprocesoId}/gerencias`, "POST", { gerenciaId: createdGerencia.id })
+              .catch(err => { if (!err?.message?.includes('ya está asignada')) throw err; });
+          }
+          return Promise.resolve();
+        });
+
+        const associationResults = await Promise.allSettled(createPromises);
+        const associationFailures = associationResults.filter(r => r.status === 'rejected');
+        if (associationFailures.length > 0) {
+          console.warn('Some associations failed to create for new gerencia:', associationFailures);
+        }
       }
 
       return createdGerencia;
@@ -2304,17 +2311,19 @@ function GerenciasContent() {
           ),
         ];
 
-        // Wait for ALL deletions to complete successfully before creating new associations
+        // Eliminar asociaciones existentes - robust handling with allSettled
         if (deletePromises.length > 0) {
-          try {
-            await Promise.all(deletePromises);
-            // Small delay to ensure database consistency before creating new associations
-            await new Promise(resolve => setTimeout(resolve, 100));
-            console.log('Existing associations removed');
-          } catch (err) {
-            console.error('Error removing existing associations:', err);
-            throw new Error('No se pudieron eliminar las asociaciones existentes. Por favor, intente nuevamente.');
+          console.log(`Removing ${deletePromises.length} associations...`);
+          const deleteResults = await Promise.allSettled(deletePromises);
+          const deleteFailures = deleteResults.filter(r => r.status === 'rejected');
+
+          if (deleteFailures.length > 0) {
+            console.warn('Some associations failed to remove (likely already deleted):', deleteFailures);
           }
+
+          // Small delay to ensure database consistency before creating new associations
+          await new Promise(resolve => setTimeout(resolve, 50));
+          console.log('Finished removing existing associations');
         }
 
         // Crear nuevas asociaciones con deduplicación
@@ -2334,27 +2343,17 @@ function GerenciasContent() {
             if (association.subprocesoId) {
               return apiRequest(`/api/subprocesos/${association.subprocesoId}/gerencias`, "POST", { gerenciaId: id })
                 .catch((err) => {
-                  console.error(`Error adding subproceso ${association.subprocesoId}:`, err);
-                  if (!err?.message?.includes('ya está asignada')) {
-                    throw err;
-                  }
+                  if (!err?.message?.includes('ya está asignada')) throw err;
                 });
             } else if (association.processId) {
               return apiRequest(`/api/processes/${association.processId}/gerencias`, "POST", { gerenciaId: id })
                 .catch((err) => {
-                  console.error(`Error adding process ${association.processId}:`, err);
-                  if (!err?.message?.includes('ya está asignada')) {
-                    throw err;
-                  }
+                  if (!err?.message?.includes('ya está asignada')) throw err;
                 });
             } else if (association.macroprocesoId) {
               return apiRequest(`/api/macroprocesos/${association.macroprocesoId}/gerencias`, "POST", { gerenciaId: id })
                 .catch((err) => {
-                  console.error(`Error adding macroproceso ${association.macroprocesoId}:`, err);
-                  // Si el error es porque ya existe, no es crítico
-                  if (!err?.message?.includes('ya está asignada')) {
-                    throw err;
-                  }
+                  if (!err?.message?.includes('ya está asignada')) throw err;
                 });
             }
             return Promise.resolve();

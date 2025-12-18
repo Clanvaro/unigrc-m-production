@@ -80,3 +80,5 @@ gcloud run services logs read unigrc-backend \
 **Última actualización:** 15 de Diciembre, 2025  
 **Estado:** ✅ Operacional
 
+
+

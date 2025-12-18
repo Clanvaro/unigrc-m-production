@@ -57,3 +57,5 @@ gcloud compute networks vpc-access connectors list --region=southamerica-west1
 gcloud secrets versions access latest --secret=DATABASE_URL | grep -o "postgresql://[^@]*@[^/]*/[^?]*" | head -c 50
 ```
 
+
+

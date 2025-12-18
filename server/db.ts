@@ -251,7 +251,9 @@ if (databaseUrl) {
     }
   }
 
-  if (isRenderDb) {
+  if (isUsingPgBouncer) {
+    console.log('✅ Using PgBouncer connection pooler - optimized connection pooling for Cloud SQL');
+  } else if (isRenderDb) {
     console.log('✅ Using Render PostgreSQL - always-on database with no cold start delays');
   } else if (isPooled) {
     console.log('✅ Using Neon connection pooler (PgBouncer) - up to 10,000 concurrent connections supported');

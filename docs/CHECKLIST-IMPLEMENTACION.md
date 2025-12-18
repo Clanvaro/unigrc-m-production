@@ -308,3 +308,5 @@ gcloud run services describe unigrc-backend --region=southamerica-west1 --format
 **Estado:** 📋 Checklist listo  
 **Siguiente acción:** Ejecutar PASO 1
 
+
+

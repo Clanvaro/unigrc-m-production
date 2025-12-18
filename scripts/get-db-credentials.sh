@@ -59,3 +59,5 @@ echo "💡 Para usar estas variables en otro script:"
 echo "   source ./scripts/get-db-credentials.sh"
 echo "   echo \$DB_USER"
 
+
+
