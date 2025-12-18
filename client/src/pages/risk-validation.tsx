@@ -1390,25 +1390,32 @@ export default function RiskValidationPage() {
     console.log('[Risk Validation] Raw validatedRiskProcessLinks:', {
       total: validatedRiskProcessLinks.length,
       sample: validatedRiskProcessLinks[0],
-      allHaveRisk: validatedRiskProcessLinks.every(rpl => rpl.risk),
-      missingRisk: validatedRiskProcessLinks.filter(rpl => !rpl.risk).length
+      allHaveRisk: validatedRiskProcessLinks.every(rpl => rpl?.risk),
+      missingRisk: validatedRiskProcessLinks.filter(rpl => !rpl?.risk).length,
+      firstFew: validatedRiskProcessLinks.slice(0, 3).map(rpl => ({
+        id: rpl?.id,
+        riskId: rpl?.riskId,
+        hasRisk: !!rpl?.risk,
+        validationStatus: rpl?.validationStatus
+      }))
     });
     
+    // CRITICAL: Don't filter out risks that don't have risk object but have riskId
+    // The render will handle creating a minimal risk object
     const filtered = validatedRiskProcessLinks.filter(rpl => {
-      // FIXED: Ensure risk object exists before filtering
-      // But be more lenient - check if risk data exists in any form
+      // Only filter out if we have absolutely no risk data
+      if (!rpl) {
+        console.warn('[Risk Validation] Null risk-process link found');
+        return false;
+      }
+      
+      // Allow through if we have riskId even without risk object
       if (!rpl.risk && !rpl.riskId) {
-        console.warn('[Risk Validation] Risk-process link missing risk object and riskId:', rpl.id, rpl);
-        return false; // Skip links without risk data
+        console.warn('[Risk Validation] Risk-process link missing both risk object and riskId:', rpl.id, rpl);
+        return false; // Skip links without any risk data
       }
       
-      // If risk object is missing but riskId exists, create a minimal risk object
-      // This handles cases where the API returns riskId but not full risk object
-      if (!rpl.risk && rpl.riskId) {
-        console.warn('[Risk Validation] Risk-process link has riskId but no risk object, creating minimal risk:', rpl.id);
-        // Don't filter out - let it pass through and handle in render
-      }
-      
+      // Apply process filter if selected
       if (selectedProcessId) {
         const matchesProcess =
           rpl.macroprocesoId === selectedProcessId ||
@@ -1416,8 +1423,13 @@ export default function RiskValidationPage() {
           rpl.subprocesoId === selectedProcessId;
         if (!matchesProcess) return false;
       }
+      
+      // Apply owner filter
       if (!matchesOwnerFilter(rpl)) return false;
+      
+      // Apply risk level filter
       if (!matchesRiskLevelFilterForRisk(rpl)) return false;
+      
       return true;
     });
     
@@ -1429,7 +1441,8 @@ export default function RiskValidationPage() {
       riskLevelFilter,
       selectedProcessId,
       statusFilter,
-      filteredSample: filtered[0]
+      filteredSample: filtered[0],
+      allFilteredHaveRisk: filtered.every(rpl => rpl?.risk || rpl?.riskId)
     });
     
     return filtered;
