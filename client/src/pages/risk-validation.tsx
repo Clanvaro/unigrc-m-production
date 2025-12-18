@@ -2384,30 +2384,47 @@ export default function RiskValidationPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredValidatedRiskProcessLinks.map((rpl) => (
-                            rpl.risk && (
-                              <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${rpl.risk.id}`}>
+                          {filteredValidatedRiskProcessLinks.map((rpl) => {
+                            // Handle case where risk object might be missing but riskId exists
+                            if (!rpl.risk && !rpl.riskId) {
+                              console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id);
+                              return null;
+                            }
+                            
+                            // Create minimal risk object if missing
+                            const risk = rpl.risk || {
+                              id: rpl.riskId,
+                              code: (rpl as any).riskCode || 'N/A',
+                              name: (rpl as any).riskName || 'Sin nombre',
+                              status: (rpl as any).riskStatus || 'active',
+                              inherentRisk: (rpl as any).riskInherentRisk ?? null,
+                              residualRisk: (rpl as any).riskResidualRisk ?? null,
+                              processOwner: (rpl as any).riskProcessOwner ?? null
+                            };
+                            
+                            return (
+                              <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${risk.id}`}>
                                 <td className="px-4 py-3">
                                   <button
-                                    onClick={() => setViewingRisk(rpl.risk)}
+                                    onClick={() => setViewingRisk(risk)}
                                     className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                    data-testid={`button-view-validated-risk-${rpl.risk.id}`}
+                                    data-testid={`button-view-validated-risk-${risk.id}`}
                                   >
-                                    {rpl.risk.code || "N/A"}
+                                    {risk.code || "N/A"}
                                   </button>
                                 </td>
                                 <td className="px-4 py-3">
-                                  <div className="font-medium text-sm">{rpl.risk.name}</div>
+                                  <div className="font-medium text-sm">{risk.name}</div>
                                 </td>
                                 <td className="px-4 py-3 text-sm">
                                   {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
                                 </td>
                                 <td className="px-4 py-3 text-sm">
-                                  {rpl.responsibleUser?.fullName || rpl.risk.processOwner || "N/A"}
+                                  {rpl.responsibleUser?.fullName || risk.processOwner || "N/A"}
                                 </td>
                                 <td className="px-4 py-3">
-                                  <Badge className={getRiskLevelColor(rpl.risk.residualRisk || rpl.risk.inherentRisk)}>
-                                    {getRiskLevelText(rpl.risk.residualRisk || rpl.risk.inherentRisk)}
+                                  <Badge className={getRiskLevelColor(risk.residualRisk || risk.inherentRisk)}>
+                                    {getRiskLevelText(risk.residualRisk || risk.inherentRisk)}
                                   </Badge>
                                 </td>
                                 <td className="px-4 py-3 text-sm">
@@ -2424,12 +2441,12 @@ export default function RiskValidationPage() {
                                       onClick={() => {
                                         setSelectedHistoryRiskProcessLink({
                                           id: rpl.id,
-                                          riskCode: rpl.risk.code,
-                                          riskName: rpl.risk.name
+                                          riskCode: risk.code,
+                                          riskName: risk.name
                                         });
                                         setHistoryModalOpen(true);
                                       }}
-                                      data-testid={`button-history-validated-risk-${rpl.risk.id}`}
+                                      data-testid={`button-history-validated-risk-${risk.id}`}
                                       title="Ver historial de validaciones"
                                     >
                                       <History className="h-4 w-4" />
@@ -2437,8 +2454,8 @@ export default function RiskValidationPage() {
                                   </div>
                                 </td>
                               </tr>
-                            )
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
