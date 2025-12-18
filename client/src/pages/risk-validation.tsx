@@ -118,7 +118,7 @@ export default function RiskValidationPage() {
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
-  const { data: validatedRiskProcessLinks = [] } = useQuery<any[]>({
+  const { data: validatedRiskProcessLinks = [], refetch: refetchValidated } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
     staleTime: 60000,
@@ -132,6 +132,14 @@ export default function RiskValidationPage() {
       console.error('[Risk Validation] Error loading validated risk-process links:', error);
     }
   });
+
+  // CRITICAL: Refetch validated risks when statusFilter changes to "validated"
+  useEffect(() => {
+    if (statusFilter === "validated" && activeTab === "risks") {
+      console.log('[Risk Validation] Status filter changed to validated, refetching...');
+      refetchValidated();
+    }
+  }, [statusFilter, activeTab, refetchValidated]);
 
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
