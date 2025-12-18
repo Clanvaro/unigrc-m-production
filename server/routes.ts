@@ -7260,11 +7260,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const queryStart = Date.now();
       
       // Combined query for risks (all statuses in one query)
+      // FIXED: Removed validated_at IS NOT NULL check - some validated risks might not have validated_at set
       const risksCountsPromise = requireDb().execute(sql`
         SELECT 
           COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
           COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'validated' AND rpl.validated_at IS NOT NULL AND r.deleted_at IS NULL)::int AS validated,
+          COUNT(*) FILTER (WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL)::int AS validated,
           COUNT(*) FILTER (WHERE rpl.validation_status = 'observed' AND r.deleted_at IS NULL)::int AS observed,
           COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected' AND r.deleted_at IS NULL)::int AS rejected
         FROM risk_process_links rpl
