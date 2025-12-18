@@ -8235,12 +8235,16 @@ export class DatabaseStorage extends MemStorage {
 
     const result = await withRetry(async () => {
       // OPTIMIZED: Only select fields needed for filters/display (reduces data transfer by ~40%)
+      // IMPORTANT: Include 'type' and 'order' for value chain display
       return await db.select({
         id: macroprocesos.id,
         name: macroprocesos.name,
         code: macroprocesos.code,
+        type: macroprocesos.type, // Required for value chain (apoyo/clave)
+        order: macroprocesos.order, // Required for sorting in value chain
         status: macroprocesos.status,
         gerenciaId: macroprocesos.gerenciaId,
+        ownerId: macroprocesos.ownerId, // Required for owner display in value chain
       })
         .from(macroprocesos)
         .where(and(
