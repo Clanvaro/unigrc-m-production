@@ -2375,11 +2375,12 @@ export default function RiskValidationPage() {
 
             {/* Validated Risks */}
             {/* CRITICAL: Always show validated risks section when statusFilter is "all" or "validated" */}
-            {(statusFilter === "all" || statusFilter === "validated") && (
+            {/* Show section if there are validated risks OR if statusFilter is "validated" (to show empty state) */}
+            {((statusFilter === "all" || statusFilter === "validated") && validatedRiskProcessLinks.length > 0) || statusFilter === "validated" ? (
               <div>
                 <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
                   <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length})</span>
+                  <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length} de {validatedRiskProcessLinks.length})</span>
                 </h2>
                 {/* CRITICAL: Show table even if filtered list is empty, but show message if no data matches filters */}
                 {filteredValidatedRiskProcessLinks.length > 0 ? (
