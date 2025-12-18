@@ -1386,11 +1386,27 @@ export default function RiskValidationPage() {
   }));
 
   const filteredValidatedRiskProcessLinks = useMemo(() => {
+    // Debug: Log raw data to understand structure
+    console.log('[Risk Validation] Raw validatedRiskProcessLinks:', {
+      total: validatedRiskProcessLinks.length,
+      sample: validatedRiskProcessLinks[0],
+      allHaveRisk: validatedRiskProcessLinks.every(rpl => rpl.risk),
+      missingRisk: validatedRiskProcessLinks.filter(rpl => !rpl.risk).length
+    });
+    
     const filtered = validatedRiskProcessLinks.filter(rpl => {
       // FIXED: Ensure risk object exists before filtering
-      if (!rpl.risk) {
-        console.warn('[Risk Validation] Risk-process link missing risk object:', rpl.id);
+      // But be more lenient - check if risk data exists in any form
+      if (!rpl.risk && !rpl.riskId) {
+        console.warn('[Risk Validation] Risk-process link missing risk object and riskId:', rpl.id, rpl);
         return false; // Skip links without risk data
+      }
+      
+      // If risk object is missing but riskId exists, create a minimal risk object
+      // This handles cases where the API returns riskId but not full risk object
+      if (!rpl.risk && rpl.riskId) {
+        console.warn('[Risk Validation] Risk-process link has riskId but no risk object, creating minimal risk:', rpl.id);
+        // Don't filter out - let it pass through and handle in render
       }
       
       if (selectedProcessId) {
@@ -1406,15 +1422,15 @@ export default function RiskValidationPage() {
     });
     
     // Debug logging when filtering by validated status
-    if (statusFilter === "validated") {
-      console.log('[Risk Validation] Filtering validated risks:', {
-        total: validatedRiskProcessLinks.length,
-        filtered: filtered.length,
-        ownerFilter,
-        riskLevelFilter,
-        selectedProcessId
-      });
-    }
+    console.log('[Risk Validation] Filtering validated risks:', {
+      total: validatedRiskProcessLinks.length,
+      filtered: filtered.length,
+      ownerFilter,
+      riskLevelFilter,
+      selectedProcessId,
+      statusFilter,
+      filteredSample: filtered[0]
+    });
     
     return filtered;
   }, [validatedRiskProcessLinks, selectedProcessId, ownerFilter, riskLevelFilter, statusFilter, matchesOwnerFilter, matchesRiskLevelFilterForRisk]);
