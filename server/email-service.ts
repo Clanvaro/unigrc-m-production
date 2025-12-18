@@ -39,14 +39,30 @@ export function setEmailService(service: IEmailService | null): void {
  */
 export async function sendEmail(params: EmailParams): Promise<boolean> {
   if (!emailService) {
-    console.log("Email service not configured, email not sent:", params.subject);
+    console.error("❌ Email service not configured - email not sent:", {
+      to: params.to,
+      subject: params.subject,
+      message: "Email service is not initialized. Check email configuration in system settings or environment variables."
+    });
     return false;
   }
 
   try {
-    return await emailService.sendEmail(params);
+    const result = await emailService.sendEmail(params);
+    if (!result) {
+      console.error("❌ Email service returned false for:", {
+        to: params.to,
+        subject: params.subject
+      });
+    }
+    return result;
   } catch (error) {
-    console.error('❌ Error sending email:', error);
+    console.error('❌ Error sending email:', {
+      to: params.to,
+      subject: params.subject,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     return false;
   }
 }

@@ -7690,6 +7690,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const successCount = emailResults.filter(r => r.success).length;
       const failureCount = emailResults.filter(r => !r.success).length;
 
+      // Check if email service is available
+      const emailServiceAvailable = getEmailService();
+      if (!emailServiceAvailable && riskProcessLinkIds.length > 0) {
+        console.error("❌ Email service not configured - cannot send validation emails");
+        return res.status(503).json({
+          message: "Servicio de email no configurado",
+          code: "EMAIL_SERVICE_NOT_CONFIGURED",
+          emailsSent: 0,
+          linksNotified: 0,
+          failures: failureCount,
+          details: emailResults
+        });
+      }
+
       // Invalidate validation caches if any notifications were sent
       if (successCount > 0) {
         const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -7699,6 +7713,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             distributedCache.invalidate(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:pending_validation`)
           ]);
         }
+      }
+
+      // Log summary
+      if (sentCount === 0 && failureCount > 0) {
+        console.error("❌ No emails sent - all failed:", {
+          total: riskProcessLinkIds.length,
+          failures: failureCount,
+          emailServiceAvailable: !!emailServiceAvailable,
+          errorDetails: emailResults.filter(r => !r.success).slice(0, 3) // Log first 3 errors
+        });
       }
 
       res.json({
