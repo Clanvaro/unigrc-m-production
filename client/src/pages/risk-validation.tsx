@@ -127,6 +127,8 @@ export default function RiskValidationPage() {
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
     onSuccess: (data) => {
       console.log('[Risk Validation] Loaded validated risk-process links:', data.length);
+      console.log('[Risk Validation] Sample validated risk-process link:', data[0]);
+      console.log('[Risk Validation] All validated risk-process links:', data);
     },
     onError: (error) => {
       console.error('[Risk Validation] Error loading validated risk-process links:', error);
@@ -1404,6 +1406,17 @@ export default function RiskValidationPage() {
         id: rpl?.id,
         riskId: rpl?.riskId,
         hasRisk: !!rpl?.risk,
+        validationStatus: rpl?.validationStatus,
+        riskCode: rpl?.risk?.code,
+        riskName: rpl?.risk?.name
+      })),
+      // Log all risk-process links for debugging
+      allLinks: validatedRiskProcessLinks.map(rpl => ({
+        id: rpl?.id,
+        riskId: rpl?.riskId,
+        hasRisk: !!rpl?.risk,
+        riskCode: rpl?.risk?.code,
+        riskName: rpl?.risk?.name,
         validationStatus: rpl?.validationStatus
       }))
     });
