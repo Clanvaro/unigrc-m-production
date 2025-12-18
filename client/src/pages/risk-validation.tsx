@@ -2375,7 +2375,18 @@ export default function RiskValidationPage() {
 
             {/* Validated Risks */}
             {/* CRITICAL: Always show validated risks section when statusFilter is "all" or "validated" */}
-            {(statusFilter === "all" || statusFilter === "validated") && (
+            {(() => {
+              const shouldShow = (statusFilter === "all" || statusFilter === "validated");
+              const hasData = validatedRiskProcessLinks.length > 0;
+              console.log('[Risk Validation] Validated section render check:', {
+                statusFilter,
+                shouldShow,
+                hasData,
+                validatedCount: validatedRiskProcessLinks.length,
+                filteredCount: filteredValidatedRiskProcessLinks.length
+              });
+              return shouldShow;
+            })() && (
               <div>
                 <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
                   <CheckCircle className="h-5 w-5 text-green-500" />
