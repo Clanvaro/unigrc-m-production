@@ -2399,10 +2399,27 @@ export default function RiskValidationPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredValidatedRiskProcessLinks.map((rpl) => {
+                          {filteredValidatedRiskProcessLinks.map((rpl, index) => {
+                            // Debug: Log first few risks being rendered
+                            if (index < 3) {
+                              console.log('[Risk Validation] Rendering validated risk:', {
+                                index,
+                                rplId: rpl?.id,
+                                riskId: rpl?.riskId,
+                                hasRiskObject: !!rpl?.risk,
+                                riskCode: rpl?.risk?.code || (rpl as any)?.riskCode,
+                                riskName: rpl?.risk?.name || (rpl as any)?.riskName
+                              });
+                            }
+                            
                             // Handle case where risk object might be missing but riskId exists
+                            if (!rpl) {
+                              console.warn('[Risk Validation] Null risk-process link found in filtered list');
+                              return null;
+                            }
+                            
                             if (!rpl.risk && !rpl.riskId) {
-                              console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id);
+                              console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id, rpl);
                               return null;
                             }
                             
@@ -2477,9 +2494,18 @@ export default function RiskValidationPage() {
                   </div>
                 ) : (
                   <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
-                    <p>No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
-                    {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
-                      <p className="text-sm mt-2">Intenta ajustar los filtros para ver más resultados.</p>
+                    {validatedRiskProcessLinks.length === 0 ? (
+                      <p>No hay riesgos aprobados en el sistema.</p>
+                    ) : (
+                      <>
+                        <p>No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
+                        <p className="text-sm mt-2">
+                          Total de riesgos aprobados: {validatedRiskProcessLinks.length}
+                          {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
+                            <> - Intenta ajustar los filtros para ver más resultados.</>
+                          )}
+                        </p>
+                      </>
                     )}
                   </div>
                 )}
