@@ -4,7 +4,7 @@ import { distributedCache } from "./services/redis";
  * Cache version for risk-control associations
  * Increment this when schema or query logic changes to bust old caches
  */
-export const CACHE_VERSION = "v2";
+export const CACHE_VERSION = "v3";
 
 /**
  * Single-tenant cache key suffix (no more dynamic tenantId)
@@ -149,10 +149,12 @@ export async function invalidateValidationCaches() {
   const startTime = Date.now();
   try {
     await Promise.all([
-      distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`validation:risk-processes:${CACHE_VERSION}:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:${CACHE_VERSION}:*:${TENANT_KEY}`),
-      distributedCache.invalidatePattern(`validation:risks:*:${TENANT_KEY}`),
+      distributedCache.invalidatePattern(`validation:risk-processes:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:*:${TENANT_KEY}`),
+      // Also invalidate the counts cache when any validation action happens
+      distributedCache.invalidatePattern(`validation:counts:${CACHE_VERSION}:*`)
     ]);
     console.log(`[GRANULAR] Validation caches invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {
