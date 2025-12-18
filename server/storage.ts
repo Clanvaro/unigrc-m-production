@@ -309,7 +309,7 @@ export interface IStorage {
   updateRisk(id: string, risk: Partial<InsertRisk>): Promise<Risk | undefined>;
   deleteRisk(id: string): Promise<boolean>;
   // Optimized lite functions for page-data-lite endpoint
-  getRisksLite(): Promise<Array<Risk & { 
+  getRisksLite(): Promise<Array<Risk & {
     ownerName?: string | null;
     ownerEmail?: string | null;
     categoryNames?: string[];
@@ -7308,7 +7308,7 @@ export class DatabaseStorage extends MemStorage {
       }, {
         maxRetries: 2 // Only retry twice for system config
       });
-      
+
       const configMap: Record<string, SystemConfig> = {};
       this.systemConfigLocalCache.clear();
 
@@ -7331,17 +7331,17 @@ export class DatabaseStorage extends MemStorage {
       } catch (e) {
         errorMessage = String(error);
       }
-      
+
       console.error('Error loading system config cache:', {
         message: errorMessage,
         code: errorCode,
         type: error?.constructor?.name || typeof error
       });
-      
+
       // Don't throw - allow fallback to default values
       // Mark as initialized to prevent infinite retries
       this.localCacheInitialized = true;
-      
+
       // If cache is empty, log warning but continue with empty cache
       if (this.systemConfigLocalCache.size === 0) {
         console.warn('⚠️ System config cache empty after error - will use defaults');
@@ -9086,7 +9086,7 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // Optimized function to get risks with owner and category info in a single query
-  async getRisksLite(): Promise<Array<Risk & { 
+  async getRisksLite(): Promise<Array<Risk & {
     ownerName?: string | null;
     ownerEmail?: string | null;
     categoryNames?: string[];
@@ -10415,7 +10415,7 @@ export class DatabaseStorage extends MemStorage {
             maxNumber++;
             const retryNumber = (maxNumber + 1).toString().padStart(3, '0');
             const retryCode = `PLAN-${year}-${retryNumber}`;
-            
+
             const [created] = await db.insert(auditPlans).values({
               ...plan,
               code: retryCode
@@ -14577,14 +14577,14 @@ export class DatabaseStorage extends MemStorage {
     const cacheStart = Date.now();
     const cached = await distributedCache.get(cacheKey);
     const cacheDuration = Date.now() - cacheStart;
-    
+
     if (cached) {
       console.log(`[DB] getGerencias: Cache hit in ${cacheDuration}ms`);
       return cached;
     }
 
     console.log(`[DB] getGerencias: Cache miss (checked in ${cacheDuration}ms), querying database...`);
-    
+
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       // OPTIMIZED: Only select fields needed for filters/display (reduces data transfer by ~40%)
@@ -18091,7 +18091,7 @@ export class DatabaseStorage extends MemStorage {
       // PERFORMANCE: Execute queries in batches of 5 to prevent pool saturation
       // This prevents exhausting the connection pool (max 20 connections) when executing 16 queries
       console.time('db:admin-batch-1');
-      
+
       // Convert queries to functions for batchQueries
       const queryFunctions = [
         () => db.select({ count: sql<number>`cast(count(*) as integer)` }).from(auditTests),
@@ -18134,7 +18134,7 @@ export class DatabaseStorage extends MemStorage {
 
       // Execute in batches of 5 to limit concurrent connections
       const results = await batchQueries(queryFunctions, 5);
-      
+
       const [
         totalTests,
         totalUsers,
@@ -18153,7 +18153,7 @@ export class DatabaseStorage extends MemStorage {
         deptTestsAggregated,
         allRisksData
       ] = results;
-      
+
       console.timeEnd('db:admin-batch-1');
 
       console.time('processing:admin-metrics');
@@ -18231,9 +18231,9 @@ export class DatabaseStorage extends MemStorage {
       // These are expensive operations, so we cache them and only update periodically
       console.time('system-health-metrics');
       const systemHealthCacheKey = 'system-health-metrics';
-      let systemHealthMetrics: { attachmentStorageUsed: number; averageResponseTime: number; calculatedAt: number } | null = 
+      let systemHealthMetrics: { attachmentStorageUsed: number; averageResponseTime: number; calculatedAt: number } | null =
         await distributedCache.get(systemHealthCacheKey);
-      
+
       if (!systemHealthMetrics) {
         // Calculate storage usage from Cloud Storage (if available)
         // OPTIMIZED: Use efficient method to estimate storage usage
@@ -18241,23 +18241,23 @@ export class DatabaseStorage extends MemStorage {
         try {
           const { objectStorageClient } = await import('./objectStorage');
           const bucketName = process.env.GCS_BUCKET_NAME || `unigrc-uploads-${process.env.GCS_PROJECT_ID || 'unigrc-m'}`;
-          
+
           if (objectStorageClient) {
             const bucket = objectStorageClient.bucket(bucketName);
-            
+
             // OPTIMIZED: Use getFiles with autoPaginate=false and limit to avoid loading all files
             // This is much faster than iterating through all files
-            const [files] = await bucket.getFiles({ 
+            const [files] = await bucket.getFiles({
               prefix: 'attachments/',
               maxResults: 100, // Sample 100 files for quick estimation
               autoPaginate: false
             });
-            
+
             if (files.length > 0) {
               // Calculate average file size from sample
               let totalSize = 0;
               let validFiles = 0;
-              
+
               // Use Promise.all for parallel metadata fetching (faster)
               const metadataPromises = files.slice(0, 50).map(async (file) => {
                 try {
@@ -18267,17 +18267,17 @@ export class DatabaseStorage extends MemStorage {
                   return 0;
                 }
               });
-              
+
               const sizes = await Promise.all(metadataPromises);
               totalSize = sizes.reduce((sum, size) => sum + size, 0);
               validFiles = sizes.filter(s => s > 0).length;
-              
+
               if (validFiles > 0) {
                 const avgFileSize = totalSize / validFiles;
                 // Estimate total storage: average file size * total file count
                 // This is an approximation but much faster than counting all files
                 const estimatedTotalSize = avgFileSize * files.length;
-                
+
                 // Assume 10GB limit (adjust based on your actual quota)
                 const storageLimitGB = 10 * 1024 * 1024 * 1024; // 10GB in bytes
                 attachmentStorageUsed = Math.min(100, Math.round((estimatedTotalSize / storageLimitGB) * 100 * 10) / 10);
@@ -19699,9 +19699,9 @@ export class DatabaseStorage extends MemStorage {
         createdAt: processOwners.createdAt,
         updatedAt: processOwners.updatedAt,
       })
-      .from(processOwners)
-      .where(eq(processOwners.isActive, true))
-      .orderBy(processOwners.name);
+        .from(processOwners)
+        .where(eq(processOwners.isActive, true))
+        .orderBy(processOwners.name);
 
       // Add timeout to prevent accumulation of delays when pool is busy
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -21138,11 +21138,11 @@ export class DatabaseStorage extends MemStorage {
     return withRetry(async () => {
       // Build WHERE conditions - filter out deleted risks and processes for performance
       const conditions = [
-        eq(riskProcessLinks.validationStatus, status), 
+        eq(riskProcessLinks.validationStatus, status),
         isNull(risks.deletedAt)
         // sql`${risks.status} != 'deleted'` // FIXED: Removed to match validation counts logic (status might be desync with deletedAt)
       ];
-      
+
       // For validated status, ensure validatedAt is not null (actually validated)
       // NOTE: Removed this check to include all validated risks, even if validatedAt is null
       // This can happen if risks were validated before validatedAt was tracked
@@ -21157,46 +21157,46 @@ export class DatabaseStorage extends MemStorage {
       // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
       // Use db directly (already imported and initialized)
       let query = db.select({
-      // RiskProcessLink fields (only essential ones)
-      rplId: riskProcessLinks.id,
-      rplRiskId: riskProcessLinks.riskId,
-      rplMacroprocesoId: riskProcessLinks.macroprocesoId,
-      rplProcessId: riskProcessLinks.processId,
-      rplSubprocesoId: riskProcessLinks.subprocesoId,
-      rplResponsibleOverrideId: riskProcessLinks.responsibleOverrideId,
-      rplValidatedBy: riskProcessLinks.validatedBy,
-      rplValidationStatus: riskProcessLinks.validationStatus,
-      rplValidationComments: riskProcessLinks.validationComments,
-      rplValidatedAt: riskProcessLinks.validatedAt,
-      rplNotified: riskProcessLinks.notified,
-      rplCreatedAt: riskProcessLinks.createdAt,
-      rplUpdatedAt: riskProcessLinks.updatedAt,
-      // Risk fields (include fields needed for filtering and display)
-      riskId: risks.id,
-      riskCode: risks.code,
-      riskName: risks.name,
-      riskStatus: risks.status,
-      riskInherentRisk: risks.inherentRisk,
-      riskResidualRisk: risks.residualRisk,
-      riskProcessOwner: risks.processOwner,
-      // Macroproceso fields (only id and name)
-      macroId: macroprocesos.id,
-      macroName: macroprocesos.name,
-      macroOwnerId: macroprocesos.ownerId,
-      // Process fields (only id and name)
-      procId: processes.id,
-      procName: processes.name,
-      procOwnerId: processes.ownerId,
-      // Subproceso fields (only id and name)
-      subId: subprocesos.id,
-      subName: subprocesos.name,
-      subOwnerId: subprocesos.ownerId,
-      // Validated by user fields (only essential ones)
-      valUserId: users.id,
-      valUserFullName: users.fullName,
-      valUserEmail: users.email,
-      // Get the responsible owner ID using COALESCE logic
-      responsibleOwnerId: sql<string>`
+        // RiskProcessLink fields (only essential ones)
+        rplId: riskProcessLinks.id,
+        rplRiskId: riskProcessLinks.riskId,
+        rplMacroprocesoId: riskProcessLinks.macroprocesoId,
+        rplProcessId: riskProcessLinks.processId,
+        rplSubprocesoId: riskProcessLinks.subprocesoId,
+        rplResponsibleOverrideId: riskProcessLinks.responsibleOverrideId,
+        rplValidatedBy: riskProcessLinks.validatedBy,
+        rplValidationStatus: riskProcessLinks.validationStatus,
+        rplValidationComments: riskProcessLinks.validationComments,
+        rplValidatedAt: riskProcessLinks.validatedAt,
+        rplNotified: riskProcessLinks.notified,
+        rplCreatedAt: riskProcessLinks.createdAt,
+        rplUpdatedAt: riskProcessLinks.updatedAt,
+        // Risk fields (include fields needed for filtering and display)
+        riskId: risks.id,
+        riskCode: risks.code,
+        riskName: risks.name,
+        riskStatus: risks.status,
+        riskInherentRisk: risks.inherentRisk,
+        riskResidualRisk: risks.residualRisk,
+        riskProcessOwner: risks.processOwner,
+        // Macroproceso fields (only id and name)
+        macroId: macroprocesos.id,
+        macroName: macroprocesos.name,
+        macroOwnerId: macroprocesos.ownerId,
+        // Process fields (only id and name)
+        procId: processes.id,
+        procName: processes.name,
+        procOwnerId: processes.ownerId,
+        // Subproceso fields (only id and name)
+        subId: subprocesos.id,
+        subName: subprocesos.name,
+        subOwnerId: subprocesos.ownerId,
+        // Validated by user fields (only essential ones)
+        valUserId: users.id,
+        valUserFullName: users.fullName,
+        valUserEmail: users.email,
+        // Get the responsible owner ID using COALESCE logic
+        responsibleOwnerId: sql<string>`
         COALESCE(
           ${riskProcessLinks.responsibleOverrideId},
           ${subprocesos.ownerId},
@@ -21204,88 +21204,89 @@ export class DatabaseStorage extends MemStorage {
           ${macroprocesos.ownerId}
         )
       `.as('responsible_owner_id')
-    })
-      .from(riskProcessLinks)
-      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .leftJoin(macroprocesos, and(
-        eq(riskProcessLinks.macroprocesoId, macroprocesos.id),
-        isNull(macroprocesos.deletedAt)
-      ))
-      .leftJoin(processes, and(
-        eq(riskProcessLinks.processId, processes.id),
-        isNull(processes.deletedAt)
-      ))
-      .leftJoin(subprocesos, and(
-        eq(riskProcessLinks.subprocesoId, subprocesos.id),
-        isNull(subprocesos.deletedAt)
-      ))
-      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-      .where(and(...conditions))
-      .orderBy(riskProcessLinks.createdAt)
-      .limit(queryLimit);
-
-    const baseResults = await query;
-
-    // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
-    const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
-    const owners = ownerIds.length > 0
-      ? await db.select({
-        id: processOwners.id,
-        fullName: processOwners.name,
-        email: processOwners.email
       })
-        .from(processOwners)
-        .where(inArray(processOwners.id, ownerIds))
-      : [];
-    const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
+        .from(riskProcessLinks)
+        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+        .leftJoin(macroprocesos, and(
+          eq(riskProcessLinks.macroprocesoId, macroprocesos.id),
+          isNull(macroprocesos.deletedAt)
+        ))
+        .leftJoin(processes, and(
+          eq(riskProcessLinks.processId, processes.id),
+          isNull(processes.deletedAt)
+        ))
+        .leftJoin(subprocesos, and(
+          eq(riskProcessLinks.subprocesoId, subprocesos.id),
+          isNull(subprocesos.deletedAt)
+        ))
+        .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
+        .where(and(...conditions))
+        .orderBy(riskProcessLinks.createdAt)
+        .limit(queryLimit);
 
-    // OPTIMIZED: Map results with minimal object construction
-    const results = baseResults.map((result) => ({
-      // RiskProcessLink fields
-      id: result.rplId,
-      riskId: result.rplRiskId,
-      macroprocesoId: result.rplMacroprocesoId,
-      processId: result.rplProcessId,
-      subprocesoId: result.rplSubprocesoId,
-      responsibleOverrideId: result.rplResponsibleOverrideId,
-      validatedBy: result.rplValidatedBy,
-      validationStatus: result.rplValidationStatus,
-      validationComments: result.rplValidationComments,
-      validatedAt: result.rplValidatedAt,
-      notified: result.rplNotified,
-      createdAt: result.rplCreatedAt,
-      updatedAt: result.rplUpdatedAt,
-      // Related entities (minimal objects)
-      risk: {
-        id: result.riskId!,
-        code: result.riskCode!,
-        name: result.riskName!,
-        status: result.riskStatus!,
-        inherentRisk: result.riskInherentRisk ?? null,
-        residualRisk: result.riskResidualRisk ?? null,
-        processOwner: result.riskProcessOwner ?? null
-      },
-      macroproceso: result.macroId ? {
-        id: result.macroId,
-        name: result.macroName!
-      } : undefined,
-      process: result.procId ? {
-        id: result.procId,
-        name: result.procName!
-      } : undefined,
-      subproceso: result.subId ? {
-        id: result.subId,
-        name: result.subName!
-      } : undefined,
-      responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-      validatedByUser: result.valUserId ? {
-        id: result.valUserId,
-        fullName: result.valUserFullName,
-        email: result.valUserEmail
-      } : undefined,
-    }));
+      const baseResults = await query;
+      console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus(${status}) returned ${baseResults.length} records from database`);
 
-    return results;
+      // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
+      const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
+      const owners = ownerIds.length > 0
+        ? await db.select({
+          id: processOwners.id,
+          fullName: processOwners.name,
+          email: processOwners.email
+        })
+          .from(processOwners)
+          .where(inArray(processOwners.id, ownerIds))
+        : [];
+      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
+
+      // OPTIMIZED: Map results with minimal object construction
+      const results = baseResults.map((result) => ({
+        // RiskProcessLink fields
+        id: result.rplId,
+        riskId: result.rplRiskId,
+        macroprocesoId: result.rplMacroprocesoId,
+        processId: result.rplProcessId,
+        subprocesoId: result.rplSubprocesoId,
+        responsibleOverrideId: result.rplResponsibleOverrideId,
+        validatedBy: result.rplValidatedBy,
+        validationStatus: result.rplValidationStatus,
+        validationComments: result.rplValidationComments,
+        validatedAt: result.rplValidatedAt,
+        notified: result.rplNotified,
+        createdAt: result.rplCreatedAt,
+        updatedAt: result.rplUpdatedAt,
+        // Related entities (minimal objects)
+        risk: {
+          id: result.riskId!,
+          code: result.riskCode!,
+          name: result.riskName!,
+          status: result.riskStatus!,
+          inherentRisk: result.riskInherentRisk ?? null,
+          residualRisk: result.riskResidualRisk ?? null,
+          processOwner: result.riskProcessOwner ?? null
+        },
+        macroproceso: result.macroId ? {
+          id: result.macroId,
+          name: result.macroName!
+        } : undefined,
+        process: result.procId ? {
+          id: result.procId,
+          name: result.procName!
+        } : undefined,
+        subproceso: result.subId ? {
+          id: result.subId,
+          name: result.subName!
+        } : undefined,
+        responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
+        validatedByUser: result.valUserId ? {
+          id: result.valUserId,
+          fullName: result.valUserFullName,
+          email: result.valUserEmail
+        } : undefined,
+      }));
+
+      return results;
     }, {
       maxRetries: 2,
       retryDelay: 1000
