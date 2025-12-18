@@ -850,6 +850,7 @@ export const insertGerenciaSchema = createInsertSchema(gerencias).omit({
   updatedAt: true,
 }).extend({
   parentId: z.string().nullable().optional(),
+  managerId: z.string().nullable().optional(),
   level: z.enum(["gerencia", "subgerencia", "jefatura"]).default("gerencia"),
 });
 

@@ -30,7 +30,7 @@ interface GerenciaFormProps {
 export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwners, gerencias, isPending }: GerenciaFormProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+
   const [selectedManagerId, setSelectedManagerId] = useState<string>(gerencia?.managerId || "");
   const [isCreateManagerDialogOpen, setIsCreateManagerDialogOpen] = useState(false);
   const [newManagerName, setNewManagerName] = useState("");
@@ -62,22 +62,22 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
       ])
         .then(([macros, processes, subprocesos]) => {
           const associations: ProcessAssociation[] = [];
-          
+
           // Agregar asociaciones de macroprocesos
           macros.forEach((macro: any) => {
             associations.push({ macroprocesoId: macro.id });
           });
-          
+
           // Agregar asociaciones de procesos
           processes.forEach((process: any) => {
             associations.push({ processId: process.id });
           });
-          
+
           // Agregar asociaciones de subprocesos
           subprocesos.forEach((subproceso: any) => {
             associations.push({ subprocesoId: subproceso.id });
           });
-          
+
           setProcessAssociations(associations);
         })
         .catch((error) => {
@@ -94,7 +94,7 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
   const availableParents = (gerencias || []).filter(g => {
     // Excluir la gerencia que se está editando para evitar referencias circulares
     if (gerencia && g.id === gerencia.id) return false;
-    
+
     if (selectedLevel === "gerencia") return g.level === "gerencia"; // Gerencias pueden depender de otras gerencias
     if (selectedLevel === "subgerencia") return g.level === "gerencia"; // Subgerencias dependen de gerencias
     if (selectedLevel === "jefatura") return g.level === "gerencia" || g.level === "subgerencia"; // Jefaturas dependen de gerencias o subgerencias
@@ -161,8 +161,8 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
               <FormItem>
                 <FormLabel>Descripción</FormLabel>
                 <FormControl>
-                  <Textarea 
-                    placeholder="Describe el propósito y alcance de la gerencia..." 
+                  <Textarea
+                    placeholder="Describe el propósito y alcance de la gerencia..."
                     {...restField}
                     value={value || ""}
                     data-testid="input-gerencia-description"
@@ -213,21 +213,21 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
           render={({ field }) => (
             <FormItem>
               <FormLabel>Depende de (Opcional)</FormLabel>
-              <Select 
+              <Select
                 onValueChange={(value) => {
                   // Si selecciona "none", establecer parentId como undefined/null
                   field.onChange(value === "none" ? undefined : value);
-                }} 
+                }}
                 value={field.value || "none"}
               >
                 <FormControl>
                   <SelectTrigger data-testid="select-gerencia-parent">
                     <SelectValue placeholder={
-                      selectedLevel === "gerencia" 
-                        ? "Selecciona la gerencia superior (opcional)" 
-                        : selectedLevel === "subgerencia" 
-                        ? "Selecciona la gerencia superior" 
-                        : "Selecciona la gerencia o subgerencia superior"
+                      selectedLevel === "gerencia"
+                        ? "Selecciona la gerencia superior (opcional)"
+                        : selectedLevel === "subgerencia"
+                          ? "Selecciona la gerencia superior"
+                          : "Selecciona la gerencia o subgerencia superior"
                     } />
                   </SelectTrigger>
                 </FormControl>
@@ -241,11 +241,11 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
                 </SelectContent>
               </Select>
               <FormDescription>
-                {selectedLevel === "gerencia" 
-                  ? "Define si esta gerencia depende de otra gerencia superior. Déjalo vacío si es de nivel raíz." 
-                  : selectedLevel === "subgerencia" 
-                  ? "Selecciona la gerencia de la cual depende esta subgerencia" 
-                  : "Selecciona la gerencia o subgerencia de la cual depende esta jefatura"}
+                {selectedLevel === "gerencia"
+                  ? "Define si esta gerencia depende de otra gerencia superior. Déjalo vacío si es de nivel raíz."
+                  : selectedLevel === "subgerencia"
+                    ? "Selecciona la gerencia de la cual depende esta subgerencia"
+                    : "Selecciona la gerencia o subgerencia de la cual depende esta jefatura"}
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -262,13 +262,16 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
                 <div className="space-y-2">
                   <Combobox
                     options={managerOptions}
-                    value={field.value || selectedManagerId}
+                    value={field.value || ""}
                     placeholder="Seleccione el responsable"
                     searchPlaceholder="Buscar por nombre o cargo..."
                     emptyText="No se encontraron responsables"
                     onValueChange={(value) => {
                       field.onChange(value);
-                      setSelectedManagerId(value);
+                      // Clear local state when form updates to keep them in sync
+                      if (selectedManagerId !== value) {
+                        setSelectedManagerId(value);
+                      }
                     }}
                     data-testid="combobox-gerencia-manager"
                   />
@@ -316,17 +319,17 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
         />
 
         <div className="flex justify-end gap-2 pt-4">
-          <Button 
-            type="button" 
-            variant="outline" 
+          <Button
+            type="button"
+            variant="outline"
             onClick={onCancel}
             disabled={isPending}
             data-testid="button-cancel-gerencia"
           >
             Cancelar
           </Button>
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             disabled={isPending}
             data-testid="button-submit-gerencia"
           >
