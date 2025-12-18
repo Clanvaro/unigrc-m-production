@@ -1362,7 +1362,17 @@ export default function RiskValidationPage() {
   // Risk level filter for risks
   const matchesRiskLevelFilterForRisk = (rpl: any): boolean => {
     if (riskLevelFilter === "all") return true;
-    if (!rpl.risk) return false;
+    
+    // CRITICAL: If risk object is missing, try to use riskId to get risk data
+    // or allow through to prevent filtering out valid risk-process links
+    if (!rpl.risk) {
+      // If we have riskId but no risk object, allow through (will be handled in render)
+      if (rpl.riskId) {
+        console.warn('[Risk Validation] Risk-process link has riskId but no risk object in risk level filter:', rpl.id);
+        return true; // Allow through to prevent hiding valid data
+      }
+      return false;
+    }
 
     // Get residual risk or fallback to inherent risk
     const riskValue = rpl.risk.residualRisk ?? rpl.risk.inherentRisk;
