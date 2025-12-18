@@ -16007,10 +16007,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Reinitialize email service with new configuration
-      const newService = EmailServiceFactory.createService(emailConfig);
-      if (newService) {
-        setEmailService(newService);
-        console.log(`✅ Email service switched to: ${newService.getServiceName()}`);
+      try {
+        const newService = EmailServiceFactory.createService(emailConfig);
+        if (newService) {
+          setEmailService(newService);
+          console.log(`✅ Email service switched to: ${newService.getServiceName()}`);
+          
+          // Test connection to verify it works
+          const connectionTest = await newService.testConnection();
+          if (!connectionTest) {
+            console.warn('⚠️  Email service created but connection test failed');
+            return res.status(400).json({ 
+              message: "Configuración guardada pero la conexión de prueba falló. Verifica las credenciales.",
+              success: false,
+              connectionTestFailed: true
+            });
+          }
+          
+          console.log(`✅ Email service connection test passed`);
+        } else {
+          console.error('❌ Failed to create email service from configuration');
+          return res.status(400).json({ 
+            message: "No se pudo crear el servicio de email con la configuración proporcionada",
+            success: false
+          });
+        }
+      } catch (serviceError: any) {
+        console.error('❌ Error creating email service:', serviceError);
+        return res.status(400).json({ 
+          message: `Error al crear servicio de email: ${serviceError?.message || 'Error desconocido'}`,
+          success: false,
+          error: serviceError?.message
+        });
       }
 
       res.json({ message: "Configuración guardada exitosamente", success: true });
