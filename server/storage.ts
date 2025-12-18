@@ -2376,8 +2376,17 @@ export class MemStorage implements IStorage {
     const gerencia: Gerencia = {
       ...insertGerencia,
       id,
+      code: `G-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
       description: insertGerencia.description || null,
-      responsibleId: insertGerencia.responsibleId || null,
+      managerId: insertGerencia.managerId || null,
+      parentId: insertGerencia.parentId || null,
+      order: 0,
+      level: insertGerencia.level || "gerencia",
+      status: "active",
+      createdBy: "user-1",
+      updatedBy: null,
+      deletedBy: null,
+      deletionReason: null,
       createdAt: new Date(),
       updatedAt: new Date(),
       deletedAt: null

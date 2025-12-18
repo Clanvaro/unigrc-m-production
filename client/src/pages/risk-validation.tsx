@@ -55,7 +55,7 @@ export default function RiskValidationPage() {
   const { currentUser } = usePermissions();
   // Get tenant/user identifier for cache key (single-tenant mode uses fixed value)
   const tenantId = currentUser?.id || 'single-tenant';
-  
+
   const [selectedRisk, setSelectedRisk] = useState<Risk | null>(null);
   const [selectedRiskProcessLink, setSelectedRiskProcessLink] = useState<any | null>(null);
   const [selectedControl, setSelectedControl] = useState<Control | null>(null);
@@ -548,7 +548,7 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risks/batch-relations"], exact: false });
       // Invalidate validation counts
       queryClient.invalidateQueries({ queryKey: ["/api/validation/counts"] });
-      
+
       toast({
         title: "Riesgo validado",
         description: `El riesgo ha sido ${validationAction === "validated" ? "aprobado" : "rechazado"} exitosamente.`,
@@ -1332,7 +1332,7 @@ export default function RiskValidationPage() {
   };
 
   // Helper function to check if a risk-process link belongs to the filtered owner
-  const matchesOwnerFilter = (rpl: any): boolean => {
+  const matchesOwnerFilter = useCallback((rpl: any): boolean => {
     if (ownerFilter === "all") return true;
 
     // Check if the responsible user directly matches
@@ -1357,12 +1357,12 @@ export default function RiskValidationPage() {
     }
 
     return false;
-  };
+  }, [ownerFilter, macroprocesos, processes, subprocesos]);
 
   // Risk level filter for risks
-  const matchesRiskLevelFilterForRisk = (rpl: any): boolean => {
+  const matchesRiskLevelFilterForRisk = useCallback((rpl: any): boolean => {
     if (riskLevelFilter === "all") return true;
-    
+
     // CRITICAL: If risk object is missing, try to use riskId to get risk data
     // or allow through to prevent filtering out valid risk-process links
     if (!rpl.risk) {
@@ -1386,7 +1386,7 @@ export default function RiskValidationPage() {
     const riskLevelText = getRiskLevelText(riskValue);
     // Case-insensitive comparison (header sends "bajo", "medio", "alto", "crítico")
     return riskLevelText.toLowerCase() === riskLevelFilter.toLowerCase();
-  };
+  }, [riskLevelFilter, getRiskLevelText]);
 
   // Filter functions for RiskProcessLinks
   const filteredPendingRiskProcessLinks = sortRiskProcessLinks(pendingRiskProcessLinks.filter(rpl => {
@@ -1430,7 +1430,7 @@ export default function RiskValidationPage() {
         validationStatus: rpl?.validationStatus
       }))
     });
-    
+
     // CRITICAL: Don't filter out risks that don't have risk object but have riskId
     // The render will handle creating a minimal risk object
     const filtered = validatedRiskProcessLinks.filter(rpl => {
@@ -1439,13 +1439,13 @@ export default function RiskValidationPage() {
         console.warn('[Risk Validation] Null risk-process link found');
         return false;
       }
-      
+
       // Allow through if we have riskId even without risk object
       if (!rpl.risk && !rpl.riskId) {
         console.warn('[Risk Validation] Risk-process link missing both risk object and riskId:', rpl.id, rpl);
         return false; // Skip links without any risk data
       }
-      
+
       // Apply process filter if selected
       if (selectedProcessId) {
         const matchesProcess =
@@ -1454,7 +1454,7 @@ export default function RiskValidationPage() {
           rpl.subprocesoId === selectedProcessId;
         if (!matchesProcess) return false;
       }
-      
+
       // Apply owner filter
       const ownerMatches = matchesOwnerFilter(rpl);
       if (!ownerMatches) {
@@ -1469,7 +1469,7 @@ export default function RiskValidationPage() {
         }
         return false;
       }
-      
+
       // Apply risk level filter
       const riskLevelMatches = matchesRiskLevelFilterForRisk(rpl);
       if (!riskLevelMatches) {
@@ -1483,10 +1483,10 @@ export default function RiskValidationPage() {
         }
         return false;
       }
-      
+
       return true;
     });
-    
+
     // Debug logging when filtering by validated status
     console.log('[Risk Validation] Filtering validated risks:', {
       total: validatedRiskProcessLinks.length,
@@ -1500,9 +1500,9 @@ export default function RiskValidationPage() {
       filteredOutByOwner: validatedRiskProcessLinks.length - filtered.length,
       filteredOutByRiskLevel: 0 // Will be calculated if needed
     });
-    
+
     return filtered;
-  }, [validatedRiskProcessLinks, selectedProcessId, ownerFilter, riskLevelFilter, statusFilter, matchesOwnerFilter, matchesRiskLevelFilterForRisk]);
+  }, [validatedRiskProcessLinks, selectedProcessId, ownerFilter, riskLevelFilter, statusFilter, matchesOwnerFilter, matchesRiskLevelFilterForRisk, macroprocesos, processes, subprocesos]);
 
   const filteredRejectedRiskProcessLinks = rejectedRiskProcessLinks.filter(rpl => {
     if (selectedProcessId) {
@@ -2127,7 +2127,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold" data-testid="stat-approved-risks">
-                  {validationCounts?.risks.validated ?? filteredValidatedRiskProcessLinks.length}
+                  {Math.max(validationCounts?.risks.validated ?? 0, filteredValidatedRiskProcessLinks.length)}
                 </div>
               </CardContent>
             </Card>
@@ -2173,12 +2173,12 @@ export default function RiskValidationPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-3xl font-bold" data-testid="stat-total-risks">
-                        {validationCounts?.risks.total ?? 
-                          ((notifiedRisksPaginationInfo?.total || 0) + 
-                           (notNotifiedRisksPaginationInfo?.total || 0) + 
-                           (validationCounts?.risks.validated || filteredValidatedRiskProcessLinks.length) + 
-                           (validationCounts?.risks.observed || filteredObservedRiskProcessLinks.length) + 
-                           (validationCounts?.risks.rejected || filteredRejectedRiskProcessLinks.length))}
+                        {validationCounts?.risks.total ??
+                          ((notifiedRisksPaginationInfo?.total || 0) +
+                            (notNotifiedRisksPaginationInfo?.total || 0) +
+                            (validationCounts?.risks.validated || filteredValidatedRiskProcessLinks.length) +
+                            (validationCounts?.risks.observed || filteredObservedRiskProcessLinks.length) +
+                            (validationCounts?.risks.rejected || filteredRejectedRiskProcessLinks.length))}
                       </div>
                     </CardContent>
                   </Card>
@@ -2443,141 +2443,141 @@ export default function RiskValidationPage() {
               });
               return shouldShow;
             })() && (
-              <div>
-                <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length} de {validatedRiskProcessLinks.length})</span>
-                </h2>
-                {/* CRITICAL: Show table even if filtered list is empty, but show message if no data matches filters */}
-                {filteredValidatedRiskProcessLinks.length > 0 ? (
-                  <div className="border rounded-lg overflow-hidden">
-                    <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead className="bg-gray-50 border-b">
-                          <tr>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
-                            <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredValidatedRiskProcessLinks.map((rpl, index) => {
-                            // Debug: Log first few risks being rendered
-                            if (index < 3) {
-                              console.log('[Risk Validation] Rendering validated risk:', {
-                                index,
-                                rplId: rpl?.id,
-                                riskId: rpl?.riskId,
-                                hasRiskObject: !!rpl?.risk,
-                                riskCode: rpl?.risk?.code || (rpl as any)?.riskCode,
-                                riskName: rpl?.risk?.name || (rpl as any)?.riskName
-                              });
-                            }
-                            
-                            // Handle case where risk object might be missing but riskId exists
-                            if (!rpl) {
-                              console.warn('[Risk Validation] Null risk-process link found in filtered list');
-                              return null;
-                            }
-                            
-                            if (!rpl.risk && !rpl.riskId) {
-                              console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id, rpl);
-                              return null;
-                            }
-                            
-                            // Create minimal risk object if missing
-                            const risk = rpl.risk || {
-                              id: rpl.riskId,
-                              code: (rpl as any).riskCode || 'N/A',
-                              name: (rpl as any).riskName || 'Sin nombre',
-                              status: (rpl as any).riskStatus || 'active',
-                              inherentRisk: (rpl as any).riskInherentRisk ?? null,
-                              residualRisk: (rpl as any).riskResidualRisk ?? null,
-                              processOwner: (rpl as any).riskProcessOwner ?? null
-                            };
-                            
-                            return (
-                              <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${risk.id}`}>
-                                <td className="px-4 py-3">
-                                  <button
-                                    onClick={() => setViewingRisk(risk)}
-                                    className="font-medium text-sm text-primary hover:underline cursor-pointer"
-                                    data-testid={`button-view-validated-risk-${risk.id}`}
-                                  >
-                                    {risk.code || "N/A"}
-                                  </button>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="font-medium text-sm">{risk.name}</div>
-                                </td>
-                                <td className="px-4 py-3 text-sm">
-                                  {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
-                                </td>
-                                <td className="px-4 py-3 text-sm">
-                                  {rpl.responsibleUser?.fullName || risk.processOwner || "N/A"}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <Badge className={getRiskLevelColor(risk.residualRisk || risk.inherentRisk)}>
-                                    {getRiskLevelText(risk.residualRisk || risk.inherentRisk)}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-3 text-sm">
-                                  {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
-                                </td>
-                                <td className="px-4 py-3 text-sm">
-                                  {rpl.validationComments || "-"}
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center justify-end">
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => {
-                                        setSelectedHistoryRiskProcessLink({
-                                          id: rpl.id,
-                                          riskCode: risk.code,
-                                          riskName: risk.name
-                                        });
-                                        setHistoryModalOpen(true);
-                                      }}
-                                      data-testid={`button-history-validated-risk-${risk.id}`}
-                                      title="Ver historial de validaciones"
+                <div>
+                  <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                    <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length} de {validatedRiskProcessLinks.length})</span>
+                  </h2>
+                  {/* CRITICAL: Show table even if filtered list is empty, but show message if no data matches filters */}
+                  {filteredValidatedRiskProcessLinks.length > 0 ? (
+                    <div className="border rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Código</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nombre</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Proceso</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Responsable</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Nivel Residual</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Fecha Validación</th>
+                              <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 dark:text-gray-300">Comentarios</th>
+                              <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700 dark:text-gray-300">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredValidatedRiskProcessLinks.map((rpl, index) => {
+                              // Debug: Log first few risks being rendered
+                              if (index < 3) {
+                                console.log('[Risk Validation] Rendering validated risk:', {
+                                  index,
+                                  rplId: rpl?.id,
+                                  riskId: rpl?.riskId,
+                                  hasRiskObject: !!rpl?.risk,
+                                  riskCode: rpl?.risk?.code || (rpl as any)?.riskCode,
+                                  riskName: rpl?.risk?.name || (rpl as any)?.riskName
+                                });
+                              }
+
+                              // Handle case where risk object might be missing but riskId exists
+                              if (!rpl) {
+                                console.warn('[Risk Validation] Null risk-process link found in filtered list');
+                                return null;
+                              }
+
+                              if (!rpl.risk && !rpl.riskId) {
+                                console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id, rpl);
+                                return null;
+                              }
+
+                              // Create minimal risk object if missing
+                              const risk = rpl.risk || {
+                                id: rpl.riskId,
+                                code: (rpl as any).riskCode || 'N/A',
+                                name: (rpl as any).riskName || 'Sin nombre',
+                                status: (rpl as any).riskStatus || 'active',
+                                inherentRisk: (rpl as any).riskInherentRisk ?? null,
+                                residualRisk: (rpl as any).riskResidualRisk ?? null,
+                                processOwner: (rpl as any).riskProcessOwner ?? null
+                              };
+
+                              return (
+                                <tr key={rpl.id} className="border-b hover:bg-gray-50 dark:hover:bg-gray-800" data-testid={`row-validated-risk-${risk.id}`}>
+                                  <td className="px-4 py-3">
+                                    <button
+                                      onClick={() => setViewingRisk(risk)}
+                                      className="font-medium text-sm text-primary hover:underline cursor-pointer"
+                                      data-testid={`button-view-validated-risk-${risk.id}`}
                                     >
-                                      <History className="h-4 w-4" />
-                                    </Button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                      {risk.code || "N/A"}
+                                    </button>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="font-medium text-sm">{risk.name}</div>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {rpl.macroproceso?.name || rpl.process?.name || rpl.subproceso?.name || "N/A"}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {rpl.responsibleUser?.fullName || risk.processOwner || "N/A"}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <Badge className={getRiskLevelColor(risk.residualRisk || risk.inherentRisk)}>
+                                      {getRiskLevelText(risk.residualRisk || risk.inherentRisk)}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {rpl.validatedAt ? new Date(rpl.validatedAt).toLocaleDateString() : "N/A"}
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {rpl.validationComments || "-"}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center justify-end">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                          setSelectedHistoryRiskProcessLink({
+                                            id: rpl.id,
+                                            riskCode: risk.code,
+                                            riskName: risk.name
+                                          });
+                                          setHistoryModalOpen(true);
+                                        }}
+                                        data-testid={`button-history-validated-risk-${risk.id}`}
+                                        title="Ver historial de validaciones"
+                                      >
+                                        <History className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
-                    {validatedRiskProcessLinks.length === 0 ? (
-                      <p>No hay riesgos aprobados en el sistema.</p>
-                    ) : (
-                      <>
-                        <p>No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
-                        <p className="text-sm mt-2">
-                          Total de riesgos aprobados: {validatedRiskProcessLinks.length}
-                          {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
-                            <> - Intenta ajustar los filtros para ver más resultados.</>
-                          )}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+                  ) : (
+                    <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
+                      {validatedRiskProcessLinks.length === 0 ? (
+                        <p>No hay riesgos aprobados en el sistema.</p>
+                      ) : (
+                        <>
+                          <p>No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
+                          <p className="text-sm mt-2">
+                            Total de riesgos aprobados: {validatedRiskProcessLinks.length}
+                            {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
+                              <> - Intenta ajustar los filtros para ver más resultados.</>
+                            )}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
             {/* Observed Risks */}
             {(statusFilter === "all" || statusFilter === "observed") && filteredObservedRiskProcessLinks.length > 0 && (

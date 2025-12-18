@@ -63,10 +63,10 @@ if (isUsingPgBouncer) {
 } else if (isCloudSql) {
   const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
   const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
-  const connectionType = isCloudSqlProxy 
-    ? 'Unix socket (Cloud SQL Proxy)' 
-    : isPrivateIP 
-      ? 'IP privada (VPC)' 
+  const connectionType = isCloudSqlProxy
+    ? 'Unix socket (Cloud SQL Proxy)'
+    : isPrivateIP
+      ? 'IP privada (VPC)'
       : 'IP pública';
   console.log(`[DB Config] Using: Google Cloud SQL via ${connectionType}, host: ${host}`);
   if (!isCloudSqlProxy && !isPrivateIP) {
@@ -123,13 +123,13 @@ if (databaseUrl) {
     : isCloudSql
       ? (isCloudSqlProxy ? 10000 : 20000) // Unix socket: 10s, IP pública: 20s
       : (isProduction ? 60000 : 15000);
-  
+
   // Statement timeout: Shorter than connection timeout to prevent queries from blocking the pool
   // If a query takes longer than this, it will be cancelled, freeing the connection for other queries
   // This prevents slow queries from exhausting the connection pool
   // Cloud SQL: 30s (connection timeout is 60s, so queries have 30s before being cancelled)
   // Render/Others: 10-15s (connection timeout is 30-60s)
-  const statementTimeout = isCloudSql 
+  const statementTimeout = isCloudSql
     ? 30000  // 30s for Cloud SQL (connection timeout is 60s)
     : (isRenderDb ? 10000 : (isProduction ? 15000 : 10000));
 
@@ -150,7 +150,7 @@ if (databaseUrl) {
         : isCloudSql
           ? { rejectUnauthorized: false }  // Cloud SQL requires SSL but disable certificate verification
           : (isProduction ? { rejectUnauthorized: false } : false);
-  
+
   // Log SSL configuration for debugging
   if (isCloudSql && !isCloudSqlProxy) {
     console.log('[DB Config] Cloud SQL SSL config:', JSON.stringify(sslConfig));
@@ -240,8 +240,8 @@ if (databaseUrl) {
     // FIXED: Detect private IP correctly for logging
     const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
     const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
-    const connectionType = isCloudSqlProxy 
-      ? 'Unix socket (Cloud SQL Proxy)' 
+    const connectionType = isCloudSqlProxy
+      ? 'Unix socket (Cloud SQL Proxy)'
       : isPrivateIP
         ? 'IP privada (VPC)'
         : 'IP pública';
@@ -298,10 +298,10 @@ if (pool) {
     }
 
     // Handle timeout errors specifically with detailed pool metrics
-    const isTimeoutError = err.message?.includes('timeout') || 
-                          err.code === 'ETIMEDOUT' || 
-                          err.message?.includes('Connection terminated due to connection timeout');
-    
+    const isTimeoutError = err.message?.includes('timeout') ||
+      err.code === 'ETIMEDOUT' ||
+      err.message?.includes('Connection terminated due to connection timeout');
+
     if (isTimeoutError) {
       const metrics = getPoolMetrics();
       console.error('❌ Connection timeout error:', {
@@ -423,12 +423,12 @@ const RETRY_DELAYS_NEON = [300, 800, 2000, 5000];   // ~8s total window for Neon
 
 // Detect database type once at module load
 const isRenderDatabase = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
-const isCloudSqlDatabase = process.env.IS_GCP_DEPLOYMENT === 'true' || 
-  process.env.DATABASE_URL?.includes('.googleapis.com') || 
+const isCloudSqlDatabase = process.env.IS_GCP_DEPLOYMENT === 'true' ||
+  process.env.DATABASE_URL?.includes('.googleapis.com') ||
   process.env.DATABASE_URL?.includes('cloudsql') || false;
 
-const RETRY_DELAYS = isCloudSqlDatabase 
-  ? RETRY_DELAYS_CLOUDSQL 
+const RETRY_DELAYS = isCloudSqlDatabase
+  ? RETRY_DELAYS_CLOUDSQL
   : (isRenderDatabase ? RETRY_DELAYS_RENDER : RETRY_DELAYS_NEON);
 
 // Retryable error patterns - specifically for connection timeouts and transient errors
@@ -443,13 +443,14 @@ const RETRYABLE_ERROR_PATTERNS = [
 
 export async function withRetry<T>(
   operation: () => Promise<T>,
-  options: { maxRetries?: number; retryableErrors?: string[] } = {}
+  options: { maxRetries?: number; retryableErrors?: string[]; retryDelay?: number } = {}
 ): Promise<T> {
   if (!db || !pool) {
     throw new Error('Database not configured - cannot perform operation');
   }
 
   const maxRetries = options.maxRetries ?? 3;
+  const retryDelay = options.retryDelay ?? 500;
   const customRetryableErrors = options.retryableErrors ?? [];
   const allRetryablePatterns = [...RETRYABLE_ERROR_PATTERNS, ...customRetryableErrors];
 
@@ -465,7 +466,7 @@ export async function withRetry<T>(
       let errorCode: string | undefined;
       let errorMessage: string | undefined;
       let errorStack: string | undefined;
-      
+
       try {
         errorCode = error?.code;
         errorMessage = error?.message;
@@ -506,17 +507,17 @@ export async function withRetry<T>(
           errorMessage.includes('ECONNRESET')
         )) ||
         // Check against retryable error patterns
-        (errorMessage && allRetryablePatterns.some(pattern => 
+        (errorMessage && allRetryablePatterns.some(pattern =>
           errorMessage.includes(pattern) || errorCode === pattern
         ));
 
       if (!isRecoverable || attempt === maxRetries) {
         // Enhanced error logging with pool metrics for timeout errors
         const isTimeoutError = (errorMessage && (
-          errorMessage.includes('timeout') || 
+          errorMessage.includes('timeout') ||
           errorMessage.includes('Connection terminated due to connection timeout')
         )) || errorCode === 'ETIMEDOUT';
-        
+
         if (isTimeoutError) {
           const metrics = getPoolMetrics();
           console.error(`❌ Database timeout error (attempt ${attempt}/${maxRetries}):`, {
@@ -539,9 +540,11 @@ export async function withRetry<T>(
         throw error;
       }
 
-      // Use exponential backoff delay
-      const delay = RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
-      const cappedDelay = Math.min(delay, 4000); // Cap at 4 seconds
+      // Use exponential backoff delay or custom retryDelay
+      const delay = options.retryDelay
+        ? options.retryDelay * Math.pow(2, attempt - 1)
+        : (RETRY_DELAYS[attempt - 1] || RETRY_DELAYS[RETRY_DELAYS.length - 1]);
+      const cappedDelay = Math.min(delay, 8000); // Cap at 8 seconds
 
       // Safely extract error info for retry log
       let retryErrorCode: string | undefined;
@@ -562,11 +565,11 @@ export async function withRetry<T>(
 
       // On connection errors, try to warm the pool before retry
       const shouldWarmPool = attempt === 2 && (
-        errorCode === 'ETIMEDOUT' || 
-        errorCode === 'ECONNRESET' || 
+        errorCode === 'ETIMEDOUT' ||
+        errorCode === 'ECONNRESET' ||
         (errorMessage && errorMessage.includes('timeout'))
       );
-      
+
       if (shouldWarmPool) {
         console.log('🔄 Warming pool before retry...');
         try {
@@ -600,14 +603,14 @@ export async function batchQueries<T>(
   }
 
   const results: T[] = [];
-  
+
   // Process queries in batches to limit concurrent connections
   for (let i = 0; i < queries.length; i += batchSize) {
     const batch = queries.slice(i, i + batchSize);
     const batchResults = await Promise.all(batch.map(q => q()));
     results.push(...batchResults);
   }
-  
+
   return results;
 }
 
@@ -805,7 +808,7 @@ function startPoolMonitoring() {
         `Pool is saturated, queries are queuing. Check for slow queries or increase max connections`
       );
     }
-    
+
     // Critical alert when pool is nearly exhausted (>90%)
     if (activeUtilizationPct >= 90) {
       console.error(
@@ -964,10 +967,10 @@ function startPoolWarming() {
         let client: any = null;
         let timeoutId: NodeJS.Timeout | null = null;
         let pingCompleted = false;
-        
+
         try {
           const pingStart = Date.now();
-          
+
           // REDUCED: Timeout reducido a 3 segundos para detectar conexiones lentas más rápido
           // OPTIMIZED: Increase timeout when pool is saturated to handle connection acquisition delays
           // Check pool metrics to adjust timeout dynamically
@@ -975,7 +978,7 @@ function startPoolWarming() {
           const poolUtilization = poolMetrics ? (poolMetrics.totalCount - poolMetrics.idleCount) / poolMetrics.maxConnections : 0;
           // Increase timeout if pool is >50% utilized (more connections active = longer wait time)
           const PING_TIMEOUT_MS = poolUtilization > 0.5 ? 10000 : 5000; // 10s if pool busy, 5s otherwise
-          
+
           // Mejor manejo del timeout: separar timeout para conexión y query
           const pingPromise = (async () => {
             try {
@@ -986,13 +989,13 @@ function startPoolWarming() {
                   timeoutId = setTimeout(() => reject(new Error('Connection acquisition timeout')), PING_TIMEOUT_MS);
                 })
               ]);
-              
+
               // Si llegamos aquí, cancelar el timeout de conexión
               if (timeoutId) {
                 clearTimeout(timeoutId);
                 timeoutId = null;
               }
-              
+
               // Ejecutar query con timeout separado
               await Promise.race([
                 client.query({ text: 'SELECT 1', rowMode: 'array' }),
@@ -1000,13 +1003,13 @@ function startPoolWarming() {
                   timeoutId = setTimeout(() => reject(new Error('Query timeout')), PING_TIMEOUT_MS);
                 })
               ]);
-              
+
               // Si llegamos aquí, cancelar el timeout de query
               if (timeoutId) {
                 clearTimeout(timeoutId);
                 timeoutId = null;
               }
-              
+
               pingCompleted = true;
             } catch (error) {
               // Limpiar timeout si existe
@@ -1017,7 +1020,7 @@ function startPoolWarming() {
               throw error;
             }
           })();
-          
+
           await pingPromise;
           const pingDuration = Date.now() - pingStart;
 
@@ -1026,8 +1029,8 @@ function startPoolWarming() {
             // FIXED: Detect private IP correctly for logging
             const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
             const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
-            const connectionType = isCloudSqlProxy 
-              ? 'Unix socket (Cloud SQL Proxy)' 
+            const connectionType = isCloudSqlProxy
+              ? 'Unix socket (Cloud SQL Proxy)'
               : isCloudSql && isPrivateIP
                 ? 'IP privada (VPC)'
                 : isCloudSql
@@ -1035,7 +1038,7 @@ function startPoolWarming() {
                   : 'unknown';
             console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}, host: ${host}) - connection will recycle naturally via maxUses`);
           }
-          
+
           // OPTIMIZED: Let connections recycle naturally via maxUses instead of closing aggressively
           // Slow pings don't necessarily mean the connection is bad - it might just be network latency
           // maxUses=100 ensures connections are recycled after many uses anyway
@@ -1046,20 +1049,20 @@ function startPoolWarming() {
             clearTimeout(timeoutId);
             timeoutId = null;
           }
-          
+
           // OPTIMIZED: Less aggressive error handling - let pool handle connection recovery naturally
-          const isTimeout = error?.message === 'Ping timeout' || 
-                           error?.message === 'Connection acquisition timeout' ||
-                           error?.message === 'Query timeout' ||
-                           error?.code === 'ETIMEDOUT' || 
-                           error?.code === 'ECONNRESET';
-          
+          const isTimeout = error?.message === 'Ping timeout' ||
+            error?.message === 'Connection acquisition timeout' ||
+            error?.message === 'Query timeout' ||
+            error?.code === 'ETIMEDOUT' ||
+            error?.code === 'ECONNRESET';
+
           if (isTimeout) {
             // FIXED: Detect private IP correctly for logging
             const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
             const isPrivateIP = /^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\./.test(host);
-            const connectionType = isCloudSqlProxy 
-              ? 'Unix socket (Cloud SQL Proxy)' 
+            const connectionType = isCloudSqlProxy
+              ? 'Unix socket (Cloud SQL Proxy)'
               : isCloudSql && isPrivateIP
                 ? 'IP privada (VPC)'
                 : isCloudSql
@@ -1077,7 +1080,7 @@ function startPoolWarming() {
             clearTimeout(timeoutId);
             timeoutId = null;
           }
-          
+
           // Always release connection back to pool if valid (let maxUses handle recycling)
           if (client) {
             try {
@@ -1138,7 +1141,7 @@ export async function getHealthStatus(): Promise<{
 let poolWarmingStarted = false;
 export function startPoolWarmingIfNeeded() {
   if (poolWarmingStarted || !pool) return;
-  
+
   // Initial warm in background after delay
   setTimeout(async () => {
     if (isQuietHours()) {
@@ -1163,7 +1166,7 @@ export function startPoolWarmingIfNeeded() {
       startPoolWarming();
     }
   }, 500); // Start even sooner for faster cold start
-  
+
   poolWarmingStarted = true;
 }
 

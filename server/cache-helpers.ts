@@ -148,13 +148,18 @@ export async function invalidateRiskControlAssociationCaches() {
 export async function invalidateValidationCaches() {
   const startTime = Date.now();
   try {
+    // Keys in routes.ts follow: validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}
+    // and validation:controls:validated:${CACHE_VERSION}:${tenantId}
     await Promise.all([
-      distributedCache.invalidatePattern(`validation:risk-processes:${CACHE_VERSION}:*:${TENANT_KEY}`),
-      distributedCache.invalidatePattern(`validation:controls:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      // Risks: tenantId is in the middle, status is at the end
+      distributedCache.invalidatePattern(`validation:risk-processes:${CACHE_VERSION}:${TENANT_KEY}:*`),
+      // Controls: status is in the middle/start, tenant is at the end
+      distributedCache.invalidatePattern(`validation:controls:*:${CACHE_VERSION}:${TENANT_KEY}`),
+      // Legacy patterns or other variants
       distributedCache.invalidatePattern(`validation:risk-processes:*:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:controls:*:${TENANT_KEY}`),
-      // Also invalidate the counts cache when any validation action happens
-      distributedCache.invalidatePattern(`validation:counts:${CACHE_VERSION}:*`)
+      // Also invalidate the counts cache which uses: validation:counts:${CACHE_VERSION}:${tenantId}
+      distributedCache.invalidatePattern(`validation:counts:${CACHE_VERSION}:${TENANT_KEY}`)
     ]);
     console.log(`[GRANULAR] Validation caches invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {

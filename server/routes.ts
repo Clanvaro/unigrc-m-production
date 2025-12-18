@@ -193,7 +193,7 @@ export async function resolveActiveTenant(
   options: { required?: boolean } = {}
 ): Promise<{ tenantId: string; userId: string | null }> {
   // Single-tenant mode: always return a constant tenant ID
-  const SINGLE_TENANT_ID = 'default';
+  const SINGLE_TENANT_ID = 'single-tenant';
 
   // Get userId from authenticated user
   const userId = (req as any).user?.claims?.sub || (req as any).user?.id || null;
@@ -7350,7 +7350,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Return cached data if available as fallback
       try {
-        const cached = await distributedCache.get(`validation:counts:${CACHE_VERSION}:${(req as any).user?.activeTenantId || 'default'}`);
+        const cached = await distributedCache.get(`validation:counts:${CACHE_VERSION}:${(req as any).user?.activeTenantId || 'single-tenant'}`);
         if (cached) {
           console.log(`[FALLBACK] Returning cached validation counts`);
           return res.json(cached);
@@ -18803,6 +18803,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         macroprocesoId: req.params.id,
         gerenciaId,
       });
+
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+
       res.status(201).json(relation);
     } catch (error: any) {
       console.error("Failed to add gerencia to macroproceso:", error);
@@ -18820,6 +18824,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!success) {
         return res.status(404).json({ message: "Relation not found" });
       }
+
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -18846,6 +18854,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         subprocesoId: req.params.id,
         gerenciaId,
       });
+
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+
       res.status(201).json(relation);
     } catch (error: any) {
       console.error("Failed to add gerencia to subproceso:", error);
@@ -18863,6 +18875,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!success) {
         return res.status(404).json({ message: "Relation not found" });
       }
+
+      // Invalidate process-gerencias cache
+      await invalidateProcessRelationsCaches();
+
       res.status(204).send();
     } catch (error) {
       if (error instanceof ActiveTenantError) {
