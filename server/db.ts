@@ -46,7 +46,16 @@ const isPooled = !isRenderDb && !isCloudSql && (databaseUrl?.includes('-pooler')
 
 // Log which database is being used
 if (isUsingPgBouncer) {
-  const pgbouncerHost = pgbouncerUrl?.split('@')[1]?.split('/')[0] || 'unknown';
+  // Detect PgBouncer host - handle both Unix socket and IP formats
+  let pgbouncerHost = 'unknown';
+  if (pgbouncerUrl?.includes('/cloudsql/')) {
+    // Unix socket format: postgresql://user:pass@/db?host=/cloudsql/...
+    const match = pgbouncerUrl.match(/host=([^&]+)/);
+    pgbouncerHost = match ? match[1] : 'Unix socket (/cloudsql/)';
+  } else {
+    // IP format: postgresql://user:pass@host:port/db
+    pgbouncerHost = pgbouncerUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
+  }
   console.log(`[DB Config] Using: PgBouncer connection pooler at ${pgbouncerHost}`);
   console.log(`[DB Config] PgBouncer mode: Cloud Run will use more client connections (poolMax=10) since PgBouncer handles real pooling`);
 } else if (isRenderDb) {
