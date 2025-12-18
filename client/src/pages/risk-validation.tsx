@@ -1456,10 +1456,33 @@ export default function RiskValidationPage() {
       }
       
       // Apply owner filter
-      if (!matchesOwnerFilter(rpl)) return false;
+      const ownerMatches = matchesOwnerFilter(rpl);
+      if (!ownerMatches) {
+        if (ownerFilter !== "all") {
+          console.log('[Risk Validation] Risk-process link filtered out by owner filter:', {
+            rplId: rpl.id,
+            riskId: rpl.riskId,
+            ownerFilter,
+            responsibleUser: rpl.responsibleUser?.id,
+            riskProcessOwner: rpl.risk?.processOwner
+          });
+        }
+        return false;
+      }
       
       // Apply risk level filter
-      if (!matchesRiskLevelFilterForRisk(rpl)) return false;
+      const riskLevelMatches = matchesRiskLevelFilterForRisk(rpl);
+      if (!riskLevelMatches) {
+        if (riskLevelFilter !== "all") {
+          console.log('[Risk Validation] Risk-process link filtered out by risk level filter:', {
+            rplId: rpl.id,
+            riskId: rpl.riskId,
+            riskLevelFilter,
+            riskValue: rpl.risk?.residualRisk ?? rpl.risk?.inherentRisk
+          });
+        }
+        return false;
+      }
       
       return true;
     });
@@ -1473,7 +1496,9 @@ export default function RiskValidationPage() {
       selectedProcessId,
       statusFilter,
       filteredSample: filtered[0],
-      allFilteredHaveRisk: filtered.every(rpl => rpl?.risk || rpl?.riskId)
+      allFilteredHaveRisk: filtered.every(rpl => rpl?.risk || rpl?.riskId),
+      filteredOutByOwner: validatedRiskProcessLinks.length - filtered.length,
+      filteredOutByRiskLevel: 0 // Will be calculated if needed
     });
     
     return filtered;
