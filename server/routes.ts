@@ -743,7 +743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const metrics = getPoolMetrics();
       const health = await getHealthStatus();
-      
+
       if (!metrics) {
         return res.status(503).json({
           status: 'unhealthy',
@@ -967,8 +967,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
-      // Get effective user ID
-      const userId = user?.id || (process.env.NODE_ENV === 'development' ? ((req.session as any)?.switchedUserId || 'user-1') : null);
+      // Get effective user ID - prioritize switched user from session if present
+      const userId = (req.session as any)?.switchedUserId || user?.id;
 
       if (!userId) {
         if (!res.headersSent) {
@@ -989,7 +989,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('[getCurrentUserHandler] Cache error:', cacheError?.message || String(cacheError));
         cached = null; // Continue without cache
       }
-      
+
       if (cached) {
         const response = {
           authenticated: true,
@@ -1257,7 +1257,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         email: req.body?.email || 'unknown',
         timings
       });
-      
+
       // Return more specific error messages based on error type
       if (error instanceof Error) {
         // Database connection errors
@@ -1275,7 +1275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
       return res.status(500).json({
         message: 'Error al procesar el login'
       });
@@ -1574,10 +1574,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
-      
+
       const fetchDuration = Date.now() - fetchStart;
       console.log(`[DB] /api/processes/basic fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
-      
+
       if (fetchDuration > 3000) {
         console.warn(`⚠️ Slow /api/processes/basic query: ${fetchDuration}ms`);
       }
@@ -1604,7 +1604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/processes/basic COMPLETE in ${totalDuration}ms (${basicProcesses.length} processes)`);
-      
+
       res.json(basicProcesses);
     } catch (error) {
       const duration = Date.now() - requestStart;
@@ -1616,7 +1616,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch basic processes",
         error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
@@ -1646,10 +1646,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getProcessesWithOwners(),
         storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
       ]);
-      
+
       const fetchDuration = Date.now() - fetchStart;
       console.log(`[DB] /api/processes fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
-      
+
       if (fetchDuration > 3000) {
         console.warn(`⚠️ Slow /api/processes query: ${fetchDuration}ms`);
       }
@@ -1670,7 +1670,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/processes COMPLETE in ${totalDuration}ms (${processesWithRisks.length} processes)`);
-      
+
       res.json(processesWithRisks);
     } catch (error) {
       const duration = Date.now() - requestStart;
@@ -1682,7 +1682,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch processes",
         error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
@@ -2047,7 +2047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheGetStart = Date.now();
       const cached = await distributedCache.get(cacheKey);
       const cacheGetDuration = Date.now() - cacheGetStart;
-      
+
       if (cached) {
         mark('cache-hit');
         console.log('[page-data-lite] CACHE HIT', {
@@ -2066,17 +2066,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SINGLE FLIGHT PATTERN: Prevent cache stampede/herd effect
       // If cache expires and multiple requests arrive, only one should compute
       let lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
-      
+
       if (lockAcquired === 0) {
         // Another request is computing, wait and retry cache get
         console.log('[page-data-lite] Lock acquired by another request, waiting...');
         await new Promise(resolve => setTimeout(resolve, 150)); // Wait 150ms
-        
+
         // Retry cache get - the other request should have populated it
         const retryCacheGetStart = Date.now();
         const retryCached = await distributedCache.get(cacheKey);
         const retryCacheGetDuration = Date.now() - retryCacheGetStart;
-        
+
         if (retryCached) {
           mark('cache-hit-after-lock');
           console.log('[page-data-lite] CACHE HIT (after lock wait)', {
@@ -2087,7 +2087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           return res.json(retryCached);
         }
-        
+
         // Still no cache after wait - proceed with computation (fallback)
         console.log('[page-data-lite] Still no cache after lock wait, proceeding with computation');
       } else {
@@ -2158,15 +2158,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       for (let batchNum = 0; batchNum < batches.length; batchNum++) {
         const batch = batches[batchNum];
         const batchStart = Date.now();
-        
+
         const batchResults = await Promise.all(
           batch.map(async (query) => {
             const queryStart = Date.now();
-            
+
             try {
               const result = await query.fn();
               const queryDuration = Date.now() - queryStart;
-              
+
               // Calculate result size (approximate JSON size)
               let resultSize = 0;
               try {
@@ -2176,20 +2176,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // If stringify fails, estimate from object
                 resultSize = Array.isArray(result) ? result.length * 100 : 100;
               }
-              
+
               // Store timing and size for detailed logging
               queryTimings[query.name] = {
                 duration: queryDuration,
                 resultSize: resultSize
               };
-              
+
               // Log every query timing for full visibility (helps identify slow queries)
               console.log(`[page-data-lite] Query: ${query.name}`, {
                 durationMs: queryDuration,
                 resultSizeKB: Math.round(resultSize / 1024),
                 resultCount: Array.isArray(result) ? result.length : typeof result === 'object' ? Object.keys(result).length : 1
               });
-              
+
               return { name: query.name, result, error: null };
             } catch (err) {
               const queryDuration = Date.now() - queryStart;
@@ -2204,18 +2204,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           })
         );
-        
+
         results.push(...batchResults);
         const batchDuration = Date.now() - batchStart;
-        
+
         // Log pool metrics after each batch
         const poolMetricsAfter = getPoolMetrics();
         console.log(`[page-data-lite] Batch ${batchNum + 1}/${totalBatches} completed`, {
           batchSize: batch.length,
           batchDurationMs: batchDuration,
           queriesInBatch: batch.map(q => q.name),
-          queryTimings: batch.map(q => ({ 
-            name: q.name, 
+          queryTimings: batch.map(q => ({
+            name: q.name,
             duration: queryTimings[q.name]?.duration || 0,
             resultSizeKB: queryTimings[q.name]?.resultSize ? Math.round(queryTimings[q.name].resultSize! / 1024) : 0
           })),
@@ -2224,25 +2224,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           poolWaiting: poolMetricsAfter?.waitingCount || 0,
         });
       }
-      
+
       const dbQueriesDuration = Date.now() - dbQueriesStart;
       mark('db-queries-complete');
 
       // Log pool metrics after all queries to detect pool starvation
       const poolMetricsAfter = getPoolMetrics();
-      
+
       // Calculate total query time and identify slowest queries
       const totalQueryTime = Object.values(queryTimings).reduce((sum, t) => sum + t.duration, 0);
       const totalResultSize = Object.values(queryTimings).reduce((sum, t) => sum + (t.resultSize || 0), 0);
       const slowestQueries = Object.entries(queryTimings)
         .sort((a, b) => b[1].duration - a[1].duration)
         .slice(0, 3)
-        .map(([name, timing]) => ({ 
-          name, 
+        .map(([name, timing]) => ({
+          name,
           durationMs: timing.duration,
           resultSizeKB: timing.resultSize ? Math.round(timing.resultSize / 1024) : 0
         }));
-      
+
       console.log('[page-data-lite] Pool metrics AFTER queries', {
         total: poolMetricsAfter?.totalCount || 0,
         max: poolMetricsAfter?.maxConnections || 0,
@@ -2252,7 +2252,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         utilization: poolMetricsAfter ? `${Math.round(((poolMetricsAfter.totalCount - poolMetricsAfter.idleCount) / poolMetricsAfter.maxConnections) * 100)}%` : 'unknown',
         dbQueriesTimeMs: dbQueriesDuration
       });
-      
+
       // Log detailed query performance summary
       const totalQueries = Object.keys(queryTimings).length;
       console.log('[page-data-lite] Query Performance Summary', {
@@ -2310,22 +2310,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await distributedCache.set(cacheKey, response, 900);
       const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
-      
+
       // Release lock after cache is set
       try {
         await distributedCache.invalidate(lockKey);
       } catch (lockError) {
         console.warn('[page-data-lite] Failed to release lock:', lockError);
       }
-      
+
       const totalDuration = Date.now() - start;
-      
+
       // COMPREHENSIVE PERFORMANCE BREAKDOWN: Identify bottlenecks
       const breakdown = {
         // Cold start / initialization
         tenantResolution: steps.find(s => s.name === 'tenant-resolved')?.t || 0,
         dbPing: dbPingDuration,
-        
+
         // Database operations
         dbQueries: dbQueriesDuration,
         dbQueriesBreakdown: {
@@ -2334,30 +2334,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           slowestQuery: slowestQueries[0]?.name || 'none',
           slowestQueryTime: slowestQueries[0]?.durationMs || 0
         },
-        
+
         // Data processing
         jsonStringify: jsonStringifyDuration,
         responseBuilding: (steps.find(s => s.name === 'response-built')?.t || 0) - (steps.find(s => s.name === 'db-queries-complete')?.t || 0),
-        
+
         // Caching
         cacheGet: cacheGetDuration,
         cacheSet: cacheSetDuration,
-        
+
         // Response size
         responseSizeKB: responseSizeKB,
         responseSizeBytes: responseSizeBytes,
         totalResultSizeKB: Math.round(totalResultSize / 1024),
-        
+
         // Total
         total: totalDuration
       };
-      
+
       // Calculate percentages to identify bottlenecks
       const dbTimePercent = Math.round((dbQueriesDuration / totalDuration) * 100);
       const jsonTimePercent = Math.round((jsonStringifyDuration / totalDuration) * 100);
       const cacheTimePercent = Math.round(((cacheGetDuration + cacheSetDuration) / totalDuration) * 100);
       const otherTimePercent = 100 - dbTimePercent - jsonTimePercent - cacheTimePercent;
-      
+
       console.log('[page-data-lite] PERFORMANCE BREAKDOWN', {
         ...breakdown,
         percentages: {
@@ -2366,12 +2366,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           cache: `${cacheTimePercent}%`,
           other: `${otherTimePercent}%`
         },
-        bottleneck: dbTimePercent > 70 ? 'DB_QUERIES' : 
-                    jsonTimePercent > 20 ? 'JSON_STRINGIFY' :
-                    cacheTimePercent > 20 ? 'CACHE' : 'OTHER',
+        bottleneck: dbTimePercent > 70 ? 'DB_QUERIES' :
+          jsonTimePercent > 20 ? 'JSON_STRINGIFY' :
+            cacheTimePercent > 20 ? 'CACHE' : 'OTHER',
         steps: steps.map(s => ({ name: s.name, t: s.t }))
       });
-      
+
       console.log('[page-data-lite] CACHE SET', {
         redisSetMs: cacheSetDuration,
         responseSizeKB: responseSizeKB,
@@ -2384,7 +2384,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (err instanceof Error) {
         console.error('Stack trace:', err.stack);
       }
-      
+
       // Release lock on error if we acquired it
       if (shouldReleaseLock && lockKey) {
         try {
@@ -2393,7 +2393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.warn('[page-data-lite] Failed to release lock on error:', lockError);
         }
       }
-      
+
       res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });
     }
   });
@@ -2528,7 +2528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.error('[ERROR] Database not available in catalogsPromise:', dbError);
             throw new Error('Database not available');
           }
-          
+
           // FIXED: Wrap each storage call in try-catch to prevent initialization errors
           const [gerencias, macroprocesos, processes, subprocesos, processOwners, processGerenciasRelations, riskCategoriesResult] = await Promise.all([
             storage.getGerencias().catch(err => {
@@ -2562,15 +2562,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               color: riskCategories.color,
               isActive: riskCategories.isActive
             })
-            .from(riskCategories)
-            .where(eq(riskCategories.isActive, true))
-            .orderBy(riskCategories.name)
-            .catch(err => {
-              console.error('[ERROR] Failed to get riskCategories:', err);
-              return [];
-            })
+              .from(riskCategories)
+              .where(eq(riskCategories.isActive, true))
+              .orderBy(riskCategories.name)
+              .catch(err => {
+                console.error('[ERROR] Failed to get riskCategories:', err);
+                return [];
+              })
           ]);
-          
+
           const riskCategories = riskCategoriesResult || [];
 
           // Filter out deleted records and map to minimal fields
@@ -2635,33 +2635,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return await withRetry(async () => {
           const batchStart = Date.now();
 
-        // Build WHERE conditions
-        const conditions: any[] = [sql`r.status <> 'deleted'`];
+          // Build WHERE conditions
+          const conditions: any[] = [sql`r.status <> 'deleted'`];
 
-        if (filters.status && filters.status !== 'all') {
-          conditions.push(sql`r.status = ${filters.status}`);
-        }
+          if (filters.status && filters.status !== 'all') {
+            conditions.push(sql`r.status = ${filters.status}`);
+          }
 
-        if (filters.search) {
-          const searchPattern = `%${filters.search}%`;
-          conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
-        }
+          if (filters.search) {
+            const searchPattern = `%${filters.search}%`;
+            conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
+          }
 
-        if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-          conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
-        }
+          if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+            conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
+          }
 
-        if (filters.processId && filters.processId !== 'all') {
-          conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
-        }
+          if (filters.processId && filters.processId !== 'all') {
+            conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
+          }
 
-        if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-          conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
-        }
+          if (filters.subprocesoId && filters.subprocesoId !== 'all') {
+            conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
+          }
 
-        const whereClause = conditions.length > 0
-          ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
-          : sql``;
+          const whereClause = conditions.length > 0
+            ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
+            : sql``;
 
           // STEP 1: Simple risks query (no joins) - very fast
           const [risksResult, countResult] = await Promise.all([
@@ -2897,7 +2897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // FIXED: Ensure catalogsPromise is always defined before using it
       let catalogsResult: any = null;
       let risksResult: any = null;
-      
+
       // Ensure catalogsPromise is defined (fallback to empty promise if undefined)
       const safeCatalogsPromise = catalogsPromise || Promise.resolve({
         gerencias: [],
@@ -2908,7 +2908,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         processGerencias: [],
         riskCategories: []
       });
-      
+
       try {
         [catalogsResult, risksResult] = await Promise.all([
           safeCatalogsPromise.catch(err => {
@@ -2987,7 +2987,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         };
       }
-      
+
       if (!catalogsResult) {
         console.error('[ERROR] Invalid catalogsResult structure:', catalogsResult);
         catalogsResult = {
@@ -3052,7 +3052,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Optimized to reduce multiple API calls from frontend
   app.get("/api/dashboard/risk-matrix", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       const cacheKey = `dashboard-risk-matrix:${CACHE_VERSION}:single-tenant`;
 
@@ -3150,7 +3150,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get control codes summary (top 3 per risk) - batch query
       const riskIds = risksResult.rows.map((r: any) => r.id);
       let controlCodesByRisk = new Map<string, string[]>();
-      
+
       if (riskIds.length > 0) {
         const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
         const controlCodesResult = await requireDb().execute(sql`
@@ -3228,7 +3228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/dashboard/risk-matrix failed after ${duration}ms:`, error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
-      
+
       if (error instanceof Error) {
         if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
           return res.status(500).json({
@@ -3428,7 +3428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const queryDuration = Date.now() - queryStart;
 
       console.log(`[DB RESULT] /api/risks returned ${paginatedRisks.length} risks, total=${total} in ${queryDuration}ms`);
-      
+
       // Log warning if query is slow (indicates missing indexes or large dataset)
       if (queryDuration > 3000) {
         console.warn(`⚠️ Slow getRisksPaginated query: ${queryDuration}ms. Check if indexes are properly created.`);
@@ -3471,7 +3471,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
       console.error("[ERROR] /api/risks details:", { errorMessage, errorStack });
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch risks",
         error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
       });
@@ -3559,7 +3559,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Optimized to reduce multiple API calls from frontend
   app.get("/api/risks/with-controls", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
-    
+
     try {
       // Parse pagination params
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
@@ -3743,7 +3743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risks/with-controls failed after ${duration}ms:`, error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
-      
+
       if (error instanceof Error) {
         if (error.message.includes('timeout') || error.message.includes('Connection terminated')) {
           return res.status(500).json({
@@ -3780,13 +3780,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Filter deleted risks in the query itself for better performance
           const { risks: paginatedRisks, total } = await storage.getRisksPaginated(
             { status: 'active' }, // OPTIMIZED: Filter deleted in query instead of memory
-            1000, 
+            1000,
             0
           );
 
           // OPTIMIZED: Additional filter for safety (but query should already exclude deleted)
           // Filter out soft-deleted records (only return active records)
-          return paginatedRisks.filter((risk: any) => 
+          return paginatedRisks.filter((risk: any) =>
             risk.status !== 'deleted' && !risk.deletedAt
           );
         },
@@ -3817,7 +3817,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const startTime = Date.now();
     let tConnect = 0;
     let tQuery = 0;
-    
+
     try {
       const cacheKey = `risk-matrix-lite:${CACHE_VERSION}:single-tenant`;
 
@@ -4094,7 +4094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error in /api/lookups/subprocesos:", error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch subprocesos",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -4142,11 +4142,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
               name: riskCategories.name,
               color: riskCategories.color
             })
-            .from(riskCategories)
-            .where(eq(riskCategories.isActive, true))
-            .orderBy(riskCategories.name);
+              .from(riskCategories)
+              .where(eq(riskCategories.isActive, true))
+              .orderBy(riskCategories.name);
           });
-          
+
           // Drizzle ORM returns array directly, not { rows: [] }
           return categories.map((c: any) => ({
             id: c.id,
@@ -4156,12 +4156,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         600 // 10 minutes - risk categories change very infrequently, longer cache for better performance
       );
-      
+
       const duration = Date.now() - startTime;
       if (duration > 1000) {
         console.log(`[PERF] /api/lookups/risk-categories completed in ${duration}ms`);
       }
-      
+
       res.json(cached);
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -4344,13 +4344,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Limit batch size to prevent abuse
       const limitedIds = validRiskIds.slice(0, 100);
-      
+
       // Optional limit per risk (default: 50 for process links, 50 for controls)
       // This prevents huge responses when risks have many relations
-      const maxLinksPerRisk = typeof limitPerRisk === 'number' && limitPerRisk > 0 
+      const maxLinksPerRisk = typeof limitPerRisk === 'number' && limitPerRisk > 0
         ? Math.min(limitPerRisk, 100) // Cap at 100
         : 50; // Default limit
-      
+
       const cacheKey = `risks-batch-relations:${CACHE_VERSION}:${limitedIds.sort().join(',')}:limit${maxLinksPerRisk}`;
 
       const requestStartTime = Date.now();
@@ -4381,7 +4381,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // OPTIMIZED: Pre-allocate Maps with expected size to avoid rehashing
           const linksByRisk = new Map<string, typeof allLinks>();
           const controlsByRisk = new Map<string, typeof allControls>();
-          
+
           // Pre-populate maps for all riskIds to ensure they exist even if empty
           for (const riskId of limitedIds) {
             linksByRisk.set(riskId, []);
@@ -4390,7 +4390,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // OPTIMIZED: Single pass grouping with early termination
           const groupingStart = Date.now();
-          
+
           // Group process links by riskId (single pass, early termination per risk)
           // FIXED: Add null/undefined checks to prevent TypeError
           for (const link of allLinks) {
@@ -4410,14 +4410,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
               group.push(control);
             }
           }
-          
+
           const groupingDuration = Date.now() - groupingStart;
           console.log(`[PERF] [batch-relations] Grouping completed in ${groupingDuration}ms`);
 
           // OPTIMIZED: Flatten using pre-allocated arrays for better performance
           const filteredLinks: typeof allLinks = [];
           const filteredControls: typeof allControls = [];
-          
+
           for (const riskId of limitedIds) {
             const links = linksByRisk.get(riskId);
             const controls = controlsByRisk.get(riskId);
@@ -4430,7 +4430,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const totalControls = filteredControls.length;
           const truncatedLinks = allLinks.length > totalLinks;
           const truncatedControls = allControls.length > totalControls;
-          
+
           console.log(`[PERF] [batch-relations] Total processing: ${totalDuration}ms (DB: ${dbQueryDuration}ms, Grouping: ${groupingDuration}ms) - Fetched ${totalLinks} links (${truncatedLinks ? `truncated from ${allLinks.length}` : 'all'}) + ${totalControls} controls (${truncatedControls ? `truncated from ${allControls.length}` : 'all'}) for ${limitedIds.length} risks`);
 
           return {
@@ -4451,13 +4451,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       const totalDuration = Date.now() - requestStartTime;
-      
+
       // Log cache hit/miss for monitoring
       const memCached = lookupMemoryCache.get(cacheKey);
-      const cacheStatus = memCached && (Date.now() - memCached.timestamp < MEMORY_CACHE_TTL) 
-        ? 'MEMORY_HIT' 
+      const cacheStatus = memCached && (Date.now() - memCached.timestamp < MEMORY_CACHE_TTL)
+        ? 'MEMORY_HIT'
         : 'DB_FETCH';
-      
+
       if (cacheStatus === 'DB_FETCH') {
         console.log(`[PERF] [batch-relations] Total request time: ${totalDuration}ms (${cacheStatus})`);
       }
@@ -4583,7 +4583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const cacheKey = `active-probability-criteria:${CACHE_VERSION}`;
           const cachedCriteria = await distributedCache.get(cacheKey);
           let activeCriteria;
-          
+
           if (cachedCriteria) {
             activeCriteria = cachedCriteria;
           } else {
@@ -5126,7 +5126,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(risks);
     } catch (error) {
       console.error("[risks/validation/:status] Error:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch risks by validation status",
         error: error instanceof Error ? error.message : String(error)
       });
@@ -5173,16 +5173,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("[validateRisk] Error in endpoint:", error);
         if (error instanceof Error) {
           if (error.message.includes('not found') || error.message.includes('deleted')) {
-            return res.status(404).json({ 
-              message: error.message || "Risk not found or has been deleted" 
+            return res.status(404).json({
+              message: error.message || "Risk not found or has been deleted"
             });
           }
-          return res.status(500).json({ 
+          return res.status(500).json({
             message: "Failed to validate risk",
-            error: error.message 
+            error: error.message
           });
         }
-        return res.status(500).json({ 
+        return res.status(500).json({
           message: "Failed to validate risk",
           error: String(error)
         });
@@ -5195,7 +5195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Invalidate validation and risk caches (granular - fast)
       // Do this in background to avoid blocking the response
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      
+
       // Invalidate caches in background (don't wait for completion)
       Promise.all([
         invalidateValidationCaches(),
@@ -5448,7 +5448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Cache key with pagination params
       const cacheKey = `controls:validation:not-notified:${limit}:${offset}`;
-      
+
       // OPTIMIZED: Try cache first (60s TTL for validation data)
       try {
         const cached = await Promise.race([
@@ -5539,17 +5539,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notifiedAt: row.controlNotifiedAt,
         createdAt: row.controlCreatedAt,
         updatedAt: row.controlUpdatedAt,
-        owner: row.ownerId ? { 
-          id: row.ownerId, 
-          name: row.ownerName, 
-          email: row.ownerEmail 
+        owner: row.ownerId ? {
+          id: row.ownerId,
+          name: row.ownerName,
+          email: row.ownerEmail
         } : null
       }));
 
       // OPTIMIZED: Get associated risks for paginated controls ONLY (select only essential columns)
       const controlIds = controlsWithOwner.map(c => c.id);
       let controlsWithRisks = controlsWithOwner;
-      
+
       if (controlIds.length > 0) {
         const associatedRisks = await requireDb()
           .select({
@@ -6372,7 +6372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-validations/dashboard failed after ${duration}ms:`, error);
-      
+
       // Return cached data if available as fallback
       try {
         const cached = await distributedCache.get(`validation:process-dashboard:${(req as any).user?.activeTenantId || 'global'}`);
@@ -6386,13 +6386,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if it's a timeout error
       if (error instanceof Error && error.message.includes('timeout')) {
-        return res.status(504).json({ 
+        return res.status(504).json({
           message: "Request timeout. The query took too long to execute.",
           error: "TIMEOUT"
         });
       }
 
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch process validation dashboard",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -6898,7 +6898,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         riskProcessLinkId: req.params.id,
         validationStatus: req.body?.validationStatus
       });
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to validate risk-process association",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -7171,7 +7171,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/risk-processes/validation/:status failed after ${duration}ms:`, error);
-      
+
       // Return cached data if available as fallback
       try {
         const { tenantId } = await resolveActiveTenant(req, { required: true });
@@ -7189,7 +7189,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if it's a timeout error
       if (error instanceof Error && error.message.includes('timeout')) {
-        return res.status(504).json({ 
+        return res.status(504).json({
           message: "Request timeout. The query took too long to execute.",
           error: "TIMEOUT"
         });
@@ -7202,7 +7202,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: error instanceof Error ? error.name : undefined,
         status: req.params.status
       });
-      
+
       // Return empty array as fallback to prevent frontend errors
       // This allows the UI to render even if the query fails
       console.warn(`[WARNING] Returning empty array as fallback for validation status: ${req.params.status}`);
@@ -7244,7 +7244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `validation:counts:${CACHE_VERSION}:${tenantId}`;
-      
+
       // OPTIMIZED: Increased cache TTL from 30s to 5 minutes (300s) - counts change infrequently
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
@@ -7258,7 +7258,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // OPTIMIZED: Combine queries using CASE WHEN to reduce from 6 queries to 3 queries
       // This reduces database round-trips and improves performance
       const queryStart = Date.now();
-      
+
       // Combined query for risks (all statuses in one query)
       // FIXED: Removed validated_at IS NOT NULL check - some validated risks might not have validated_at set
       const risksCountsPromise = requireDb().execute(sql`
@@ -7347,7 +7347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/validation/counts failed after ${duration}ms:`, error);
-      
+
       // Return cached data if available as fallback
       try {
         const cached = await distributedCache.get(`validation:counts:${CACHE_VERSION}:${(req as any).user?.activeTenantId || 'default'}`);
@@ -7361,13 +7361,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if it's a timeout error
       if (error instanceof Error && error.message.includes('timeout')) {
-        return res.status(504).json({ 
+        return res.status(504).json({
           message: "Request timeout. The query took too long to execute.",
           error: "TIMEOUT"
         });
       }
 
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch validation counts",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -8535,34 +8535,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const [macroRelations, processRelations, subprocesoRelations, controlRelations] = await Promise.all([
           eventIds.length > 0
             ? requireDb().select({
-                riskEventId: riskEventMacroprocesos.riskEventId,
-                macroprocesoId: riskEventMacroprocesos.macroprocesoId
-              })
+              riskEventId: riskEventMacroprocesos.riskEventId,
+              macroprocesoId: riskEventMacroprocesos.macroprocesoId
+            })
               .from(riskEventMacroprocesos)
               .where(inArray(riskEventMacroprocesos.riskEventId, eventIds))
             : Promise.resolve([]),
           eventIds.length > 0
             ? requireDb().select({
-                riskEventId: riskEventProcesses.riskEventId,
-                processId: riskEventProcesses.processId
-              })
+              riskEventId: riskEventProcesses.riskEventId,
+              processId: riskEventProcesses.processId
+            })
               .from(riskEventProcesses)
               .where(inArray(riskEventProcesses.riskEventId, eventIds))
             : Promise.resolve([]),
           eventIds.length > 0
             ? requireDb().select({
-                riskEventId: riskEventSubprocesos.riskEventId,
-                subprocesoId: riskEventSubprocesos.subprocesoId
-              })
+              riskEventId: riskEventSubprocesos.riskEventId,
+              subprocesoId: riskEventSubprocesos.subprocesoId
+            })
               .from(riskEventSubprocesos)
               .where(inArray(riskEventSubprocesos.riskEventId, eventIds))
             : Promise.resolve([]),
           controlIds.length > 0
             ? requireDb().select({
-                id: controls.id,
-                code: controls.code,
-                name: controls.name,
-              })
+              id: controls.id,
+              code: controls.code,
+              name: controls.name,
+            })
               .from(controls)
               .where(inArray(controls.id, controlIds))
             : Promise.resolve([])
@@ -8633,7 +8633,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('[ERROR] /api/risk-events/page-data failed:', error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch risk events page data",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -9268,7 +9268,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // FIXED: Validate maxEffectivenessLimit to prevent it from being 0 or invalid
             // If the limit is 0 or invalid, use 100 as default (no limit applied)
             const validMaxLimit = (maxEffectivenessLimit > 0 && maxEffectivenessLimit <= 100) ? maxEffectivenessLimit : 100;
-            
+
             if (validMaxLimit < 100) {
               console.log(`[INFO] /api/controls: Applying max effectiveness limit of ${validMaxLimit}%`);
             }
@@ -9319,7 +9319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Parse query parameters
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const offset = parseInt(req.query.offset as string) || 0;
-      
+
       // Build filters
       const filters: import('./storage').ControlFilters = {
         search: req.query.search as string,
@@ -9356,79 +9356,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       try {
         return await withRetry(async () => {
-        // Build WHERE conditions for filtering
-        const whereConditions: any[] = [sql`c.status <> 'deleted'`];
-        
-        if (filters.search) {
-          const searchPattern = `%${filters.search.toLowerCase()}%`;
-          whereConditions.push(sql`(
+          // Build WHERE conditions for filtering
+          const whereConditions: any[] = [sql`c.status <> 'deleted'`];
+
+          if (filters.search) {
+            const searchPattern = `%${filters.search.toLowerCase()}%`;
+            whereConditions.push(sql`(
             LOWER(c.name) LIKE ${searchPattern} OR
             LOWER(c.code) LIKE ${searchPattern} OR
             LOWER(c.description) LIKE ${searchPattern}
           )`);
-        }
-        
-        if (filters.type) {
-          whereConditions.push(sql`c.type = ${filters.type}`);
-        }
-        
-        if (filters.frequency) {
-          whereConditions.push(sql`c.frequency = ${filters.frequency}`);
-        }
-        
-        if (filters.status && filters.status !== 'deleted') {
-          whereConditions.push(sql`c.status = ${filters.status}`);
-        }
-        
-        if (filters.validationStatus) {
-          whereConditions.push(sql`c.validation_status = ${filters.validationStatus}`);
-        }
-        
-        if (filters.minEffectiveness !== undefined) {
-          whereConditions.push(sql`c.effectiveness >= ${filters.minEffectiveness}`);
-        }
-        
-        if (filters.maxEffectiveness !== undefined) {
-          whereConditions.push(sql`c.effectiveness <= ${filters.maxEffectiveness}`);
-        }
+          }
 
-        // Build base query with optional owner filter
-        const baseFrom = filters.ownerId 
-          ? sql`FROM controls c
+          if (filters.type) {
+            whereConditions.push(sql`c.type = ${filters.type}`);
+          }
+
+          if (filters.frequency) {
+            whereConditions.push(sql`c.frequency = ${filters.frequency}`);
+          }
+
+          if (filters.status && filters.status !== 'deleted') {
+            whereConditions.push(sql`c.status = ${filters.status}`);
+          }
+
+          if (filters.validationStatus) {
+            whereConditions.push(sql`c.validation_status = ${filters.validationStatus}`);
+          }
+
+          if (filters.minEffectiveness !== undefined) {
+            whereConditions.push(sql`c.effectiveness >= ${filters.minEffectiveness}`);
+          }
+
+          if (filters.maxEffectiveness !== undefined) {
+            whereConditions.push(sql`c.effectiveness <= ${filters.maxEffectiveness}`);
+          }
+
+          // Build base query with optional owner filter
+          const baseFrom = filters.ownerId
+            ? sql`FROM controls c
               INNER JOIN control_owners co_filter ON c.id = co_filter.control_id AND co_filter.is_active = true
               INNER JOIN process_owners po_filter ON co_filter.process_owner_id = po_filter.id`
-          : sql`FROM controls c`;
-        
-        // Build WHERE clause - combine base conditions with owner filter if needed
-        const allWhereConditions = [...whereConditions];
-        if (filters.ownerId) {
-          allWhereConditions.push(sql`po_filter.id = ${filters.ownerId}`);
-        }
-        
-        const baseWhere = allWhereConditions.length > 0 
-          ? sql`WHERE ${sql.join(allWhereConditions, sql` AND `)}`
-          : sql``;
-        
-        // OPTIMIZED: Single aggregated query with CTEs
-        // Build complete FROM clause for count query
-        const countFrom = filters.ownerId 
-          ? sql`FROM controls c
+            : sql`FROM controls c`;
+
+          // Build WHERE clause - combine base conditions with owner filter if needed
+          const allWhereConditions = [...whereConditions];
+          if (filters.ownerId) {
+            allWhereConditions.push(sql`po_filter.id = ${filters.ownerId}`);
+          }
+
+          const baseWhere = allWhereConditions.length > 0
+            ? sql`WHERE ${sql.join(allWhereConditions, sql` AND `)}`
+            : sql``;
+
+          // OPTIMIZED: Single aggregated query with CTEs
+          // Build complete FROM clause for count query
+          const countFrom = filters.ownerId
+            ? sql`FROM controls c
               INNER JOIN control_owners co_filter_count ON c.id = co_filter_count.control_id AND co_filter_count.is_active = true
               INNER JOIN process_owners po_filter_count ON co_filter_count.process_owner_id = po_filter_count.id`
-          : sql`FROM controls c`;
-        
-        // Build count WHERE clause - same conditions but with count aliases
-        const countWhereConditions = [...whereConditions];
-        if (filters.ownerId) {
-          countWhereConditions.push(sql`po_filter_count.id = ${filters.ownerId}`);
-        }
-        const countWhere = countWhereConditions.length > 0
-          ? sql`WHERE ${sql.join(countWhereConditions, sql` AND `)}`
-          : sql``;
+            : sql`FROM controls c`;
 
-        let controlsResult;
-        try {
-          controlsResult = await requireDb().execute(sql`
+          // Build count WHERE clause - same conditions but with count aliases
+          const countWhereConditions = [...whereConditions];
+          if (filters.ownerId) {
+            countWhereConditions.push(sql`po_filter_count.id = ${filters.ownerId}`);
+          }
+          const countWhere = countWhereConditions.length > 0
+            ? sql`WHERE ${sql.join(countWhereConditions, sql` AND `)}`
+            : sql``;
+
+          let controlsResult;
+          try {
+            controlsResult = await requireDb().execute(sql`
           WITH controls_base AS (
             SELECT 
               c.id,
@@ -9531,125 +9531,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
           CROSS JOIN controls_count cc
           ORDER BY cb.code
           `);
-        } catch (sqlError: any) {
-          console.error(`[ERROR] SQL query failed in /api/controls/with-details:`, sqlError);
-          console.error(`[ERROR] SQL error code:`, sqlError?.code);
-          console.error(`[ERROR] SQL error detail:`, sqlError?.detail);
-          console.error(`[ERROR] SQL error hint:`, sqlError?.hint);
-          console.error(`[ERROR] SQL error message:`, sqlError?.message);
-          console.error(`[ERROR] SQL error stack:`, sqlError?.stack);
-          console.error(`[ERROR] Query parameters - limit: ${limit}, offset: ${offset}, filters:`, JSON.stringify(filters, null, 2));
-          throw sqlError;
-        }
+          } catch (sqlError: any) {
+            console.error(`[ERROR] SQL query failed in /api/controls/with-details:`, sqlError);
+            console.error(`[ERROR] SQL error code:`, sqlError?.code);
+            console.error(`[ERROR] SQL error detail:`, sqlError?.detail);
+            console.error(`[ERROR] SQL error hint:`, sqlError?.hint);
+            console.error(`[ERROR] SQL error message:`, sqlError?.message);
+            console.error(`[ERROR] SQL error stack:`, sqlError?.stack);
+            console.error(`[ERROR] Query parameters - limit: ${limit}, offset: ${offset}, filters:`, JSON.stringify(filters, null, 2));
+            throw sqlError;
+          }
 
-        // OPTIMIZED: Get max effectiveness limit (already fetched in parallel)
-        const maxEffectivenessLimit = await maxEffectivenessLimitPromise;
+          // OPTIMIZED: Get max effectiveness limit (already fetched in parallel)
+          const maxEffectivenessLimit = await maxEffectivenessLimitPromise;
 
-        // Validate query result
-        if (!controlsResult) {
-          console.error(`[ERROR] /api/controls/with-details: Query result is null or undefined`);
-          throw new Error("Invalid query result: result is null or undefined");
-        }
-        
-        if (!controlsResult.rows || !Array.isArray(controlsResult.rows)) {
-          console.error(`[ERROR] /api/controls/with-details: Invalid rows array`, {
-            hasRows: !!controlsResult.rows,
-            rowsType: typeof controlsResult.rows,
-            rowsIsArray: Array.isArray(controlsResult.rows),
-            resultKeys: Object.keys(controlsResult || {})
+          // Validate query result
+          if (!controlsResult) {
+            console.error(`[ERROR] /api/controls/with-details: Query result is null or undefined`);
+            throw new Error("Invalid query result: result is null or undefined");
+          }
+
+          if (!controlsResult.rows || !Array.isArray(controlsResult.rows)) {
+            console.error(`[ERROR] /api/controls/with-details: Invalid rows array`, {
+              hasRows: !!controlsResult.rows,
+              rowsType: typeof controlsResult.rows,
+              rowsIsArray: Array.isArray(controlsResult.rows),
+              resultKeys: Object.keys(controlsResult || {})
+            });
+            throw new Error("Invalid query result: missing or invalid rows array");
+          }
+
+          // Extract total from first row, or default to 0 if no rows
+          let total = 0;
+          if (controlsResult.rows.length > 0) {
+            const firstRow = controlsResult.rows[0] as any;
+            total = firstRow?.total !== undefined && firstRow.total !== null
+              ? parseInt(String(firstRow.total), 10)
+              : 0;
+          }
+          const controls = (controlsResult.rows as any[]).map((row: any, index: number) => {
+            try {
+              // Parse JSON fields safely
+              let associatedRisks: { id: string; code: string }[] = [];
+              if (row.associated_risks) {
+                if (Array.isArray(row.associated_risks)) {
+                  associatedRisks = row.associated_risks;
+                } else if (typeof row.associated_risks === 'string') {
+                  try {
+                    associatedRisks = JSON.parse(row.associated_risks);
+                  } catch (e) {
+                    console.warn(`[WARN] Failed to parse associated_risks for control ${row.id} (row ${index}):`, e);
+                  }
+                }
+              }
+
+              let controlOwner: { id: string; fullName: string; cargo: string } | undefined = undefined;
+              if (row.control_owner) {
+                if (typeof row.control_owner === 'object') {
+                  controlOwner = row.control_owner;
+                } else if (typeof row.control_owner === 'string') {
+                  try {
+                    controlOwner = JSON.parse(row.control_owner);
+                  } catch (e) {
+                    console.warn(`[WARN] Failed to parse control_owner for control ${row.id} (row ${index}):`, e);
+                  }
+                }
+              }
+
+              return {
+                id: row.id,
+                code: row.code,
+                name: row.name,
+                description: row.description,
+                type: row.type,
+                frequency: row.frequency,
+                effectiveness: maxEffectivenessLimit < 100
+                  ? Math.min(row.effectiveness, maxEffectivenessLimit)
+                  : row.effectiveness,
+                effectTarget: row.effect_target,
+                isActive: row.is_active,
+                lastReview: row.last_review,
+                validationStatus: row.validation_status,
+                validatedAt: row.validated_at,
+                validatedBy: row.validated_by,
+                validationComments: row.validation_comments,
+                createdBy: row.created_by,
+                updatedBy: row.updated_by,
+                deletedBy: row.deleted_by,
+                deletedAt: row.deleted_at,
+                deletionReason: row.deletion_reason,
+                createdAt: row.created_at,
+                updatedAt: row.updated_at,
+                associatedRisksCount: row.associated_risks_count || 0,
+                associatedRisks: associatedRisks,
+                controlOwner: controlOwner
+              };
+            } catch (rowError: any) {
+              console.error(`[ERROR] Failed to process row ${index} in /api/controls/with-details:`, rowError);
+              console.error(`[ERROR] Row data:`, JSON.stringify(row, null, 2));
+              throw new Error(`Failed to process control row ${index}: ${rowError.message}`);
+            }
           });
-          throw new Error("Invalid query result: missing or invalid rows array");
-        }
 
-        // Extract total from first row, or default to 0 if no rows
-        let total = 0;
-        if (controlsResult.rows.length > 0) {
-          const firstRow = controlsResult.rows[0] as any;
-          total = firstRow?.total !== undefined && firstRow.total !== null 
-            ? parseInt(String(firstRow.total), 10) 
-            : 0;
-        }
-        const controls = (controlsResult.rows as any[]).map((row: any, index: number) => {
-        try {
-        // Parse JSON fields safely
-        let associatedRisks: { id: string; code: string }[] = [];
-        if (row.associated_risks) {
-          if (Array.isArray(row.associated_risks)) {
-            associatedRisks = row.associated_risks;
-          } else if (typeof row.associated_risks === 'string') {
-            try {
-              associatedRisks = JSON.parse(row.associated_risks);
-            } catch (e) {
-              console.warn(`[WARN] Failed to parse associated_risks for control ${row.id} (row ${index}):`, e);
+          const response = {
+            data: controls,
+            pagination: {
+              limit,
+              offset,
+              total,
+              hasMore: offset + limit < total
             }
-          }
-        }
-
-        let controlOwner: { id: string; fullName: string; cargo: string } | undefined = undefined;
-        if (row.control_owner) {
-          if (typeof row.control_owner === 'object') {
-            controlOwner = row.control_owner;
-          } else if (typeof row.control_owner === 'string') {
-            try {
-              controlOwner = JSON.parse(row.control_owner);
-            } catch (e) {
-              console.warn(`[WARN] Failed to parse control_owner for control ${row.id} (row ${index}):`, e);
-            }
-          }
-        }
-
-          return {
-            id: row.id,
-            code: row.code,
-            name: row.name,
-            description: row.description,
-            type: row.type,
-            frequency: row.frequency,
-            effectiveness: maxEffectivenessLimit < 100 
-              ? Math.min(row.effectiveness, maxEffectivenessLimit) 
-              : row.effectiveness,
-            effectTarget: row.effect_target,
-            isActive: row.is_active,
-            lastReview: row.last_review,
-            validationStatus: row.validation_status,
-            validatedAt: row.validated_at,
-            validatedBy: row.validated_by,
-            validationComments: row.validation_comments,
-            createdBy: row.created_by,
-            updatedBy: row.updated_by,
-            deletedBy: row.deleted_by,
-            deletedAt: row.deleted_at,
-            deletionReason: row.deletion_reason,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-            associatedRisksCount: row.associated_risks_count || 0,
-            associatedRisks: associatedRisks,
-            controlOwner: controlOwner
           };
-        } catch (rowError: any) {
-          console.error(`[ERROR] Failed to process row ${index} in /api/controls/with-details:`, rowError);
-          console.error(`[ERROR] Row data:`, JSON.stringify(row, null, 2));
-          throw new Error(`Failed to process control row ${index}: ${rowError.message}`);
-        }
-        });
 
-        const response = {
-          data: controls,
-          pagination: {
-            limit,
-            offset,
-            total,
-            hasMore: offset + limit < total
-          }
-        };
+          // OPTIMIZED: Increase cache TTL to 5 minutes (300s) for better performance
+          // Cache is invalidated granularly on mutations, so longer TTL is safe
+          await distributedCache.set(cacheKey, response, 300);
+          const duration = Date.now() - requestStart;
+          console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
 
-        // OPTIMIZED: Increase cache TTL to 5 minutes (300s) for better performance
-        // Cache is invalidated granularly on mutations, so longer TTL is safe
-        await distributedCache.set(cacheKey, response, 300);
-        const duration = Date.now() - requestStart;
-        console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
-        
-        res.json(response);
+          res.json(response);
         }, {
           maxRetries: 3
         });
@@ -9686,8 +9686,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error('SQL Error detail:', (error as any).detail);
         }
       }
-      res.status(500).json({ 
-        message: "Failed to fetch controls", 
+      res.status(500).json({
+        message: "Failed to fetch controls",
         error: error instanceof Error ? error.message : String(error),
         ...(process.env.NODE_ENV === 'development' && error instanceof Error ? { stack: error.stack } : {})
       });
@@ -9737,30 +9737,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("[ERROR] Error message:", error.message);
         console.error("[ERROR] Error stack:", error.stack);
       }
-      
+
       // Handle Zod validation errors
       if (error instanceof z.ZodError) {
         console.error("[ERROR] Validation errors:", JSON.stringify(error.errors, null, 2));
-        return res.status(400).json({ 
-          message: "Invalid control data", 
+        return res.status(400).json({
+          message: "Invalid control data",
           errors: error.errors.map(e => ({
             path: e.path.join('.'),
             message: e.message
           }))
         });
       }
-      
+
       // Handle database errors
       if (error && typeof error === 'object' && 'code' in error) {
         console.error("[ERROR] Database error code:", (error as any).code);
         console.error("[ERROR] Database error detail:", (error as any).detail);
         console.error("[ERROR] Database error constraint:", (error as any).constraint);
       }
-      
+
       // Log request body for debugging (without sensitive data)
       console.error("[ERROR] Request body:", JSON.stringify(req.body, null, 2));
-      
-      res.status(400).json({ 
+
+      res.status(400).json({
         message: error instanceof Error ? error.message : "Invalid control data",
         error: process.env.NODE_ENV === 'development' ? String(error) : undefined
       });
@@ -10224,7 +10224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/controls/:controlId/complete-evaluation", isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     const controlId = req.params.controlId;
-    
+
     try {
       if (!controlId) {
         return res.status(400).json({ message: "Control ID is required" });
@@ -11043,7 +11043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Cache key with version
       const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
-      
+
       // OPTIMIZED: Try cache with timeout
       try {
         const cached = await Promise.race([
@@ -11234,7 +11234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }));
 
       const response = plans;
-      
+
       // OPTIMIZED: Cache with timeout and increased TTL from 30s to 60s
       try {
         await Promise.all([
@@ -11253,7 +11253,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const duration = Date.now() - requestStart;
       console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
-      
+
       if (duration > 3000) {
         console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 3000ms)`);
       }
@@ -11262,7 +11262,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/action-plans failed after ${duration}ms:`, error);
-      
+
       // Try fallback cache
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
@@ -11270,7 +11270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[FALLBACK] Returning cached action-plans data`);
         return res.json(fallbackCache);
       }
-      
+
       res.status(500).json({ message: "Failed to fetch action plans", error: error instanceof Error ? error.message : String(error) });
     }
   });
@@ -11744,7 +11744,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Cache for 5 minutes (observed data changes less frequently)
       const cacheKey = `validation:action-plans:observed:${CACHE_VERSION}:${tenantId}`;
-      
+
       // OPTIMIZED: Try cache with timeout
       try {
         const cached = await Promise.race([
@@ -11846,7 +11846,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           processMap.set(String(p.id), { name: String(p.name) });
         }
       }
-      
+
       // OPTIMIZED: Group risks by actionId using Map for O(n) instead of O(n*m) filtering
       // Filter out null risks (from LEFT JOIN where risk was deleted)
       // FIXED: Add comprehensive null/undefined checks to prevent TypeError
@@ -11857,26 +11857,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.warn('[action-plans/validation/observed] Skipping invalid risk association:', ar);
           continue;
         }
-        
+
         // Skip if risk is null (deleted risk from LEFT JOIN) or missing required fields
         if (!ar.actionId || !ar.riskId || !ar.riskCode) {
           continue;
         }
-        
+
         // Ensure actionId is a string (drizzle might return it as number or other type)
         const actionId = String(ar.actionId);
-        
+
         if (!risksByActionId.has(actionId)) {
           risksByActionId.set(actionId, []);
         }
-        
+
         const riskEntry = {
           riskId: String(ar.riskId),
           isPrimary: Boolean(ar.isPrimary),
           riskCode: String(ar.riskCode || ''),
           riskName: String(ar.riskName || ''),
         };
-        
+
         risksByActionId.get(actionId)!.push(riskEntry);
       }
 
@@ -11888,10 +11888,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.warn('[action-plans/validation/observed] Skipping invalid plan:', plan);
           return null;
         }
-        
+
         const planId = String(plan.id || '');
         const processId = plan.processId ? String(plan.processId) : null;
-        
+
         return {
           ...plan,
           process: processId ? (processMap.get(processId) || null) : null,
@@ -11924,7 +11924,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: error.name
         });
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch observed action plans",
         error: error instanceof Error ? error.message : String(error)
       });
@@ -15292,7 +15292,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("[system-config/risk-decimals] Storage not initialized");
         return res.json({ enabled: false, precision: 0 });
       }
-      
+
       // Wrap in additional try-catch to ensure we always return a response
       let decimalsConfig;
       try {
@@ -15303,7 +15303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Use defaults if inner call fails
         decimalsConfig = { enabled: false, precision: 0 };
       }
-      
+
       // Ensure we always send a response
       if (!res.headersSent) {
         res.json(decimalsConfig || { enabled: false, precision: 0 });
@@ -16013,29 +16013,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (newService) {
           setEmailService(newService);
           console.log(`✅ Email service switched to: ${newService.getServiceName()}`);
-          
+
           // Test connection to verify it works
           const connectionTest = await newService.testConnection();
           if (!connectionTest) {
             console.warn('⚠️  Email service created but connection test failed');
-            return res.status(400).json({ 
+            return res.status(400).json({
               message: "Configuración guardada pero la conexión de prueba falló. Verifica las credenciales.",
               success: false,
               connectionTestFailed: true
             });
           }
-          
+
           console.log(`✅ Email service connection test passed`);
         } else {
           console.error('❌ Failed to create email service from configuration');
-          return res.status(400).json({ 
+          return res.status(400).json({
             message: "No se pudo crear el servicio de email con la configuración proporcionada",
             success: false
           });
         }
       } catch (serviceError: any) {
         console.error('❌ Error creating email service:', serviceError);
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: `Error al crear servicio de email: ${serviceError?.message || 'Error desconocido'}`,
           success: false,
           error: serviceError?.message
@@ -16188,7 +16188,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/users", noCacheMiddleware, isAuthenticated, requireAnyPermission(["view_users", "users:manage", "manage_users"]), async (req, res) => {
     try {
       const requestStart = Date.now();
-      
+
       // Use two-tier cache: L1 memory (<1ms) + L2 Redis (~50ms) for optimal performance
       // TTL increased to 300s (5 min) as users don't change frequently
       const cacheKey = `users:all`;
@@ -16201,12 +16201,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const fetchedUsers = await storage.getUsers();
           const fetchDuration = Date.now() - fetchStart;
           console.log(`✅ Successfully fetched ${fetchedUsers.length} users in ${fetchDuration}ms`);
-          
+
           // Safety check: If query takes too long or returns too many users, log a warning
           if (fetchDuration > 5000) {
             console.warn(`⚠️ Slow getUsers() query: ${fetchDuration}ms for ${fetchedUsers.length} users`);
           }
-          
+
           return fetchedUsers;
         },
         300 // 5 minutes - users change infrequently
@@ -16400,10 +16400,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/user-roles", isAuthenticated, requirePermission("manage_users"), async (req, res) => {
     try {
       const { userId, roleId } = req.body;
-      
+
       if (!userId || !roleId) {
-        return res.status(400).json({ 
-          message: "userId and roleId are required" 
+        return res.status(400).json({
+          message: "userId and roleId are required"
         });
       }
 
@@ -16411,7 +16411,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         userId,
         roleId,
       });
-      
+
       const userRole = await storage.assignUserRole(validatedData);
 
       // Invalidate BOTH auth caches for this user (permissions changed)
@@ -16924,71 +16924,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }).from(riskControls)
         ]);
 
-      if (allRisks.length > 0) {
-        // Calculate residual risk for each risk
-        const riskResidualMap = new Map<string, number>();
-        const riskControlMap = new Map<string, any[]>();
+        if (allRisks.length > 0) {
+          // Calculate residual risk for each risk
+          const riskResidualMap = new Map<string, number>();
+          const riskControlMap = new Map<string, any[]>();
 
-        // Group controls by risk
-        for (const rc of allRiskControls) {
-          if (!riskControlMap.has(rc.riskId)) {
-            riskControlMap.set(rc.riskId, []);
+          // Group controls by risk
+          for (const rc of allRiskControls) {
+            if (!riskControlMap.has(rc.riskId)) {
+              riskControlMap.set(rc.riskId, []);
+            }
+            riskControlMap.get(rc.riskId)!.push(rc);
           }
-          riskControlMap.get(rc.riskId)!.push(rc);
+
+          // Calculate minimum residual risk per risk
+          for (const risk of allRisks) {
+            const controls = riskControlMap.get(risk.id) || [];
+            let residualRisk = risk.inherentRisk;
+            if (controls.length > 0) {
+              // Safe NaN filtering to prevent data corruption
+              const vals = controls.map(rc => Number(rc.residualRisk)).filter(n => Number.isFinite(n));
+              residualRisk = vals.length ? Math.min(...vals) : risk.inherentRisk;
+            }
+            riskResidualMap.set(risk.id, residualRisk);
+          }
+
+          // Calculate organizational risk averages (both inherent and residual)
+          const totalInherentRisk = allRisks.reduce((sum: number, risk: any) => sum + risk.inherentRisk, 0);
+          const totalResidualRisk = allRisks.reduce((sum: number, risk: any) => sum + (riskResidualMap.get(risk.id) || risk.inherentRisk), 0);
+          const organizationalRiskAvg = Math.round((totalInherentRisk / allRisks.length) * 10) / 10;
+          const organizationalResidualRiskAvg = Math.round((totalResidualRisk / allRisks.length) * 10) / 10;
+
+          // Count processes and regulations with risks
+          const processIds = Array.from(new Set(allRisks.filter((r: any) => r.processId != null).map((r: any) => r.processId)));
+          const processCount = processIds.length;
+          const processRisks = allRisks.filter((r: any) => r.processId != null);
+          const processInherentAvg = processRisks.length > 0
+            ? Math.round((processRisks.reduce((sum: number, r: any) => sum + r.inherentRisk, 0) / processRisks.length) * 10) / 10
+            : 0;
+          const processResidualAvg = processRisks.length > 0
+            ? Math.round((processRisks.reduce((sum: number, r: any) => sum + (riskResidualMap.get(r.id) || r.inherentRisk), 0) / processRisks.length) * 10) / 10
+            : 0;
+
+          // Enhanced stats with organizational metrics including residual risk
+          const enhancedStats = {
+            ...baseStats,
+            organizationalRiskAvg,
+            organizationalResidualRiskAvg,
+            entityRiskBreakdown: {
+              processCount,
+              regulationCount: 1, // We know there's at least one from previous work
+              processInherentAvg,
+              processResidualAvg,
+              processAvg: processInherentAvg, // Backward compatibility alias
+              regulationAvg: 14.0 // From our regulation calculations
+            }
+          };
+
+          // Cache for 5 minutes - dashboard data changes moderately
+          await distributedCache.set(cacheKey, enhancedStats, 300);
+          return enhancedStats;
+        } else {
+          // Cache for 5 minutes
+          await distributedCache.set(cacheKey, baseStats, 300);
+          return baseStats;
         }
-
-        // Calculate minimum residual risk per risk
-        for (const risk of allRisks) {
-          const controls = riskControlMap.get(risk.id) || [];
-          let residualRisk = risk.inherentRisk;
-          if (controls.length > 0) {
-            // Safe NaN filtering to prevent data corruption
-            const vals = controls.map(rc => Number(rc.residualRisk)).filter(n => Number.isFinite(n));
-            residualRisk = vals.length ? Math.min(...vals) : risk.inherentRisk;
-          }
-          riskResidualMap.set(risk.id, residualRisk);
-        }
-
-        // Calculate organizational risk averages (both inherent and residual)
-        const totalInherentRisk = allRisks.reduce((sum: number, risk: any) => sum + risk.inherentRisk, 0);
-        const totalResidualRisk = allRisks.reduce((sum: number, risk: any) => sum + (riskResidualMap.get(risk.id) || risk.inherentRisk), 0);
-        const organizationalRiskAvg = Math.round((totalInherentRisk / allRisks.length) * 10) / 10;
-        const organizationalResidualRiskAvg = Math.round((totalResidualRisk / allRisks.length) * 10) / 10;
-
-        // Count processes and regulations with risks
-        const processIds = Array.from(new Set(allRisks.filter((r: any) => r.processId != null).map((r: any) => r.processId)));
-        const processCount = processIds.length;
-        const processRisks = allRisks.filter((r: any) => r.processId != null);
-        const processInherentAvg = processRisks.length > 0
-          ? Math.round((processRisks.reduce((sum: number, r: any) => sum + r.inherentRisk, 0) / processRisks.length) * 10) / 10
-          : 0;
-        const processResidualAvg = processRisks.length > 0
-          ? Math.round((processRisks.reduce((sum: number, r: any) => sum + (riskResidualMap.get(r.id) || r.inherentRisk), 0) / processRisks.length) * 10) / 10
-          : 0;
-
-        // Enhanced stats with organizational metrics including residual risk
-        const enhancedStats = {
-          ...baseStats,
-          organizationalRiskAvg,
-          organizationalResidualRiskAvg,
-          entityRiskBreakdown: {
-            processCount,
-            regulationCount: 1, // We know there's at least one from previous work
-            processInherentAvg,
-            processResidualAvg,
-            processAvg: processInherentAvg, // Backward compatibility alias
-            regulationAvg: 14.0 // From our regulation calculations
-          }
-        };
-
-        // Cache for 5 minutes - dashboard data changes moderately
-        await distributedCache.set(cacheKey, enhancedStats, 300);
-        return enhancedStats;
-      } else {
-        // Cache for 5 minutes
-        await distributedCache.set(cacheKey, baseStats, 300);
-        return baseStats;
-      }
       })();
 
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -17000,7 +17000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/dashboard/stats failed after ${duration}ms:`, error);
-      
+
       // Return cached data if available as fallback
       try {
         const cached = await distributedCache.get(`dashboard-stats:single-tenant`);
@@ -17014,13 +17014,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Check if it's a timeout error
       if (error instanceof Error && error.message.includes('timeout')) {
-        return res.status(504).json({ 
+        return res.status(504).json({
           message: "Request timeout. The dashboard query took too long to execute.",
           error: "TIMEOUT"
         });
       }
 
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch dashboard stats",
         error: error instanceof Error ? error.message : "Unknown error"
       });
@@ -17543,7 +17543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(macroprocesos)
           .where(isNull(macroprocesos.deletedAt))
           .orderBy(macroprocesos.order),
-        
+
         requireDb()
           .select({
             id: processes.id,
@@ -17554,7 +17554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .from(processes)
           .where(isNull(processes.deletedAt))
           .orderBy(processes.code),
-        
+
         requireDb()
           .select({
             id: subprocesos.id,
@@ -17581,7 +17581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/catalogs/process-structure COMPLETE in ${totalDuration}ms`);
-      
+
       res.json(response);
     } catch (error) {
       const duration = Date.now() - requestStart;
@@ -17590,7 +17590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Error stack:', error.stack);
         console.error('Error message:', error.message);
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Error interno del servidor al obtener la estructura de procesos",
         error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
@@ -17621,10 +17621,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getMacroprocesos(),
         storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
       ]);
-      
+
       const fetchDuration = Date.now() - fetchStart;
       console.log(`[DB] /api/macroprocesos fetched ${macroprocesos.length} macroprocesos and risk levels in ${fetchDuration}ms`);
-      
+
       if (fetchDuration > 3000) {
         console.warn(`⚠️ Slow /api/macroprocesos query: ${fetchDuration}ms`);
       }
@@ -17655,7 +17655,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/macroprocesos COMPLETE in ${totalDuration}ms (${macroprocesoswithRisks.length} macroprocesos)`);
-      
+
       res.json(macroprocesoswithRisks);
     } catch (error) {
       const duration = Date.now() - requestStart;
@@ -17664,7 +17664,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Error stack:', error.stack);
         console.error('Error message:', error.message);
       }
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch macroprocesos",
         error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
@@ -18349,7 +18349,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const errorStack = error instanceof Error ? error.stack : undefined;
       console.error('[ERROR] /api/subprocesos details:', { errorMessage, errorStack, pool: getPoolMetrics() });
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch subprocesos",
         error: process.env.NODE_ENV === 'development' ? errorMessage : undefined
       });
@@ -18589,7 +18589,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Storage.getGerencias() already handles caching internally, so we don't need to check cache here
       // This avoids double cache checking which can add latency
       const gerencias = await storage.getGerencias();
-      
+
       const totalDuration = Date.now() - startTime;
       if (totalDuration > 1000) {
         console.log(`[PERFORMANCE] /api/gerencias: Slow request detected: ${totalDuration}ms, fetched ${gerencias.length} gerencias`);
@@ -18903,13 +18903,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const requestStart = Date.now();
       const riskLevelsMap = await storage.getGerenciasRiskLevels();
       const duration = Date.now() - requestStart;
-      
+
       // Convert Map to object for JSON serialization
       const riskLevels = Object.fromEntries(riskLevelsMap);
 
       // Cache for 10 minutes (600 seconds) - risk levels change infrequently
       await distributedCache.set(cacheKey, riskLevels, 600);
-      
+
       if (duration > 1000) {
         console.log(`[PERF] /api/gerencias-risk-levels completed in ${duration}ms`);
       }
@@ -19058,8 +19058,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof z.ZodError) {
         console.error("Audit creation validation error:", JSON.stringify(error.errors, null, 2));
         console.error("Received data:", JSON.stringify(req.body, null, 2));
-        return res.status(400).json({ 
-          message: "Invalid audit data", 
+        return res.status(400).json({
+          message: "Invalid audit data",
           errors: error.errors,
           receivedData: req.body
         });
@@ -19067,8 +19067,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Audit creation error:", error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
       console.error("Received data:", JSON.stringify(req.body, null, 2));
-      res.status(400).json({ 
-        message: "Invalid audit data", 
+      res.status(400).json({
+        message: "Invalid audit data",
         error: error instanceof Error ? error.message : "Unknown error",
         details: error instanceof Error ? error.stack : undefined
       });
@@ -20066,7 +20066,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.message });
       }
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to generate audit universe from processes",
         error: errorMessage
       });
@@ -22448,7 +22448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Convert date strings to Date objects before validation
       const user = (req as any).user;
       const userId = user?.claims?.sub || getAuthenticatedUserId(req);
-      
+
       // Generate code automatically if not provided (based on law + article)
       let code = req.body.code;
       if (!code) {
@@ -22495,18 +22495,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error(`[ERROR] Regulation validation failed after ${duration}ms:`, JSON.stringify(validationError.errors, null, 2));
           console.error("[ERROR] Received data:", JSON.stringify(processedData, null, 2));
           console.error("[ERROR] Original request body:", JSON.stringify(req.body, null, 2));
-          
+
           // Build user-friendly error message
           const missingFields = validationError.errors
             .filter(e => e.code === 'invalid_type' && e.received === 'undefined')
             .map(e => e.path.join('.'))
             .join(', ');
-          
-          const errorMessage = missingFields 
+
+          const errorMessage = missingFields
             ? `Faltan campos requeridos: ${missingFields}`
             : "Datos de normativa inválidos. Verifique los campos requeridos.";
-          
-          return res.status(400).json({ 
+
+          return res.status(400).json({
             message: errorMessage,
             errors: validationError.errors.map(e => ({
               field: e.path.join('.'),
@@ -22530,7 +22530,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Error message:', error.message);
       }
       console.error("[ERROR] Request body:", JSON.stringify(req.body, null, 2));
-      res.status(400).json({ 
+      res.status(400).json({
         message: "No se pudo crear la normativa. Verifique los datos e intente nuevamente.",
         error: process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
       });
@@ -25534,7 +25534,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error deleting crime category:", error);
       console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
       console.error("Category ID:", req.params.id);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to delete crime category",
         error: error instanceof Error ? error.message : "Unknown error"
       });

@@ -47,13 +47,13 @@ export function getSession() {
     // Detect if using Cloud SQL (same logic as db.ts)
     // IMPORTANT: Detect Cloud SQL by IP private range (10.x.x.x) even if IS_GCP_DEPLOYMENT is not set
     // This handles cases where Cloud Run connects via VPC with private IP
-    const isCloudSql = 
+    const isCloudSql =
       process.env.IS_GCP_DEPLOYMENT === 'true' ||
       databaseUrl?.includes('.googleapis.com') ||
       databaseUrl?.includes('cloudsql') ||
       /@10\.\d+\.\d+\.\d+/.test(databaseUrl || '') || // Private IP range (VPC) - always Cloud SQL in GCP
       false;
-    
+
     const isCloudSqlProxy = databaseUrl?.includes('/cloudsql/') || false;
     const isRenderDb = databaseUrl.includes('render.com') || databaseUrl.includes('oregon-postgres.render.com');
 
@@ -94,7 +94,7 @@ export function getSession() {
           ? `${poolConnectionString}&sslmode=require`
           : `${poolConnectionString}?sslmode=require`;
       }
-      
+
       // Create a Pool with SSL configuration for Cloud SQL
       sessionPool = new Pool({
         connectionString: poolConnectionString,
@@ -414,32 +414,6 @@ export async function setupAuth(app: Express) {
       return verified(new Error("Failed to create user"));
     }
 
-    // Obtener los tenants del usuario
-    const userTenants = await storage.getUserTenants(dbUser.id);
-
-    // Agregar información del usuario a la sesión
-    user.id = dbUser.id;
-    user.email = dbUser.email;
-    user.firstName = dbUser.firstName;
-    user.lastName = dbUser.lastName;
-    user.isPlatformAdmin = dbUser.isPlatformAdmin || false;
-
-    console.log(`[Replit Auth] User object after DB upsert:`);
-    console.log(`  - DB User ID: ${dbUser.id}`);
-    console.log(`  - Session User ID: ${user.id}`);
-    console.log(`  - Email: ${user.email}`);
-    console.log(`  - isPlatformAdmin: ${user.isPlatformAdmin}`);
-
-    // Si el usuario tiene tenants, seleccionar el primero activo
-    if (userTenants && userTenants.length > 0) {
-      const activeTenant = userTenants.find(t => t.isActive) || userTenants[0];
-      if (activeTenant) {
-        user.activeTenantId = activeTenant.tenantId;
-      }
-    }
-    // Si no tiene tenants, lo manejaremos en el middleware de rutas
-    // El usuario podrá autenticarse pero no acceder a recursos que requieran tenant
-
     // Load user's permissions from global roles
     user.permissions = await storage.getUserPermissions(dbUser.id);
 
@@ -556,15 +530,8 @@ export async function setupAuth(app: Express) {
             return res.redirect("/platform-admin");
           }
 
-          // Check if user has any tenants (only applies to non-admin users)
-          const userTenants = dbUser ? await storage.getUserTenants(dbUser.id) : [];
-          if (!userTenants || userTenants.length === 0) {
-            console.log("[Replit Auth] User has no tenants. Redirecting to /no-access");
-            return res.redirect("/no-access");
-          }
-
-          // Normal user with tenants - redirect to dashboard
-          console.log("[Replit Auth] Normal user with tenants. Redirecting to /");
+          // Normal user - redirect to dashboard
+          console.log("[Replit Auth] Normal user. Redirecting to /");
           return res.redirect("/");
         } catch (error) {
           console.error("[Replit Auth] Error determining redirect:", error);
@@ -649,6 +616,68 @@ export async function setupAuth(app: Express) {
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const startTime = Date.now();
   const timings: Record<string, number> = {};
+
+  // CRITICAL FIX: Prioritize switched user session if present (used for demo/testing)
+  // This must run before standard authentication checks to ensure the "switched" identity
+  // takes precedence in both development and production environments.
+  const switchedUserId = (req.session as any)?.switchedUserId;
+  const originalUser = req.user as any;
+
+  if (switchedUserId && (!originalUser || originalUser.id !== switchedUserId)) {
+    console.log(`[isAuthenticated] Using switched user session: ${originalUser?.id || 'none'} -> ${switchedUserId}`);
+    try {
+      // Load switched user metadata (with caching)
+      const cachedData = authCache.get(switchedUserId);
+      let userData;
+      let userTenants;
+      let userPermissions;
+
+      if (cachedData) {
+        userData = cachedData.user;
+        userPermissions = cachedData.permissions;
+      } else {
+        console.log(`[isAuthenticated] Loading fresh metadata for switched user: ${switchedUserId}`);
+        userData = await storage.getUser(switchedUserId);
+        userPermissions = await storage.getUserPermissions(switchedUserId);
+
+        if (userData) {
+          authCache.set(switchedUserId, {
+            user: userData,
+            tenants: [], // SINGLE-TENANT: No tenants
+            permissions: userPermissions,
+            cachedAt: Date.now()
+          });
+        }
+      }
+
+      if (userData) {
+        // Override req.user with the switched user's data
+        (req as any).user = {
+          id: switchedUserId,
+          username: userData.username || userData.email?.split('@')[0],
+          email: userData.email,
+          fullName: userData.fullName,
+          activeTenantId: 'single-tenant',
+          permissions: userPermissions,
+          isAdmin: userData.isAdmin || userData.isPlatformAdmin || false,
+          isPlatformAdmin: userData.isPlatformAdmin || false
+        };
+
+        // Mark session as authenticated since we have a valid switched user
+        // This ensures req.isAuthenticated() returns true even if original OAuth session is missing
+        if (typeof (req as any).isAuthenticated !== 'function') {
+          (req as any).isAuthenticated = () => true;
+        }
+
+        timings['total'] = Date.now() - startTime;
+        return next();
+      }
+    } catch (error) {
+      console.error("[isAuthenticated] Error applying switched user context:", error);
+      // Fallback to normal authentication if switching fails
+    }
+  }
+
   const user = req.user as any;
 
   // Check if user is authenticated (production OAuth flow)
@@ -755,14 +784,8 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
             isPlatformAdmin = dbUser.isAdmin || dbUser.isPlatformAdmin || false;
           }
 
-          const tenantsStart = Date.now();
-          const userTenants = await storage.getUserTenants(effectiveUserId);
-          timings['db:getUserTenants'] = Date.now() - tenantsStart;
-
-          const activeTenant = userTenants.find(t => t.isActive) || userTenants[0];
-          if (activeTenant) {
-            activeTenantId = activeTenant.tenantId;
-          }
+          // SINGLE-TENANT: Always use the single tenant
+          activeTenantId = 'single-tenant';
 
           const permsStart = Date.now();
           permissions = await storage.getUserPermissions(effectiveUserId);
@@ -777,7 +800,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
               fullName,
               isPlatformAdmin
             },
-            tenants: userTenants,
+            tenants: [],
             permissions,
             cachedAt: Date.now()
           });
@@ -851,11 +874,8 @@ export const optionalTenant: RequestHandler = async (req, res, next) => {
       let permissions: string[] = [];
 
       try {
-        const userTenants = await storage.getUserTenants('user-1');
-        const activeTenant = userTenants.find(t => t.isActive) || userTenants[0];
-        if (activeTenant) {
-          activeTenantId = activeTenant.tenantId;
-        }
+        // SINGLE-TENANT: Always use the single tenant
+        activeTenantId = 'single-tenant';
 
         // Load user's permissions from global roles
         permissions = await storage.getUserPermissions('user-1');

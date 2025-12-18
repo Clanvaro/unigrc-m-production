@@ -75,7 +75,7 @@ interface CriteriaWithOptions {
 
 // Funciones de mapeo para el slider de effectTarget
 const getSliderValue = (effectTarget: string): number => {
-  switch(effectTarget) {
+  switch (effectTarget) {
     case 'probability': return 0;
     case 'both': return 1;
     case 'impact': return 2;
@@ -84,7 +84,7 @@ const getSliderValue = (effectTarget: string): number => {
 };
 
 const getEffectTargetFromSlider = (value: number): string => {
-  switch(value) {
+  switch (value) {
     case 0: return 'probability';
     case 1: return 'both';
     case 2: return 'impact';
@@ -93,7 +93,7 @@ const getEffectTargetFromSlider = (value: number): string => {
 };
 
 const getEffectTargetDescription = (effectTarget: string): string => {
-  switch(effectTarget) {
+  switch (effectTarget) {
     case 'probability': return 'Este control está diseñado para reducir la probabilidad de que ocurra el riesgo.';
     case 'impact': return 'Este control está diseñado para reducir el impacto cuando ocurre el riesgo.';
     case 'both': return 'Este control afecta tanto la probabilidad como el impacto del riesgo.';
@@ -155,7 +155,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
     queryKey: ["/api/control-owners/control", control?.id],
     enabled: !!control,
   });
-  
+
   const currentOwner = currentOwners?.[0]; // Get the first active owner
 
   // Set initial evaluation data from existing evaluations
@@ -209,7 +209,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       const response = await fetch("/api/system-config/max-effectiveness-limit/value");
       const data = await response.json();
       const maxEffectivenessLimit = data.maxEffectivenessLimit || 100;
-      
+
       const finalEffectiveness = Math.min(baseEffectiveness, maxEffectivenessLimit);
       setCalculatedEffectiveness(finalEffectiveness);
       form.setValue("effectiveness", finalEffectiveness);
@@ -223,7 +223,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
   const mutation = useMutation({
     mutationFn: async (data: ControlFormData) => {
       let controlResult: any;
-      
+
       // Add required fields with defaults - only for creation
       // For updates, preserve original values and send only changed fields
       const controlData = control ? {
@@ -236,7 +236,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         frequency: data.frequency || "daily",
         isActive: true,
       };
-      
+
       if (control) {
         controlResult = await apiRequest(`/api/controls/${control.id}`, "PUT", controlData);
       } else {
@@ -271,7 +271,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
 
       // Save evaluations only if we have evaluation data
       const hasEvaluationData = Object.keys(evaluationData).length > 0;
-      
+
       if (hasEvaluationData && controlResult) {
         if (controlId) {
           await saveEvaluations(controlId);
@@ -294,7 +294,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
           if (!old?.data) return old;
           return {
             ...old,
-            data: old.data.map((c: any) => 
+            data: old.data.map((c: any) =>
               c.id === control.id ? { ...c, ...data, id: control.id } : c
             )
           };
@@ -302,8 +302,8 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       } else {
         // Add new control with temporary ID
         const tempId = `temp-${Date.now()}`;
-        const newControl = { 
-          ...data, 
+        const newControl = {
+          ...data,
           id: tempId,
           type: "preventive",
           frequency: data.frequency || "daily",
@@ -341,7 +341,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       // Update cache immediately with server response (faster than refetch)
       const controlId = control?.id || controlResult.id;
       const tempId = context?.tempId;
-      
+
       // Helper to filter out temporary controls - uses context.tempId if available,
       // otherwise falls back to prefix-based removal for retries/lost context
       const filterTempControls = (c: any) => {
@@ -352,7 +352,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         // Fallback: remove any temp-prefixed entries to prevent duplicates on retry
         return typeof c.id !== 'string' || !c.id.startsWith('temp-');
       };
-      
+
       // Update /api/controls cache
       queryClient.setQueryData(["/api/controls"], (old: any) => {
         if (!old?.data) return old;
@@ -374,24 +374,32 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/control-owners"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls", controlId, "evaluations"] });
-      
+
       // CRITICAL: Force immediate refetch of controls list to show updated owner/responsible
       // The controlResult from API doesn't include the newly assigned owner (assigned in separate call)
       // So we must invalidate and refetch to get the complete data with owner info
-      await queryClient.invalidateQueries({ 
+      await queryClient.invalidateQueries({
         queryKey: ["/api/controls"],
         exact: false,
         refetchType: 'active'
       });
-      
+
       // CRITICAL: Invalidate ALL paginated controls queries (matches any params) to update main controls table immediately
       // Using exact:false ensures we match all queries starting with ["/api/controls", "paginated", ...]
-      await queryClient.invalidateQueries({ 
+      await queryClient.invalidateQueries({
         queryKey: ["/api/controls", "paginated"],
         exact: false,
         refetchType: 'active'
       });
-      
+
+      // CRITICAL: Invalidate the optimized with-details endpoint used by the main controls table
+      // This is crucial because it uses a different prefix than /api/controls
+      await queryClient.invalidateQueries({
+        queryKey: ["/api/controls/with-details"],
+        exact: false,
+        refetchType: 'active'
+      });
+
       toast({
         title: control ? "Control actualizado" : "Control creado",
         description: `El control ha sido ${control ? "actualizado" : "creado"} exitosamente.`,
@@ -409,11 +417,11 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
     onSuccess: () => {
       // Clear local evaluation data
       setEvaluationData({});
-      
+
       // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ["/api/controls", control?.id, "evaluations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/controls"] });
-      
+
       toast({
         title: "Evaluaciones eliminadas",
         description: "Se han eliminado todas las evaluaciones del control exitosamente.",
@@ -513,7 +521,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
 
   const handleGenerateDescription = async () => {
     const controlName = form.getValues("name");
-    
+
     if (!controlName?.trim()) {
       toast({
         title: "Campo requerido",
@@ -530,7 +538,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json'
       };
-      
+
       const isProduction = import.meta.env.MODE === 'production';
       if (isProduction) {
         const csrfToken = getCSRFTokenFromCookie();
@@ -542,7 +550,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       const response = await fetch(`${window.location.origin}/api/ai/assistant-stream`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           question: `Genera una descripción concisa y profesional para un control llamado "${controlName}". Explica brevemente qué hace el control y por qué es importante. Máximo 2 párrafos cortos. No uses formato markdown ni asteriscos. Texto plano solamente.`
         }),
         credentials: 'include'
@@ -566,12 +574,12 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
           try {
             const jsonStr = line.replace('data: ', '');
             const data = JSON.parse(jsonStr);
-            
+
             if (data.chunk) {
               accumulatedContent += data.chunk;
               form.setValue("description", accumulatedContent);
             }
-            
+
             if (data.done) break;
             if (data.error) throw new Error(data.error);
           } catch (parseError) {
@@ -584,7 +592,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         title: "Descripción generada",
         description: "La IA ha generado una descripción para el control.",
       });
-      
+
     } catch (error) {
       console.error('Error generating description:', error);
       toast({
@@ -615,9 +623,9 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
             <FormItem>
               <FormLabel>Nombre del Control</FormLabel>
               <FormControl>
-                <Textarea 
-                  placeholder="Ej: Monitoreo de transacciones" 
-                  {...field} 
+                <Textarea
+                  placeholder="Ej: Monitoreo de transacciones"
+                  {...field}
                   value={field.value || ""}
                   data-testid="input-control-name"
                   rows={2}
@@ -661,9 +669,9 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                 </Button>
               </div>
               <FormControl>
-                <Textarea 
-                  placeholder="Describe el control en detalle..." 
-                  {...field} 
+                <Textarea
+                  placeholder="Describe el control en detalle..."
+                  {...field}
                   value={field.value || ""}
                   data-testid="input-control-description"
                   onKeyDown={(e) => { if (e.key === " " || e.key === "Dead" || e.key === "Process" || e.key === "Meta") { e.stopPropagation(); } }}
@@ -755,7 +763,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
               <div className="p-2 bg-muted rounded-md text-sm">
                 {control.createdAt ? new Date(control.createdAt).toLocaleDateString('es-ES', {
                   year: 'numeric',
-                  month: 'long', 
+                  month: 'long',
                   day: 'numeric'
                 }) : 'No disponible'}
               </div>
@@ -769,7 +777,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                 <FormItem>
                   <FormLabel>Fecha de Validación</FormLabel>
                   <FormControl>
-                    <Input 
+                    <Input
                       type="date"
                       {...field}
                       value={field.value ? new Date(field.value).toISOString().split('T')[0] : ''}
@@ -829,7 +837,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                         Impacto
                       </span>
                     </div>
-                    
+
                     {/* Slider */}
                     <Slider
                       value={[getSliderValue(field.value || 'both')]}
@@ -840,7 +848,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                       className="w-full"
                       data-testid="slider-effect-target"
                     />
-                    
+
                     {/* Descripción dinámica */}
                     <div className="mt-3 p-3 bg-muted rounded-lg">
                       <p className="text-sm">
@@ -868,77 +876,76 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
           </div>
 
           <div className="space-y-4">
-              {criteriaLoading ? (
-                <div className="text-center py-8">
-                  <div className="text-sm text-muted-foreground">Cargando criterios de evaluación...</div>
-                </div>
-              ) : (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    Evalúe cada criterio según las opciones disponibles. La efectividad se calculará automáticamente.
-                  </p>
-                  
-                  {criteriaWithOptions.map(({ criteria, options }) => (
-                    <Card key={criteria.id} className="p-4">
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-medium">{criteria.name}</h4>
-                          <Badge variant="secondary">{criteria.weight}%</Badge>
-                        </div>
-                        
-                        {criteria.description && (
-                          <p className="text-sm text-muted-foreground">{criteria.description}</p>
-                        )}
+            {criteriaLoading ? (
+              <div className="text-center py-8">
+                <div className="text-sm text-muted-foreground">Cargando criterios de evaluación...</div>
+              </div>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Evalúe cada criterio según las opciones disponibles. La efectividad se calculará automáticamente.
+                </p>
 
-                        <ToggleGroup
-                          type="single"
-                          value={evaluationData[criteria.id] || ""}
-                          onValueChange={(value) => {
-                            if (value) {
-                              setEvaluationData(prev => ({
-                                ...prev,
-                                [criteria.id]: value
-                              }));
-                            }
-                          }}
-                          className={`grid gap-2 w-full ${
-                            options.length === 2 ? 'grid-cols-2' :
-                            options.length === 3 ? 'grid-cols-3' :
-                            options.length === 4 ? 'grid-cols-4' :
-                            options.length === 5 ? 'grid-cols-5' :
-                            'grid-cols-3'
-                          }`}
-                          data-testid={`toggle-group-criteria-${criteria.id}`}
-                        >
-                          {options.map((option: any) => (
-                            <ToggleGroupItem 
-                              key={option.id}
-                              value={option.id} 
-                              className="h-12 flex-col gap-1 border border-input data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-primary"
-                              data-testid={`toggle-option-${option.id}`}
-                            >
-                              <span className="font-medium">{option.label}</span>
-                              <Badge 
-                                variant={evaluationData[criteria.id] === option.id ? "secondary" : "outline"} 
-                                className="text-xs"
-                              >
-                                {option.score}%
-                              </Badge>
-                            </ToggleGroupItem>
-                          ))}
-                        </ToggleGroup>
-
-                        {evaluationData[criteria.id] && (
-                          <div className="p-2 bg-muted rounded text-sm">
-                            {(options as any[]).find(opt => opt.id === evaluationData[criteria.id])?.description}
-                          </div>
-                        )}
+                {criteriaWithOptions.map(({ criteria, options }) => (
+                  <Card key={criteria.id} className="p-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-medium">{criteria.name}</h4>
+                        <Badge variant="secondary">{criteria.weight}%</Badge>
                       </div>
-                    </Card>
-                  ))}
 
-                  {Object.keys(evaluationData).length === criteriaWithOptions.length && 
-                   criteriaWithOptions.length > 0 && (
+                      {criteria.description && (
+                        <p className="text-sm text-muted-foreground">{criteria.description}</p>
+                      )}
+
+                      <ToggleGroup
+                        type="single"
+                        value={evaluationData[criteria.id] || ""}
+                        onValueChange={(value) => {
+                          if (value) {
+                            setEvaluationData(prev => ({
+                              ...prev,
+                              [criteria.id]: value
+                            }));
+                          }
+                        }}
+                        className={`grid gap-2 w-full ${options.length === 2 ? 'grid-cols-2' :
+                            options.length === 3 ? 'grid-cols-3' :
+                              options.length === 4 ? 'grid-cols-4' :
+                                options.length === 5 ? 'grid-cols-5' :
+                                  'grid-cols-3'
+                          }`}
+                        data-testid={`toggle-group-criteria-${criteria.id}`}
+                      >
+                        {options.map((option: any) => (
+                          <ToggleGroupItem
+                            key={option.id}
+                            value={option.id}
+                            className="h-12 flex-col gap-1 border border-input data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:border-primary"
+                            data-testid={`toggle-option-${option.id}`}
+                          >
+                            <span className="font-medium">{option.label}</span>
+                            <Badge
+                              variant={evaluationData[criteria.id] === option.id ? "secondary" : "outline"}
+                              className="text-xs"
+                            >
+                              {option.score}%
+                            </Badge>
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+
+                      {evaluationData[criteria.id] && (
+                        <div className="p-2 bg-muted rounded text-sm">
+                          {(options as any[]).find(opt => opt.id === evaluationData[criteria.id])?.description}
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                ))}
+
+                {Object.keys(evaluationData).length === criteriaWithOptions.length &&
+                  criteriaWithOptions.length > 0 && (
                     <Card className="border-green-200 bg-green-50">
                       <CardContent className="pt-4">
                         <div className="flex items-center gap-2 text-green-700">
@@ -950,9 +957,9 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                       </CardContent>
                     </Card>
                   )}
-                </>
-              )}
-            </div>
+              </>
+            )}
+          </div>
 
           {/* Hidden form field for effectiveness */}
           <FormField
@@ -965,20 +972,20 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         </div>
 
         <div className="flex gap-2">
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             disabled={mutation.isPending}
             data-testid="button-submit-control"
           >
             {mutation.isPending ? "Guardando..." : control ? "Actualizar" : "Crear"}
           </Button>
-          
+
           {/* Clear Evaluations Button - Only show when editing existing control with evaluations */}
           {control && Object.keys(evaluationData).length > 0 && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button 
-                  type="button" 
+                <Button
+                  type="button"
                   variant="destructive"
                   disabled={clearEvaluationsMutation.isPending}
                   data-testid="button-clear-evaluations"
@@ -997,7 +1004,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction 
+                  <AlertDialogAction
                     onClick={handleClearEvaluations}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
@@ -1007,9 +1014,9 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
               </AlertDialogContent>
             </AlertDialog>
           )}
-          
-          <Button 
-            type="button" 
+
+          <Button
+            type="button"
             variant="outline"
             onClick={() => onSuccess?.()}
             data-testid="button-cancel-control"
