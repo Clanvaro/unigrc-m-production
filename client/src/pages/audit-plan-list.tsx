@@ -81,8 +81,10 @@ export default function AuditPlanList() {
     return () => window.removeEventListener('auditPlanFiltersChanged', handleFiltersChanged);
   }, []);
 
-  const { data: plans = [], isLoading } = useQuery<AuditPlan[]>({
+  const { data: plans = [], isLoading, refetch } = useQuery<AuditPlan[]>({
     queryKey: ["/api/audit-plans"],
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   const deleteMutation = useMutation({
@@ -124,8 +126,10 @@ export default function AuditPlanList() {
       }
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/audit-plans"] });
+    onSuccess: async () => {
+      // Invalidar y refetch inmediatamente
+      await queryClient.invalidateQueries({ queryKey: ["/api/audit-plans"] });
+      await queryClient.refetchQueries({ queryKey: ["/api/audit-plans"] });
       toast({ title: "Plan aprobado exitosamente" });
     },
     onError: (error: Error) => {
@@ -146,6 +150,13 @@ export default function AuditPlanList() {
     const matchesYear = yearFilter === "all" || plan.year.toString() === yearFilter;
     return matchesSearch && matchesStatus && matchesYear;
   });
+
+  // Debug: Log filtered plans when filters change
+  useEffect(() => {
+    if (plans.length > 0) {
+      console.log("Audit plans loaded:", plans.length, "Filtered:", filteredPlans.length, "Status filter:", statusFilter);
+    }
+  }, [plans.length, filteredPlans.length, statusFilter]);
 
   const getStatusBadge = (status: string) => {
     const statusConfig: Record<string, { label: string; className: string; icon: React.ReactNode }> = {

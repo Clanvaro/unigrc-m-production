@@ -19984,6 +19984,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Error al aprobar el plan de auditoría" });
       }
 
+      // Invalidar caché de planes de auditoría
+      const tenantId = await resolveActiveTenantId(req, { required: false });
+      if (tenantId) {
+        await distributedCache.invalidatePattern(`audit-plans:${tenantId}:*`);
+      }
+
       console.log(`Plan de auditoría ${planId} aprobado por usuario ${userId}`);
       res.json(updatedPlan);
 
