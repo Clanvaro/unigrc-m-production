@@ -16,11 +16,28 @@ const getMicrosoftOidcConfig = memoize(
   async () => {
     const tenantId = process.env.MICROSOFT_TENANT_ID || 'common'; // 'common' supports both personal and corporate
     const issuerUrl = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+    const clientId = process.env.MICROSOFT_CLIENT_ID;
     
-    return await client.discovery(
-      new URL(issuerUrl),
-      process.env.MICROSOFT_CLIENT_ID!
-    );
+    if (!clientId) {
+      throw new Error("MICROSOFT_CLIENT_ID is not configured");
+    }
+    
+    console.log(`[Microsoft Auth] Discovering OIDC configuration from: ${issuerUrl}`);
+    console.log(`[Microsoft Auth] Using Client ID: ${clientId}`);
+    
+    try {
+      const config = await client.discovery(
+        new URL(issuerUrl),
+        clientId
+      );
+      console.log(`[Microsoft Auth] ✅ OIDC discovery successful`);
+      return config;
+    } catch (error) {
+      console.error(`[Microsoft Auth] ❌ OIDC discovery failed:`, error);
+      console.error(`[Microsoft Auth] Issuer URL: ${issuerUrl}`);
+      console.error(`[Microsoft Auth] Client ID: ${clientId}`);
+      throw error;
+    }
   },
   { maxAge: 3600 * 1000 } // Cache for 1 hour
 );
@@ -104,6 +121,19 @@ export async function setupMicrosoftAuth(app: Express) {
   }
 
   console.log("🔐 Configuring Microsoft Auth for production");
+  console.log(`[Microsoft Auth] Client ID: ${process.env.MICROSOFT_CLIENT_ID}`);
+  console.log(`[Microsoft Auth] Tenant ID: ${process.env.MICROSOFT_TENANT_ID || 'common'}`);
+
+  try {
+    const config = await getMicrosoftOidcConfig();
+    console.log(`[Microsoft Auth] OIDC configuration loaded successfully`);
+  } catch (error) {
+    console.error(`[Microsoft Auth] ❌ Failed to load OIDC configuration:`, error);
+    console.error(`[Microsoft Auth] Error details:`, error instanceof Error ? error.message : String(error));
+    console.error(`[Microsoft Auth] Stack:`, error instanceof Error ? error.stack : 'No stack trace');
+    // Don't throw - allow the app to continue without Microsoft Auth
+    return;
+  }
 
   const config = await getMicrosoftOidcConfig();
   
@@ -160,10 +190,19 @@ export async function setupMicrosoftAuth(app: Express) {
     console.log("  - req.hostname:", req.hostname);
     console.log("  - Session ID:", req.sessionID);
 
-    passport.authenticate("microsoft", {
-      prompt: "select_account", // Allow user to select account
-      scope: ["openid", "email", "profile", "offline_access"],
-    })(req, res, next);
+    try {
+      passport.authenticate("microsoft", {
+        prompt: "select_account", // Allow user to select account
+        scope: ["openid", "email", "profile", "offline_access"],
+      })(req, res, next);
+    } catch (error) {
+      console.error("[Microsoft Auth] Error in login route:", error);
+      console.error("[Microsoft Auth] Error details:", error instanceof Error ? error.message : String(error));
+      return res.status(500).json({ 
+        message: "Error al iniciar autenticación con Microsoft",
+        error: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.message : String(error)) : undefined
+      });
+    }
   });
 
   // Microsoft callback route
