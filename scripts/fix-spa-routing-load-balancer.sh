@@ -26,10 +26,11 @@ gcloud config set project $PROJECT_ID
 
 # Paso 1: Desplegar Cloud Function si no existe
 echo "📦 Paso 1: Verificando Cloud Function..."
-if ! gcloud functions describe $FUNCTION_NAME \
+echo "   Esto puede tardar unos segundos..."
+if ! timeout 30 gcloud functions describe $FUNCTION_NAME \
   --gen2 \
   --region=$REGION \
-  --project=$PROJECT_ID &>/dev/null; then
+  --project=$PROJECT_ID 2>/dev/null; then
   
   echo "   Cloud Function no existe, desplegando..."
   gcloud functions deploy $FUNCTION_NAME \
@@ -53,11 +54,12 @@ fi
 # Obtener URL de la Cloud Function
 echo ""
 echo "🔍 Obteniendo URL de la Cloud Function..."
-FUNCTION_URL=$(gcloud functions describe $FUNCTION_NAME \
+echo "   Esto puede tardar unos segundos..."
+FUNCTION_URL=$(timeout 30 gcloud functions describe $FUNCTION_NAME \
   --gen2 \
   --region=$REGION \
   --format="value(serviceConfig.uri)" \
-  --project=$PROJECT_ID)
+  --project=$PROJECT_ID 2>/dev/null)
 
 if [ -z "$FUNCTION_URL" ]; then
   echo "❌ Error: No se pudo obtener la URL de la Cloud Function"
