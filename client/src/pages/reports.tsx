@@ -137,87 +137,42 @@ export default function Reports() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [riskValuesHash]); // Use only stable hash - risks is accessed from closure
 
-  // Risks by process data - Group by macroproceso, process, or subproceso
-  // Map IDs to names using catalogs - memoized for performance
-  // React error #310 fix: Create stable hash of process IDs to track changes
-  const processIdsHash = useMemo(() => {
-    if (!Array.isArray(risks)) return '';
-    try {
-      return risks
-        .map((r: any) => r?.macroprocesoId || r?.processId || r?.subprocesoId || '')
-        .filter(Boolean)
-        .sort()
-        .join(',');
-    } catch {
-      return '';
-    }
-  }, [risks]);
+  // Use the dedicated endpoint that correctly queries risk_process_links
+  const { data: risksGroupedByProcessData, isLoading: risksGroupedLoading } = useQuery<Array<{
+    entityId: string;
+    entityName: string;
+    entityCode: string;
+    entityType: 'macroproceso' | 'process' | 'subproceso';
+    macroprocesoId: string | null;
+    macroprocesoName: string | null;
+    processId: string | null;
+    processName: string | null;
+    riskCount: number;
+    riskIds: string[];
+  }>>({
+    queryKey: ["/api/risks/grouped-by-process"],
+    staleTime: 120000, // 2 minutos
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
 
-  const catalogHash = useMemo(() => {
-    return `${macroprocesos.length}-${processes.length}-${subprocesos.length}`;
-  }, [macroprocesos.length, processes.length, subprocesos.length]);
-
+  // Transform grouped data to chart format
   const risksByProcessData = useMemo(() => {
-    if (!Array.isArray(risks)) return [];
+    if (!Array.isArray(risksGroupedByProcessData)) return [];
     
     try {
-      const processCounts = new Map<string, { name: string; count: number }>();
-      
-      // Access risks, macroprocesosMap, processesMap, subprocesosMap from closure
-      risks.forEach((risk: any) => {
-        // Check macroproceso level - use macroproceso object if available, otherwise map from ID
-        if (risk?.macroproceso) {
-          const macroprocesoName = risk.macroproceso.name || macroprocesosMap.get(risk.macroproceso.id) || 'Sin nombre';
-          const macroprocesoId = risk.macroproceso.id || risk.macroprocesoId;
-          if (macroprocesoId) {
-            const existing = processCounts.get(macroprocesoId) || { name: macroprocesoName, count: 0 };
-            processCounts.set(macroprocesoId, { ...existing, count: existing.count + 1 });
-          }
-        } else if (risk?.macroprocesoId) {
-          const macroprocesoName = macroprocesosMap.get(risk.macroprocesoId) || 'Sin nombre';
-          const existing = processCounts.get(risk.macroprocesoId) || { name: macroprocesoName, count: 0 };
-          processCounts.set(risk.macroprocesoId, { ...existing, count: existing.count + 1 });
-        }
-        
-        // Check process level - use process object if available, otherwise map from ID
-        if (risk?.process) {
-          const processName = risk.process.name || processesMap.get(risk.process.id) || 'Sin nombre';
-          const processId = risk.process.id || risk.processId;
-          if (processId) {
-            const existing = processCounts.get(String(processId)) || { name: processName, count: 0 };
-            processCounts.set(String(processId), { ...existing, count: existing.count + 1 });
-          }
-        } else if (risk?.processId) {
-          const processName = processesMap.get(risk.processId) || 'Sin nombre';
-          const existing = processCounts.get(String(risk.processId)) || { name: processName, count: 0 };
-          processCounts.set(String(risk.processId), { ...existing, count: existing.count + 1 });
-        }
-        
-        // Check subproceso level - use subproceso object if available, otherwise map from ID
-        if (risk?.subproceso) {
-          const subprocesoName = risk.subproceso.name || subprocesosMap.get(risk.subproceso.id) || 'Sin nombre';
-          const subprocesoId = risk.subproceso.id || risk.subprocesoId;
-          if (subprocesoId) {
-            const existing = processCounts.get(subprocesoId) || { name: subprocesoName, count: 0 };
-            processCounts.set(subprocesoId, { ...existing, count: existing.count + 1 });
-          }
-        } else if (risk?.subprocesoId) {
-          const subprocesoName = subprocesosMap.get(risk.subprocesoId) || 'Sin nombre';
-          const existing = processCounts.get(risk.subprocesoId) || { name: subprocesoName, count: 0 };
-          processCounts.set(risk.subprocesoId, { ...existing, count: existing.count + 1 });
-        }
-      });
-      
-      return Array.from(processCounts.values())
-        .map(({ name, count }) => ({ name, risks: count }))
+      return risksGroupedByProcessData
+        .map((item) => ({
+          name: item.entityName || item.entityCode || 'Sin nombre',
+          risks: item.riskCount
+        }))
         .filter((item) => item.risks > 0)
         .sort((a, b) => b.risks - a.risks); // Sort by risk count (highest first)
     } catch (error) {
-      console.error("Error calculating risks by process:", error);
+      console.error("Error transforming risks by process data:", error);
       return [];
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [processIdsHash, catalogHash]); // Use only stable hashes - arrays and Maps accessed from closure
+  }, [risksGroupedByProcessData]);
 
   // FIXED: Control effectiveness data - memoized for performance
   // React error #310 fix: Create stable hash of effectiveness values
@@ -291,7 +246,7 @@ export default function Reports() {
 
   // Show loading state only if critical data is loading
   // MOVED AFTER ALL HOOKS to prevent React error #310
-  if (risksLoading || controlsLoading || actionPlansLoading) {
+  if (risksLoading || controlsLoading || actionPlansLoading || risksGroupedLoading) {
     return (
       <div className="p-6">
         <div className="flex items-center justify-center h-64">
