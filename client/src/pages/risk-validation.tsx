@@ -120,13 +120,14 @@ export default function RiskValidationPage() {
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
-  const { data: validatedRiskProcessLinks = [], refetch: refetchValidated } = useQuery<any[]>({
+  const { data: validatedRiskProcessLinks = [], refetch: refetchValidated, isLoading: isValidatedLoading, error: validatedError } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
     staleTime: 60000,
-    refetchOnMount: false, // NO refetch al montar componente
+    refetchOnMount: true, // Refetch al montar para asegurar datos frescos
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    retry: 2, // Reintentar 2 veces si falla
   });
 
   // Log validated data when it changes
@@ -142,6 +143,8 @@ export default function RiskValidationPage() {
   useEffect(() => {
     if (statusFilter === "validated" && activeTab === "risks") {
       console.log('[Risk Validation] Status filter changed to validated, refetching...');
+      // Invalidar caché y refetch para asegurar datos frescos
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
       refetchValidated();
       // Scroll a la sección de riesgos aprobados después de que los datos se carguen
       setTimeout(() => {
@@ -149,9 +152,9 @@ export default function RiskValidationPage() {
           behavior: 'smooth',
           block: 'start'
         });
-      }, 300);
+      }, 500);
     }
-  }, [statusFilter, activeTab, refetchValidated]);
+  }, [statusFilter, activeTab, refetchValidated, queryClient]);
 
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
@@ -2584,12 +2587,77 @@ export default function RiskValidationPage() {
                     <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
                       {(() => {
                         const validatedArray = Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks : [];
-                        return validatedArray.length === 0 ? (
-                          <div>
-                            <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
-                            <p className="text-lg font-medium mb-2">No hay riesgos aprobados en el sistema.</p>
-                          </div>
-                        ) : (
+                        const validationCount = validationCounts?.risks.validated ?? 0;
+                        
+                        // Si hay un error en la query, mostrar mensaje de error
+                        if (validatedError) {
+                          return (
+                            <div>
+                              <AlertCircle className="mx-auto h-12 w-12 mb-4 text-red-400" />
+                              <p className="text-lg font-medium mb-2">Error al cargar riesgos aprobados</p>
+                              <p className="text-sm text-muted-foreground">
+                                Intenta recargar la página o contacta al administrador.
+                              </p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-4"
+                                onClick={() => refetchValidated()}
+                              >
+                                Reintentar
+                              </Button>
+                            </div>
+                          );
+                        }
+                        
+                        // Si está cargando, mostrar skeleton
+                        if (isValidatedLoading) {
+                          return (
+                            <div>
+                              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-400 mx-auto mb-4"></div>
+                              <p className="text-lg font-medium mb-2">Cargando riesgos aprobados...</p>
+                            </div>
+                          );
+                        }
+                        
+                        // Si no hay datos pero el contador muestra que debería haber, mostrar advertencia
+                        if (validatedArray.length === 0 && validationCount > 0) {
+                          return (
+                            <>
+                              <AlertTriangle className="mx-auto h-12 w-12 mb-4 text-yellow-400" />
+                              <p className="text-lg font-medium mb-2">No se pudieron cargar los riesgos aprobados</p>
+                              <p className="text-sm mt-2">
+                                El sistema indica que hay <span className="font-semibold">{validationCount}</span> riesgos aprobados, 
+                                pero no se pudieron cargar en el listado.
+                              </p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-4"
+                                onClick={() => {
+                                  queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/validation/counts"] });
+                                  refetchValidated();
+                                }}
+                              >
+                                Recargar datos
+                              </Button>
+                            </>
+                          );
+                        }
+                        
+                        // Si no hay datos y el contador también es 0, mostrar mensaje normal
+                        if (validatedArray.length === 0) {
+                          return (
+                            <div>
+                              <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
+                              <p className="text-lg font-medium mb-2">No hay riesgos aprobados en el sistema.</p>
+                            </div>
+                          );
+                        }
+                        
+                        // Si hay datos pero el filtro los eliminó todos
+                        return (
                           <>
                             <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
                             <p className="text-lg font-medium mb-2">No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
