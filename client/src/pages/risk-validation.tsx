@@ -2457,14 +2457,26 @@ export default function RiskValidationPage() {
             {/* CRITICAL: Always show validated risks section when statusFilter is "all" or "validated" */}
             {(() => {
               const shouldShow = (statusFilter === "all" || statusFilter === "validated");
-              const hasData = validatedRiskProcessLinks.length > 0;
+              const validatedArray = Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks : [];
+              const hasData = validatedArray.length > 0;
+              const validationCount = validationCounts?.risks.validated ?? 0;
+              
               console.log('[Risk Validation] Validated section render check:', {
                 statusFilter,
                 shouldShow,
                 hasData,
-                validatedCount: validatedRiskProcessLinks.length,
-                filteredCount: filteredValidatedRiskProcessLinks.length
+                validatedCountFromAPI: validatedArray.length,
+                validationCountFromCounts: validationCount,
+                filteredCount: filteredValidatedRiskProcessLinks.length,
+                isLoading: isValidatedLoading,
+                error: validatedError
               });
+              
+              // Si hay un error o está cargando, mostrar sección de todos modos
+              if (shouldShow && (isValidatedLoading || validatedError)) {
+                console.warn('[Risk Validation] Query state:', { isValidatedLoading, validatedError });
+              }
+              
               return shouldShow;
             })() && (
                 <div ref={validatedRisksSectionRef} id="validated-risks-section" data-testid="validated-risks-section">
