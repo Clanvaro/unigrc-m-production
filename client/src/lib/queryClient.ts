@@ -7,10 +7,11 @@ async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     let errorMessage = text;
+    let errorData: any = null;
     
     // Try to parse JSON error response
     try {
-      const errorData = JSON.parse(text);
+      errorData = JSON.parse(text);
       if (errorData.message) {
         errorMessage = errorData.message;
       }
@@ -20,6 +21,7 @@ async function throwIfResNotOk(res: Response) {
     
     const error = new Error(errorMessage);
     (error as any).status = res.status;
+    (error as any).response = { data: errorData || { message: errorMessage } };
     
     // Handle authentication errors
     if (res.status === 401) {

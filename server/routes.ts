@@ -20614,17 +20614,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Authentication required" });
       }
 
-      const validatedData = insertAuditCriterionSchema.parse({
-        ...req.body,
-        auditId: req.params.id,
-        createdBy: safeCreatedBy
-      });
+      // Validar datos con mensajes de error específicos
+      let validatedData;
+      try {
+        validatedData = insertAuditCriterionSchema.parse({
+          ...req.body,
+          auditId: req.params.id,
+          createdBy: safeCreatedBy
+        });
+      } catch (validationError) {
+        if (validationError instanceof z.ZodError) {
+          const firstError = validationError.errors[0];
+          console.error("Validation error creating audit criterion:", validationError.errors);
+          return res.status(400).json({ 
+            message: firstError.message || "Datos inválidos",
+            field: firstError.path.join('.'),
+            errors: validationError.errors.map(e => ({
+              field: e.path.join('.'),
+              message: e.message
+            }))
+          });
+        }
+        throw validationError;
+      }
 
       const criterion = await storage.createAuditCriterion(validatedData);
       res.status(201).json(criterion);
     } catch (error) {
       console.error("Error creating audit criterion:", error);
-      res.status(400).json({ message: "Invalid audit criterion data" });
+      const errorMessage = error instanceof Error ? error.message : "Error desconocido al crear criterio";
+      res.status(400).json({ 
+        message: errorMessage,
+        error: error instanceof Error ? error.stack : undefined
+      });
     }
   });
 

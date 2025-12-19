@@ -91,8 +91,18 @@ export function AuditCriteriaSection({ audit }: AuditSectionProps) {
       resetForm();
       toast({ title: "Criterio creado exitosamente" });
     },
-    onError: () => {
-      toast({ title: "Error al crear criterio", variant: "destructive" });
+    onError: (error: any) => {
+      const errorMessage = error?.response?.data?.message || error?.message || "Error al crear criterio";
+      const fieldError = error?.response?.data?.field;
+      const description = fieldError 
+        ? `Error en ${fieldError}: ${errorMessage}`
+        : errorMessage;
+      
+      toast({ 
+        title: "Error al crear criterio", 
+        description,
+        variant: "destructive" 
+      });
     },
   });
 
@@ -156,15 +166,53 @@ export function AuditCriteriaSection({ audit }: AuditSectionProps) {
   };
 
   const handleSubmit = () => {
-    if (!formData.title.trim()) {
-      toast({ title: "El título es requerido", variant: "destructive" });
+    // Validar que el título no esté vacío
+    if (!formData.title || !formData.title.trim()) {
+      toast({ 
+        title: "Error de validación", 
+        description: "El título del criterio es requerido",
+        variant: "destructive" 
+      });
       return;
     }
 
+    // Validar que si sourceType es "regulation", regulationId debe estar presente
+    if (formData.sourceType === "regulation" && !formData.regulationId) {
+      toast({ 
+        title: "Error de validación", 
+        description: "Debe seleccionar una normativa cuando el tipo de origen es 'Normativa'",
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    // Validar que si sourceType es "document", documentId debe estar presente
+    if (formData.sourceType === "document" && !formData.documentId) {
+      toast({ 
+        title: "Error de validación", 
+        description: "Debe seleccionar un documento cuando el tipo de origen es 'Gestión Documental'",
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    // Preparar datos para enviar (limpiar campos null/undefined)
+    const dataToSend: CriterionFormData = {
+      ...formData,
+      regulationId: formData.sourceType === "regulation" ? formData.regulationId : null,
+      documentId: formData.sourceType === "document" ? formData.documentId : null,
+      // Asegurar que los campos opcionales sean strings vacíos en lugar de null
+      description: formData.description || "",
+      normativeReference: formData.normativeReference || "",
+      evidenceExpectations: formData.evidenceExpectations || "",
+      ownerArea: formData.ownerArea || "",
+      applicabilityNotes: formData.applicabilityNotes || ""
+    };
+
     if (editingCriterion) {
-      updateMutation.mutate({ id: editingCriterion.id, data: formData });
+      updateMutation.mutate({ id: editingCriterion.id, data: dataToSend });
     } else {
-      createMutation.mutate(formData);
+      createMutation.mutate(dataToSend);
     }
   };
 
@@ -390,11 +438,14 @@ function CriterionForm({
   const selectedDocument = documents.find(d => d.id === formData.documentId);
 
   const handleSourceTypeChange = (value: string) => {
+    const newSourceType = value as "manual" | "regulation" | "document";
     setFormData({
       ...formData,
-      sourceType: value as "manual" | "regulation" | "document",
+      sourceType: newSourceType,
       regulationId: null,
-      documentId: null
+      documentId: null,
+      // Limpiar título si se cambia a manual (para que el usuario lo llene manualmente)
+      title: newSourceType === "manual" ? "" : formData.title
     });
   };
 
@@ -454,7 +505,12 @@ function CriterionForm({
                         key={regulation.id}
                         value={`${regulation.code} ${regulation.name}`}
                         onSelect={() => {
-                          setFormData({ ...formData, regulationId: regulation.id, title: regulation.name });
+                          setFormData({ 
+                            ...formData, 
+                            regulationId: regulation.id, 
+                            title: regulation.name || `${regulation.code} - ${regulation.name}`,
+                            normativeReference: regulation.code || formData.normativeReference
+                          });
                           setOpenRegulations(false);
                         }}
                         data-testid={`option-regulation-${regulation.id}`}
@@ -513,7 +569,11 @@ function CriterionForm({
                         key={document.id}
                         value={`${document.internalCode} ${document.name}`}
                         onSelect={() => {
-                          setFormData({ ...formData, documentId: document.id, title: document.name });
+                          setFormData({ 
+                            ...formData, 
+                            documentId: document.id, 
+                            title: document.name || `${document.internalCode} - ${document.name}`
+                          });
                           setOpenDocuments(false);
                         }}
                         data-testid={`option-document-${document.id}`}
@@ -547,10 +607,17 @@ function CriterionForm({
           placeholder="Ej: Cumplimiento normativo ISO 27001"
           data-testid="input-criterion-title"
           disabled={formData.sourceType !== "manual"}
+          required
+          className={!formData.title.trim() ? "border-red-500" : ""}
         />
         {formData.sourceType !== "manual" && (
           <p className="text-xs text-muted-foreground mt-1">
             El título se completa automáticamente al seleccionar una normativa o documento
+          </p>
+        )}
+        {formData.sourceType === "manual" && !formData.title.trim() && (
+          <p className="text-xs text-red-500 mt-1">
+            El título es requerido
           </p>
         )}
       </div>
