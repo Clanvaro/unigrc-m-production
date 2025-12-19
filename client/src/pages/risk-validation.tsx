@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -127,15 +127,16 @@ export default function RiskValidationPage() {
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
-    onSuccess: (data) => {
-      console.log('[Risk Validation] Loaded validated risk-process links:', data.length);
-      console.log('[Risk Validation] Sample validated risk-process link:', data[0]);
-      console.log('[Risk Validation] All validated risk-process links:', data);
-    },
-    onError: (error) => {
-      console.error('[Risk Validation] Error loading validated risk-process links:', error);
-    }
   });
+
+  // Log validated data when it changes
+  useEffect(() => {
+    if (validatedRiskProcessLinks && validatedRiskProcessLinks.length > 0) {
+      console.log('[Risk Validation] Loaded validated risk-process links:', validatedRiskProcessLinks.length);
+      console.log('[Risk Validation] Sample validated risk-process link:', validatedRiskProcessLinks[0]);
+      console.log('[Risk Validation] All validated risk-process links:', validatedRiskProcessLinks);
+    }
+  }, [validatedRiskProcessLinks]);
 
   // CRITICAL: Refetch validated risks when statusFilter changes to "validated"
   useEffect(() => {
@@ -1415,13 +1416,15 @@ export default function RiskValidationPage() {
   }));
 
   const filteredValidatedRiskProcessLinks = useMemo(() => {
+    if (!Array.isArray(validatedRiskProcessLinks)) return [];
+    
     // Debug: Log raw data to understand structure
     console.log('[Risk Validation] Raw validatedRiskProcessLinks:', {
       total: validatedRiskProcessLinks.length,
       sample: validatedRiskProcessLinks[0],
-      allHaveRisk: validatedRiskProcessLinks.every(rpl => rpl?.risk),
-      missingRisk: validatedRiskProcessLinks.filter(rpl => !rpl?.risk).length,
-      firstFew: validatedRiskProcessLinks.slice(0, 3).map(rpl => ({
+      allHaveRisk: validatedRiskProcessLinks.every((rpl: any) => rpl?.risk),
+      missingRisk: validatedRiskProcessLinks.filter((rpl: any) => !rpl?.risk).length,
+      firstFew: validatedRiskProcessLinks.slice(0, 3).map((rpl: any) => ({
         id: rpl?.id,
         riskId: rpl?.riskId,
         hasRisk: !!rpl?.risk,
@@ -1430,7 +1433,7 @@ export default function RiskValidationPage() {
         riskName: rpl?.risk?.name
       })),
       // Log all risk-process links for debugging
-      allLinks: validatedRiskProcessLinks.map(rpl => ({
+      allLinks: validatedRiskProcessLinks.map((rpl: any) => ({
         id: rpl?.id,
         riskId: rpl?.riskId,
         hasRisk: !!rpl?.risk,
@@ -1442,7 +1445,7 @@ export default function RiskValidationPage() {
 
     // CRITICAL: Don't filter out risks that don't have risk object but have riskId
     // The render will handle creating a minimal risk object
-    const filtered = validatedRiskProcessLinks.filter(rpl => {
+    const filtered = validatedRiskProcessLinks.filter((rpl: any) => {
       // Only filter out if we have absolutely no risk data
       if (!rpl) {
         console.warn('[Risk Validation] Null risk-process link found');
@@ -1505,7 +1508,7 @@ export default function RiskValidationPage() {
       selectedProcessId,
       statusFilter,
       filteredSample: filtered[0],
-      allFilteredHaveRisk: filtered.every(rpl => rpl?.risk || rpl?.riskId),
+      allFilteredHaveRisk: filtered.every((rpl: any) => rpl?.risk || rpl?.riskId),
       filteredOutByOwner: validatedRiskProcessLinks.length - filtered.length,
       filteredOutByRiskLevel: 0 // Will be calculated if needed
     });
@@ -2145,7 +2148,7 @@ export default function RiskValidationPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold" data-testid="stat-approved-risks">
-                  {Math.max(validationCounts?.risks.validated ?? 0, validatedRiskProcessLinks.length)}
+                  {Math.max(validationCounts?.risks.validated ?? 0, Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks.length : 0)}
                 </div>
               </CardContent>
             </Card>
@@ -2464,7 +2467,7 @@ export default function RiskValidationPage() {
                 <div ref={validatedRisksSectionRef} id="validated-risks-section" data-testid="validated-risks-section">
                   <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
                     <CheckCircle className="h-5 w-5 text-green-500" />
-                    <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length} de {validatedRiskProcessLinks.length})</span>
+                    <span>Riesgos Aprobados ({filteredValidatedRiskProcessLinks.length} de {Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks.length : 0})</span>
                   </h2>
                   {/* CRITICAL: Show table even if filtered list is empty, but show message if no data matches filters */}
                   {filteredValidatedRiskProcessLinks.length > 0 ? (
@@ -2579,53 +2582,56 @@ export default function RiskValidationPage() {
                     </div>
                   ) : (
                     <div className="border rounded-lg p-8 text-center text-gray-500 dark:text-gray-400">
-                      {validatedRiskProcessLinks.length === 0 ? (
-                        <div>
-                          <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
-                          <p className="text-lg font-medium mb-2">No hay riesgos aprobados en el sistema.</p>
-                        </div>
-                      ) : (
-                        <>
-                          <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
-                          <p className="text-lg font-medium mb-2">No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
-                          <p className="text-sm mt-2">
-                            Total de riesgos aprobados: <span className="font-semibold">{validatedRiskProcessLinks.length}</span>
-                          </p>
-                          {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
-                            <div className="mt-4">
-                              <p className="text-sm text-muted-foreground mb-2">Filtros activos:</p>
-                              <div className="flex flex-wrap gap-2 justify-center">
-                                {ownerFilter !== "all" && (
-                                  <Badge variant="secondary">Responsable: {processOwners.find(o => o.id === ownerFilter)?.name || ownerFilter}</Badge>
-                                )}
-                                {riskLevelFilter !== "all" && (
-                                  <Badge variant="secondary">Nivel: {riskLevelFilter}</Badge>
-                                )}
-                                {selectedProcessId && (
-                                  <Badge variant="secondary">
-                                    Proceso: {processes.find(p => p.id === selectedProcessId)?.name || 
-                                             subprocesos.find(s => s.id === selectedProcessId)?.name || 
-                                             macroprocesos.find(m => m.id === selectedProcessId)?.name || 
-                                             selectedProcessId}
-                                  </Badge>
-                                )}
+                      {(() => {
+                        const validatedArray = Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks : [];
+                        return validatedArray.length === 0 ? (
+                          <div>
+                            <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
+                            <p className="text-lg font-medium mb-2">No hay riesgos aprobados en el sistema.</p>
+                          </div>
+                        ) : (
+                          <>
+                            <CheckCircle className="mx-auto h-12 w-12 mb-4 text-gray-400" />
+                            <p className="text-lg font-medium mb-2">No hay riesgos aprobados que coincidan con los filtros seleccionados.</p>
+                            <p className="text-sm mt-2">
+                              Total de riesgos aprobados: <span className="font-semibold">{validatedArray.length}</span>
+                            </p>
+                            {(ownerFilter !== "all" || riskLevelFilter !== "all" || selectedProcessId) && (
+                              <div className="mt-4">
+                                <p className="text-sm text-muted-foreground mb-2">Filtros activos:</p>
+                                <div className="flex flex-wrap gap-2 justify-center">
+                                  {ownerFilter !== "all" && (
+                                    <Badge variant="secondary">Responsable: {processOwners.find(o => o.id === ownerFilter)?.name || ownerFilter}</Badge>
+                                  )}
+                                  {riskLevelFilter !== "all" && (
+                                    <Badge variant="secondary">Nivel: {riskLevelFilter}</Badge>
+                                  )}
+                                  {selectedProcessId && (
+                                    <Badge variant="secondary">
+                                      Proceso: {processes.find(p => p.id === selectedProcessId)?.name || 
+                                               subprocesos.find(s => s.id === selectedProcessId)?.name || 
+                                               macroprocesos.find(m => m.id === selectedProcessId)?.name || 
+                                               selectedProcessId}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="mt-4"
+                                  onClick={() => {
+                                    setOwnerFilter("all");
+                                    setRiskLevelFilter("all");
+                                    setSelectedProcessId(null);
+                                  }}
+                                >
+                                  Limpiar Filtros
+                                </Button>
                               </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="mt-4"
-                                onClick={() => {
-                                  setOwnerFilter("all");
-                                  setRiskLevelFilter("all");
-                                  setSelectedProcessId(null);
-                                }}
-                              >
-                                Limpiar Filtros
-                              </Button>
-                            </div>
-                          )}
-                        </>
-                      )}
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
