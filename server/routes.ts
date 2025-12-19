@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated, optionalTenant } from "./replitAuth";
+import { setupMicrosoftAuth } from "./microsoftAuth";
 import { authCache } from "./auth-cache";
 import { csrfProtection, csrfProtectionForMutations, getCSRFToken, generateCsrfToken } from "./csrf";
 import { authRateLimiter, apiMutationLimiter } from "./security";
@@ -697,6 +698,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Auth middleware
   await setupAuth(app);
+  
+  // Microsoft Auth (if configured)
+  await setupMicrosoftAuth(app);
 
   // Health check and warmup endpoints (no auth required for load balancer/monitoring)
   app.get("/api/health", async (req, res) => {

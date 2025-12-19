@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -14,6 +14,22 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
+
+  // Check for error in URL query params (from OAuth redirects)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const errorParam = params.get('error');
+    if (errorParam) {
+      const errorMessages: Record<string, string> = {
+        'auth_failed': 'Error al autenticar con Microsoft. Por favor intenta nuevamente.',
+        'auth_no_user': 'No se pudo obtener la información del usuario de Microsoft.',
+        'account_deactivated': 'Tu cuenta ha sido desactivada. Contacta al administrador.',
+      };
+      setError(errorMessages[errorParam] || 'Error al iniciar sesión. Por favor intenta nuevamente.');
+      // Clean URL
+      window.history.replaceState({}, '', '/login');
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,6 +154,32 @@ export default function LoginPage() {
               disabled={loading}
             >
               {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+            </Button>
+            
+            <div className="relative my-4">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-gray-500">O continúa con</span>
+              </div>
+            </div>
+            
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                window.location.href = '/api/auth/microsoft';
+              }}
+            >
+              <svg className="mr-2 h-4 w-4" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect width="11" height="11" fill="#F25022"/>
+                <rect x="12" width="11" height="11" fill="#7FBA00"/>
+                <rect y="12" width="11" height="11" fill="#00A4EF"/>
+                <rect x="12" y="12" width="11" height="11" fill="#FFB900"/>
+              </svg>
+              Continuar con Microsoft
             </Button>
             
             <div className="text-sm text-center text-gray-500">
