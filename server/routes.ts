@@ -7140,8 +7140,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
         const duration = Date.now() - startTime;
-        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms`);
-        return res.json(cached);
+        const cachedLength = Array.isArray(cached) ? cached.length : 0;
+        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms (${cachedLength} links)`);
+        
+        // CRITICAL: If cached result is empty for validated/observed/rejected, invalidate and refetch
+        // This handles cases where cache was set with empty array but data exists
+        if (cachedLength === 0 && (actualStatus === 'validated' || actualStatus === 'observed' || actualStatus === 'rejected')) {
+          console.warn(`[CACHE] Empty cached result for ${actualStatus}, invalidating and refetching...`);
+          await distributedCache.delete(cacheKey);
+          // Continue to fetch fresh data below
+        } else {
+          return res.json(cached);
+        }
       }
 
       console.log(`[CACHE MISS] ${cacheKey} - fetching data`);

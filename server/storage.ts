@@ -21238,6 +21238,37 @@ export class DatabaseStorage extends MemStorage {
 
       const baseResults = await query;
       console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus(${status}) returned ${baseResults.length} records from database`);
+      
+      // Debug: Log sample results to understand data structure
+      if (baseResults.length > 0 && status === 'validated') {
+        console.log(`[DB DEBUG] Sample validated risk-process link from DB:`, {
+          rplId: baseResults[0]?.rplId,
+          rplRiskId: baseResults[0]?.rplRiskId,
+          rplValidationStatus: baseResults[0]?.rplValidationStatus,
+          riskId: baseResults[0]?.riskId,
+          riskCode: baseResults[0]?.riskCode,
+          riskName: baseResults[0]?.riskName,
+          riskDeletedAt: baseResults[0]?.riskId ? 'checking...' : 'N/A'
+        });
+      } else if (baseResults.length === 0 && status === 'validated') {
+        console.warn(`[DB DEBUG] No validated risk-process links found in database. Checking if there are any with validation_status='validated'...`);
+        // Debug query to check if there are any validated links at all
+        const debugCount = await db.execute(sql`
+          SELECT COUNT(*)::int as total
+          FROM risk_process_links rpl
+          WHERE rpl.validation_status = 'validated'
+        `);
+        console.log(`[DB DEBUG] Total risk-process links with validation_status='validated': ${(debugCount.rows[0] as any)?.total || 0}`);
+        
+        // Check how many have deleted risks
+        const withDeletedRisks = await db.execute(sql`
+          SELECT COUNT(*)::int as total
+          FROM risk_process_links rpl
+          INNER JOIN risks r ON rpl.risk_id = r.id
+          WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NOT NULL
+        `);
+        console.log(`[DB DEBUG] Validated links with deleted risks: ${(withDeletedRisks.rows[0] as any)?.total || 0}`);
+      }
 
       // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
       const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
