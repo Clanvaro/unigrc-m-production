@@ -16593,6 +16593,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Platform Admin - User Management (SINGLE-TENANT MODE)
+  // Database metrics endpoint (admin only, cached 30s, no heavy queries)
+  app.get("/api/admin/db-metrics", isAuthenticated, requirePlatformAdmin(), async (req, res) => {
+    try {
+      const cacheKey = 'db-metrics:aggregated';
+      const CACHE_TTL = 30; // 30 segundos como mínimo
+
+      // Intentar obtener de cache primero
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        return res.json({
+          ...cached,
+          cached: true,
+          cacheAge: 'fresh'
+        });
+      }
+
+      // Obtener métricas agregadas (sin queries pesadas, solo datos en memoria)
+      const { getAggregatedMetrics } = await import('./performance/pool-metrics');
+      const metrics = getAggregatedMetrics();
+
+      // Obtener métricas actuales del pool (sin queries)
+      const currentPoolMetrics = getPoolMetrics();
+
+      const response = {
+        timestamp: new Date().toISOString(),
+        cached: false,
+        pool: currentPoolMetrics && currentPoolMetrics.totalCount !== undefined && currentPoolMetrics.idleCount !== undefined && currentPoolMetrics.maxConnections !== undefined ? {
+          total: currentPoolMetrics.totalCount,
+          idle: currentPoolMetrics.idleCount,
+          active: currentPoolMetrics.totalCount - currentPoolMetrics.idleCount,
+          waiting: currentPoolMetrics.waitingCount || 0,
+          max: currentPoolMetrics.maxConnections,
+          utilizationPct: Math.round(((currentPoolMetrics.totalCount - currentPoolMetrics.idleCount) / currentPoolMetrics.maxConnections) * 100)
+        } : null,
+        stats: metrics.stats,
+        slowQueries: metrics.slowQueries.slice(0, 20), // Últimas 20 slow queries
+        alerts: [] as string[]
+      };
+
+      // Generar alertas basadas en métricas
+      if (metrics.stats.utilizationPct >= 90) {
+        response.alerts.push('CRITICAL: Pool utilization >= 90%');
+      } else if (metrics.stats.utilizationPct >= 80) {
+        response.alerts.push('WARNING: Pool utilization >= 80%');
+      }
+
+      if (metrics.stats.maxWaiting > 5) {
+        response.alerts.push(`WARNING: ${metrics.stats.maxWaiting} queries waiting (pool saturated)`);
+      }
+
+      if (currentPoolMetrics && currentPoolMetrics.maxConnections !== undefined && metrics.stats.p95Active > currentPoolMetrics.maxConnections * 0.9) {
+        response.alerts.push('WARNING: P95 active connections near pool max');
+      }
+
+      // Cachear respuesta por 30 segundos
+      await distributedCache.set(cacheKey, response, CACHE_TTL);
+
+      res.json(response);
+    } catch (error) {
+      console.error('[ERROR] /api/admin/db-metrics failed:', error);
+      res.status(500).json({
+        message: "Failed to fetch database metrics",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   app.get("/api/platform-admin/users", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
     try {
       const users = await storage.getUsers();

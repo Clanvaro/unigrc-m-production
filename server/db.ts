@@ -353,7 +353,7 @@ if (pool) {
   });
 
   // Log slow queries for debugging (Nov 23, 2025)
-  // Updated Nov 29, 2025: Reduced threshold to 5s and added more detail
+  // Updated: Only log slow queries + record in metrics collector
   const originalQuery = pool.query.bind(pool);
   (pool as any).query = function (queryText: any, values?: any, callback?: any): any {
     const startTime = Date.now();
@@ -364,9 +364,19 @@ if (pool) {
         const queryStr = typeof queryText === 'string' ? queryText : queryText?.text || '';
         const truncatedQuery = queryStr.substring(0, 300);
         const metrics = getPoolMetrics();
+        
+        // Solo log slow queries (no todas las queries)
         console.warn(`⚠️ SLOW QUERY (${duration}ms): ${truncatedQuery}`);
         if (metrics) {
           console.warn(`   Pool: active=${metrics.totalCount - metrics.idleCount}/${metrics.maxConnections}, waiting=${metrics.waitingCount}`);
+        }
+        
+        // Registrar en el recolector de métricas
+        try {
+          const { recordSlowQuery } = require('./performance/pool-metrics');
+          recordSlowQuery(truncatedQuery, duration);
+        } catch (e) {
+          // Ignorar si el módulo no está disponible aún
         }
       }
     };
@@ -777,50 +787,62 @@ function startPoolMonitoring() {
     return;
   }
 
-  // Log pool metrics every minute
+  // Log métricas agregadas cada 5 minutos (reducido de cada minuto)
+  // Solo mostrar estadísticas agregadas, no métricas individuales
   poolMonitoringInterval = setInterval(() => {
+    try {
+      const { getAggregatedMetrics } = require('./performance/pool-metrics');
+      const aggregated = getAggregatedMetrics();
+      
+      if (aggregated.stats) {
+        // Log métricas agregadas: p95, pool waiting, etc.
+        const sampleCount = aggregated.stats.maxActive > 0 ? 'multiple' : '0';
+        console.log(
+          `📊 Pool Stats (${sampleCount} samples): ` +
+          `avgActive=${aggregated.stats.avgActive.toFixed(1)}, ` +
+          `p95Active=${aggregated.stats.p95Active}, ` +
+          `p99Active=${aggregated.stats.p99Active}, ` +
+          `maxWaiting=${aggregated.stats.maxWaiting}, ` +
+          `utilization=${aggregated.stats.utilizationPct}%`
+        );
+      }
+    } catch (e) {
+      // Fallback a métricas básicas si el módulo no está disponible
+      const metrics = getPoolMetrics();
+      if (!metrics || metrics.totalCount === undefined || metrics.idleCount === undefined || metrics.maxConnections === undefined) return;
+
+      const activeConnections = metrics.totalCount - metrics.idleCount;
+      const activeUtilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
+
+      // Solo log si hay problemas (saturación o waiting)
+      if (activeUtilizationPct >= 80 || (metrics.waitingCount || 0) > 0) {
+        console.warn(
+          `⚠️ Pool Status: active=${activeConnections}/${metrics.maxConnections} (${activeUtilizationPct}%), ` +
+          `waiting=${metrics.waitingCount || 0}`
+        );
+      }
+    }
+
+    // Alertas críticas (mantener)
     const metrics = getPoolMetrics();
-    if (!metrics) return;
+    if (metrics && metrics.totalCount !== undefined && metrics.idleCount !== undefined && metrics.maxConnections !== undefined) {
+      const activeConnections = metrics.totalCount - metrics.idleCount;
+      const activeUtilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
 
-    const utilizationPct = Math.round((metrics.totalCount / metrics.maxConnections) * 100);
-    const activeConnections = metrics.totalCount - metrics.idleCount;
-    const activeUtilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
-
-    console.log(
-      `📊 Pool Metrics: total=${metrics.totalCount}/${metrics.maxConnections} (${utilizationPct}%), ` +
-      `idle=${metrics.idleCount}, active=${activeConnections}, waiting=${metrics.waitingCount}`
-    );
-
-    // Alert on high ACTIVE connection saturation (>80% threshold)
-    // Idle connections are harmless - they're ready to serve new requests
-    // 80% threshold provides early warning before pool exhaustion
-    if (activeUtilizationPct >= 80) {
-      console.warn(
-        `⚠️ HIGH POOL SATURATION: ${activeUtilizationPct}% active (${activeConnections}/${metrics.maxConnections}) - ` +
-        `Pool is ${activeUtilizationPct >= 90 ? 'CRITICALLY' : 'highly'} saturated. ` +
-        `Consider: 1) Investigating slow queries, 2) Increasing DB_POOL_MAX, 3) Optimizing concurrent queries`
-      );
+      if (activeUtilizationPct >= 90) {
+        console.error(
+          `🚨 CRITICAL POOL SATURATION: ${activeUtilizationPct}% active (${activeConnections}/${metrics.maxConnections}), ` +
+          `${metrics.waitingCount || 0} waiting - Pool near exhaustion!`
+        );
+      } else if ((metrics.waitingCount || 0) > 5) {
+        console.warn(
+          `⚠️ CONNECTION QUEUE: ${metrics.waitingCount || 0} queries waiting - Pool saturated`
+        );
+      }
     }
+  }, 300000); // Every 5 minutes (reducido de 60 segundos)
 
-    // Alert on queued connections (this indicates real saturation)
-    // Reduced threshold for smaller pool size
-    if (metrics.waitingCount > 3) {
-      console.warn(
-        `⚠️ CONNECTION QUEUE BUILD-UP: ${metrics.waitingCount} queries waiting - ` +
-        `Pool is saturated, queries are queuing. Check for slow queries or increase max connections`
-      );
-    }
-
-    // Critical alert when pool is nearly exhausted (>90%)
-    if (activeUtilizationPct >= 90) {
-      console.error(
-        `🚨 CRITICAL POOL SATURATION: ${activeUtilizationPct}% active (${activeConnections}/${metrics.maxConnections}), ` +
-        `${metrics.waitingCount} waiting - Pool near exhaustion! Immediate action required.`
-      );
-    }
-  }, 60000); // Every 60 seconds
-
-  console.log('✅ Pool monitoring started - metrics logged every 60 seconds');
+  console.log('✅ Pool monitoring started - aggregated metrics logged every 5 minutes');
 }
 
 function stopPoolMonitoring() {
@@ -836,6 +858,15 @@ let poolMonitoringStarted = false;
 export function startPoolMonitoringIfNeeded() {
   if (poolMonitoringStarted || !pool) return;
   startPoolMonitoring();
+  
+  // Iniciar también el recolector de métricas
+  try {
+    const { startPoolMetricsCollection } = require('./performance/pool-metrics');
+    startPoolMetricsCollection();
+  } catch (e) {
+    // Ignorar si el módulo no está disponible
+  }
+  
   poolMonitoringStarted = true;
 }
 
