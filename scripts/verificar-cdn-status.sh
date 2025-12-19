@@ -67,12 +67,19 @@ if gcloud compute backend-services describe $BACKEND_SERVICE_NAME --global --pro
   echo "✅ Backend Service existe: $BACKEND_SERVICE_NAME"
   
   # Verificar si CDN está habilitado
-  CDN_ENABLED_SERVICE=$(gcloud compute backend-services describe $BACKEND_SERVICE_NAME \
+  # CDN está habilitado si existe cdnPolicy (incluso si enableCdn no está explícito)
+  CDN_POLICY_EXISTS=$(gcloud compute backend-services describe $BACKEND_SERVICE_NAME \
+    --global \
+    --format="value(cdnPolicy.cacheMode)" \
+    --project=$PROJECT_ID 2>/dev/null || echo "")
+  
+  CDN_ENABLED_FLAG=$(gcloud compute backend-services describe $BACKEND_SERVICE_NAME \
     --global \
     --format="value(cdnPolicy.enableCdn)" \
-    --project=$PROJECT_ID 2>/dev/null || echo "false")
+    --project=$PROJECT_ID 2>/dev/null || echo "")
   
-  if [ "$CDN_ENABLED_SERVICE" = "True" ]; then
+  # CDN está habilitado si hay política configurada O si enableCdn es True
+  if [ -n "$CDN_POLICY_EXISTS" ] || [ "$CDN_ENABLED_FLAG" = "True" ]; then
     echo "   ✅ CDN está HABILITADO en el Backend Service"
     
     # Obtener configuración de caché
@@ -151,14 +158,20 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "📝 RESUMEN"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-if [ "$CDN_ENABLED_BUCKET" = "True" ] && [ "$CDN_ENABLED_SERVICE" = "True" ]; then
+# Verificar estado del Backend Service (CDN habilitado si hay política configurada)
+CDN_SERVICE_ENABLED="false"
+if [ -n "$CDN_POLICY_EXISTS" ] || [ "$CDN_ENABLED_FLAG" = "True" ]; then
+  CDN_SERVICE_ENABLED="true"
+fi
+
+if [ "$CDN_ENABLED_BUCKET" = "True" ] && [ "$CDN_SERVICE_ENABLED" = "true" ]; then
   echo "✅ Cloud CDN está COMPLETAMENTE HABILITADO"
   echo "   - Backend Bucket: ✅"
   echo "   - Backend Service: ✅"
-elif [ "$CDN_ENABLED_BUCKET" = "True" ] || [ "$CDN_ENABLED_SERVICE" = "True" ]; then
+elif [ "$CDN_ENABLED_BUCKET" = "True" ] || [ "$CDN_SERVICE_ENABLED" = "true" ]; then
   echo "⚠️  Cloud CDN está PARCIALMENTE HABILITADO"
   echo "   - Backend Bucket: $([ "$CDN_ENABLED_BUCKET" = "True" ] && echo "✅" || echo "❌")"
-  echo "   - Backend Service: $([ "$CDN_ENABLED_SERVICE" = "True" ] && echo "✅" || echo "❌")"
+  echo "   - Backend Service: $([ "$CDN_SERVICE_ENABLED" = "true" ] && echo "✅" || echo "❌")"
 else
   echo "❌ Cloud CDN está DESHABILITADO"
   echo "   - Backend Bucket: ❌"
