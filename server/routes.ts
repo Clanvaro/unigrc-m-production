@@ -7150,7 +7150,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // OPTIMIZED: Use withRetry with timeout wrapper to prevent 504 errors
       // The query now has a default LIMIT of 1000 to prevent loading all records
       const riskProcessLinks = await withRetry(async () => {
-        return await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+        const result = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
+        console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus returned ${result.length} links for status: ${actualStatus}`);
+        if (result.length > 0) {
+          console.log(`[DB DEBUG] Sample link:`, {
+            id: result[0]?.id,
+            riskId: result[0]?.riskId,
+            hasRisk: !!result[0]?.risk,
+            validationStatus: result[0]?.validationStatus
+          });
+        }
+        return result;
       }, {
         maxRetries: 1 // Only retry once for timeout scenarios
       });
@@ -7162,7 +7172,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn(`⚠️ Slow /api/risk-processes/validation/${actualStatus} query: ${queryDuration}ms`);
       }
 
-      await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+      // CRITICAL: Only cache if we got results, otherwise cache might store empty array
+      if (riskProcessLinks.length > 0) {
+        await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+      } else {
+        // If no results, check if there should be results by comparing with counts
+        console.warn(`[WARN] /api/risk-processes/validation/${actualStatus} returned 0 results - this might indicate a data inconsistency`);
+        // Don't cache empty results for validated/observed/rejected to allow retry
+        if (actualStatus === 'validated' || actualStatus === 'observed' || actualStatus === 'rejected') {
+          console.log(`[CACHE] Skipping cache for empty ${actualStatus} results to allow retry`);
+        } else {
+          await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
+        }
+      }
 
       const totalDuration = Date.now() - startTime;
       console.log(`[PERF] /api/risk-processes/validation/${actualStatus} COMPLETE in ${totalDuration}ms (${riskProcessLinks.length} links)`);
@@ -7260,7 +7282,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const queryStart = Date.now();
 
       // Combined query for risks (all statuses in one query)
-      // FIXED: Removed validated_at IS NOT NULL check - some validated risks might not have validated_at set
+      // FIXED: Ensure counts match the detail query - only count non-deleted risks
+      // This ensures consistency between /api/validation/counts and /api/risk-processes/validation/:status
       const risksCountsPromise = requireDb().execute(sql`
         SELECT 
           COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
