@@ -26,12 +26,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "1️⃣  VERIFICANDO BACKEND BUCKET (Frontend estático)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-if gcloud compute backend-buckets describe $BACKEND_BUCKET_NAME --global --project=$PROJECT_ID &>/dev/null; then
+if gcloud compute backend-buckets describe $BACKEND_BUCKET_NAME --project=$PROJECT_ID &>/dev/null; then
   echo "✅ Backend Bucket existe: $BACKEND_BUCKET_NAME"
   
   # Verificar si CDN está habilitado
   CDN_ENABLED_BUCKET=$(gcloud compute backend-buckets describe $BACKEND_BUCKET_NAME \
-    --global \
     --format="value(enableCdn)" \
     --project=$PROJECT_ID 2>/dev/null || echo "false")
   
