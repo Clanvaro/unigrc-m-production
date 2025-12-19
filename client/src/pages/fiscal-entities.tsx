@@ -34,8 +34,10 @@ export default function FiscalEntitiesPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: entities = [], isLoading } = useQuery<FiscalEntity[]>({
+  const { data: entities = [], isLoading, refetch } = useQuery<FiscalEntity[]>({
     queryKey: ["/api/fiscal-entities"],
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   const deleteMutation = useMutation({

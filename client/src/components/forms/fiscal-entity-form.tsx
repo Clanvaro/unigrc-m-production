@@ -67,8 +67,10 @@ export function FiscalEntityForm({ entity, onClose }: FiscalEntityFormProps) {
         return await apiRequest("/api/fiscal-entities", "POST", values);
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/fiscal-entities"] });
+    onSuccess: async () => {
+      // Invalidar y refetch inmediatamente
+      await queryClient.invalidateQueries({ queryKey: ["/api/fiscal-entities"] });
+      await queryClient.refetchQueries({ queryKey: ["/api/fiscal-entities"] });
       toast({
         title: entity ? "Entidad actualizada" : "Entidad creada",
         description: entity
@@ -78,11 +80,17 @@ export function FiscalEntityForm({ entity, onClose }: FiscalEntityFormProps) {
       onClose();
     },
     onError: (error: any) => {
+      const errorMessage = error?.response?.data?.message || error?.message || "No se pudo guardar la entidad fiscal.";
+      const fieldErrors = error?.response?.data?.errors;
+      
       toast({
         title: "Error",
-        description: error.message || "No se pudo guardar la entidad fiscal.",
+        description: fieldErrors 
+          ? `Error de validación: ${fieldErrors.map((e: any) => e.message).join(", ")}`
+          : errorMessage,
         variant: "destructive",
       });
+      console.error("Error creating/updating fiscal entity:", error);
     },
   });
 

@@ -986,15 +986,6 @@ export default function AuditReports() {
   // Lista principal de auditorías
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Informes de Auditoría</h1>
-          <p className="text-muted-foreground">
-            Selecciona una auditoría para generar su informe completo
-          </p>
-        </div>
-      </div>
-
       {/* Filtros */}
       <Card>
         <CardHeader>

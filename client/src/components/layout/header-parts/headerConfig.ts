@@ -35,6 +35,7 @@ export const pageTitles: Record<string, PageTitle> = {
   "/risk-events": { title: "Eventos de Riesgo", subtitle: "Gestión y seguimiento de eventos materializados, fraudes y delitos" },
   "/audit-tests": { title: "Mis Pruebas de Auditoría", subtitle: "Gestiona las pruebas de auditoría asignadas" },
   "/audit-findings": { title: "Hallazgos de Auditoría", subtitle: "Gestión y seguimiento de hallazgos identificados en auditorías" },
+  "/audit-reports": { title: "Informes de Auditoría", subtitle: "Selecciona una auditoría para generar su informe completo" },
   "/manual": { title: "Manual de Uso", subtitle: "Guía completa para usar Unigrc" },
   "/trash": { title: "Papelera de Reciclaje", subtitle: "Elementos eliminados que pueden ser restaurados" },
   "/import": { title: "Importar Datos", subtitle: "Importe entidades, procesos, riesgos y controles desde Excel" },

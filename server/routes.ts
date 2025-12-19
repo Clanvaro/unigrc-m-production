@@ -23103,7 +23103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
-      const entity = await storage.getFiscalEntity(req.params.id, tenantId);
+      const entity = await storage.getFiscalEntity(req.params.id);
       if (!entity) {
         return res.status(404).json({ message: "Fiscal entity not found" });
       }
@@ -23117,7 +23117,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
-      const entity = await storage.getFiscalEntityByCode(req.params.code, tenantId);
+      const entity = await storage.getFiscalEntityByCode(req.params.code);
       if (!entity) {
         return res.status(404).json({ message: "Fiscal entity not found" });
       }
@@ -23136,15 +23136,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Inject tenantId from session (throws ActiveTenantError if not found)
       const entity = await storage.createFiscalEntity(await withTenantId(req, validatedData));
+      
+      // Invalidar caché de entidades fiscales
+      const tenantId = await resolveActiveTenantId(req, { required: false });
+      if (tenantId) {
+        await distributedCache.invalidatePattern(`fiscal-entities:${tenantId}:*`);
+      }
+      
       res.status(201).json(entity);
     } catch (error: any) {
+      console.error("Error creating fiscal entity:", error);
+      
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      if (error.name === 'ZodError') {
+      if (error.name === 'ZodError' || error instanceof z.ZodError) {
         return res.status(400).json({
           message: "Datos de entidad fiscal inválidos",
-          errors: error.errors
+          errors: error.errors || []
         });
       }
       if (error.message?.includes('unique constraint') || error.code === '23505') {
@@ -23156,7 +23165,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         return res.status(409).json({ message: "Ya existe una entidad con estos datos" });
       }
-      res.status(400).json({ message: "Error al crear la entidad fiscal" });
+      const errorMessage = error instanceof Error ? error.message : "Error desconocido al crear la entidad fiscal";
+      res.status(400).json({ message: errorMessage });
     }
   });
 
