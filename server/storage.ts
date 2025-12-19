@@ -21148,109 +21148,75 @@ export class DatabaseStorage extends MemStorage {
 
   async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]> {
     return withRetry(async () => {
-      // Build WHERE conditions - filter out deleted risks and processes for performance
-      const conditions = [
-        eq(riskProcessLinks.validationStatus, status),
-        isNull(risks.deletedAt)
-        // sql`${risks.status} != 'deleted'` // FIXED: Removed to match validation counts logic (status might be desync with deletedAt)
-      ];
-
-      // For validated status, ensure validatedAt is not null (actually validated)
-      // NOTE: Removed this check to include all validated risks, even if validatedAt is null
-      // This can happen if risks were validated before validatedAt was tracked
-      // if (status === 'validated') {
-      //   conditions.push(isNotNull(riskProcessLinks.validatedAt));
-      // }
-
       // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
-      // This prevents 504 timeouts when there are many records
       const queryLimit = limit || 1000;
 
-      // OPTIMIZED: Select only essential columns instead of entire tables (~70% payload reduction)
-      // Use db directly (already imported and initialized)
-      let query = db.select({
-        // RiskProcessLink fields (only essential ones)
-        rplId: riskProcessLinks.id,
-        rplRiskId: riskProcessLinks.riskId,
-        rplMacroprocesoId: riskProcessLinks.macroprocesoId,
-        rplProcessId: riskProcessLinks.processId,
-        rplSubprocesoId: riskProcessLinks.subprocesoId,
-        rplResponsibleOverrideId: riskProcessLinks.responsibleOverrideId,
-        rplValidatedBy: riskProcessLinks.validatedBy,
-        rplValidationStatus: riskProcessLinks.validationStatus,
-        rplValidationComments: riskProcessLinks.validationComments,
-        rplValidatedAt: riskProcessLinks.validatedAt,
-        rplNotified: riskProcessLinks.notified,
-        rplCreatedAt: riskProcessLinks.createdAt,
-        rplUpdatedAt: riskProcessLinks.updatedAt,
-        // Risk fields (include fields needed for filtering and display)
-        riskId: risks.id,
-        riskCode: risks.code,
-        riskName: risks.name,
-        riskStatus: risks.status,
-        riskInherentRisk: risks.inherentRisk,
-        riskResidualRisk: risks.residualRisk,
-        riskProcessOwner: risks.processOwner,
-        // Macroproceso fields (only id and name)
-        macroId: macroprocesos.id,
-        macroName: macroprocesos.name,
-        macroOwnerId: macroprocesos.ownerId,
-        // Process fields (only id and name)
-        procId: processes.id,
-        procName: processes.name,
-        procOwnerId: processes.ownerId,
-        // Subproceso fields (only id and name)
-        subId: subprocesos.id,
-        subName: subprocesos.name,
-        subOwnerId: subprocesos.ownerId,
-        // Validated by user fields (only essential ones)
-        valUserId: users.id,
-        valUserFullName: users.fullName,
-        valUserEmail: users.email,
-        // Get the responsible owner ID using COALESCE logic
-        responsibleOwnerId: sql<string>`
-        COALESCE(
-          ${riskProcessLinks.responsibleOverrideId},
-          ${subprocesos.ownerId},
-          ${processes.ownerId},
-          ${macroprocesos.ownerId}
-        )
-      `.as('responsible_owner_id')
-      })
-        .from(riskProcessLinks)
-        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-        .leftJoin(macroprocesos, and(
-          eq(riskProcessLinks.macroprocesoId, macroprocesos.id),
-          isNull(macroprocesos.deletedAt)
-        ))
-        .leftJoin(processes, and(
-          eq(riskProcessLinks.processId, processes.id),
-          isNull(processes.deletedAt)
-        ))
-        .leftJoin(subprocesos, and(
-          eq(riskProcessLinks.subprocesoId, subprocesos.id),
-          isNull(subprocesos.deletedAt)
-        ))
-        .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-        .where(and(...conditions))
-        .orderBy(riskProcessLinks.createdAt)
-        .limit(queryLimit);
+      // FIX: Use raw SQL instead of Drizzle ORM to avoid "Cannot convert undefined or null to object" 
+      // error when LEFT JOINs return null values. This is a known Drizzle ORM issue with LEFT JOINs.
+      console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus called with status: ${status}, limit: ${queryLimit}`);
+      
+      const sqlResults = await db.execute(sql`
+        SELECT 
+          rpl.id as rpl_id,
+          rpl.risk_id as rpl_risk_id,
+          rpl.macroproceso_id as rpl_macroproceso_id,
+          rpl.process_id as rpl_process_id,
+          rpl.subproceso_id as rpl_subproceso_id,
+          rpl.responsible_override_id as rpl_responsible_override_id,
+          rpl.validated_by as rpl_validated_by,
+          rpl.validation_status as rpl_validation_status,
+          rpl.validation_comments as rpl_validation_comments,
+          rpl.validated_at as rpl_validated_at,
+          rpl.notification_sent as rpl_notified,
+          rpl.created_at as rpl_created_at,
+          rpl.updated_at as rpl_updated_at,
+          r.id as risk_id,
+          r.code as risk_code,
+          r.name as risk_name,
+          r.status as risk_status,
+          r.inherent_risk as risk_inherent_risk,
+          r.residual_risk as risk_residual_risk,
+          r.process_owner as risk_process_owner,
+          m.id as macro_id,
+          m.name as macro_name,
+          m.owner_id as macro_owner_id,
+          p.id as proc_id,
+          p.name as proc_name,
+          p.owner_id as proc_owner_id,
+          s.id as sub_id,
+          s.name as sub_name,
+          s.owner_id as sub_owner_id,
+          u.id as val_user_id,
+          u.full_name as val_user_full_name,
+          u.email as val_user_email,
+          COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id
+        FROM risk_process_links rpl
+        INNER JOIN risks r ON rpl.risk_id = r.id
+        LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
+        LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
+        LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
+        LEFT JOIN users u ON rpl.validated_by = u.id
+        WHERE rpl.validation_status = ${status} AND r.deleted_at IS NULL
+        ORDER BY rpl.created_at
+        LIMIT ${queryLimit}
+      `);
 
-      const baseResults = await query;
+      const baseResults = sqlResults.rows as any[];
       console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus(${status}) returned ${baseResults.length} records from database`);
       
       // Debug: Log sample results to understand data structure
       if (baseResults.length > 0 && status === 'validated') {
         console.log(`[DB DEBUG] Sample validated risk-process link from DB:`, {
-          rplId: baseResults[0]?.rplId,
-          rplRiskId: baseResults[0]?.rplRiskId,
-          rplValidationStatus: baseResults[0]?.rplValidationStatus,
-          riskId: baseResults[0]?.riskId,
-          riskCode: baseResults[0]?.riskCode,
-          riskName: baseResults[0]?.riskName,
-          riskDeletedAt: baseResults[0]?.riskId ? 'checking...' : 'N/A'
+          rplId: baseResults[0]?.rpl_id,
+          rplRiskId: baseResults[0]?.rpl_risk_id,
+          rplValidationStatus: baseResults[0]?.rpl_validation_status,
+          riskId: baseResults[0]?.risk_id,
+          riskCode: baseResults[0]?.risk_code,
+          riskName: baseResults[0]?.risk_name
         });
-      } else if (baseResults.length === 0 && status === 'validated') {
+      }
+      
+      if (baseResults.length === 0 && status === 'validated') {
         console.warn(`[DB DEBUG] No validated risk-process links found in database. Running comprehensive diagnostics...`);
         
         // Debug query 1: Total validated links (no joins)
@@ -21405,7 +21371,8 @@ export class DatabaseStorage extends MemStorage {
       }
 
       // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
-      const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
+      // Note: SQL results use snake_case column names
+      const ownerIds = [...new Set(baseResults.map(r => r.responsible_owner_id).filter(Boolean))];
       const owners = ownerIds.length > 0
         ? await db.select({
           id: processOwners.id,
@@ -21417,49 +21384,49 @@ export class DatabaseStorage extends MemStorage {
         : [];
       const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
 
-      // OPTIMIZED: Map results with minimal object construction
+      // Map SQL results (snake_case) to expected format (camelCase)
       const results = baseResults.map((result) => ({
         // RiskProcessLink fields
-        id: result.rplId,
-        riskId: result.rplRiskId,
-        macroprocesoId: result.rplMacroprocesoId,
-        processId: result.rplProcessId,
-        subprocesoId: result.rplSubprocesoId,
-        responsibleOverrideId: result.rplResponsibleOverrideId,
-        validatedBy: result.rplValidatedBy,
-        validationStatus: result.rplValidationStatus,
-        validationComments: result.rplValidationComments,
-        validatedAt: result.rplValidatedAt,
-        notified: result.rplNotified,
-        createdAt: result.rplCreatedAt,
-        updatedAt: result.rplUpdatedAt,
+        id: result.rpl_id,
+        riskId: result.rpl_risk_id,
+        macroprocesoId: result.rpl_macroproceso_id,
+        processId: result.rpl_process_id,
+        subprocesoId: result.rpl_subproceso_id,
+        responsibleOverrideId: result.rpl_responsible_override_id,
+        validatedBy: result.rpl_validated_by,
+        validationStatus: result.rpl_validation_status,
+        validationComments: result.rpl_validation_comments,
+        validatedAt: result.rpl_validated_at,
+        notified: result.rpl_notified,
+        createdAt: result.rpl_created_at,
+        updatedAt: result.rpl_updated_at,
         // Related entities (minimal objects)
         risk: {
-          id: result.riskId!,
-          code: result.riskCode!,
-          name: result.riskName!,
-          status: result.riskStatus!,
-          inherentRisk: result.riskInherentRisk ?? null,
-          residualRisk: result.riskResidualRisk ?? null,
-          processOwner: result.riskProcessOwner ?? null
+          id: result.risk_id!,
+          code: result.risk_code!,
+          name: result.risk_name!,
+          status: result.risk_status!,
+          inherentRisk: result.risk_inherent_risk ?? null,
+          residualRisk: result.risk_residual_risk ?? null,
+          processOwner: result.risk_process_owner ?? null
         },
-        macroproceso: result.macroId ? {
-          id: result.macroId,
-          name: result.macroName!
+        macroproceso: result.macro_id ? {
+          id: result.macro_id,
+          name: result.macro_name!
         } : undefined,
-        process: result.procId ? {
-          id: result.procId,
-          name: result.procName!
+        process: result.proc_id ? {
+          id: result.proc_id,
+          name: result.proc_name!
         } : undefined,
-        subproceso: result.subId ? {
-          id: result.subId,
-          name: result.subName!
+        subproceso: result.sub_id ? {
+          id: result.sub_id,
+          name: result.sub_name!
         } : undefined,
-        responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-        validatedByUser: result.valUserId ? {
-          id: result.valUserId,
-          fullName: result.valUserFullName,
-          email: result.valUserEmail
+        responsibleUser: result.responsible_owner_id ? ownersMap.get(result.responsible_owner_id) : undefined,
+        validatedByUser: result.val_user_id ? {
+          id: result.val_user_id,
+          fullName: result.val_user_full_name,
+          email: result.val_user_email
         } : undefined,
       }));
 
