@@ -235,7 +235,7 @@ export default function Risks() {
     };
   }
 
-  const { data: bootstrapData, isLoading: isBootstrapLoading, refetch: refetchRisks } = useQuery<BootstrapResponse>({
+  const { data: bootstrapData, isLoading: isBootstrapLoading, isFetching, refetch: refetchRisks } = useQuery<BootstrapResponse>({
     queryKey: ["/api/risks/bootstrap", {
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
@@ -267,12 +267,15 @@ export default function Risks() {
     refetchOnWindowFocus: false,
     refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh (within staleTime) - prevents slow reloads
     refetchOnReconnect: false, // OPTIMIZED: No refetch on reconnect - data is cached
-    keepPreviousData: true, // Keep previous data while fetching new page for smooth transitions
+    placeholderData: (previousData) => previousData, // Keep previous data while fetching new page for smooth transitions
   });
 
   // Extract data from bootstrap response
   const risks = bootstrapData?.risks?.data || [];
   const totalPages = bootstrapData?.risks?.pagination ? Math.ceil(bootstrapData.risks.pagination.total / pageSize) : 0;
+  
+  // Determine if this is the initial load (no previous data)
+  const isInitialLoad = !bootstrapData || bootstrapData.risks.data.length === 0;
 
   // Catalogs from bootstrap (cached for 5 min on server, use local staleTime too)
   const gerencias = bootstrapData?.catalogs?.gerencias || [];
@@ -2411,7 +2414,7 @@ export default function Risks() {
       </div>
 
       {/* Optimized risk table - fast loading */}
-      {isLoading ? (
+      {(isInitialLoad && isBootstrapLoading) ? (
         <Card className="flex-1 flex flex-col">
           <CardContent className="p-4">
             <RisksPageSkeleton />
