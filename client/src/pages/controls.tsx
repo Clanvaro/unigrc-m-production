@@ -1161,9 +1161,11 @@ export default function Controls() {
                           </Button>
                         </PopoverTrigger>
                         <PopoverContent
-                          className="w-[400px] p-0"
+                          className="w-[400px] p-0 z-[100]"
                           align="start"
+                          sideOffset={5}
                           onWheel={(e) => e.stopPropagation()}
+                          onOpenAutoFocus={(e) => e.preventDefault()}
                         >
                           <Command className="max-h-[500px]">
                             <CommandInput
