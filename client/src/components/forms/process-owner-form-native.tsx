@@ -34,9 +34,6 @@ export function ProcessOwnerForm({ processOwner, onSuccess, onCancel }: ProcessO
     queryKey: ["/api/fiscal-entities"],
   });
 
-  // Debug: Log fiscal entities
-  console.log('🔍 ProcessOwnerForm - fiscalEntities:', fiscalEntities);
-
   const form = useForm<ProcessOwnerFormValues>({
     resolver: zodResolver(processOwnerFormSchema),
     defaultValues: {

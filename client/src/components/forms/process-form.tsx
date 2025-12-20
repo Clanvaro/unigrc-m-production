@@ -239,9 +239,6 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
   });
 
   const onSubmit = (data: ProcessFormData) => {
-    console.log("Form submitted with data:", data);
-    console.log("Form errors:", form.formState.errors);
-    // Include selected entities for selective scope
     const submitData = {
       ...data,
       selectedEntities: data.entityScope === "selective" ? selectedEntities : undefined,
@@ -253,9 +250,7 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit, (errors) => {
-        console.log("Form validation failed with errors:", errors);
-      })} className="space-y-4" data-testid="process-form">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" data-testid="process-form">
         <FormField
           control={form.control}
           name="code"
