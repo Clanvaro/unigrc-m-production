@@ -238,7 +238,6 @@ export default function RiskValidationPage() {
   useEffect(() => {
     const handleProcessFilterChanged = (event: CustomEvent) => {
       const { processFilter, macroprocesoFilter, subprocesoFilter } = event.detail;
-      console.log("📡 Received process filter change:", { processFilter, macroprocesoFilter, subprocesoFilter });
 
       // Determine which process level was selected and set selectedProcessId
       if (subprocesoFilter && subprocesoFilter !== "all") {
@@ -693,13 +692,9 @@ export default function RiskValidationPage() {
   // Resend email for risk-process-link
   const resendRiskProcessLinkEmailMutation = useMutation({
     mutationFn: async (riskProcessLinkId: string) => {
-      console.log("🔄 [RESEND] Starting resend for risk-process link:", riskProcessLinkId);
-      const response = await apiRequest(`/api/risk-processes/${riskProcessLinkId}/resend-notification`, 'POST', {});
-      console.log("✅ [RESEND] Response received:", response);
-      return response;
+      return await apiRequest(`/api/risk-processes/${riskProcessLinkId}/resend-notification`, 'POST', {});
     },
     onSuccess: (result: any) => {
-      console.log("✅ [RESEND] onSuccess called with result:", result);
       // Invalidate all validation queries to refresh data
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/notified/list"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/not-notified/list"] });
@@ -709,14 +704,12 @@ export default function RiskValidationPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/observed"] });
       const message = result?.message || "Se reenvió el email de validación al responsable del proceso";
       const description = result?.email ? `${message} (${result.email})` : message;
-      console.log("📧 [RESEND] Showing toast with message:", message, "description:", description);
       toast({
         title: "Email reenviado",
         description: description
       });
     },
     onError: (error: any) => {
-      console.error("❌ [RESEND] onError called with error:", error);
       toast({
         title: "Error al reenviar",
         description: error?.message || "No se pudo reenviar el email de validación.",
