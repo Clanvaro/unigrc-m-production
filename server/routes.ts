@@ -2723,13 +2723,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           let controlSummaryMap = new Map<number, { controlCount: number; avgEffectiveness: number; controlsSummary: { code: string }[] }>();
           let processesSummaryMap = new Map<number, { name: string; type: 'macro' | 'process' | 'subproceso' }[]>();
           let actionPlansSummaryMap = new Map<number, { code: string; status: string }[]>();
+          let validationStatusMap = new Map<string, string>();
 
           if (risks.length > 0) {
             const riskIds = risks.map(r => r.id);
             const riskIdsSql = sql.join(riskIds.map(id => sql`${id}`), sql`, `);
 
             // OPTIMIZED: Execute all batch queries in parallel instead of sequentially
-            const [controlSummary, controlCodes, processSummaries, actionPlansSummaries] = await Promise.all([
+            const [controlSummary, controlCodes, processSummaries, actionPlansSummaries, validationStatuses] = await Promise.all([
               // Query 1: Control summaries (count, avg effectiveness)
               requireDb().execute(sql`
                 SELECT 
@@ -2806,6 +2807,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 FROM ranked_actions
                 WHERE rn <= 3
                 ORDER BY risk_id, rn
+              `),
+
+              // Query 5: Aggregated validation status from risk_process_links
+              requireDb().execute(sql`
+                SELECT 
+                  rpl.risk_id,
+                  CASE
+                    WHEN COUNT(*) = 0 THEN 'pending'
+                    WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected') > 0 THEN 'rejected'
+                    WHEN COUNT(*) FILTER (WHERE rpl.validation_status = 'observed') > 0 THEN 'observed'
+                    WHEN COUNT(*) = COUNT(*) FILTER (WHERE rpl.validation_status = 'validated') AND COUNT(*) > 0 THEN 'validated'
+                    ELSE 'pending'
+                  END as validation_status
+                FROM risk_process_links rpl
+                WHERE rpl.risk_id IN (${riskIdsSql})
+                GROUP BY rpl.risk_id
               `)
             ]);
 
@@ -2847,6 +2864,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 plans.push({ code: row.code, status: row.status });
               }
             }
+
+            // Build validation status map
+            for (const row of validationStatuses.rows as any[]) {
+              validationStatusMap.set(row.risk_id, row.validation_status);
+            }
           }
 
           // STEP 3: In-memory calculation (O(n) - very fast)
@@ -2880,6 +2902,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               createdAt: row.created_at,
               controlCount,
               calculatedResidual,
+              // Validation status from risk_process_links (aggregated)
+              validationStatus: validationStatusMap.get(row.id) || 'pending',
               // Add association summaries
               processesSummary: processesSummaryMap.get(row.id) || [],
               controlsSummary: summary?.controlsSummary || [],
