@@ -13,6 +13,20 @@ import { distributedCache } from './redis';
  * - Resilient to network issues
  */
 
+interface TwoTierCacheOptions {
+    l1TtlMs?: number;
+    l2TtlSeconds?: number;
+    l2TimeoutMs?: number;
+    cleanupIntervalMs?: number;
+    // Optional L2 provider override (defaults to distributedCache)
+    l2?: {
+        get: (key: string) => Promise<any>;
+        set: (key: string, data: any, ttlSeconds: number) => Promise<void>;
+        invalidate?: (key?: string) => Promise<void>;
+        invalidatePattern?: (pattern: string) => Promise<void>;
+    };
+}
+
 interface CacheEntry {
     data: any;
     expiresAt: number;
@@ -40,14 +54,21 @@ export class TwoTierCache {
     };
 
     // Configuration
-    private readonly L1_DEFAULT_TTL = 30 * 1000; // 30 seconds
-    private readonly L2_DEFAULT_TTL = 5 * 60; // 5 minutes (in seconds for Redis)
-    private readonly L2_TIMEOUT = 250; // 250ms timeout for L2 cache (increased from 100ms for Upstash latency tolerance)
-    private readonly CLEANUP_INTERVAL = 60 * 1000; // Clean L1 every minute
+    private readonly L1_DEFAULT_TTL: number; // ms
+    private readonly L2_DEFAULT_TTL: number; // seconds
+    private readonly L2_TIMEOUT: number; // ms
+    private readonly CLEANUP_INTERVAL: number; // ms
+    private readonly l2Client: NonNullable<TwoTierCacheOptions["l2"]>;
 
     private cleanupTimer: NodeJS.Timeout;
 
-    constructor() {
+    constructor(options: TwoTierCacheOptions = {}) {
+        this.L1_DEFAULT_TTL = options.l1TtlMs ?? 30 * 1000; // default 30s
+        this.L2_DEFAULT_TTL = options.l2TtlSeconds ?? 5 * 60; // default 5min
+        this.L2_TIMEOUT = options.l2TimeoutMs ?? 250; // default 250ms
+        this.CLEANUP_INTERVAL = options.cleanupIntervalMs ?? 60 * 1000; // default 60s
+        this.l2Client = options.l2 ?? distributedCache;
+
         // Start periodic cleanup of expired L1 entries
         this.cleanupTimer = setInterval(() => this.cleanupL1(), this.CLEANUP_INTERVAL);
     }
@@ -111,15 +132,19 @@ export class TwoTierCache {
         if (key) {
             // Invalidate specific key
             this.l1Cache.delete(key);
-            await distributedCache.invalidate(key).catch(err => {
-                console.warn(`[TwoTierCache] Failed to invalidate L2 key ${key}:`, err);
-            });
+            if (this.l2Client.invalidate) {
+                await this.l2Client.invalidate(key).catch(err => {
+                    console.warn(`[TwoTierCache] Failed to invalidate L2 key ${key}:`, err);
+                });
+            }
         } else {
             // Invalidate all
             this.l1Cache.clear();
-            await distributedCache.invalidate().catch(err => {
-                console.warn('[TwoTierCache] Failed to invalidate all L2 keys:', err);
-            });
+            if (this.l2Client.invalidate) {
+                await this.l2Client.invalidate().catch(err => {
+                    console.warn('[TwoTierCache] Failed to invalidate all L2 keys:', err);
+                });
+            }
         }
     }
 
@@ -136,9 +161,11 @@ export class TwoTierCache {
         }
 
         // Invalidate from L2
-        await distributedCache.invalidatePattern(pattern).catch(err => {
-            console.warn(`[TwoTierCache] Failed to invalidate L2 pattern ${pattern}:`, err);
-        });
+        if (this.l2Client.invalidatePattern) {
+            await this.l2Client.invalidatePattern(pattern).catch(err => {
+                console.warn(`[TwoTierCache] Failed to invalidate L2 pattern ${pattern}:`, err);
+            });
+        }
     }
 
     /**
@@ -197,7 +224,7 @@ export class TwoTierCache {
      * Set value in L2 cache
      */
     private async setL2(key: string, data: any, ttlSeconds: number): Promise<void> {
-        await distributedCache.set(key, data, ttlSeconds);
+        await this.l2Client.set(key, data, ttlSeconds);
     }
 
     /**
@@ -210,7 +237,7 @@ export class TwoTierCache {
 
         try {
             const result = await Promise.race([
-                distributedCache.get(key),
+                this.l2Client.get(key),
                 timeoutPromise
             ]);
             return result;

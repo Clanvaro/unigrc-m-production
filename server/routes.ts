@@ -14,6 +14,7 @@ import { normalizePaginationParams, createPaginatedResponse } from "./pagination
 import { analyzeCriticalQuery, analyzeAllCriticalQueries, CRITICAL_QUERIES, type CriticalQueryKey } from './performance/query-analyzer';
 // New performance services
 import { distributedCache } from './services/redis';
+import { TwoTierCache } from './services/two-tier-cache';
 import { twoTierCache, getCacheStatsForEndpoint } from './services/two-tier-cache';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
@@ -141,6 +142,14 @@ import { randomBytes } from "crypto";
 import { registerAIAssistantRoutes } from "./ai-assistant-routes";
 import multer from "multer";
 import { objectStorageClient } from "./objectStorage";
+
+// Two-tier cache instance for risks bootstrap payload (L1 + L2)
+const bootstrapCache = new TwoTierCache({
+  l1TtlMs: 30_000,       // 30s per instance
+  l2TtlSeconds: 60,      // 60s in distributed cache
+  l2TimeoutMs: 250,      // short timeout to avoid blocking on slow L2
+  l2: distributedCache,
+});
 
 // Soft-delete validation schema
 const softDeleteSchema = z.object({
@@ -2486,6 +2495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // OPTIMIZED: Reduced default limit from 50 to 25 for faster initial load
       const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
       const offset = parseInt(req.query.offset as string) || 0;
+      const tenantId = (req as any)?.tenant?.id || (req as any)?.tenantId || 'single-tenant';
 
       // Parse filters
       const filters = {
@@ -2504,6 +2514,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const filterKey = JSON.stringify(filters);
       const cacheKeyRisks = `risks-bootstrap:risks:${CACHE_VERSION}:${limit}:${offset}:${filterKey}`;
       const cacheKeyCatalogs = `risks-bootstrap:catalogs:${CACHE_VERSION}`;
+      const cacheKeyPayload = `risks-bootstrap:payload:${CACHE_VERSION}:${tenantId}:${limit}:${offset}:${filterKey}`;
+
+      // Fast path: try full payload cache (string) using two-tier cache (L1+L2)
+      const cachedPayload = await bootstrapCache.get<string>(cacheKeyPayload);
+      if (cachedPayload) {
+        console.log(`[CACHE HIT] ${cacheKeyPayload} (payload)`);
+        res.type("application/json").send(cachedPayload);
+        return;
+      }
 
       // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
       // FIXED: Add error handling for cache operations to prevent initialization errors
@@ -2969,15 +2988,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const response = {
-        risks: risksResult,
-        catalogs: catalogsResult,
-        _meta: {
-          fetchedAt: new Date().toISOString(),
-          duration: Date.now() - requestStart
-        }
-      };
-
       // FIXED: Validate response structure before sending
       if (!risksResult || !risksResult.data) {
         console.error('[ERROR] Invalid risksResult structure:', risksResult);
@@ -3011,7 +3021,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         catalogsCached: !!catalogs
       });
 
-      res.json({
+      // Cache full payload as string to maximize L1 hit speed
+      const payloadString = JSON.stringify({
         risks: risksResult,
         catalogs: catalogsResult,
         _meta: {
@@ -3019,6 +3030,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           duration: Date.now() - requestStart
         }
       });
+
+      await bootstrapCache.set(cacheKeyPayload, payloadString, 60); // short TTL to avoid stale payload
+
+      res.type("application/json").send(payloadString);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/risks/bootstrap failed after ${duration}ms:`, error);
