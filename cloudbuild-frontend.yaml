@@ -75,7 +75,4 @@ options:
   machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
 
-# Substitutions (opcional, para diferentes entornos)
-substitutions:
-  _ENVIRONMENT: 'prod'
-  _BUCKET_NAME: 'unigrc-frontend-prod'
+# Note: Substitutions removed - bucket name hardcoded for simplicity
