@@ -241,7 +241,7 @@ export default function Controls() {
     setCurrentPage(1);
   }, [filters, searchTerm, responsibleFilter]);
 
-  const { data: controlsResponse, isLoading, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
+  const { data: controlsResponse, isLoading, isFetching, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: queryKeys.controls.withDetails({
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
@@ -1213,7 +1213,10 @@ export default function Controls() {
     },
   ].filter(col => visibleColumns[col.id]), [sortField, sortDirection, displayData, visibleColumns]);
 
-  const showTableSkeleton = isLoading && (!controlsResponse || (controlsResponse as any).data?.length === 0);
+  // Determine if this is the initial load (no previous data or empty data)
+  const isInitialLoad = !controlsResponse || !controlsResponse.data || controlsResponse.data.length === 0;
+  // Show skeleton during initial load while fetching
+  const showTableSkeleton = isInitialLoad && (isLoading || isFetching);
 
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="controls-content" role="region" aria-label="Gestión de Controles">
