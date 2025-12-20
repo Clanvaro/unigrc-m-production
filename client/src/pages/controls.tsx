@@ -1121,169 +1121,12 @@ export default function Controls() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Dialogs remain open based on state */}
-          <Dialog open={editingControl?.id === control.id} onOpenChange={(open) => !open && setEditingControl(null)}>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Editar Control</DialogTitle>
-                <DialogDescription>
-                  Actualizar la información y configuración de este control.
-                </DialogDescription>
-              </DialogHeader>
-              <ControlForm
-                control={editingControl!}
-                onSuccess={handleEditSuccess}
-              />
-            </DialogContent>
-          </Dialog>
-
-          <Dialog
-            open={riskDialogControl?.id === control.id}
-            onOpenChange={(open) => {
-              if (!open) {
-                setRiskDialogControl(null);
-                setRiskSearchTerm("");
-              }
-            }}
-          >
-            <DialogContent 
-              className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
-              onOpenAutoFocus={(e) => e.preventDefault()}
-            >
-              <DialogHeader>
-                <DialogTitle>Asociar Riesgos al Control - {riskDialogControl?.code}</DialogTitle>
-                <DialogDescription>
-                  Agregar y gestionar riesgos asociados a este control
-                </DialogDescription>
-              </DialogHeader>
-
-              {riskDialogControl && (
-                <div className="flex-1 overflow-hidden flex flex-col">
-                  {/* Add Risk Section */}
-                  <div className="mb-4">
-                    <Label>Agregar Riesgo</Label>
-                    {/* Search input */}
-                    <div className="mt-2 mb-2">
-                      <Input
-                        placeholder="Buscar por código o nombre..."
-                        value={riskSearchTerm}
-                        onChange={(e) => setRiskSearchTerm(e.target.value)}
-                        onKeyDown={(e) => e.stopPropagation()}
-                        autoComplete="off"
-                        className="w-full"
-                      />
-                    </div>
-                    {/* Filtered risks list */}
-                    <div className="border rounded-md max-h-[200px] overflow-y-auto">
-                      {isLoadingRisks ? (
-                        <div className="p-4 text-center text-sm text-muted-foreground">
-                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
-                          Cargando riesgos...
-                        </div>
-                      ) : (
-                        (() => {
-                          const availableRisks = risks
-                            .filter(risk => !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id))
-                            .filter(risk => 
-                              !riskSearchTerm || 
-                              risk.code?.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
-                              risk.name?.toLowerCase().includes(riskSearchTerm.toLowerCase())
-                            );
-                          
-                          if (availableRisks.length === 0) {
-                            return (
-                              <div className="p-4 text-center text-sm text-muted-foreground">
-                                {riskSearchTerm ? "No se encontraron riesgos" : "No hay riesgos disponibles para asociar"}
-                              </div>
-                            );
-                          }
-                          
-                          return availableRisks.map((risk) => (
-                            <div
-                              key={risk.id}
-                              className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
-                              onClick={() => {
-                                handleAddRisk(risk.id);
-                                setRiskSearchTerm("");
-                              }}
-                            >
-                              <div className="font-medium text-sm">{risk.code} - {risk.name}</div>
-                              {risk.description && (
-                                <div className="text-xs text-muted-foreground truncate">{risk.description.substring(0, 80)}...</div>
-                              )}
-                            </div>
-                          ));
-                        })()
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Associated Risks List */}
-                  <div className="flex-1 overflow-y-auto">
-                    <Label className="mb-3 block">Riesgos Asociados ({controlRiskAssociations.length})</Label>
-                    {controlRiskAssociations.length > 0 ? (
-                      <div className="space-y-3">
-                        {controlRiskAssociations.map((association: any) => (
-                          <div key={association.id} className="p-3 border rounded-lg bg-muted/30 relative group">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => handleRemoveRisk(association.id)}
-                            >
-                              <X className="h-3 w-3" />
-                            </Button>
-                            <div className="flex justify-between items-start pr-8">
-                              <div className="flex-1">
-                                <h4 className="font-medium text-sm">{association.risk?.name || 'Sin nombre'}</h4>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  {association.risk?.description || 'Sin descripción'}
-                                </p>
-                                <Badge variant="outline" className="mt-2 text-xs">
-                                  {association.risk?.code}
-                                </Badge>
-                              </div>
-                              <div className="text-right">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-muted-foreground">Riesgo Residual:</span>
-                                  <Badge variant="secondary" className="text-xs">
-                                    {association.residualRisk}
-                                  </Badge>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground text-center py-8">
-                        No hay riesgos asociados. Selecciona un riesgo arriba para agregarlo.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <DialogFooter className="mt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setRiskDialogControl(null);
-                    setRiskSearchTerm("");
-                  }}
-                  data-testid="button-close-risk-dialog"
-                >
-                  Cerrar
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
       ),
       width: "100px",
       align: 'center',
     },
-  ].filter(col => visibleColumns[col.id]), [sortField, sortDirection, editingControl, riskDialogControl, displayData, visibleColumns]);
+  ].filter(col => visibleColumns[col.id]), [sortField, sortDirection, displayData, visibleColumns]);
 
   if (isLoading) {
     return <ControlsPageSkeleton />;
@@ -1643,6 +1486,167 @@ export default function Controls() {
               </TabsContent>
             </Tabs>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Control Dialog */}
+      <Dialog open={!!editingControl} onOpenChange={(open) => !open && setEditingControl(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Editar Control</DialogTitle>
+            <DialogDescription>
+              Actualizar la información y configuración de este control.
+            </DialogDescription>
+          </DialogHeader>
+          {editingControl && (
+            <ControlForm
+              control={editingControl}
+              onSuccess={handleEditSuccess}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Associate Risks Dialog */}
+      <Dialog
+        open={!!riskDialogControl}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRiskDialogControl(null);
+            setRiskSearchTerm("");
+          }
+        }}
+      >
+        <DialogContent 
+          className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>Asociar Riesgos al Control - {riskDialogControl?.code}</DialogTitle>
+            <DialogDescription>
+              Agregar y gestionar riesgos asociados a este control
+            </DialogDescription>
+          </DialogHeader>
+
+          {riskDialogControl && (
+            <div className="flex-1 overflow-hidden flex flex-col">
+              {/* Add Risk Section */}
+              <div className="mb-4">
+                <Label>Agregar Riesgo</Label>
+                {/* Search input */}
+                <div className="mt-2 mb-2">
+                  <Input
+                    placeholder="Buscar por código o nombre..."
+                    value={riskSearchTerm}
+                    onChange={(e) => setRiskSearchTerm(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    autoComplete="off"
+                    className="w-full"
+                  />
+                </div>
+                {/* Filtered risks list */}
+                <div className="border rounded-md max-h-[200px] overflow-y-auto">
+                  {isLoadingRisks ? (
+                    <div className="p-4 text-center text-sm text-muted-foreground">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
+                      Cargando riesgos...
+                    </div>
+                  ) : (
+                    (() => {
+                      const availableRisks = risks
+                        .filter(risk => !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id))
+                        .filter(risk => 
+                          !riskSearchTerm || 
+                          risk.code?.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
+                          risk.name?.toLowerCase().includes(riskSearchTerm.toLowerCase())
+                        );
+                      
+                      if (availableRisks.length === 0) {
+                        return (
+                          <div className="p-4 text-center text-sm text-muted-foreground">
+                            {riskSearchTerm ? "No se encontraron riesgos" : "No hay riesgos disponibles para asociar"}
+                          </div>
+                        );
+                      }
+                      
+                      return availableRisks.map((risk) => (
+                        <div
+                          key={risk.id}
+                          className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
+                          onClick={() => {
+                            handleAddRisk(risk.id);
+                            setRiskSearchTerm("");
+                          }}
+                        >
+                          <div className="font-medium text-sm">{risk.code} - {risk.name}</div>
+                          {risk.description && (
+                            <div className="text-xs text-muted-foreground truncate">{risk.description.substring(0, 80)}...</div>
+                          )}
+                        </div>
+                      ));
+                    })()
+                  )}
+                </div>
+              </div>
+
+              {/* Associated Risks List */}
+              <div className="flex-1 overflow-y-auto">
+                <Label className="mb-3 block">Riesgos Asociados ({controlRiskAssociations.length})</Label>
+                {controlRiskAssociations.length > 0 ? (
+                  <div className="space-y-3">
+                    {controlRiskAssociations.map((association: any) => (
+                      <div key={association.id} className="p-3 border rounded-lg bg-muted/30 relative group">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => handleRemoveRisk(association.id)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                        <div className="flex justify-between items-start pr-8">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-sm">{association.risk?.name || 'Sin nombre'}</h4>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {association.risk?.description || 'Sin descripción'}
+                            </p>
+                            <Badge variant="outline" className="mt-2 text-xs">
+                              {association.risk?.code}
+                            </Badge>
+                          </div>
+                          <div className="text-right">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground">Riesgo Residual:</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {association.residualRisk}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    No hay riesgos asociados. Selecciona un riesgo arriba para agregarlo.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRiskDialogControl(null);
+                setRiskSearchTerm("");
+              }}
+              data-testid="button-close-risk-dialog"
+            >
+              Cerrar
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
