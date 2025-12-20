@@ -130,19 +130,9 @@ export default function RiskValidationPage() {
     retry: 2, // Reintentar 2 veces si falla
   });
 
-  // Log validated data when it changes
-  useEffect(() => {
-    if (validatedRiskProcessLinks && validatedRiskProcessLinks.length > 0) {
-      console.log('[Risk Validation] Loaded validated risk-process links:', validatedRiskProcessLinks.length);
-      console.log('[Risk Validation] Sample validated risk-process link:', validatedRiskProcessLinks[0]);
-      console.log('[Risk Validation] All validated risk-process links:', validatedRiskProcessLinks);
-    }
-  }, [validatedRiskProcessLinks]);
-
   // CRITICAL: Refetch validated risks when statusFilter changes to "validated"
   useEffect(() => {
     if (statusFilter === "validated" && activeTab === "risks") {
-      console.log('[Risk Validation] Status filter changed to validated, refetching...');
       // Invalidar caché y refetch para asegurar datos frescos
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
       refetchValidated();
@@ -1380,11 +1370,7 @@ export default function RiskValidationPage() {
     // or allow through to prevent filtering out valid risk-process links
     if (!rpl.risk) {
       // If we have riskId but no risk object, allow through (will be handled in render)
-      if (rpl.riskId) {
-        console.warn('[Risk Validation] Risk-process link has riskId but no risk object in risk level filter:', rpl.id);
-        return true; // Allow through to prevent hiding valid data
-      }
-      return false;
+      return !!rpl.riskId;
     }
 
     // Get residual risk or fallback to inherent risk
@@ -1420,46 +1406,10 @@ export default function RiskValidationPage() {
 
   const filteredValidatedRiskProcessLinks = useMemo(() => {
     if (!Array.isArray(validatedRiskProcessLinks)) return [];
-    
-    // Debug: Log raw data to understand structure
-    console.log('[Risk Validation] Raw validatedRiskProcessLinks:', {
-      total: validatedRiskProcessLinks.length,
-      sample: validatedRiskProcessLinks[0],
-      allHaveRisk: validatedRiskProcessLinks.every((rpl: any) => rpl?.risk),
-      missingRisk: validatedRiskProcessLinks.filter((rpl: any) => !rpl?.risk).length,
-      firstFew: validatedRiskProcessLinks.slice(0, 3).map((rpl: any) => ({
-        id: rpl?.id,
-        riskId: rpl?.riskId,
-        hasRisk: !!rpl?.risk,
-        validationStatus: rpl?.validationStatus,
-        riskCode: rpl?.risk?.code,
-        riskName: rpl?.risk?.name
-      })),
-      // Log all risk-process links for debugging
-      allLinks: validatedRiskProcessLinks.map((rpl: any) => ({
-        id: rpl?.id,
-        riskId: rpl?.riskId,
-        hasRisk: !!rpl?.risk,
-        riskCode: rpl?.risk?.code,
-        riskName: rpl?.risk?.name,
-        validationStatus: rpl?.validationStatus
-      }))
-    });
 
-    // CRITICAL: Don't filter out risks that don't have risk object but have riskId
-    // The render will handle creating a minimal risk object
-    const filtered = validatedRiskProcessLinks.filter((rpl: any) => {
-      // Only filter out if we have absolutely no risk data
-      if (!rpl) {
-        console.warn('[Risk Validation] Null risk-process link found');
-        return false;
-      }
-
-      // Allow through if we have riskId even without risk object
-      if (!rpl.risk && !rpl.riskId) {
-        console.warn('[Risk Validation] Risk-process link missing both risk object and riskId:', rpl.id, rpl);
-        return false; // Skip links without any risk data
-      }
+    return validatedRiskProcessLinks.filter((rpl: any) => {
+      // Skip if no risk data at all
+      if (!rpl || (!rpl.risk && !rpl.riskId)) return false;
 
       // Apply process filter if selected
       if (selectedProcessId) {
@@ -1471,52 +1421,13 @@ export default function RiskValidationPage() {
       }
 
       // Apply owner filter
-      const ownerMatches = matchesOwnerFilter(rpl);
-      if (!ownerMatches) {
-        if (ownerFilter !== "all") {
-          console.log('[Risk Validation] Risk-process link filtered out by owner filter:', {
-            rplId: rpl.id,
-            riskId: rpl.riskId,
-            ownerFilter,
-            responsibleUser: rpl.responsibleUser?.id,
-            riskProcessOwner: rpl.risk?.processOwner
-          });
-        }
-        return false;
-      }
+      if (!matchesOwnerFilter(rpl)) return false;
 
       // Apply risk level filter
-      const riskLevelMatches = matchesRiskLevelFilterForRisk(rpl);
-      if (!riskLevelMatches) {
-        if (riskLevelFilter !== "all") {
-          console.log('[Risk Validation] Risk-process link filtered out by risk level filter:', {
-            rplId: rpl.id,
-            riskId: rpl.riskId,
-            riskLevelFilter,
-            riskValue: rpl.risk?.residualRisk ?? rpl.risk?.inherentRisk
-          });
-        }
-        return false;
-      }
+      if (!matchesRiskLevelFilterForRisk(rpl)) return false;
 
       return true;
     });
-
-    // Debug logging when filtering by validated status
-    console.log('[Risk Validation] Filtering validated risks:', {
-      total: validatedRiskProcessLinks.length,
-      filtered: filtered.length,
-      ownerFilter,
-      riskLevelFilter,
-      selectedProcessId,
-      statusFilter,
-      filteredSample: filtered[0],
-      allFilteredHaveRisk: filtered.every((rpl: any) => rpl?.risk || rpl?.riskId),
-      filteredOutByOwner: validatedRiskProcessLinks.length - filtered.length,
-      filteredOutByRiskLevel: 0 // Will be calculated if needed
-    });
-
-    return filtered;
   }, [validatedRiskProcessLinks, selectedProcessId, ownerFilter, riskLevelFilter, statusFilter, matchesOwnerFilter, matchesRiskLevelFilterForRisk, macroprocesos, processes, subprocesos]);
 
   const filteredRejectedRiskProcessLinks = rejectedRiskProcessLinks.filter(rpl => {
@@ -2455,30 +2366,7 @@ export default function RiskValidationPage() {
 
             {/* Validated Risks */}
             {/* CRITICAL: Always show validated risks section when statusFilter is "all" or "validated" */}
-            {(() => {
-              const shouldShow = (statusFilter === "all" || statusFilter === "validated");
-              const validatedArray = Array.isArray(validatedRiskProcessLinks) ? validatedRiskProcessLinks : [];
-              const hasData = validatedArray.length > 0;
-              const validationCount = validationCounts?.risks.validated ?? 0;
-              
-              console.log('[Risk Validation] Validated section render check:', {
-                statusFilter,
-                shouldShow,
-                hasData,
-                validatedCountFromAPI: validatedArray.length,
-                validationCountFromCounts: validationCount,
-                filteredCount: filteredValidatedRiskProcessLinks.length,
-                isLoading: isValidatedLoading,
-                error: validatedError
-              });
-              
-              // Si hay un error o está cargando, mostrar sección de todos modos
-              if (shouldShow && (isValidatedLoading || validatedError)) {
-                console.warn('[Risk Validation] Query state:', { isValidatedLoading, validatedError });
-              }
-              
-              return shouldShow;
-            })() && (
+            {(statusFilter === "all" || statusFilter === "validated") && (
                 <div ref={validatedRisksSectionRef} id="validated-risks-section" data-testid="validated-risks-section">
                   <h2 className="text-xl font-semibold mb-4 flex items-center space-x-2">
                     <CheckCircle className="h-5 w-5 text-green-500" />
@@ -2502,29 +2390,9 @@ export default function RiskValidationPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {filteredValidatedRiskProcessLinks.map((rpl, index) => {
-                              // Debug: Log first few risks being rendered
-                              if (index < 3) {
-                                console.log('[Risk Validation] Rendering validated risk:', {
-                                  index,
-                                  rplId: rpl?.id,
-                                  riskId: rpl?.riskId,
-                                  hasRiskObject: !!rpl?.risk,
-                                  riskCode: rpl?.risk?.code || (rpl as any)?.riskCode,
-                                  riskName: rpl?.risk?.name || (rpl as any)?.riskName
-                                });
-                              }
-
-                              // Handle case where risk object might be missing but riskId exists
-                              if (!rpl) {
-                                console.warn('[Risk Validation] Null risk-process link found in filtered list');
-                                return null;
-                              }
-
-                              if (!rpl.risk && !rpl.riskId) {
-                                console.warn('[Risk Validation] Skipping risk-process link without risk data:', rpl.id, rpl);
-                                return null;
-                              }
+                            {filteredValidatedRiskProcessLinks.map((rpl) => {
+                              // Skip invalid entries
+                              if (!rpl || (!rpl.risk && !rpl.riskId)) return null;
 
                               // Create minimal risk object if missing
                               const risk = rpl.risk || {
