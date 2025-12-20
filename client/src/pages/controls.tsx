@@ -426,7 +426,7 @@ export default function Controls() {
       // Snapshot the previous value
       const previousRisks = queryClient.getQueryData(queryKeys.controls.risks(controlId));
 
-      // Optimistically add the new risk association
+      // Optimistically add the new risk association with full risk object
       const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
       const tempId = `temp-${Date.now()}`;
       queryClient.setQueryData(
@@ -436,9 +436,16 @@ export default function Controls() {
           riskId: risk.id,
           controlId: control.id,
           residualRisk,
-          riskCode: risk.code,
-          riskName: risk.name,
-          inherentRisk: risk.inherentRisk
+          // Include full risk object for immediate UI update
+          risk: {
+            id: risk.id,
+            code: risk.code,
+            name: risk.name,
+            description: risk.description,
+            inherentRisk: risk.inherentRisk,
+            probability: risk.probability,
+            impact: risk.impact
+          }
         }]
       );
 
@@ -1152,43 +1159,57 @@ export default function Controls() {
                   {/* Add Risk Section */}
                   <div className="mb-4">
                     <Label>Agregar Riesgo</Label>
-                    <div className="flex gap-2 mt-2">
-                      <Select
-                        onValueChange={(riskId) => {
-                          if (riskId) {
-                            handleAddRisk(riskId);
+                    {/* Search input */}
+                    <div className="mt-2 mb-2">
+                      <Input
+                        placeholder="Buscar por código o nombre..."
+                        value={riskSearchTerm}
+                        onChange={(e) => setRiskSearchTerm(e.target.value)}
+                        className="w-full"
+                      />
+                    </div>
+                    {/* Filtered risks list */}
+                    <div className="border rounded-md max-h-[200px] overflow-y-auto">
+                      {isLoadingRisks ? (
+                        <div className="p-4 text-center text-sm text-muted-foreground">
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
+                          Cargando riesgos...
+                        </div>
+                      ) : (
+                        (() => {
+                          const availableRisks = risks
+                            .filter(risk => !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id))
+                            .filter(risk => 
+                              !riskSearchTerm || 
+                              risk.code?.toLowerCase().includes(riskSearchTerm.toLowerCase()) ||
+                              risk.name?.toLowerCase().includes(riskSearchTerm.toLowerCase())
+                            );
+                          
+                          if (availableRisks.length === 0) {
+                            return (
+                              <div className="p-4 text-center text-sm text-muted-foreground">
+                                {riskSearchTerm ? "No se encontraron riesgos" : "No hay riesgos disponibles para asociar"}
+                              </div>
+                            );
                           }
-                        }}
-                      >
-                        <SelectTrigger className="flex-1">
-                          <SelectValue placeholder={isLoadingRisks ? "Cargando riesgos..." : "Seleccionar riesgo"} />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-[300px]">
-                          {isLoadingRisks ? (
-                            <div className="p-4 text-center text-sm text-muted-foreground">
-                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
-                              Cargando riesgos...
+                          
+                          return availableRisks.map((risk) => (
+                            <div
+                              key={risk.id}
+                              className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
+                              onClick={() => {
+                                handleAddRisk(risk.id);
+                                setRiskSearchTerm("");
+                              }}
+                            >
+                              <div className="font-medium text-sm">{risk.code} - {risk.name}</div>
+                              {risk.description && (
+                                <div className="text-xs text-muted-foreground truncate">{risk.description.substring(0, 80)}...</div>
+                              )}
                             </div>
-                          ) : (
-                            risks
-                              .filter(risk =>
-                                !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
-                              )
-                              .map((risk) => (
-                                <SelectItem key={risk.id} value={risk.id}>
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">{risk.code} - {risk.name}</span>
-                                  </div>
-                                </SelectItem>
-                              ))
-                          )}
-                          {!isLoadingRisks && risks.filter(risk => !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)).length === 0 && (
-                            <div className="p-4 text-center text-sm text-muted-foreground">
-                              No hay riesgos disponibles para asociar
-                            </div>
-                          )}
-                        </SelectContent>
-                      </Select>
+                          ));
+                        })()
+                      )}
                     </div>
                   </div>
 
