@@ -209,7 +209,7 @@ async function upsertUser(
   }
 }
 
-// Routes that should skip session/passport middleware (static assets, Vite HMR)
+// Routes that should skip session/passport middleware (static assets, Vite HMR, public validation)
 const shouldSkipSession = (path: string): boolean => {
   // Skip session for:
   // - Vite HMR and dev files
@@ -217,12 +217,17 @@ const shouldSkipSession = (path: string): boolean => {
   // - Static assets (images, fonts, etc.)
   // - Source files served by Vite dev server
   // - Assets directory (Vite build output)
+  // - Public validation routes (accessed via email links without session)
   return (
     path.startsWith('/@') ||
     path.startsWith('/node_modules/') ||
     path.startsWith('/@fs/') ||
     path.startsWith('/src/') ||
     path.startsWith('/assets/') ||
+    path.startsWith('/public/') ||
+    path.startsWith('/api/public/') ||
+    path.startsWith('/validate/') ||
+    path.startsWith('/action-plan-upload/') ||
     path.endsWith('.tsx') ||
     path.endsWith('.ts') ||
     path.endsWith('.css') ||
