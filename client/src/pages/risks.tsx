@@ -59,7 +59,7 @@ const translateControlType = (type: string | undefined) => {
   return translations[type.toLowerCase()] || type;
 };
 
-// Colores por defecto para categorías de riesgo conocidas
+// Colores por defecto para categorías de riesgo conocidas (fallback)
 const DEFAULT_CATEGORY_COLORS: Record<string, string> = {
   'Operacional': '#3b82f6',    // Azul
   'Cumplimiento': '#8b5cf6',   // Púrpura
@@ -73,15 +73,16 @@ const DEFAULT_CATEGORY_COLORS: Record<string, string> = {
   'Legal': '#8b5cf6',          // Púrpura
 };
 
-// Helper para obtener color de categoría
-const getCategoryColor = (categoryName: string, riskCategories: any[]): string => {
-  // Primero buscar en las categorías del catálogo (con color asignado)
-  const categoryData = riskCategories?.find((cat: any) => cat.name === categoryName);
-  if (categoryData?.color && categoryData.color !== '#6b7280') {
-    return categoryData.color;
-  }
-  // Si no tiene color asignado, usar el color por defecto
-  return DEFAULT_CATEGORY_COLORS[categoryName] || '#6b7280';
+// Helper para construir mapa de colores O(1) lookup - se llama una vez con useMemo
+const buildCategoryColorMap = (riskCategories: any[]): Record<string, string> => {
+  const colorMap = { ...DEFAULT_CATEGORY_COLORS };
+  // Sobrescribir con colores del catálogo si existen y no son gris default
+  riskCategories?.forEach((cat: any) => {
+    if (cat?.name && cat?.color && cat.color !== '#6b7280') {
+      colorMap[cat.name] = cat.color;
+    }
+  });
+  return colorMap;
 };
 
 export default function Risks() {
@@ -310,6 +311,9 @@ export default function Risks() {
   const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
   const riskCategories = bootstrapData?.catalogs?.riskCategories || [];
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
+
+  // Mapa de colores de categorías - O(1) lookup, se recalcula solo cuando cambia riskCategories
+  const categoryColorMap = useMemo(() => buildCategoryColorMap(riskCategories), [riskCategories]);
 
   // Process owners from bootstrap (for basic display)
   const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
@@ -1531,7 +1535,7 @@ export default function Risks() {
               key={categoryName}
               className="text-xs whitespace-nowrap"
               style={{
-                backgroundColor: getCategoryColor(categoryName, riskCategories),
+                backgroundColor: categoryColorMap[categoryName] || '#6b7280',
                 color: "white"
               }}
             >
@@ -1541,7 +1545,7 @@ export default function Risks() {
             <Badge 
               className="text-xs whitespace-nowrap"
               style={{
-                backgroundColor: getCategoryColor(risk.category as string, riskCategories),
+                backgroundColor: categoryColorMap[risk.category as string] || '#6b7280',
                 color: "white"
               }}
             >
@@ -2593,7 +2597,7 @@ export default function Risks() {
                               key={categoryName}
                               className="text-xs"
                               style={{
-                                backgroundColor: getCategoryColor(categoryName, riskCategories),
+                                backgroundColor: categoryColorMap[categoryName] || '#6b7280',
                                 color: "white"
                               }}
                             >
@@ -2603,7 +2607,7 @@ export default function Risks() {
                             <Badge 
                               className="text-xs"
                               style={{
-                                backgroundColor: getCategoryColor(viewingRisk.category as string, riskCategories),
+                                backgroundColor: categoryColorMap[viewingRisk.category as string] || '#6b7280',
                                 color: "white"
                               }}
                             >
