@@ -21148,13 +21148,13 @@ export class DatabaseStorage extends MemStorage {
 
   async getRiskProcessLinksByValidationStatus(status: string, tenantId?: string, limit?: number): Promise<RiskProcessLinkWithDetails[]> {
     return withRetry(async () => {
-      try {
-        // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
-        const queryLimit = limit || 1000;
+      // PERFORMANCE: Add default LIMIT of 1000 to prevent loading all records at once
+      const queryLimit = limit || 1000;
 
-        // FIX: Use raw SQL instead of Drizzle ORM to avoid "Cannot convert undefined or null to object"
+      try {
         console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus called with status: ${status}, limit: ${queryLimit}`);
-        
+
+        // Use raw SQL to avoid Drizzle LEFT JOIN null issues
         const sqlResults = await db.execute(sql`
           SELECT 
             rpl.id as rpl_id,
@@ -21211,8 +21211,7 @@ export class DatabaseStorage extends MemStorage {
             risk_code: baseResults[0]?.risk_code,
           });
         }
-      
-      // Debug: Log sample results to understand data structure
+
         if (baseResults.length === 0 && status === 'validated') {
           console.warn(`[DB DEBUG] No validated links found. Running diagnostics...`);
 
@@ -21310,7 +21309,6 @@ export class DatabaseStorage extends MemStorage {
 
         return results;
       } catch (error: any) {
-        // Log rich error info to understand why we return empty array
         console.error(`[DB ERROR] getRiskProcessLinksByValidationStatus(${status}) failed`, {
           message: error?.message || String(error),
           code: error?.code,
@@ -21318,101 +21316,6 @@ export class DatabaseStorage extends MemStorage {
         });
         throw error;
       }
-        console.warn(`[DB DEBUG] No validated links found. Running diagnostics...`);
-
-        const debugCount = await db.execute(sql`
-          SELECT COUNT(*)::int as total
-          FROM risk_process_links rpl
-          WHERE rpl.validation_status = 'validated'
-        `);
-        console.log(`[DB DEBUG] Diagnostic 1 - total validated (no joins): ${(debugCount.rows[0] as any)?.total || 0}`);
-
-        const withValidRisks = await db.execute(sql`
-          SELECT COUNT(*)::int as total
-          FROM risk_process_links rpl
-          INNER JOIN risks r ON rpl.risk_id = r.id
-          WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL
-        `);
-        console.log(`[DB DEBUG] Diagnostic 2 - validated with NON-deleted risks: ${(withValidRisks.rows[0] as any)?.total || 0}`);
-
-        const sampleLinks = await db.execute(sql`
-          SELECT 
-            rpl.id as rpl_id,
-            rpl.risk_id,
-            rpl.validation_status,
-            r.id as risk_id,
-            r.code as risk_code,
-            r.deleted_at as risk_deleted_at,
-            r.status as risk_status
-          FROM risk_process_links rpl
-          LEFT JOIN risks r ON rpl.risk_id = r.id
-          WHERE rpl.validation_status = 'validated'
-          LIMIT 5
-        `);
-        console.log(`[DB DEBUG] Diagnostic 3 - sample validated links:`, JSON.stringify(sampleLinks.rows, null, 2));
-      }
-
-      // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
-      // Note: SQL results use snake_case column names
-      const ownerIds = [...new Set(baseResults.map(r => r.responsible_owner_id).filter(Boolean))];
-      const owners = ownerIds.length > 0
-        ? await db.select({
-          id: processOwners.id,
-          fullName: processOwners.name,
-          email: processOwners.email
-        })
-          .from(processOwners)
-          .where(inArray(processOwners.id, ownerIds))
-        : [];
-      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-
-      // Map SQL results (snake_case) to expected format (camelCase)
-      const results = baseResults.map((result) => ({
-        // RiskProcessLink fields
-        id: result.rpl_id,
-        riskId: result.rpl_risk_id,
-        macroprocesoId: result.rpl_macroproceso_id,
-        processId: result.rpl_process_id,
-        subprocesoId: result.rpl_subproceso_id,
-        responsibleOverrideId: result.rpl_responsible_override_id,
-        validatedBy: result.rpl_validated_by,
-        validationStatus: result.rpl_validation_status,
-        validationComments: result.rpl_validation_comments,
-        validatedAt: result.rpl_validated_at,
-        notified: result.rpl_notified,
-        createdAt: result.rpl_created_at,
-        updatedAt: result.rpl_updated_at,
-        // Related entities (minimal objects)
-        risk: {
-          id: result.risk_id!,
-          code: result.risk_code!,
-          name: result.risk_name!,
-          status: result.risk_status!,
-          inherentRisk: result.risk_inherent_risk ?? null,
-          residualRisk: result.risk_residual_risk ?? null,
-          processOwner: result.risk_process_owner ?? null
-        },
-        macroproceso: result.macro_id ? {
-          id: result.macro_id,
-          name: result.macro_name!
-        } : undefined,
-        process: result.proc_id ? {
-          id: result.proc_id,
-          name: result.proc_name!
-        } : undefined,
-        subproceso: result.sub_id ? {
-          id: result.sub_id,
-          name: result.sub_name!
-        } : undefined,
-        responsibleUser: result.responsible_owner_id ? ownersMap.get(result.responsible_owner_id) : undefined,
-        validatedByUser: result.val_user_id ? {
-          id: result.val_user_id,
-          fullName: result.val_user_full_name,
-          email: result.val_user_email
-        } : undefined,
-      }));
-
-      return results;
     }, {
       maxRetries: 2,
       retryDelay: 1000
