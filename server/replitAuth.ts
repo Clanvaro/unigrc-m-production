@@ -251,12 +251,35 @@ export async function setupAuth(app: Express) {
   // This ensures secure cookies work in production without opening rate-limit bypass vulnerabilities
   app.set("trust proxy", 1);
 
+  // CRITICAL: Mark public routes FIRST before any auth middleware
+  // This ensures /public/* routes are never blocked by auth checks
+  app.use((req, res, next) => {
+    if (shouldSkipSession(req.path)) {
+      // Mark as public route to skip all auth checks
+      (res.locals as any).isPublicRoute = true;
+      (req as any).skipAuth = true;
+      return next();
+    }
+    // Also check res.locals flag set in routes.ts
+    if ((res.locals as any)?.isPublicRoute) {
+      (req as any).skipAuth = true;
+      return next();
+    }
+    next();
+  });
+
   // Get session middleware instance
   const sessionMiddleware = getSession();
 
   // OPTIMIZATION: Skip session middleware for static assets to reduce DB queries
   app.use((req, res, next) => {
-    if (shouldSkipSession(req.path)) {
+    // CRITICAL: Public frontend routes (/public/*) should never hit auth middleware
+    // They are SPA routes that will be handled by serveStatic
+    if (shouldSkipSession(req.path) || (req as any).skipAuth) {
+      return next();
+    }
+    // Also check res.locals flag set in routes.ts
+    if ((res.locals as any)?.isPublicRoute) {
       return next();
     }
     return sessionMiddleware(req, res, next);
@@ -303,7 +326,11 @@ export async function setupAuth(app: Express) {
   // OPTIMIZATION: Skip passport.session() for static assets (same as session middleware)
   app.use((req, res, next) => {
     // Skip passport session for static assets - they don't need user context
-    if (shouldSkipSession(req.path)) {
+    if (shouldSkipSession(req.path) || (req as any).skipAuth) {
+      return next();
+    }
+    // Also check res.locals flag set in routes.ts
+    if ((res.locals as any)?.isPublicRoute) {
       return next();
     }
 

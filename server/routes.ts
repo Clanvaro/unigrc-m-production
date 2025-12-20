@@ -705,6 +705,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
+  // CRITICAL: Mark public routes BEFORE auth middleware
+  // These routes are accessed via email links without authentication
+  app.use((req, res, next) => {
+    const isPublicRoute = req.path.startsWith('/public/') ||
+                         req.path.startsWith('/api/public/') ||
+                         req.path.startsWith('/validate/') ||
+                         req.path.startsWith('/action-plan-upload/');
+    
+    if (isPublicRoute) {
+      // Mark as public route to skip auth checks
+      (res.locals as any).isPublicRoute = true;
+    }
+    next();
+  });
+
   // Auth middleware
   await setupAuth(app);
   
