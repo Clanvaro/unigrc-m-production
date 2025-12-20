@@ -12087,7 +12087,7 @@ Responde SOLO con un JSON válido con este formato exacto:
                 validationStatus: actions.validationStatus,
                 processId: actions.processId,
                 assignedTo: actions.assignedTo,
-                deadline: actions.deadline,
+                dueDate: actions.dueDate, // Corregido: era 'deadline' pero el campo se llama 'dueDate'
                 createdAt: actions.createdAt,
                 updatedAt: actions.updatedAt,
               })
