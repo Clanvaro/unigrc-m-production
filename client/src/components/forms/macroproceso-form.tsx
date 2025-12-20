@@ -46,6 +46,8 @@ export default function MacroprocesoForm({ macroproceso, onSuccess }: Macroproce
   // Fetch process owners
   const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // Fetch gerencias

@@ -138,9 +138,12 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
   });
 
   // Fetch process owners directly (much more efficient and correct)
+  // refetchOnMount: 'always' ensures fresh data when opening the form (e.g., after creating a new owner)
   const { data: processOwners = [] } = useQuery({
     queryKey: ["/api/process-owners"],
     select: (data: any[]) => data.filter(owner => owner.isActive), // Only active owners
+    staleTime: 0, // Always consider data stale to ensure fresh owners list
+    refetchOnMount: 'always', // Refetch when form opens
   });
 
   // Transform process owners for combobox

@@ -63,6 +63,8 @@ export default function ActionPlanForm({ actionPlan, defaultRiskId, auditFinding
 
   const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // Transform process owners for combobox

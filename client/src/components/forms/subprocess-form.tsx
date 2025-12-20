@@ -40,6 +40,8 @@ export default function SubprocessForm({ subproceso, procesoId, onSuccess }: Sub
   // Fetch process owners
   const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // Transform process owners for combobox
