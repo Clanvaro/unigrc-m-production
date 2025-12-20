@@ -291,16 +291,13 @@ export default function Controls() {
   const controls = controlsResponse?.data || [];
   const totalPages = controlsResponse?.pagination ? Math.ceil(controlsResponse.pagination.total / pageSize) : 0;
 
-  // Query for available risks to associate with controls
+  // Query for available risks to associate with controls (carga diferida)
   const { data: risksResponse, isLoading: isLoadingRisks } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/risks", "for-control-association"],
     queryFn: async () => {
-      console.log("[Controls] Fetching risks for association dropdown...");
       const response = await fetch("/api/risks?limit=500");
       if (!response.ok) throw new Error("Failed to fetch risks");
-      const data = await response.json();
-      console.log("[Controls] Fetched risks:", data?.data?.length || 0);
-      return data;
+      return response.json();
     },
     staleTime: 30000, // 30 seconds
     gcTime: 5 * 60 * 1000,
