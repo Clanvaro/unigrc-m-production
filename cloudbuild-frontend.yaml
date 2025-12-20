@@ -28,8 +28,8 @@ steps:
       - 'rsync'
       - '-r'
       - '-d'
-      - 'dist/public'
-      - 'gs://unigrc-frontend-prod'
+      - 'dist/public/'
+      - 'gs://unigrc-frontend-prod/'
     id: 'upload-to-storage'
 
   # Set cache headers for static assets
