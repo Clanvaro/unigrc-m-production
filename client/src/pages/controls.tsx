@@ -408,22 +408,19 @@ export default function Controls() {
       if (!control || !risk) throw new Error("Control o riesgo no encontrado");
 
       const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
-      const response = await fetch(`/api/risks/${riskId}/controls`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ controlId, residualRisk })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const error = new Error(errorData.message || "Error al asociar riesgo") as any;
-        error.code = errorData.code;
-        error.status = response.status;
+      
+      try {
+        return await apiRequest(`/api/risks/${riskId}/controls`, "POST", {
+          controlId,
+          residualRisk
+        });
+      } catch (error: any) {
+        // Re-throw with additional info for duplicate detection
+        if (error.status === 409) {
+          error.code = "DUPLICATE_ASSOCIATION";
+        }
         throw error;
       }
-
-      return response.json();
     },
     onMutate: async ({ controlId, riskId }) => {
       // Marcar el riesgo como en proceso
