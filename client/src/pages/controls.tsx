@@ -285,14 +285,14 @@ export default function Controls() {
   const controls = controlsResponse?.data || [];
   const totalPages = controlsResponse?.pagination ? Math.ceil(controlsResponse.pagination.total / pageSize) : 0;
 
-  const { data: risksResponse } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
+  const { data: risksResponse, isLoading: isLoadingRisks } = useQuery<{ data: Risk[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: queryKeys.risks.all(),
     queryFn: async () => {
       const response = await fetch("/api/risks");
       if (!response.ok) throw new Error("Failed to fetch risks");
       return response.json();
     },
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 0, // Always refetch to ensure fresh list of risks
     gcTime: 5 * 60 * 1000,
   });
   const risks = risksResponse?.data || [];
@@ -1167,30 +1167,39 @@ export default function Controls() {
                               onValueChange={setRiskSearchTerm}
                             />
                             <CommandList className="!max-h-[400px]">
-                              <CommandEmpty>No se encontraron riesgos.</CommandEmpty>
-                              <CommandGroup>
-                                {risks
-                                  .filter(risk =>
-                                    !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
-                                  )
-                                  .map((risk) => (
-                                    <CommandItem
-                                      key={risk.id}
-                                      value={`${risk.code} ${risk.name}`}
-                                      onSelect={() => {
-                                        handleAddRisk(risk.id);
-                                        setOpenRiskCombobox(false);
-                                        setRiskSearchTerm("");
-                                      }}
-                                    >
-                                      <Check className={`mr-2 h-4 w-4 ${false ? "opacity-100" : "opacity-0"}`} />
-                                      <div className="flex flex-col">
-                                        <span className="font-medium">{risk.code} - {risk.name}</span>
-                                        <span className="text-xs text-muted-foreground">{risk.description?.substring(0, 60)}...</span>
-                                      </div>
-                                    </CommandItem>
-                                  ))}
-                              </CommandGroup>
+                              {isLoadingRisks ? (
+                                <div className="p-4 text-center text-sm text-muted-foreground">
+                                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
+                                  Cargando riesgos...
+                                </div>
+                              ) : (
+                                <>
+                                  <CommandEmpty>No se encontraron riesgos.</CommandEmpty>
+                                  <CommandGroup>
+                                    {risks
+                                      .filter(risk =>
+                                        !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
+                                      )
+                                      .map((risk) => (
+                                        <CommandItem
+                                          key={risk.id}
+                                          value={`${risk.code} ${risk.name}`}
+                                          onSelect={() => {
+                                            handleAddRisk(risk.id);
+                                            setOpenRiskCombobox(false);
+                                            setRiskSearchTerm("");
+                                          }}
+                                        >
+                                          <Check className={`mr-2 h-4 w-4 ${false ? "opacity-100" : "opacity-0"}`} />
+                                          <div className="flex flex-col">
+                                            <span className="font-medium">{risk.code} - {risk.name}</span>
+                                            <span className="text-xs text-muted-foreground">{risk.description?.substring(0, 60)}...</span>
+                                          </div>
+                                        </CommandItem>
+                                      ))}
+                                  </CommandGroup>
+                                </>
+                              )}
                             </CommandList>
                           </Command>
                         </PopoverContent>
