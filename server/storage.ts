@@ -15530,6 +15530,13 @@ export class DatabaseStorage extends MemStorage {
     if (update.deletedBy !== undefined) actionUpdate.deletedBy = update.deletedBy;
     if (update.deletedAt !== undefined) actionUpdate.deletedAt = update.deletedAt;
     if (update.deletionReason !== undefined) actionUpdate.deletionReason = update.deletionReason;
+    // Validation fields (used by email-based validation)
+    if ((update as any).validationStatus !== undefined) actionUpdate.validationStatus = (update as any).validationStatus;
+    if ((update as any).validationComments !== undefined) actionUpdate.validationComments = (update as any).validationComments;
+    if ((update as any).validatedAt !== undefined) actionUpdate.validatedAt = (update as any).validatedAt;
+    if ((update as any).validatedBy !== undefined) actionUpdate.validatedBy = (update as any).validatedBy;
+    if ((update as any).reviewedAt !== undefined) actionUpdate.reviewedAt = (update as any).reviewedAt;
+    if ((update as any).notifiedAt !== undefined) actionUpdate.notifiedAt = (update as any).notifiedAt;
 
     const [updated] = await db.update(actions)
       .set(actionUpdate)
