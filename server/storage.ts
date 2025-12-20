@@ -21174,8 +21174,9 @@ export class DatabaseStorage extends MemStorage {
             r.code as risk_code,
             r.name as risk_name,
             r.status as risk_status,
-            r.inherent_risk as risk_inherent_risk,
-            r.residual_risk as risk_residual_risk,
+            -- Campos opcionales removidos por compatibilidad con esquemas sin estas columnas
+            -- r.inherent_risk as risk_inherent_risk,
+            -- r.residual_risk as risk_residual_risk,
             r.process_owner as risk_process_owner,
             m.id as macro_id,
             m.name as macro_name,
@@ -21283,8 +21284,8 @@ export class DatabaseStorage extends MemStorage {
             code: result.risk_code!,
             name: result.risk_name!,
             status: result.risk_status!,
-            inherentRisk: result.risk_inherent_risk ?? null,
-            residualRisk: result.risk_residual_risk ?? null,
+            inherentRisk: (result as any).risk_inherent_risk ?? null,
+            residualRisk: (result as any).risk_residual_risk ?? null,
             processOwner: result.risk_process_owner ?? null
           },
           macroproceso: result.macro_id ? {
