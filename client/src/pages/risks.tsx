@@ -976,23 +976,101 @@ export default function Risks() {
   }, [sortColumn, sortOrder]);
 
   // Note: With pagination, complex filtering is limited to current page only
-  // TODO: Move filters to backend for proper pagination with filtering
+  // FIXED: Backend now handles process/macroproceso/subproceso filtering correctly via risk_process_links
+  // When these filters are active, trust backend filtering and only apply client-side filters for other criteria
+  const hasBackendProcessFilters = macroprocesoFilter !== "all" || processFilter !== "all" || subprocesoFilter !== "all";
+  
   // Memoize filtered and sorted risks to prevent recalculation on every render
-  const filteredRisks = useMemo(() => risks.filter((risk: Risk) => {
-    // Filter by search term
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      const matchesSearch =
-        risk.name.toLowerCase().includes(searchLower) ||
-        risk.code.toLowerCase().includes(searchLower) ||
-        (risk.description && risk.description.toLowerCase().includes(searchLower)) ||
-        (risk.processOwner && risk.processOwner.toLowerCase().includes(searchLower));
+  const filteredRisks = useMemo(() => {
+    // If backend already filtered by process/macroproceso/subproceso, trust it and only apply other filters
+    if (hasBackendProcessFilters) {
+      return risks.filter((risk: Risk) => {
+        // Only apply client-side filters that backend doesn't handle
+        // Filter by search term
+        if (searchTerm) {
+          const searchLower = searchTerm.toLowerCase();
+          const matchesSearch =
+            risk.name.toLowerCase().includes(searchLower) ||
+            risk.code.toLowerCase().includes(searchLower) ||
+            (risk.description && risk.description.toLowerCase().includes(searchLower)) ||
+            (risk.processOwner && risk.processOwner.toLowerCase().includes(searchLower));
 
-      if (!matchesSearch) return false;
+          if (!matchesSearch) return false;
+        }
+
+        // Filter by validation status - use aggregated status instead of legacy
+        if (validationFilter !== "all" && getAggregatedValidationStatus(risk) !== validationFilter) return false;
+
+        // Filter by inherent risk level
+        if (inherentRiskLevelFilter !== "all") {
+          const level = getRiskLevelText(risk.inherentRisk).toLowerCase();
+          if (level !== inherentRiskLevelFilter) return false;
+        }
+
+        // Filter by residual risk level
+        if (residualRiskLevelFilter !== "all") {
+          const riskControls = allRiskControls.filter((rc: any) => rc.riskId === risk.id);
+          const controls = riskControls.map((rc: any) => ({
+            effectiveness: rc.control?.effectiveness || 0,
+            effectTarget: rc.control?.effectTarget || 'both'
+          }));
+          const residualRisk = calculateResidualRiskFromControls(risk.probability, risk.impact, controls);
+          const level = getRiskLevelText(residualRisk).toLowerCase();
+          if (level !== residualRiskLevelFilter) return false;
+        }
+
+        // Filter by owner
+        if (ownerFilter !== "all") {
+          const riskLinks = allRiskProcessLinks.filter((link: any) => link.riskId === risk.id);
+          const hasOwner = riskLinks.some((link: any) => {
+            if (link.responsibleOverrideId === ownerFilter) return true;
+            if (link.subprocesoId) {
+              const subproceso = subprocesos.find((s: any) => s.id === link.subprocesoId);
+              if (subproceso?.ownerId === ownerFilter) return true;
+              const process = processes.find((p: any) => p.id === subproceso?.procesoId);
+              if (process?.ownerId === ownerFilter) return true;
+              const macroproceso = macroprocesos.find((m: any) => m.id === process?.macroprocesoId);
+              if (macroproceso?.ownerId === ownerFilter) return true;
+            } else if (link.processId) {
+              const process = processes.find((p: any) => p.id === link.processId);
+              if (process?.ownerId === ownerFilter) return true;
+              const macroproceso = macroprocesos.find((m: any) => m.id === process?.macroprocesoId);
+              if (macroproceso?.ownerId === ownerFilter) return true;
+            } else if (link.macroprocesoId) {
+              const macroproceso = macroprocesos.find((m: any) => m.id === link.macroprocesoId);
+              if (macroproceso?.ownerId === ownerFilter) return true;
+            }
+            return false;
+          });
+          if (!hasOwner) return false;
+        }
+
+        // Filter by gerencia
+        if (gerenciaFilter !== "all") {
+          // Gerencia filtering is handled by backend
+          return true;
+        }
+
+        return true;
+      });
     }
 
-    // Filter by macroproceso
-    if (macroprocesoFilter !== "all") {
+    // Original client-side filtering when backend filters are not active
+    return risks.filter((risk: Risk) => {
+      // Filter by search term
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase();
+        const matchesSearch =
+          risk.name.toLowerCase().includes(searchLower) ||
+          risk.code.toLowerCase().includes(searchLower) ||
+          (risk.description && risk.description.toLowerCase().includes(searchLower)) ||
+          (risk.processOwner && risk.processOwner.toLowerCase().includes(searchLower));
+
+        if (!matchesSearch) return false;
+      }
+
+      // Filter by macroproceso
+      if (macroprocesoFilter !== "all") {
       let matchesMacroproceso = false;
 
       // First, check riskProcessLinks for associations
@@ -1230,6 +1308,7 @@ export default function Risks() {
     }
 
     return true;
+    });
   }).sort((a: Risk, b: Risk) => {
     if (sortOrder === "none") return 0;
 
@@ -1300,6 +1379,10 @@ export default function Risks() {
     macroprocesos,
     processGerencias,
     macroprocesoGerencias,
+    hasBackendProcessFilters,
+    getAggregatedValidationStatus,
+    getRiskLevelText,
+    calculateResidualRiskFromControls,
   ]);
 
   // Memoize delete handler
