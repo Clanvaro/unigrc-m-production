@@ -2658,6 +2658,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return await withRetry(async () => {
           const batchStart = Date.now();
 
+          // OPTIMIZED: Use JOINs instead of multiple EXISTS for better performance
+          // Check if we need JOINs for process filtering
+          const needsProcessJoins = (filters.macroprocesoId && filters.macroprocesoId !== 'all') ||
+                                   (filters.processId && filters.processId !== 'all') ||
+                                   (filters.subprocesoId && filters.subprocesoId !== 'all');
+
           // Build WHERE conditions
           const conditions: any[] = [sql`r.status <> 'deleted'`];
 
@@ -2670,85 +2676,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
             conditions.push(sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern} OR r.description ILIKE ${searchPattern})`);
           }
 
-          if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-            const macroId = parseInt(filters.macroprocesoId);
-            conditions.push(sql`
-              (
-                r.macroproceso_id = ${macroId}
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  WHERE rpl.risk_id = r.id
-                    AND rpl.macroproceso_id = ${macroId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                )
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  JOIN processes p ON p.id = rpl.process_id
-                  WHERE rpl.risk_id = r.id
-                    AND p.macroproceso_id = ${macroId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                    AND (p.deleted_at IS NULL OR p.deleted_at > NOW())
-                )
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  JOIN subprocesos s ON s.id = rpl.subproceso_id
-                  JOIN processes p ON p.id = s.proceso_id
-                  WHERE rpl.risk_id = r.id
-                    AND p.macroproceso_id = ${macroId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                    AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
-                    AND (p.deleted_at IS NULL OR p.deleted_at > NOW())
-                )
-              )
+          // Build JOIN clauses and process filter conditions
+          const joins: any[] = [];
+          const processConditions: any[] = [];
+
+          if (needsProcessJoins) {
+            // LEFT JOIN risk_process_links (only non-deleted)
+            joins.push(sql`
+              LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id 
+                AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
             `);
+
+            // LEFT JOIN processes for checking macroproceso_id
+            if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+              joins.push(sql`
+                LEFT JOIN processes p_rpl ON p_rpl.id = rpl.process_id 
+                  AND (p_rpl.deleted_at IS NULL OR p_rpl.deleted_at > NOW())
+              `);
+            }
+
+            // LEFT JOIN subprocesos for checking proceso_id
+            if ((filters.processId && filters.processId !== 'all') || 
+                (filters.macroprocesoId && filters.macroprocesoId !== 'all')) {
+              joins.push(sql`
+                LEFT JOIN subprocesos s_rpl ON s_rpl.id = rpl.subproceso_id 
+                  AND (s_rpl.deleted_at IS NULL OR s_rpl.deleted_at > NOW())
+              `);
+            }
+
+            // LEFT JOIN processes via subprocesos for macroproceso filtering
+            if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+              joins.push(sql`
+                LEFT JOIN processes p_sub ON p_sub.id = s_rpl.proceso_id 
+                  AND (p_sub.deleted_at IS NULL OR p_sub.deleted_at > NOW())
+              `);
+            }
+
+            // Build process filter conditions using JOINs
+            if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+              const macroId = parseInt(filters.macroprocesoId);
+              processConditions.push(sql`
+                (
+                  r.macroproceso_id = ${macroId}
+                  OR rpl.macroproceso_id = ${macroId}
+                  OR p_rpl.macroproceso_id = ${macroId}
+                  OR p_sub.macroproceso_id = ${macroId}
+                )
+              `);
+            }
+
+            if (filters.processId && filters.processId !== 'all') {
+              const processId = parseInt(filters.processId);
+              processConditions.push(sql`
+                (
+                  r.process_id = ${processId}
+                  OR rpl.process_id = ${processId}
+                  OR s_rpl.proceso_id = ${processId}
+                )
+              `);
+            }
+
+            if (filters.subprocesoId && filters.subprocesoId !== 'all') {
+              const subprocesoId = parseInt(filters.subprocesoId);
+              processConditions.push(sql`
+                (
+                  r.subproceso_id = ${subprocesoId}
+                  OR rpl.subproceso_id = ${subprocesoId}
+                )
+              `);
+            }
+          } else {
+            // No JOINs needed - use simple conditions
+            if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+              const macroId = parseInt(filters.macroprocesoId);
+              conditions.push(sql`r.macroproceso_id = ${macroId}`);
+            }
+
+            if (filters.processId && filters.processId !== 'all') {
+              const processId = parseInt(filters.processId);
+              conditions.push(sql`r.process_id = ${processId}`);
+            }
+
+            if (filters.subprocesoId && filters.subprocesoId !== 'all') {
+              const subprocesoId = parseInt(filters.subprocesoId);
+              conditions.push(sql`r.subproceso_id = ${subprocesoId}`);
+            }
           }
 
-          if (filters.processId && filters.processId !== 'all') {
-            const processId = parseInt(filters.processId);
-            conditions.push(sql`
-              (
-                r.process_id = ${processId}
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  WHERE rpl.risk_id = r.id
-                    AND rpl.process_id = ${processId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                )
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  JOIN subprocesos s ON s.id = rpl.subproceso_id
-                  WHERE rpl.risk_id = r.id
-                    AND s.proceso_id = ${processId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                    AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
-                )
-              )
-            `);
-          }
-
-          if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-            const subprocesoId = parseInt(filters.subprocesoId);
-            conditions.push(sql`
-              (
-                r.subproceso_id = ${subprocesoId}
-                OR EXISTS (
-                  SELECT 1 FROM risk_process_links rpl
-                  WHERE rpl.risk_id = r.id
-                    AND rpl.subproceso_id = ${subprocesoId}
-                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
-                )
-              )
-            `);
+          // Combine all conditions
+          if (processConditions.length > 0) {
+            conditions.push(sql`(${sql.join(processConditions, sql` AND `)})`);
           }
 
           const whereClause = conditions.length > 0
             ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
             : sql``;
 
-          // STEP 1: Simple risks query (no joins) - very fast
+          const joinClause = joins.length > 0
+            ? sql`${sql.join(joins, sql` `)}`
+            : sql``;
+
+          // STEP 1: Optimized risks query with JOINs when needed
           const [risksResult, countResult] = await Promise.all([
             requireDb().execute(sql`
-              SELECT 
+              SELECT DISTINCT
                 r.id,
                 r.code,
                 r.name,
@@ -2763,13 +2794,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 r.category,
                 r.created_at
               FROM risks r
+              ${joinClause}
               ${whereClause}
               ORDER BY r.created_at DESC
               LIMIT ${limit} OFFSET ${offset}
             `),
             requireDb().execute(sql`
-              SELECT COUNT(*)::int as total 
+              SELECT COUNT(DISTINCT r.id)::int as total 
               FROM risks r
+              ${joinClause}
               ${whereClause}
             `)
           ]);
