@@ -5419,7 +5419,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Generate validation link (for now using the main app URL)
-      const baseUrl = req.headers.origin || req.headers.host || "http://localhost:5000";
+      // Priority: FRONTEND_URL (GCP) > request origin > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL || req.headers.origin || `https://${req.headers.host}` || "http://localhost:5000";
       const validationLink = `${baseUrl}/validation`;
 
       // Generate email content
@@ -6106,9 +6107,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Now send one email per responsible (grouped)
       let sentCount = 0;
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
 
       for (const [responsibleEmail, controlRows] of controlsByResponsible.entries()) {
         const controlsList = controlRows.map(r => r.control);
@@ -6365,9 +6367,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Create validation URL
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
       const validationUrl = `${baseUrl}/public/batch-validation/${batchTokenValue}`;
 
       // Helper function to get control type text in Spanish
@@ -7680,9 +7683,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Now send one email per responsible (grouped)
       let sentCount = 0;
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
 
       for (const [responsibleEmail, riskRows] of risksByResponsible.entries()) {
         const riskProcessLinksList = riskRows.map(r => ({
@@ -8035,9 +8039,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Create validation URL
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
       const validationUrl = `${baseUrl}/public/batch-validation/${tokenValue}`;
 
       // Get risk level
@@ -13312,9 +13317,10 @@ Responde SOLO con un JSON válido con este formato exacto:
 
       // Now send one email per responsible (grouped)
       let sentCount = 0;
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
 
       for (const [responsibleEmail, plans] of plansByResponsible.entries()) {
         // Find the process owner for this email
@@ -13562,9 +13568,10 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
 
       const processOwner = processOwnerData[0];
-      const baseUrl = process.env.REPLIT_DOMAINS
-        ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`
-        : 'http://localhost:5000';
+      // Priority: FRONTEND_URL (GCP) > REPLIT_DOMAINS (Replit) > localhost (dev)
+      const baseUrl = process.env.FRONTEND_URL
+        || (process.env.REPLIT_DOMAINS ? `https://${process.env.REPLIT_DOMAINS.split(',')[0]}` : null)
+        || 'http://localhost:5000';
 
       // Generate batch validation token (with single plan)
       const expiresAt = new Date();
@@ -25584,7 +25591,8 @@ Responde SOLO con un JSON válido con este formato exacto:
         }
 
         // Build validation URL
-        const validationUrl = `${process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/validate/${createdToken.token}`;
+        // Priority: FRONTEND_URL (GCP) > REPLIT_DEV_DOMAIN (Replit) > localhost (dev)
+        const validationUrl = `${process.env.FRONTEND_URL || process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/validate/${createdToken.token}`;
 
         // Build email HTML
         const emailHtml = `
