@@ -1146,7 +1146,10 @@ export default function Controls() {
               }
             }}
           >
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <DialogContent 
+              className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
+              onOpenAutoFocus={(e) => e.preventDefault()}
+            >
               <DialogHeader>
                 <DialogTitle>Asociar Riesgos al Control - {riskDialogControl?.code}</DialogTitle>
                 <DialogDescription>
@@ -1165,6 +1168,8 @@ export default function Controls() {
                         placeholder="Buscar por código o nombre..."
                         value={riskSearchTerm}
                         onChange={(e) => setRiskSearchTerm(e.target.value)}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        autoComplete="off"
                         className="w-full"
                       />
                     </div>
