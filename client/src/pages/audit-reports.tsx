@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import jsPDF from "jspdf";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AuditsPageSkeleton } from "@/components/skeletons/audits-page-skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -981,6 +982,11 @@ export default function AuditReports() {
         </Tabs>
       </div>
     );
+  }
+
+  // Show loading skeleton while data loads
+  if (auditsLoading) {
+    return <AuditsPageSkeleton />;
   }
 
   // Lista principal de auditorías

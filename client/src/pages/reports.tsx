@@ -8,6 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { getRiskLevelText } from "@/lib/risk-calculations";
 import { Top5Risks } from "@/components/Top5Risks";
 import { useToast } from "@/hooks/use-toast";
+import { ReportsPageSkeleton } from "@/components/skeletons/reports-page-skeleton";
 import type { RiskWithProcess, Control, Action } from "@shared/schema";
 
 export default function Reports() {
@@ -247,16 +248,7 @@ export default function Reports() {
   // Show loading state only if critical data is loading
   // MOVED AFTER ALL HOOKS to prevent React error #310
   if (risksLoading || controlsLoading || actionPlansLoading || risksGroupedLoading) {
-    return (
-      <div className="p-6">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <p className="text-lg font-medium">Cargando reportes...</p>
-            <p className="text-sm text-muted-foreground mt-2">Por favor espera mientras se cargan los datos</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <ReportsPageSkeleton />;
   }
 
   // Show error state with retry option

@@ -51,7 +51,7 @@ Esta guía explica cómo configurar la autenticación con Microsoft (Azure AD / 
 6. **Configurar Permisos de API**
    - En el menú lateral, ve a "API permissions"
    - Verifica que estos permisos estén configurados:
-     - ✅ `openid` (OpenID Connect sign-in)
+     - ✅ `openid` (OpenID Connect sign-in)          
      - ✅ `email`
      - ✅ `profile`
      - ✅ `offline_access`

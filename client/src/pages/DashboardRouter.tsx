@@ -11,6 +11,7 @@ import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { UserPreferences } from "@shared/schema";
+import { DashboardSkeleton } from "@/components/skeletons/dashboard-skeleton";
 
 /**
  * Smart Dashboard Router component that routes users to the appropriate
@@ -38,11 +39,8 @@ export function DashboardRouter() {
   // Show loading state while permissions or preferences are being loaded
   if (isLoading || !currentUser || isLoadingPreferences) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Cargando dashboard...</p>
-        </div>
+      <div className="p-6">
+        <DashboardSkeleton />
       </div>
     );
   }

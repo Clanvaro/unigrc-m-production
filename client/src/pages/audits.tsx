@@ -19,6 +19,7 @@ import { ResponsiveTable, ResponsiveTableContent, ResponsiveTableBody, Responsiv
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AuditsPageSkeleton } from "@/components/skeletons/audits-page-skeleton";
 import { Plus, Search, Calendar, CalendarCheck, Users, Clock, FileText, AlertTriangle, Edit, Trash2, Play, CheckCircle, CheckCircle2, XCircle, Target, Paperclip, MessageCircle, Milestone, Shield, Save, X, Eye, ArrowRight, BarChart3, UserCheck, MoreVertical, Info, FileWarning, LayoutDashboard, ClipboardCheck, GitBranch, RefreshCw, FolderOpen, FileCheck2, MessageSquare, FileOutput, TrendingUp, ChevronUp, ChevronDown } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
@@ -1074,7 +1075,7 @@ export default function Audits() {
   };
 
   if (isLoading) {
-    return <div className="p-6">Cargando auditorías...</div>;
+    return <AuditsPageSkeleton />;
   }
 
   return (
