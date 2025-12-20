@@ -141,7 +141,7 @@ export default function Controls() {
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(25);
 
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({
@@ -281,6 +281,11 @@ export default function Controls() {
     staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    refetchOnMount: false, // evita limpiar la tabla si ya hay datos en caché
+    placeholderData: {
+      data: [],
+      pagination: { limit: pageSize, offset: 0, total: 0 }
+    },
     gcTime: 5 * 60 * 1000,
   });
   const controls = controlsResponse?.data || [];
@@ -299,7 +304,8 @@ export default function Controls() {
     },
     staleTime: 30000, // 30 seconds
     gcTime: 5 * 60 * 1000,
-    refetchOnMount: true,
+    refetchOnMount: false,
+    enabled: !!riskDialogControl, // carga diferida al abrir el modal de asociación
   });
   const risks = risksResponse?.data || [];
 
@@ -1210,9 +1216,7 @@ export default function Controls() {
     },
   ].filter(col => visibleColumns[col.id]), [sortField, sortDirection, displayData, visibleColumns]);
 
-  if (isLoading) {
-    return <ControlsPageSkeleton />;
-  }
+  const showTableSkeleton = isLoading && (!controlsResponse || (controlsResponse as any).data?.length === 0);
 
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="controls-content" role="region" aria-label="Gestión de Controles">
@@ -1253,16 +1257,20 @@ export default function Controls() {
       <Card className="flex-1 flex flex-col overflow-hidden">
         <CardContent className="p-0 h-full flex flex-col">
           <div className="flex-1 overflow-hidden">
-            <VirtualizedTable
-              data={displayData}
-              columns={columns}
-              estimatedRowHeight={70}
-              overscan={5}
-              getRowKey={(control) => control.id}
-              isLoading={isLoading}
-              ariaLabel="Tabla de controles"
-              ariaDescribedBy="controls-table-description"
-            />
+            {showTableSkeleton ? (
+              <ControlsPageSkeleton />
+            ) : (
+              <VirtualizedTable
+                data={displayData}
+                columns={columns}
+                estimatedRowHeight={70}
+                overscan={5}
+                getRowKey={(control) => control.id}
+                isLoading={isLoading}
+                ariaLabel="Tabla de controles"
+                ariaDescribedBy="controls-table-description"
+              />
+            )}
             <div id="controls-table-description" className="sr-only">
               Tabla con {displayData.length} controles. Use las flechas del teclado para navegar entre filas, Enter o Espacio para seleccionar.
             </div>

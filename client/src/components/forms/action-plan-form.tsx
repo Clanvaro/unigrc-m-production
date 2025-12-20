@@ -123,8 +123,12 @@ export default function ActionPlanForm({ actionPlan, defaultRiskId, auditFinding
     mutationFn: async (data: { name: string; email: string; position: string }) => {
       return await apiRequest("/api/process-owners", "POST", data);
     },
-    onSuccess: (newOwner) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
+    onSuccess: async (newOwner) => {
+      // Forzar refetch inmediato para que el nuevo responsable aparezca en el dropdown
+      await queryClient.invalidateQueries({ 
+        queryKey: ["/api/process-owners"],
+        refetchType: 'active'
+      });
       form.setValue("responsible", newOwner.name);
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");

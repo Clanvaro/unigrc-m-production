@@ -113,8 +113,12 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
     mutationFn: async (data: { name: string; email: string; position: string }) => {
       return await apiRequest("/api/process-owners", "POST", data);
     },
-    onSuccess: (newManager) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
+    onSuccess: async (newManager) => {
+      // Forzar refetch inmediato para que el nuevo responsable aparezca en el dropdown
+      await queryClient.invalidateQueries({ 
+        queryKey: ["/api/process-owners"],
+        refetchType: 'active'
+      });
       form.setValue("managerId", newManager.id);
       setSelectedManagerId(newManager.id);
       setIsCreateManagerDialogOpen(false);
