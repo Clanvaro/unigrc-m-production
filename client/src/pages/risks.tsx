@@ -982,9 +982,62 @@ export default function Risks() {
   
   // Memoize filtered and sorted risks to prevent recalculation on every render
   const filteredRisks = useMemo(() => {
+    // Define the sort function
+    const sortRisks = (risksToSort: Risk[]) => {
+      return risksToSort.sort((a: Risk, b: Risk) => {
+        if (sortOrder === "none") return 0;
+
+        let aValue: number, bValue: number;
+
+        switch (sortColumn) {
+          case "code":
+            const getCodeNumber = (code: string) => {
+              const match = code.match(/\d+/);
+              return match ? parseInt(match[0], 10) : 0;
+            };
+            aValue = getCodeNumber(a.code);
+            bValue = getCodeNumber(b.code);
+            break;
+
+          case "probability":
+            aValue = a.probability || 0;
+            bValue = b.probability || 0;
+            break;
+
+          case "impact":
+            aValue = a.impact || 0;
+            bValue = b.impact || 0;
+            break;
+
+          case "inherent":
+            aValue = a.inherentRisk || 0;
+            bValue = b.inherentRisk || 0;
+            break;
+
+          case "residual":
+            const aRiskControls = allRiskControls.filter((rc: any) => rc.riskId === a.id);
+            const bRiskControls = allRiskControls.filter((rc: any) => rc.riskId === b.id);
+            const aVals = aRiskControls.map((rc: any) => Number(rc.residualRisk)).filter((n: number) => Number.isFinite(n));
+            const bVals = bRiskControls.map((rc: any) => Number(rc.residualRisk)).filter((n: number) => Number.isFinite(n));
+            aValue = aVals.length > 0 ? Math.min(...aVals) : a.inherentRisk || 0;
+            bValue = bVals.length > 0 ? Math.min(...bVals) : b.inherentRisk || 0;
+            break;
+
+          default:
+            return 0;
+        }
+
+        if (sortOrder === "asc") {
+          return aValue - bValue;
+        } else {
+          return bValue - aValue;
+        }
+      });
+    };
+
     // If backend already filtered by process/macroproceso/subproceso, trust it and only apply other filters
     if (hasBackendProcessFilters) {
-      return risks.filter((risk: Risk) => {
+      const filtered = risks.filter((risk: Risk) => {
         // Only apply client-side filters that backend doesn't handle
         // Filter by search term
         if (searchTerm) {
@@ -1053,10 +1106,11 @@ export default function Risks() {
 
         return true;
       });
+      return sortRisks(filtered);
     }
 
     // Original client-side filtering when backend filters are not active
-    return risks.filter((risk: Risk) => {
+    const filtered = risks.filter((risk: Risk) => {
       // Filter by search term
       if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
@@ -1309,57 +1363,8 @@ export default function Risks() {
 
     return true;
     });
-  }).sort((a: Risk, b: Risk) => {
-    if (sortOrder === "none") return 0;
-
-    let aValue: number, bValue: number;
-
-    switch (sortColumn) {
-      case "code":
-        // Extract numeric part from code (e.g., "R-001" -> 1, "R-012" -> 12)
-        const getCodeNumber = (code: string) => {
-          const match = code.match(/\d+/);
-          return match ? parseInt(match[0], 10) : 0;
-        };
-        aValue = getCodeNumber(a.code);
-        bValue = getCodeNumber(b.code);
-        break;
-
-      case "probability":
-        aValue = a.probability || 0;
-        bValue = b.probability || 0;
-        break;
-
-      case "impact":
-        aValue = a.impact || 0;
-        bValue = b.impact || 0;
-        break;
-
-      case "inherent":
-        aValue = a.inherentRisk || 0;
-        bValue = b.inherentRisk || 0;
-        break;
-
-      case "residual":
-        // Calcular riesgo residual basado en controles - safe NaN filtering
-        const aRiskControls = allRiskControls.filter((rc: any) => rc.riskId === a.id);
-        const bRiskControls = allRiskControls.filter((rc: any) => rc.riskId === b.id);
-        const aVals = aRiskControls.map((rc: any) => Number(rc.residualRisk)).filter((n: number) => Number.isFinite(n));
-        const bVals = bRiskControls.map((rc: any) => Number(rc.residualRisk)).filter((n: number) => Number.isFinite(n));
-        aValue = aVals.length > 0 ? Math.min(...aVals) : a.inherentRisk || 0;
-        bValue = bVals.length > 0 ? Math.min(...bVals) : b.inherentRisk || 0;
-        break;
-
-      default:
-        return 0;
-    }
-
-    if (sortOrder === "asc") {
-      return aValue - bValue;
-    } else {
-      return bValue - aValue;
-    }
-  }), [
+    return sortRisks(filtered);
+  }, [
     risks,
     searchTerm,
     macroprocesoFilter,
