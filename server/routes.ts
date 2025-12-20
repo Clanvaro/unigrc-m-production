@@ -6943,7 +6943,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // OPTIMIZED: Use granular cache invalidation (5-10ms vs 100ms+)
-      await invalidateRiskProcessLinkCaches();
+      // CRITICAL: Also invalidate validation caches so new risks appear immediately in validation center
+      await Promise.all([
+        invalidateRiskProcessLinkCaches(),
+        invalidateValidationCaches()
+      ]);
       // Invalidate specific risk cache for immediate update
       if (validatedData.riskId && tenantId) {
         await distributedCache.invalidate(`risk-processes:risk:${validatedData.riskId}:${tenantId}`);
