@@ -122,13 +122,17 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
         ...old,
         { ...newOwner, isActive: true }
       ]);
-      // Seleccionar el nuevo responsable
-      form.setValue("ownerId", newOwner.id);
+      // Cerrar diálogo y limpiar campos primero
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");
       setNewOwnerEmail("");
       setNewOwnerPosition("");
       toast({ title: "Responsable creado", description: "El responsable se ha creado exitosamente." });
+      // Seleccionar el nuevo responsable después de que React procese el cambio de cache
+      // Usar setTimeout para asegurar que el re-render ocurra antes del setValue
+      setTimeout(() => {
+        form.setValue("ownerId", newOwner.id);
+      }, 0);
       // Refetch en background para sincronizar
       queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },

@@ -459,8 +459,6 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         ...old,
         { ...newOwner, isActive: true }
       ]);
-      setSelectedOwnerId(newOwner.id);
-      form.setValue("ownerId", newOwner.id);
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");
       setNewOwnerEmail("");
@@ -469,6 +467,11 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         title: "Dueño de proceso creado",
         description: "El nuevo dueño de proceso ha sido creado exitosamente.",
       });
+      // Seleccionar después de que React procese el cambio de cache
+      setTimeout(() => {
+        setSelectedOwnerId(newOwner.id);
+        form.setValue("ownerId", newOwner.id);
+      }, 0);
       queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },
     onError: () => {

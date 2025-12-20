@@ -80,12 +80,15 @@ export default function SubprocessForm({ subproceso, procesoId, onSuccess }: Sub
         ...old,
         { ...newOwner, isActive: true }
       ]);
-      form.setValue("ownerId", newOwner.id);
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");
       setNewOwnerEmail("");
       setNewOwnerPosition("");
       toast({ title: "Responsable creado", description: "El responsable se ha creado exitosamente." });
+      // Seleccionar después de que React procese el cambio de cache
+      setTimeout(() => {
+        form.setValue("ownerId", newOwner.id);
+      }, 0);
       queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },
     onError: () => {
