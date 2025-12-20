@@ -308,7 +308,7 @@ export default function Controls() {
   });
 
   // Get control's associated risks (for both risk dialog and view dialog)
-  const { data: controlRiskAssociations = [], refetch: refetchControlRisks, isLoading: isLoadingRisks } = useQuery({
+  const { data: controlRiskAssociations = [], refetch: refetchControlRisks, isLoading: isLoadingControlRisks } = useQuery({
     queryKey: queryKeys.controls.risks(riskDialogControl?.id || viewingControl?.id),
     queryFn: async () => {
       const currentControl = riskDialogControl || viewingControl;
