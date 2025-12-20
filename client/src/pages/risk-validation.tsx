@@ -116,7 +116,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 30000,
     refetchOnMount: false, // NO refetch al montar componente
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
@@ -125,7 +125,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: true, // Refetch al montar para asegurar datos frescos
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
     retry: 2, // Reintentar 2 veces si falla
   });
@@ -151,7 +151,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
@@ -160,7 +160,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
@@ -284,7 +284,7 @@ export default function RiskValidationPage() {
     queryKey: ["/api/validation/counts"],
     staleTime: 30000, // 30 seconds - matches server cache
     refetchOnMount: true, // Refetch to get latest counts when page loads
-    refetchOnWindowFocus: false, // Don't refetch on window focus
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
     gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
@@ -295,7 +295,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
@@ -307,7 +307,7 @@ export default function RiskValidationPage() {
     enabled: activeTab === "risks",
     staleTime: 60000,
     refetchOnMount: false, // NO refetch al montar componente
-    refetchOnWindowFocus: false, // NO refetch al cambiar de ventana
+    refetchOnWindowFocus: true, // Refetch al volver a la ventana
     gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
   });
 
