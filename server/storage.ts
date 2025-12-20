@@ -21152,9 +21152,6 @@ export class DatabaseStorage extends MemStorage {
       const queryLimit = limit || 1000;
 
       try {
-        console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus called with status: ${status}, limit: ${queryLimit}`);
-
-        // Use raw SQL to avoid Drizzle LEFT JOIN null issues
         const sqlResults = await db.execute(sql`
           SELECT 
             rpl.id as rpl_id,
@@ -21174,9 +21171,6 @@ export class DatabaseStorage extends MemStorage {
             r.code as risk_code,
             r.name as risk_name,
             r.status as risk_status,
-            -- Campos opcionales removidos por compatibilidad con esquemas sin estas columnas
-            -- r.inherent_risk as risk_inherent_risk,
-            -- r.residual_risk as risk_residual_risk,
             r.process_owner as risk_process_owner,
             m.id as macro_id,
             m.name as macro_name,
@@ -21203,50 +21197,6 @@ export class DatabaseStorage extends MemStorage {
         `);
 
         const baseResults = sqlResults.rows as any[];
-        console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus(${status}) returned ${baseResults.length} records from database`);
-        if (baseResults.length > 0) {
-          console.log(`[DB DEBUG] Sample row for ${status}:`, {
-            rpl_id: baseResults[0]?.rpl_id,
-            risk_id: baseResults[0]?.risk_id,
-            validation_status: baseResults[0]?.rpl_validation_status,
-            risk_code: baseResults[0]?.risk_code,
-          });
-        }
-
-        if (baseResults.length === 0 && status === 'validated') {
-          console.warn(`[DB DEBUG] No validated links found. Running diagnostics...`);
-
-          const debugCount = await db.execute(sql`
-            SELECT COUNT(*)::int as total
-            FROM risk_process_links rpl
-            WHERE rpl.validation_status = 'validated'
-          `);
-          console.log(`[DB DEBUG] Diagnostic 1 - total validated (no joins): ${(debugCount.rows[0] as any)?.total || 0}`);
-
-          const withValidRisks = await db.execute(sql`
-            SELECT COUNT(*)::int as total
-            FROM risk_process_links rpl
-            INNER JOIN risks r ON rpl.risk_id = r.id
-            WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL
-          `);
-          console.log(`[DB DEBUG] Diagnostic 2 - validated with NON-deleted risks: ${(withValidRisks.rows[0] as any)?.total || 0}`);
-
-          const sampleLinks = await db.execute(sql`
-            SELECT 
-              rpl.id as rpl_id,
-              rpl.risk_id,
-              rpl.validation_status,
-              r.id as risk_id,
-              r.code as risk_code,
-              r.deleted_at as risk_deleted_at,
-              r.status as risk_status
-            FROM risk_process_links rpl
-            LEFT JOIN risks r ON rpl.risk_id = r.id
-            WHERE rpl.validation_status = 'validated'
-            LIMIT 5
-          `);
-          console.log(`[DB DEBUG] Diagnostic 3 - sample validated links:`, JSON.stringify(sampleLinks.rows, null, 2));
-        }
 
         // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
         // Note: SQL results use snake_case column names
@@ -21310,10 +21260,10 @@ export class DatabaseStorage extends MemStorage {
 
         return results;
       } catch (error: any) {
+        // Keep minimal error logging
         console.error(`[DB ERROR] getRiskProcessLinksByValidationStatus(${status}) failed`, {
           message: error?.message || String(error),
-          code: error?.code,
-          stack: error?.stack
+          code: error?.code
         });
         throw error;
       }
