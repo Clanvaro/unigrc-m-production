@@ -134,6 +134,7 @@ export default function Controls() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [riskSearchTerm, setRiskSearchTerm] = useState("");
   const [openRiskCombobox, setOpenRiskCombobox] = useState(false);
+  const [processingRiskIds, setProcessingRiskIds] = useState<Set<string>>(new Set());
   const [testMode50k, setTestMode50k] = useState(false);
   const [savedViewsDialogOpen, setSavedViewsDialogOpen] = useState(false);
   const [columnConfigDialogOpen, setColumnConfigDialogOpen] = useState(false);
@@ -401,22 +402,37 @@ export default function Controls() {
   };
 
   const addRiskMutation = useMutation({
-    mutationFn: ({ controlId, riskId }: { controlId: string; riskId: string }) => {
+    mutationFn: async ({ controlId, riskId }: { controlId: string; riskId: string }) => {
       const control = controls.find((c: Control) => c.id === controlId);
       const risk = risks.find((r: Risk) => r.id === riskId);
       if (!control || !risk) throw new Error("Control o riesgo no encontrado");
 
       const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
-      return apiRequest(`/api/risks/${riskId}/controls`, "POST", {
-        controlId,
-        residualRisk
+      const response = await fetch(`/api/risks/${riskId}/controls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ controlId, residualRisk })
       });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const error = new Error(errorData.message || "Error al asociar riesgo") as any;
+        error.code = errorData.code;
+        error.status = response.status;
+        throw error;
+      }
+
+      return response.json();
     },
     onMutate: async ({ controlId, riskId }) => {
+      // Marcar el riesgo como en proceso
+      setProcessingRiskIds(prev => new Set(prev).add(riskId));
+
       // OPTIMISTIC UPDATE: Add to cache immediately
       const control = controls.find((c: Control) => c.id === controlId);
       const risk = risks.find((r: Risk) => r.id === riskId);
-      if (!control || !risk) return;
+      if (!control || !risk) return { riskId };
 
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({
@@ -449,9 +465,16 @@ export default function Controls() {
         }]
       );
 
-      return { previousRisks, controlId };
+      return { previousRisks, controlId, riskId };
     },
     onSuccess: async (_data, variables, context) => {
+      // Quitar el riesgo de la lista de procesamiento
+      setProcessingRiskIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.riskId);
+        return next;
+      });
+
       // Invalidate all control queries (list and paginated)
       await queryClient.invalidateQueries({
         queryKey: queryKeys.controls.all(),
@@ -473,7 +496,14 @@ export default function Controls() {
 
       toast({ title: "Riesgo asociado", description: "El riesgo ha sido asociado al control exitosamente." });
     },
-    onError: (_error, _variables, context) => {
+    onError: (error: any, variables, context) => {
+      // Quitar el riesgo de la lista de procesamiento
+      setProcessingRiskIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.riskId);
+        return next;
+      });
+
       // Rollback on error
       if (context?.previousRisks && context?.controlId) {
         queryClient.setQueryData(
@@ -481,7 +511,23 @@ export default function Controls() {
           context.previousRisks
         );
       }
-      toast({ title: "Error", description: "No se pudo asociar el riesgo.", variant: "destructive" });
+
+      // Manejar error de duplicado específicamente
+      if (error.code === "DUPLICATE_ASSOCIATION" || error.status === 409) {
+        toast({ 
+          title: "Riesgo ya asociado", 
+          description: "Este riesgo ya está asociado a este control.", 
+          variant: "default" 
+        });
+        // Refrescar la lista para mostrar el estado real
+        if (context?.controlId) {
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.controls.risks(context.controlId)
+          });
+        }
+      } else {
+        toast({ title: "Error", description: "No se pudo asociar el riesgo.", variant: "destructive" });
+      }
     },
   });
 
@@ -542,6 +588,10 @@ export default function Controls() {
   });
 
   const handleAddRisk = (riskId: string) => {
+    // Evitar clics múltiples mientras se procesa
+    if (processingRiskIds.has(riskId)) {
+      return;
+    }
     if (riskDialogControl) {
       addRiskMutation.mutate({ controlId: riskDialogControl.id, riskId });
     }
@@ -1569,21 +1619,35 @@ export default function Controls() {
                         );
                       }
                       
-                      return availableRisks.map((risk) => (
-                        <div
-                          key={risk.id}
-                          className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
-                          onClick={() => {
-                            handleAddRisk(risk.id);
-                            setRiskSearchTerm("");
-                          }}
-                        >
-                          <div className="font-medium text-sm">{risk.code} - {risk.name}</div>
-                          {risk.description && (
-                            <div className="text-xs text-muted-foreground truncate">{risk.description.substring(0, 80)}...</div>
-                          )}
-                        </div>
-                      ));
+                      return availableRisks.map((risk) => {
+                        const isProcessing = processingRiskIds.has(risk.id);
+                        return (
+                          <div
+                            key={risk.id}
+                            className={`p-2 border-b last:border-b-0 transition-colors ${
+                              isProcessing 
+                                ? "opacity-50 cursor-not-allowed bg-muted/50" 
+                                : "hover:bg-muted cursor-pointer"
+                            }`}
+                            onClick={() => {
+                              if (!isProcessing) {
+                                handleAddRisk(risk.id);
+                                setRiskSearchTerm("");
+                              }
+                            }}
+                          >
+                            <div className="font-medium text-sm flex items-center gap-2">
+                              {risk.code} - {risk.name}
+                              {isProcessing && (
+                                <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                              )}
+                            </div>
+                            {risk.description && (
+                              <div className="text-xs text-muted-foreground truncate">{risk.description.substring(0, 80)}...</div>
+                            )}
+                          </div>
+                        );
+                      });
                     })()
                   )}
                 </div>

@@ -425,6 +425,8 @@ export const riskControls = pgTable("risk_controls", {
   index("idx_rc_risk_id").on(table.riskId),
   index("idx_rc_control_id").on(table.controlId),
   index("idx_rc_risk_control").on(table.riskId, table.controlId),
+  // Constraint único para evitar asociaciones duplicadas
+  uniqueIndex("unique_risk_control").on(table.riskId, table.controlId),
 ]);
 
 export const riskCategories = pgTable("risk_categories", {

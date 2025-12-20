@@ -10924,6 +10924,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         residualRisk: Number(req.body.residualRisk).toFixed(1),
         riskId: req.params.riskId,
       });
+
+      // Verificar si ya existe la asociación para evitar duplicados
+      const existingAssociation = await requireDb()
+        .select({ id: riskControls.id })
+        .from(riskControls)
+        .where(
+          and(
+            eq(riskControls.riskId, req.params.riskId),
+            eq(riskControls.controlId, validatedData.controlId)
+          )
+        )
+        .limit(1);
+
+      if (existingAssociation.length > 0) {
+        return res.status(409).json({
+          message: "Este control ya está asociado a este riesgo",
+          code: "DUPLICATE_ASSOCIATION"
+        });
+      }
+
       const riskControl = await storage.createRiskControl(validatedData);
 
       // Invalidate only risk-control association caches (granular, fast: ~5-25ms)
@@ -10943,6 +10963,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({
           message: "Invalid risk control data",
           errors: error.errors
+        });
+      }
+      // Manejar error de constraint único (por si acaso hay race condition)
+      if (error.code === '23505' || error.message?.includes('unique_risk_control')) {
+        return res.status(409).json({
+          message: "Este control ya está asociado a este riesgo",
+          code: "DUPLICATE_ASSOCIATION"
         });
       }
       console.error("Error creating risk control:", error);
