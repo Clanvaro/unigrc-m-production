@@ -59,6 +59,31 @@ const translateControlType = (type: string | undefined) => {
   return translations[type.toLowerCase()] || type;
 };
 
+// Colores por defecto para categorías de riesgo conocidas
+const DEFAULT_CATEGORY_COLORS: Record<string, string> = {
+  'Operacional': '#3b82f6',    // Azul
+  'Cumplimiento': '#8b5cf6',   // Púrpura
+  'Fraude': '#ef4444',         // Rojo
+  'Tecnología': '#10b981',     // Verde
+  'Tecnológico': '#10b981',    // Verde (variante)
+  'Financiero': '#f59e0b',     // Naranja
+  'Reputacional': '#ec4899',   // Rosa
+  'Estratégico': '#6366f1',    // Índigo
+  'Ciberseguridad': '#14b8a6', // Teal
+  'Legal': '#8b5cf6',          // Púrpura
+};
+
+// Helper para obtener color de categoría
+const getCategoryColor = (categoryName: string, riskCategories: any[]): string => {
+  // Primero buscar en las categorías del catálogo (con color asignado)
+  const categoryData = riskCategories?.find((cat: any) => cat.name === categoryName);
+  if (categoryData?.color && categoryData.color !== '#6b7280') {
+    return categoryData.color;
+  }
+  // Si no tiene color asignado, usar el color por defecto
+  return DEFAULT_CATEGORY_COLORS[categoryName] || '#6b7280';
+};
+
 export default function Risks() {
   const [, setLocation] = useLocation();
   const { currentUser } = usePermissions();
@@ -1501,22 +1526,25 @@ export default function Risks() {
       width: '180px',
       cell: (risk) => (
         <div className="flex flex-wrap gap-1">
-          {Array.isArray(risk.category) ? risk.category.slice(0, 2).map((categoryName: string) => {
-            const categoryData = riskCategories?.find((cat: any) => cat.name === categoryName);
-            return (
-              <Badge
-                key={categoryName}
-                className="text-xs whitespace-nowrap"
-                style={{
-                  backgroundColor: categoryData?.color || "#6b7280",
-                  color: "white"
-                }}
-              >
-                {categoryName}
-              </Badge>
-            );
-          }) : (
-            <Badge variant="secondary" className="text-xs whitespace-nowrap">
+          {Array.isArray(risk.category) ? risk.category.slice(0, 2).map((categoryName: string) => (
+            <Badge
+              key={categoryName}
+              className="text-xs whitespace-nowrap"
+              style={{
+                backgroundColor: getCategoryColor(categoryName, riskCategories),
+                color: "white"
+              }}
+            >
+              {categoryName}
+            </Badge>
+          )) : (
+            <Badge 
+              className="text-xs whitespace-nowrap"
+              style={{
+                backgroundColor: getCategoryColor(risk.category as string, riskCategories),
+                color: "white"
+              }}
+            >
               {risk.category}
             </Badge>
           )}
@@ -2560,22 +2588,25 @@ export default function Risks() {
                       <div>
                         <Label className="text-sm font-medium text-muted-foreground">Categoría</Label>
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {Array.isArray(viewingRisk.category) ? viewingRisk.category.map((categoryName: string) => {
-                            const categoryData = riskCategories.find((cat: any) => cat.name === categoryName);
-                            return (
-                              <Badge
-                                key={categoryName}
-                                className="text-xs"
-                                style={{
-                                  backgroundColor: categoryData?.color || "#6b7280",
-                                  color: "white"
-                                }}
-                              >
-                                {categoryName}
-                              </Badge>
-                            );
-                          }) : (
-                            <Badge variant="secondary" className="text-xs">
+                          {Array.isArray(viewingRisk.category) ? viewingRisk.category.map((categoryName: string) => (
+                            <Badge
+                              key={categoryName}
+                              className="text-xs"
+                              style={{
+                                backgroundColor: getCategoryColor(categoryName, riskCategories),
+                                color: "white"
+                              }}
+                            >
+                              {categoryName}
+                            </Badge>
+                          )) : (
+                            <Badge 
+                              className="text-xs"
+                              style={{
+                                backgroundColor: getCategoryColor(viewingRisk.category as string, riskCategories),
+                                color: "white"
+                              }}
+                            >
                               {viewingRisk.category}
                             </Badge>
                           )}
