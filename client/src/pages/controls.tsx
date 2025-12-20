@@ -438,6 +438,9 @@ export default function Controls() {
 
       // Snapshot the previous value
       const previousRisks = queryClient.getQueryData(queryKeys.controls.risks(controlId));
+      const previousControlsWithDetails = queryClient.getQueriesData<any>({
+        queryKey: ["/api/controls/with-details"]
+      });
 
       // Optimistically add the new risk association with full risk object
       const residualRisk = calculateResidualRisk(risk.inherentRisk, control.effectiveness);
@@ -462,7 +465,27 @@ export default function Controls() {
         }]
       );
 
-      return { previousRisks, controlId, riskId };
+      // OPTIMISTIC UPDATE: Update controls-with-details cache so the table reflects the new association
+      queryClient.setQueriesData(
+        { queryKey: ["/api/controls/with-details"] },
+        (old: any) => {
+          if (!old?.data) return old;
+          const updatedData = old.data.map((c: any) => {
+            if (c.id !== controlId) return c;
+            const existingRisks = c.associatedRisks || [];
+            const alreadyExists = existingRisks.some((r: any) => r.id === risk.id);
+            if (alreadyExists) return c;
+            return {
+              ...c,
+              associatedRisks: [...existingRisks, { id: risk.id, code: risk.code }],
+              associatedRisksCount: (c.associatedRisksCount ?? existingRisks.length) + 1
+            };
+          });
+          return { ...old, data: updatedData };
+        }
+      );
+
+      return { previousRisks, previousControlsWithDetails, controlId, riskId };
     },
     onSuccess: async (_data, variables, context) => {
       // Quitar el riesgo de la lista de procesamiento
@@ -511,6 +534,11 @@ export default function Controls() {
           queryKeys.controls.risks(context.controlId),
           context.previousRisks
         );
+      }
+      if (context?.previousControlsWithDetails) {
+        context.previousControlsWithDetails.forEach(([key, data]: [any, any]) => {
+          queryClient.setQueryData(key, data);
+        });
       }
 
       // Manejar error de duplicado específicamente
