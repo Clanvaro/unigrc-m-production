@@ -10876,9 +10876,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/controls/:controlId/risks", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const risks = await storage.getControlRisks(req.params.controlId, tenantId);
+      const controlId = req.params.controlId;
+      
+      console.log(`[DEBUG] /api/controls/${controlId}/risks - Fetching risks for control`);
+      
+      const risks = await storage.getControlRisks(controlId);
+      
+      console.log(`[DEBUG] /api/controls/${controlId}/risks - Found ${risks.length} associated risks`);
+      
       res.json(risks);
     } catch (error) {
+      console.error(`[ERROR] /api/controls/${req.params.controlId}/risks:`, error);
       res.status(500).json({ message: "Failed to fetch control risks" });
     }
   });

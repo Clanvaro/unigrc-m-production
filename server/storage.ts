@@ -8589,6 +8589,8 @@ export class DatabaseStorage extends MemStorage {
     controlCountByRisk?: Map<string, number>;
   }> {
     try {
+      console.log(`[DEBUG] getRiskControlAssociations called with options:`, JSON.stringify(options));
+      
       // Build WHERE conditions
       const conditions = [];
 
@@ -8827,6 +8829,8 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getControlRisks(controlId: string): Promise<(RiskControl & { risk: Risk })[]> {
+    console.log(`[DEBUG] getControlRisks called for controlId: ${controlId}`);
+    
     // Use the unified function for specific control
     const { associations } = await this.getRiskControlAssociations({
       controlId,
@@ -8834,14 +8838,20 @@ export class DatabaseStorage extends MemStorage {
       includeControlDetails: false
     });
 
+    console.log(`[DEBUG] getControlRisks - Raw associations count: ${associations.length}`);
+    
     // Filter to only return associations with risk details
-    return associations.filter(a => a.risk).map(a => ({
+    const result = associations.filter(a => a.risk).map(a => ({
       id: a.id,
       riskId: a.riskId,
       controlId: a.controlId,
       residualRisk: a.residualRisk,
       risk: a.risk!
     }));
+    
+    console.log(`[DEBUG] getControlRisks - Filtered result count: ${result.length}`);
+    
+    return result;
   }
 
   async createRiskControl(insertRiskControl: InsertRiskControl): Promise<RiskControl> {
