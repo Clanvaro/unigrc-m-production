@@ -554,7 +554,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          question: `Genera una descripción concisa y profesional para un control llamado "${controlName}". Explica brevemente qué hace el control y por qué es importante. Máximo 2 párrafos cortos. No uses formato markdown ni asteriscos. Texto plano solamente.`
+          question: `Genera una descripción concisa y profesional para un control llamado "${controlName}". Explica brevemente qué hace el control, cómo funciona y qué objetivo cumple. Solo 1 párrafo corto (máximo 4 oraciones). No incluyas beneficios ni importancia. No uses formato markdown ni asteriscos. Texto plano solamente.`
         }),
         credentials: 'include'
       });
