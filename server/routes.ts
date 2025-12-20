@@ -8270,11 +8270,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ============== AI RISK SUGGESTIONS (DEPRECATED - Moved to Azure OpenAI) ==============
-  // These endpoints are no longer used. AI functionality now uses Azure OpenAI via AI Assistant.
+  // ============== AI RISK SUGGESTIONS ==============
+  // Endpoint for generating AI-powered risk suggestions based on process context
 
+  app.post("/api/risks/ai-suggestions", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { processId, subprocesoId, macroprocesoId, userContext, excludeExistingRisks, useGlobalDocumentation } = req.body;
+
+      // Build context for AI
+      let contextParts: string[] = [];
+      
+      if (macroprocesoId) {
+        const macroproceso = await storage.getMacroproceso(macroprocesoId);
+        if (macroproceso) contextParts.push(`Macroproceso: ${macroproceso.name}`);
+      }
+      
+      if (processId) {
+        const process = await storage.getProcess(processId);
+        if (process) contextParts.push(`Proceso: ${process.name} - ${process.description || ''}`);
+      }
+      
+      if (subprocesoId) {
+        const subproceso = await storage.getSubproceso(subprocesoId);
+        if (subproceso) contextParts.push(`Subproceso: ${subproceso.name}`);
+      }
+
+      if (userContext) {
+        contextParts.push(`Contexto adicional: ${userContext}`);
+      }
+
+      // Get existing risks to exclude if requested
+      let existingRiskNames: string[] = [];
+      if (excludeExistingRisks) {
+        const existingRisks = await storage.getRisks();
+        existingRiskNames = existingRisks.map(r => r.name.toLowerCase());
+      }
+
+      const prompt = `Eres un experto en gestión de riesgos empresariales. Genera exactamente 5 sugerencias de riesgos operacionales para el siguiente contexto organizacional:
+
+${contextParts.join('\n')}
+
+${existingRiskNames.length > 0 ? `\nNOTA: Evita sugerir riesgos similares a estos ya existentes: ${existingRiskNames.slice(0, 10).join(', ')}` : ''}
+
+Para cada riesgo sugerido, proporciona:
+1. name: Nombre corto y descriptivo del riesgo (máximo 80 caracteres)
+2. description: Descripción detallada del riesgo (100-200 caracteres)
+3. category: Categoría del riesgo (una de: ["Operacional", "Financiero", "Cumplimiento", "Tecnológico", "Reputacional", "Estratégico"])
+4. frequencyOccurrence: Frecuencia estimada de ocurrencia (1-5, donde 1=muy raro, 5=muy frecuente)
+5. impact: Impacto estimado (1-5, donde 1=muy bajo, 5=muy alto)
+
+Responde SOLO con un JSON válido con este formato exacto:
+{
+  "suggestions": [
+    {
+      "name": "Nombre del riesgo",
+      "description": "Descripción del riesgo",
+      "category": ["Operacional"],
+      "frequencyOccurrence": 3,
+      "impact": 4
+    }
+  ]
+}`;
+
+      const response = await openAIService.generateText(prompt, "Eres un experto en gestión de riesgos GRC.");
+      
+      // Parse the response
+      let suggestions = [];
+      try {
+        // Try to extract JSON from the response
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          suggestions = parsed.suggestions || [];
+        }
+      } catch (parseError) {
+        console.error("Error parsing AI response:", parseError);
+        suggestions = [];
+      }
+
+      res.json({
+        success: true,
+        suggestions,
+        metadata: {
+          generatedAt: new Date().toISOString(),
+          context: contextParts.join(' | ')
+        }
+      });
+    } catch (error: any) {
+      console.error("Error generating AI risk suggestions:", error);
+      res.status(500).json({
+        success: false,
+        message: "Error interno del servidor al generar sugerencias",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  });
+
+  // DEPRECATED: Old endpoint code commented out below
   /*
-  // AI Risk Suggestions endpoint (DEPRECATED)
+  // AI Risk Suggestions endpoint (DEPRECATED - old implementation)
   app.post("/api/risks/ai-suggestions", isAuthenticated, async (req: Request, res: Response) => {
     try {
       // Get authenticated user ID
@@ -8548,7 +8642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }
   */
-  // ============== END OF DEPRECATED AI RISK SUGGESTIONS ==============
+  // ============== END OF AI RISK SUGGESTIONS ==============
 
   // ============== RISK EVENTS ==============
 
