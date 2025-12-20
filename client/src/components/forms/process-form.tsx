@@ -111,20 +111,26 @@ export default function ProcessForm({ process, macroprocesoId, onSuccess }: Proc
     }
   }, [macroproceso, process, form]);
 
-  // Mutation para crear nuevo responsable
+  // Mutation para crear nuevo responsable (con optimistic update)
   const createOwnerMutation = useMutation({
     mutationFn: async (data: { name: string; email: string; position: string }) => {
       return await apiRequest("/api/process-owners", "POST", data);
     },
-    onSuccess: async (newOwner) => {
-      // Esperar a que termine el refetch antes de seleccionar
-      await queryClient.refetchQueries({ queryKey: ["/api/process-owners"] });
+    onSuccess: (newOwner) => {
+      // Optimistic update: agregar al cache inmediatamente
+      queryClient.setQueryData<ProcessOwner[]>(["/api/process-owners"], (old = []) => [
+        ...old,
+        { ...newOwner, isActive: true }
+      ]);
+      // Seleccionar el nuevo responsable
       form.setValue("ownerId", newOwner.id);
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");
       setNewOwnerEmail("");
       setNewOwnerPosition("");
       toast({ title: "Responsable creado", description: "El responsable se ha creado exitosamente." });
+      // Refetch en background para sincronizar
+      queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },
     onError: () => {
       toast({ title: "Error", description: "No se pudo crear el responsable.", variant: "destructive" });

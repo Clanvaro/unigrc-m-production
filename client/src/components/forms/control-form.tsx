@@ -443,19 +443,22 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
     clearEvaluationsMutation.mutate();
   };
 
-  // Mutation to create a new process owner
+  // Mutation to create a new process owner (con optimistic update)
   const createOwnerMutation = useMutation({
     mutationFn: async (data: { name: string; email: string; position: string }) => {
       const newOwner = await apiRequest("/api/process-owners", "POST", {
         ...data,
-        company: "Default Company", // Default company for now
+        company: "Default Company",
         isActive: true,
       });
       return newOwner;
     },
-    onSuccess: async (newOwner) => {
-      // Esperar a que termine el refetch antes de seleccionar
-      await queryClient.refetchQueries({ queryKey: ["/api/process-owners"] });
+    onSuccess: (newOwner) => {
+      // Optimistic update: agregar al cache inmediatamente
+      queryClient.setQueryData<any[]>(["/api/process-owners"], (old = []) => [
+        ...old,
+        { ...newOwner, isActive: true }
+      ]);
       setSelectedOwnerId(newOwner.id);
       form.setValue("ownerId", newOwner.id);
       setIsCreateOwnerDialogOpen(false);
@@ -466,6 +469,7 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
         title: "Dueño de proceso creado",
         description: "El nuevo dueño de proceso ha sido creado exitosamente.",
       });
+      queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },
     onError: () => {
       toast({

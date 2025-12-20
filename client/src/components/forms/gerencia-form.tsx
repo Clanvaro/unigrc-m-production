@@ -108,14 +108,17 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
     description: owner.position || undefined,
   }));
 
-  // Mutation para crear nuevo responsable
+  // Mutation para crear nuevo responsable (con optimistic update)
   const createManagerMutation = useMutation({
     mutationFn: async (data: { name: string; email: string; position: string }) => {
       return await apiRequest("/api/process-owners", "POST", data);
     },
-    onSuccess: async (newManager) => {
-      // Esperar a que termine el refetch antes de seleccionar
-      await queryClient.refetchQueries({ queryKey: ["/api/process-owners"] });
+    onSuccess: (newManager) => {
+      // Optimistic update: agregar al cache inmediatamente
+      queryClient.setQueryData<any[]>(["/api/process-owners"], (old = []) => [
+        ...old,
+        { ...newManager, isActive: true }
+      ]);
       form.setValue("managerId", newManager.id);
       setSelectedManagerId(newManager.id);
       setIsCreateManagerDialogOpen(false);
@@ -123,6 +126,7 @@ export default function GerenciaForm({ gerencia, onSubmit, onCancel, processOwne
       setNewManagerEmail("");
       setNewManagerPosition("");
       toast({ title: "Responsable creado", description: "El responsable se ha creado exitosamente." });
+      queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
     },
     onError: () => {
       toast({ title: "Error", description: "No se pudo crear el responsable.", variant: "destructive" });
