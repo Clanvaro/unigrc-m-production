@@ -21203,53 +21203,38 @@ export class DatabaseStorage extends MemStorage {
 
       const baseResults = sqlResults.rows as any[];
       console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus(${status}) returned ${baseResults.length} records from database`);
-      
-      // Debug: Log sample results to understand data structure
-      if (baseResults.length > 0 && status === 'validated') {
-        console.log(`[DB DEBUG] Sample validated risk-process link from DB:`, {
-          rplId: baseResults[0]?.rpl_id,
-          rplRiskId: baseResults[0]?.rpl_risk_id,
-          rplValidationStatus: baseResults[0]?.rpl_validation_status,
-          riskId: baseResults[0]?.risk_id,
-          riskCode: baseResults[0]?.risk_code,
-          riskName: baseResults[0]?.risk_name
+      if (baseResults.length > 0) {
+        console.log(`[DB DEBUG] Sample row for ${status}:`, {
+          rpl_id: baseResults[0]?.rpl_id,
+          risk_id: baseResults[0]?.risk_id,
+          validation_status: baseResults[0]?.rpl_validation_status,
+          risk_code: baseResults[0]?.risk_code,
         });
       }
       
+      // Debug: Log sample results to understand data structure
       if (baseResults.length === 0 && status === 'validated') {
-        console.warn(`[DB DEBUG] No validated risk-process links found in database. Running comprehensive diagnostics...`);
-        
-        // Debug query 1: Total validated links (no joins)
+        console.warn(`[DB DEBUG] No validated links found. Running diagnostics...`);
+
         const debugCount = await db.execute(sql`
           SELECT COUNT(*)::int as total
           FROM risk_process_links rpl
           WHERE rpl.validation_status = 'validated'
         `);
-        console.log(`[DB DEBUG] 1. Total risk-process links with validation_status='validated': ${(debugCount.rows[0] as any)?.total || 0}`);
-        
-        // Debug query 2: Validated links with valid (non-deleted) risks - EXACT COUNT QUERY MATCH
+        console.log(`[DB DEBUG] Diagnostic 1 - total validated (no joins): ${(debugCount.rows[0] as any)?.total || 0}`);
+
         const withValidRisks = await db.execute(sql`
           SELECT COUNT(*)::int as total
           FROM risk_process_links rpl
           INNER JOIN risks r ON rpl.risk_id = r.id
           WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL
         `);
-        console.log(`[DB DEBUG] 2. Validated links with NON-deleted risks (exact count query): ${(withValidRisks.rows[0] as any)?.total || 0}`);
-        
-        // Debug query 3: Validated links with deleted risks
-        const withDeletedRisks = await db.execute(sql`
-          SELECT COUNT(*)::int as total
-          FROM risk_process_links rpl
-          INNER JOIN risks r ON rpl.risk_id = r.id
-          WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NOT NULL
-        `);
-        console.log(`[DB DEBUG] 3. Validated links with DELETED risks: ${(withDeletedRisks.rows[0] as any)?.total || 0}`);
-        
-        // Debug query 4: Sample validated links to see actual data
+        console.log(`[DB DEBUG] Diagnostic 2 - validated with NON-deleted risks: ${(withValidRisks.rows[0] as any)?.total || 0}`);
+
         const sampleLinks = await db.execute(sql`
           SELECT 
-            rpl.id as rpl_id, 
-            rpl.risk_id, 
+            rpl.id as rpl_id,
+            rpl.risk_id,
             rpl.validation_status,
             r.id as risk_id,
             r.code as risk_code,
@@ -21260,114 +21245,7 @@ export class DatabaseStorage extends MemStorage {
           WHERE rpl.validation_status = 'validated'
           LIMIT 5
         `);
-        console.log(`[DB DEBUG] 4. Sample validated links (first 5):`, JSON.stringify(sampleLinks.rows, null, 2));
-        
-        // Debug query 5: Check if risks exist for validated links
-        const orphanedLinks = await db.execute(sql`
-          SELECT COUNT(*)::int as total
-          FROM risk_process_links rpl
-          LEFT JOIN risks r ON rpl.risk_id = r.id
-          WHERE rpl.validation_status = 'validated' AND r.id IS NULL
-        `);
-        console.log(`[DB DEBUG] 5. Validated links with NO matching risk (orphaned): ${(orphanedLinks.rows[0] as any)?.total || 0}`);
-        
-        // FALLBACK: If drizzle query failed but SQL shows data exists, use direct SQL query
-        const validCount = (withValidRisks.rows[0] as any)?.total || 0;
-        if (validCount > 0) {
-          console.log(`[DB DEBUG] FALLBACK: Drizzle returned 0 but SQL count shows ${validCount}. Using direct SQL query...`);
-          
-          // Use raw SQL that matches the count query exactly
-          const fallbackResults = await db.execute(sql`
-            SELECT 
-              rpl.id as rpl_id,
-              rpl.risk_id as rpl_risk_id,
-              rpl.macroproceso_id as rpl_macroproceso_id,
-              rpl.process_id as rpl_process_id,
-              rpl.subproceso_id as rpl_subproceso_id,
-              rpl.responsible_override_id as rpl_responsible_override_id,
-              rpl.validated_by as rpl_validated_by,
-              rpl.validation_status as rpl_validation_status,
-              rpl.validation_comments as rpl_validation_comments,
-              rpl.validated_at as rpl_validated_at,
-              rpl.notification_sent as rpl_notified,
-              rpl.created_at as rpl_created_at,
-              rpl.updated_at as rpl_updated_at,
-              r.id as risk_id,
-              r.code as risk_code,
-              r.name as risk_name,
-              r.status as risk_status,
-              r.inherent_risk as risk_inherent_risk,
-              r.residual_risk as risk_residual_risk,
-              r.process_owner as risk_process_owner,
-              m.id as macro_id,
-              m.name as macro_name,
-              m.owner_id as macro_owner_id,
-              p.id as proc_id,
-              p.name as proc_name,
-              p.owner_id as proc_owner_id,
-              s.id as sub_id,
-              s.name as sub_name,
-              s.owner_id as sub_owner_id,
-              u.id as val_user_id,
-              u.full_name as val_user_full_name,
-              u.email as val_user_email,
-              COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id
-            FROM risk_process_links rpl
-            INNER JOIN risks r ON rpl.risk_id = r.id
-            LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
-            LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
-            LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
-            LEFT JOIN users u ON rpl.validated_by = u.id
-            WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL
-            ORDER BY rpl.created_at
-            LIMIT ${queryLimit}
-          `);
-          
-          console.log(`[DB DEBUG] FALLBACK SQL query returned ${fallbackResults.rows.length} rows`);
-          
-          if (fallbackResults.rows.length > 0) {
-            // Map fallback results to match expected format
-            const fallbackOwnerIds = [...new Set(fallbackResults.rows.map((r: any) => r.responsible_owner_id).filter(Boolean))];
-            const fallbackOwners = fallbackOwnerIds.length > 0
-              ? await db.execute(sql`
-                  SELECT id, name as full_name, email 
-                  FROM process_owners 
-                  WHERE id = ANY(${fallbackOwnerIds})
-                `)
-              : { rows: [] };
-            const fallbackOwnersMap = new Map((fallbackOwners.rows as any[]).map(owner => [owner.id, owner]));
-            
-            return fallbackResults.rows.map((row: any) => ({
-              id: row.rpl_id,
-              riskId: row.rpl_risk_id,
-              macroprocesoId: row.rpl_macroproceso_id,
-              processId: row.rpl_process_id,
-              subprocesoId: row.rpl_subproceso_id,
-              responsibleOverrideId: row.rpl_responsible_override_id,
-              validatedBy: row.rpl_validated_by,
-              validationStatus: row.rpl_validation_status,
-              validationComments: row.rpl_validation_comments,
-              validatedAt: row.rpl_validated_at,
-              notified: row.rpl_notified,
-              createdAt: row.rpl_created_at,
-              updatedAt: row.rpl_updated_at,
-              risk: {
-                id: row.risk_id,
-                code: row.risk_code,
-                name: row.risk_name,
-                status: row.risk_status,
-                inherentRisk: row.risk_inherent_risk,
-                residualRisk: row.risk_residual_risk,
-                processOwner: row.risk_process_owner
-              },
-              macroproceso: row.macro_id ? { id: row.macro_id, name: row.macro_name } : undefined,
-              process: row.proc_id ? { id: row.proc_id, name: row.proc_name } : undefined,
-              subproceso: row.sub_id ? { id: row.sub_id, name: row.sub_name } : undefined,
-              validatedByUser: row.val_user_id ? { id: row.val_user_id, fullName: row.val_user_full_name, email: row.val_user_email } : undefined,
-              responsibleUser: row.responsible_owner_id ? fallbackOwnersMap.get(row.responsible_owner_id) : undefined
-            }));
-          }
-        }
+        console.log(`[DB DEBUG] Diagnostic 3 - sample validated links:`, JSON.stringify(sampleLinks.rows, null, 2));
       }
 
       // PERFORMANCE: Batch-fetch all process owners (prevent N+1 query)
