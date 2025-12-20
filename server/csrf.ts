@@ -144,7 +144,12 @@ export const csrfProtectionForMutations: RequestHandler = (req, res, next) => {
   }
   
   // Skip CSRF protection for public validation endpoints (email-based validation)
-  if (req.path.startsWith('/public/batch-validation') || 
+  // Note: These are accessed via links in emails, without session/CSRF context
+  if (req.path.startsWith('/api/public/batch-validation') || 
+      req.path.startsWith('/api/public/validate-control') ||
+      req.path.startsWith('/api/public/validate-action-plan') ||
+      // Also check without /api prefix (for frontend routing)
+      req.path.startsWith('/public/batch-validation') || 
       req.path.startsWith('/public/validate-control') ||
       req.path.startsWith('/public/validate-action-plan')) {
     return next();
