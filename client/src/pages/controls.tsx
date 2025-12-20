@@ -1153,64 +1153,42 @@ export default function Controls() {
                   <div className="mb-4">
                     <Label>Agregar Riesgo</Label>
                     <div className="flex gap-2 mt-2">
-                      <Popover open={openRiskCombobox} onOpenChange={setOpenRiskCombobox} modal={true}>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" className="flex-1 justify-between">
-                            Seleccionar riesgo
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="w-[400px] p-0 z-[100]"
-                          align="start"
-                          sideOffset={5}
-                          onWheel={(e) => e.stopPropagation()}
-                          onOpenAutoFocus={(e) => e.preventDefault()}
-                        >
-                          <Command className="max-h-[500px]">
-                            <CommandInput
-                              placeholder="Buscar riesgo..."
-                              value={riskSearchTerm}
-                              onValueChange={setRiskSearchTerm}
-                            />
-                            <CommandList className="!max-h-[400px]">
-                              {isLoadingRisks ? (
-                                <div className="p-4 text-center text-sm text-muted-foreground">
-                                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
-                                  Cargando riesgos...
-                                </div>
-                              ) : (
-                                <>
-                                  <CommandEmpty>No se encontraron riesgos.</CommandEmpty>
-                                  <CommandGroup>
-                                    {risks
-                                      .filter(risk =>
-                                        !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
-                                      )
-                                      .map((risk) => (
-                                        <CommandItem
-                                          key={risk.id}
-                                          value={`${risk.code} ${risk.name}`}
-                                          onSelect={() => {
-                                            handleAddRisk(risk.id);
-                                            setOpenRiskCombobox(false);
-                                            setRiskSearchTerm("");
-                                          }}
-                                        >
-                                          <Check className={`mr-2 h-4 w-4 ${false ? "opacity-100" : "opacity-0"}`} />
-                                          <div className="flex flex-col">
-                                            <span className="font-medium">{risk.code} - {risk.name}</span>
-                                            <span className="text-xs text-muted-foreground">{risk.description?.substring(0, 60)}...</span>
-                                          </div>
-                                        </CommandItem>
-                                      ))}
-                                  </CommandGroup>
-                                </>
-                              )}
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
+                      <Select
+                        onValueChange={(riskId) => {
+                          if (riskId) {
+                            handleAddRisk(riskId);
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="flex-1">
+                          <SelectValue placeholder={isLoadingRisks ? "Cargando riesgos..." : "Seleccionar riesgo"} />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-[300px]">
+                          {isLoadingRisks ? (
+                            <div className="p-4 text-center text-sm text-muted-foreground">
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent mx-auto mb-2" />
+                              Cargando riesgos...
+                            </div>
+                          ) : (
+                            risks
+                              .filter(risk =>
+                                !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)
+                              )
+                              .map((risk) => (
+                                <SelectItem key={risk.id} value={risk.id}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{risk.code} - {risk.name}</span>
+                                  </div>
+                                </SelectItem>
+                              ))
+                          )}
+                          {!isLoadingRisks && risks.filter(risk => !controlRiskAssociations.some((assoc: any) => assoc.riskId === risk.id)).length === 0 && (
+                            <div className="p-4 text-center text-sm text-muted-foreground">
+                              No hay riesgos disponibles para asociar
+                            </div>
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
 
