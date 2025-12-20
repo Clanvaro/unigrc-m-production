@@ -11969,7 +11969,7 @@ Responde SOLO con un JSON válido con este formato exacto:
               .select({
                 id: actions.id,
                 code: actions.code,
-                name: actions.name,
+                name: actions.title, // La columna se llama 'title' en el schema
                 description: actions.description,
                 status: actions.status,
                 validationStatus: actions.validationStatus,
