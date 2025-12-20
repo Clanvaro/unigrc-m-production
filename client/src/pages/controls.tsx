@@ -475,22 +475,26 @@ export default function Controls() {
         return next;
       });
 
-      // Invalidate all control queries (list and paginated)
+      // Invalidate all control queries (list and paginated) - force immediate refetch
       await queryClient.invalidateQueries({
         queryKey: queryKeys.controls.all(),
-        exact: false // This will match all queries starting with ["/api/controls"]
+        exact: false,
+        refetchType: 'active'
       });
 
-      // Also invalidate the detailed controls list
+      // CRITICAL: Invalidate the detailed controls list with immediate refetch
+      // This ensures the table shows updated associated risks count immediately
       await queryClient.invalidateQueries({
         queryKey: ["/api/controls/with-details"],
-        exact: false
+        exact: false,
+        refetchType: 'active'
       });
 
       // Also invalidate the specific control's risks
       if (context?.controlId) {
         await queryClient.invalidateQueries({
-          queryKey: queryKeys.controls.risks(context.controlId)
+          queryKey: queryKeys.controls.risks(context.controlId),
+          refetchType: 'active'
         });
       }
 
@@ -557,19 +561,22 @@ export default function Controls() {
     onSuccess: async (_data, _variables, context) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.controls.all(),
-        exact: false
+        exact: false,
+        refetchType: 'active'
       });
 
-      // Also invalidate the detailed controls list
+      // CRITICAL: Invalidate the detailed controls list with immediate refetch
       await queryClient.invalidateQueries({
         queryKey: ["/api/controls/with-details"],
-        exact: false
+        exact: false,
+        refetchType: 'active'
       });
 
       // Also invalidate the specific control's risks
       if (context?.currentControl) {
         await queryClient.invalidateQueries({
-          queryKey: queryKeys.controls.risks(context.currentControl.id)
+          queryKey: queryKeys.controls.risks(context.currentControl.id),
+          refetchType: 'active'
         });
       }
 

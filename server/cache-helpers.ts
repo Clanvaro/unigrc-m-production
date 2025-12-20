@@ -132,6 +132,8 @@ export async function invalidateRiskControlAssociationCaches() {
       distributedCache.invalidate(`risks-page-data-lite:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risks-overview:${CACHE_VERSION}:single-tenant`),
       distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
+      // CRITICAL: Invalidate controls-with-details cache so control list shows updated associated risks
+      distributedCache.invalidatePattern(`controls-with-details:${CACHE_VERSION}:*`),
     ]);
     await invalidateRiskMatrixCache();
     console.log(`[GRANULAR] Risk-control association caches invalidated in ${Date.now() - startTime}ms`);
