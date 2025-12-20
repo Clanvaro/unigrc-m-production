@@ -465,12 +465,6 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
 
   const mutation = useMutation({
     mutationFn: async (data: RiskFormData) => {
-      console.log('Mutation received data:', {
-        directProbability: data.directProbability,
-        impact: data.impact,
-        fullData: data
-      });
-
       // Step 1: Create or update the risk (without direct process fields if using associations)
       const riskData = { ...data };
 
@@ -478,12 +472,6 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       delete riskData.macroprocesoId;
       delete riskData.processId;
       delete riskData.subprocesoId;
-
-      console.log('About to send apiRequest with:', {
-        directProbability: riskData.directProbability,
-        impact: riskData.impact,
-        fullRiskData: riskData
-      });
 
       let createdOrUpdatedRisk;
       if (risk) {
@@ -1007,29 +995,10 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       }
     }
 
-    console.log('Before override:', {
-      sanitized_probability: sanitizedData.probability,
-      sanitized_impact: sanitizedData.impact,
-      sanitized_inherentRisk: sanitizedData.inherentRisk
-    });
-
     // Add calculated probability, impact, and inherent risk
-    console.log('Sending to backend:', {
-      mode: probabilityInputMode,
-      watchedDirectProbability,
-      watchedImpact,
-      finalProbability,
-      inherentRisk
-    });
     sanitizedData.probability = finalProbability;
     sanitizedData.impact = watchedImpact;
     sanitizedData.inherentRisk = inherentRisk;
-
-    console.log('After override:', {
-      sanitized_probability: sanitizedData.probability,
-      sanitized_impact: sanitizedData.impact,
-      sanitized_inherentRisk: sanitizedData.inherentRisk
-    });
 
     // Clean the data object to ensure proper null values instead of undefined or empty strings
     const cleanedData = {
@@ -1074,12 +1043,6 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
 
     // Remove inherentRisk as it's calculated automatically on backend
     delete backendPayload.inherentRisk;
-
-    console.log('Final payload to mutation (mapped for backend):', {
-      directProbability: backendPayload.directProbability,
-      impact: backendPayload.impact,
-      fullPayload: backendPayload
-    });
 
     mutation.mutate(backendPayload);
   };
