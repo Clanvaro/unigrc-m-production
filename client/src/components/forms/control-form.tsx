@@ -454,11 +454,8 @@ export default function ControlForm({ control, onSuccess }: ControlFormProps) {
       return newOwner;
     },
     onSuccess: async (newOwner) => {
-      // Forzar refetch inmediato para que el nuevo dueño aparezca en el dropdown
-      await queryClient.invalidateQueries({ 
-        queryKey: ["/api/process-owners"],
-        refetchType: 'active'
-      });
+      // Esperar a que termine el refetch antes de seleccionar
+      await queryClient.refetchQueries({ queryKey: ["/api/process-owners"] });
       setSelectedOwnerId(newOwner.id);
       form.setValue("ownerId", newOwner.id);
       setIsCreateOwnerDialogOpen(false);

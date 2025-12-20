@@ -124,11 +124,8 @@ export default function ActionPlanForm({ actionPlan, defaultRiskId, auditFinding
       return await apiRequest("/api/process-owners", "POST", data);
     },
     onSuccess: async (newOwner) => {
-      // Forzar refetch inmediato para que el nuevo responsable aparezca en el dropdown
-      await queryClient.invalidateQueries({ 
-        queryKey: ["/api/process-owners"],
-        refetchType: 'active'
-      });
+      // Esperar a que termine el refetch antes de seleccionar
+      await queryClient.refetchQueries({ queryKey: ["/api/process-owners"] });
       form.setValue("responsible", newOwner.name);
       setIsCreateOwnerDialogOpen(false);
       setNewOwnerName("");
