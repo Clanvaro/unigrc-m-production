@@ -2671,15 +2671,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-            conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
+            const macroId = parseInt(filters.macroprocesoId);
+            conditions.push(sql`
+              (
+                r.macroproceso_id = ${macroId}
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  WHERE rpl.risk_id = r.id
+                    AND rpl.macroproceso_id = ${macroId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                )
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  JOIN processes p ON p.id = rpl.process_id
+                  WHERE rpl.risk_id = r.id
+                    AND p.macroproceso_id = ${macroId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                    AND (p.deleted_at IS NULL OR p.deleted_at > NOW())
+                )
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  JOIN subprocesos s ON s.id = rpl.subproceso_id
+                  JOIN processes p ON p.id = s.proceso_id
+                  WHERE rpl.risk_id = r.id
+                    AND p.macroproceso_id = ${macroId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                    AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+                    AND (p.deleted_at IS NULL OR p.deleted_at > NOW())
+                )
+              )
+            `);
           }
 
           if (filters.processId && filters.processId !== 'all') {
-            conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
+            const processId = parseInt(filters.processId);
+            conditions.push(sql`
+              (
+                r.process_id = ${processId}
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  WHERE rpl.risk_id = r.id
+                    AND rpl.process_id = ${processId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                )
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  JOIN subprocesos s ON s.id = rpl.subproceso_id
+                  WHERE rpl.risk_id = r.id
+                    AND s.proceso_id = ${processId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                    AND (s.deleted_at IS NULL OR s.deleted_at > NOW())
+                )
+              )
+            `);
           }
 
           if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-            conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
+            const subprocesoId = parseInt(filters.subprocesoId);
+            conditions.push(sql`
+              (
+                r.subproceso_id = ${subprocesoId}
+                OR EXISTS (
+                  SELECT 1 FROM risk_process_links rpl
+                  WHERE rpl.risk_id = r.id
+                    AND rpl.subproceso_id = ${subprocesoId}
+                    AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+                )
+              )
+            `);
           }
 
           const whereClause = conditions.length > 0
