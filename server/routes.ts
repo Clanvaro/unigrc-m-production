@@ -12195,22 +12195,40 @@ Responde SOLO con un JSON válido con este formato exacto:
 
       // OPTIMIZED: Map to response format (minimal object construction)
       // FIXED: Add null checks and ensure plan.id is converted to string for Map lookup
-      const plansWithRisks = safeObservedPlans.map(plan => {
-        // Validate plan object
-        if (!plan || typeof plan !== 'object') {
-          console.warn('[action-plans/validation/observed] Skipping invalid plan:', plan);
-          return null;
+      const plansWithRisks: any[] = [];
+      for (const plan of safeObservedPlans) {
+        try {
+          // Validate plan object
+          if (!plan || typeof plan !== 'object') {
+            console.warn('[action-plans/validation/observed] Skipping invalid plan:', plan);
+            continue;
+          }
+
+          const planId = String(plan.id || '');
+          const processId = plan.processId ? String(plan.processId) : null;
+
+          // Build result object without spread to avoid TypeError
+          const resultPlan = {
+            id: plan.id,
+            code: plan.code || null,
+            name: plan.name || null,
+            description: plan.description || null,
+            status: plan.status || null,
+            validationStatus: plan.validationStatus || null,
+            processId: plan.processId || null,
+            assignedTo: plan.assignedTo || null,
+            dueDate: plan.dueDate || null,
+            createdAt: plan.createdAt || null,
+            updatedAt: plan.updatedAt || null,
+            process: processId ? (processMap.get(processId) || null) : null,
+            associatedRisks: risksByActionId.get(planId) || []
+          };
+
+          plansWithRisks.push(resultPlan);
+        } catch (planError) {
+          console.error('[action-plans/validation/observed] Error processing plan:', planError, 'Plan data:', JSON.stringify(plan));
         }
-
-        const planId = String(plan.id || '');
-        const processId = plan.processId ? String(plan.processId) : null;
-
-        return {
-          ...plan,
-          process: processId ? (processMap.get(processId) || null) : null,
-          associatedRisks: risksByActionId.get(planId) || []
-        };
-      }).filter((plan): plan is NonNullable<typeof plan> => plan !== null); // Remove any null entries with type guard
+      }
 
       // OPTIMIZED: Cache for 5 minutes (300s) - observed data changes less frequently
       try {
