@@ -241,7 +241,7 @@ export default function Controls() {
     setCurrentPage(1);
   }, [filters, searchTerm, responsibleFilter]);
 
-  const { data: controlsResponse, isLoading, isFetching, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
+  const { data: controlsResponse, isLoading, isFetching, isFetched, refetch: refetchControls } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: queryKeys.controls.withDetails({
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
@@ -1217,6 +1217,8 @@ export default function Controls() {
   const isInitialLoad = !controlsResponse || !controlsResponse.data || controlsResponse.data.length === 0;
   // Show skeleton during initial load while fetching
   const showTableSkeleton = isInitialLoad && (isLoading || isFetching);
+  const showEmptyState = isFetched && !isLoading && !isFetching && !testMode50k && controls.length === 0;
+  const showFilteredEmpty = isFetched && !isLoading && !isFetching && !testMode50k && controls.length > 0 && displayData.length === 0;
 
   return (
     <div className="@container h-full flex flex-col p-4 @md:p-8 pt-6 gap-2" data-testid="controls-content" role="region" aria-label="Gestión de Controles">
@@ -1323,7 +1325,7 @@ export default function Controls() {
             </div>
           )}
 
-          {displayData.length === 0 && !testMode50k && controls.length === 0 && (
+          {showEmptyState && (
             <div className="text-center py-12">
               <p className="text-muted-foreground mb-4">No se encontraron controles</p>
               <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -1345,7 +1347,7 @@ export default function Controls() {
               </Dialog>
             </div>
           )}
-          {displayData.length === 0 && !testMode50k && controls.length > 0 && (
+          {showFilteredEmpty && (
             <div className="text-center py-12">
               <p className="text-muted-foreground">No se encontraron controles con los filtros aplicados</p>
               <p className="text-sm text-muted-foreground mt-2">Intenta ajustar o limpiar los filtros</p>
