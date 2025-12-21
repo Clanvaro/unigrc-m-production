@@ -202,7 +202,6 @@ export default function RiskValidationPage() {
       } = event.detail;
 
       if (newStatusFilter !== undefined) {
-        console.log("📡 Received statusFilter change event from header:", newStatusFilter);
         setStatusFilter(newStatusFilter);
       }
       if (newOwnerFilter !== undefined) {
@@ -210,17 +209,14 @@ export default function RiskValidationPage() {
         setOwnerFilter(newOwnerFilter);
       }
       if (newRiskLevelFilter !== undefined) {
-        console.log("📡 Received riskLevelFilter change event from header:", newRiskLevelFilter);
         setRiskLevelFilter(newRiskLevelFilter);
       }
 
       // Handle process filter changes
       if (newProcessFilter !== undefined) {
-        console.log("📡 Received processFilter change event from header:", newProcessFilter);
         setSelectedProcessId(newProcessFilter !== "all" ? newProcessFilter : null);
       }
       if (newMacroprocesoFilter !== undefined) {
-        console.log("📡 Received macroprocesoFilter change event from header:", newMacroprocesoFilter);
         // Only set if process filter is not set
         if (newProcessFilter === undefined || newProcessFilter === "all") {
           setSelectedProcessId(newMacroprocesoFilter !== "all" ? newMacroprocesoFilter : null);
