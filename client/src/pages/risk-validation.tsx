@@ -481,6 +481,18 @@ export default function RiskValidationPage() {
       });
     },
     onSuccess: () => {
+      // Optimistic UI: mover el enlace fuera de pendientes inmediatamente
+      queryClient.setQueryData<any[]>(["/api/risk-processes/validation/pending"], (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.filter((item) => item.id !== (selectedRiskProcessLink as any)?.id);
+      });
+      // Opcional: podríamos añadirlo a la lista de validados si la tenemos en cache
+      queryClient.setQueryData<any[]>(["/api/risk-processes/validation/validated"], (old) => {
+        if (!Array.isArray(old) || !selectedRiskProcessLink) return old;
+        const updated = { ...(selectedRiskProcessLink as any), validationStatus: validationAction };
+        return [updated, ...old];
+      });
+
       // Invalidate all validation queries to ensure fresh data
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/pending"] });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes/validation/validated"] });
