@@ -14355,10 +14355,16 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
       
       // CRITICAL: Invalidate caches so validation center shows updated data immediately
+      // Use the tenantId from the batch token to ensure correct cache keys are invalidated
+      const tenantId = batchToken.tenantId;
       await Promise.all([
         invalidateRiskProcessLinkCaches(),
         invalidateValidationCaches(),
-        invalidateControlDataCaches()
+        invalidateControlDataCaches(),
+        // CRITICAL: Also invalidate with the specific tenantId (not just single-tenant)
+        distributedCache.invalidate(`validation:counts:${CACHE_VERSION}:${tenantId}`),
+        distributedCache.invalidatePattern(`validation:risk-processes:${CACHE_VERSION}:${tenantId}:*`),
+        distributedCache.invalidate(`validation:lite:${CACHE_VERSION}:${tenantId}`)
       ]).catch(err => {
         console.error('[BATCH VALIDATION] Cache invalidation error (non-critical):', err);
       });
