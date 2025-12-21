@@ -21016,14 +21016,8 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   app.post("/api/audits/:id/criteria", isAuthenticated, async (req, res) => {
     try {
-      const createdBy = (req as any).user?.claims?.sub;
-      if (!createdBy && process.env.NODE_ENV !== 'development') {
-        return res.status(401).json({ message: "Authentication required" });
-      }
-      const safeCreatedBy = createdBy || (process.env.NODE_ENV === 'development' ? "user-1" : null);
-      if (!safeCreatedBy) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
+      const createdBy = getAuthenticatedUserId(req);
+      if (!createdBy) return res.status(401).json({ message: "Authentication required" });
 
       // Validar datos con mensajes de error específicos
       let validatedData;
@@ -21031,7 +21025,7 @@ Responde SOLO con un JSON válido con este formato exacto:
         validatedData = insertAuditCriterionSchema.parse({
           ...req.body,
           auditId: req.params.id,
-          createdBy: safeCreatedBy
+          createdBy
         });
       } catch (validationError) {
         if (validationError instanceof z.ZodError) {
