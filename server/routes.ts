@@ -12270,10 +12270,8 @@ Responde SOLO con un JSON válido con este formato exacto:
           name: error.name
         });
       }
-      res.status(500).json({
-        message: "Failed to fetch observed action plans",
-        error: error instanceof Error ? error.message : String(error)
-      });
+      // Fallback suave: evitar 500 en la UI y permitir carga parcial
+      res.status(200).json([]);
     }
   });
 
