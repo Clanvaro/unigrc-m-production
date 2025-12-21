@@ -198,6 +198,8 @@ export function AuditReEvaluationSection({ audit }: AuditSectionProps) {
   const { data: adHocRisks, isLoading: adHocLoading } = useQuery<AuditRisk[]>({
     queryKey: ["/api/audits", audit.id, "ad-hoc-risks"],
     enabled: !!audit.id,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   const createAdHocRisk = useMutation({
@@ -205,7 +207,7 @@ export function AuditReEvaluationSection({ audit }: AuditSectionProps) {
       return await apiRequest(`/api/audits/${audit.id}/ad-hoc-risks`, "POST", riskData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/audits", audit.id, "ad-hoc-risks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", audit.id, "ad-hoc-risks"], refetchType: "active" });
       toast({
         title: "Riesgo ad-hoc creado",
         description: "El riesgo ad-hoc se ha creado correctamente",
@@ -227,7 +229,7 @@ export function AuditReEvaluationSection({ audit }: AuditSectionProps) {
       return await apiRequest(`/api/audit-risks/${id}`, "PUT", data);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/audits", audit.id, "ad-hoc-risks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/audits", audit.id, "ad-hoc-risks"], refetchType: "active" });
       toast({
         title: "Riesgo ad-hoc actualizado",
         description: "El riesgo ad-hoc se ha actualizado correctamente",
