@@ -14336,7 +14336,16 @@ Responde SOLO con un JSON válido con este formato exacto:
             validatedCount++;
           }
         }
+      } else if (batchToken.type === 'risk') {
+        // Count validated risk-process-links
+        for (const entityId of batchToken.entityIds) {
+          const rpl = await requireDb().select().from(riskProcessLinks).where(eq(riskProcessLinks.id, entityId)).limit(1).then(r => r[0]);
+          if (rpl && rpl.validationStatus && rpl.validationStatus !== 'pending_validation') {
+            validatedCount++;
+          }
+        }
       } else {
+        // Action plans
         for (const entityId of batchToken.entityIds) {
           const actionPlan = await storage.getActionPlan(entityId);
           if (actionPlan && actionPlan.validationStatus && actionPlan.validationStatus !== 'pending_validation') {
@@ -14344,6 +14353,15 @@ Responde SOLO con un JSON válido con este formato exacto:
           }
         }
       }
+      
+      // CRITICAL: Invalidate caches so validation center shows updated data immediately
+      await Promise.all([
+        invalidateRiskProcessLinkCaches(),
+        invalidateValidationCaches(),
+        invalidateControlDataCaches()
+      ]).catch(err => {
+        console.error('[BATCH VALIDATION] Cache invalidation error (non-critical):', err);
+      });
 
       // Mark batch token as used only when ALL entities have been validated
       const allEntitiesProcessed = validatedCount === batchToken.entityIds.length;
