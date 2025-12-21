@@ -12478,6 +12478,16 @@ Responde SOLO con un JSON válido con este formato exacto:
         updatedBy: userId
       });
 
+      if (!updated) {
+        console.error("[action-plans/:id/validate] updateActionPlan returned undefined", {
+          actionPlanId: req.params.id,
+          tenantId,
+          status,
+          userId
+        });
+        return res.status(500).json({ message: "No se pudo actualizar el plan de acción" });
+      }
+
       // Log the validation action
       await requireDb().insert(auditLogs).values({
         entityType: 'action_plan',
@@ -12505,25 +12515,29 @@ Responde SOLO con un JSON válido con este formato exacto:
       // Send notification if requested
       if (sendNotification && currentPlan.responsible) {
         const actionText = status === 'validated' ? 'aprobado' : status === 'observed' ? 'observado' : 'rechazado';
-        await notificationService.createNotification({
-          recipientId: currentPlan.responsible,
-          type: NotificationTypes.ACTION_PLAN_VALIDATED,
-          category: 'action',
-          priority: status === 'rejected' ? 'critical' : 'normal',
-          title: `Plan de Acción ${actionText}`,
-          message: `Tu plan de acción "${currentPlan.name}" ha sido ${actionText}.${comments ? ` Comentarios: ${comments}` : ''}`,
-          actionText: 'Ver Plan',
-          actionUrl: `/action-plans/${req.params.id}`,
-          data: {
-            actionPlanId: req.params.id,
-            actionPlanName: currentPlan.name,
-            validationStatus: status,
-            comments
-          },
-          channels: ['in_app', 'email'],
-          tenantId: currentPlan.tenantId,
-          createdBy: userId
-        });
+        try {
+          await notificationService.createNotification({
+            recipientId: currentPlan.responsible,
+            type: NotificationTypes.ACTION_PLAN_VALIDATED,
+            category: 'action',
+            priority: status === 'rejected' ? 'critical' : 'normal',
+            title: `Plan de Acción ${actionText}`,
+            message: `Tu plan de acción "${currentPlan.name}" ha sido ${actionText}.${comments ? ` Comentarios: ${comments}` : ''}`,
+            actionText: 'Ver Plan',
+            actionUrl: `/action-plans/${req.params.id}`,
+            data: {
+              actionPlanId: req.params.id,
+              actionPlanName: currentPlan.name,
+              validationStatus: status,
+              comments
+            },
+            channels: ['in_app', 'email'],
+            tenantId: currentPlan.tenantId,
+            createdBy: userId
+          });
+        } catch (notifyError) {
+          console.error("[action-plans/:id/validate] Notification failed (non-blocking):", notifyError);
+        }
       }
 
       res.json(updated);
@@ -12531,7 +12545,12 @@ Responde SOLO con un JSON válido con este formato exacto:
       if (error instanceof ActiveTenantError) {
         return res.status(400).json({ message: error.message });
       }
-      console.error("Failed to validate action plan:", error);
+      console.error("Failed to validate action plan:", {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        body: req.body,
+        params: req.params
+      });
       res.status(500).json({ message: "Failed to validate action plan" });
     }
   });
