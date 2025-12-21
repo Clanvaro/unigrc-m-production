@@ -11441,6 +11441,7 @@ Responde SOLO con un JSON válido con este formato exacto:
           GROUP BY entity_id
         ),
         risk_process_info AS (
+          -- Fuente principal: risk_process_links
           SELECT DISTINCT
             rpl.risk_id,
             rpl.process_id,
@@ -11452,6 +11453,21 @@ Responde SOLO con un JSON válido con este formato exacto:
           LEFT JOIN subprocesos sp ON rpl.subproceso_id = sp.id
           LEFT JOIN processes mp_proc ON rpl.macroproceso_id = mp_proc.macroproceso_id
           WHERE rpl.risk_id IS NOT NULL
+
+          UNION
+
+          -- Fallback: usar los campos legacy del riesgo si no hay risk_process_links
+          SELECT DISTINCT
+            r.id as risk_id,
+            r.process_id,
+            r.subproceso_id,
+            r.macroproceso_id,
+            COALESCE(p2.id, sp2.proceso_id, mp_proc2.id) as final_process_id
+          FROM risks r
+          LEFT JOIN processes p2 ON r.process_id = p2.id
+          LEFT JOIN subprocesos sp2 ON r.subproceso_id = sp2.id
+          LEFT JOIN processes mp_proc2 ON r.macroproceso_id = mp_proc2.macroproceso_id
+          WHERE r.deleted_at IS NULL
         ),
         process_gerencias_agg AS (
           SELECT 
