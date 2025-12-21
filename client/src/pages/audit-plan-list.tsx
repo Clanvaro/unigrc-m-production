@@ -151,13 +151,6 @@ export default function AuditPlanList() {
     return matchesSearch && matchesStatus && matchesYear;
   });
 
-  // Debug: Log filtered plans when filters change
-  useEffect(() => {
-    if (plans.length > 0) {
-      console.log("Audit plans loaded:", plans.length, "Filtered:", filteredPlans.length, "Status filter:", statusFilter);
-    }
-  }, [plans.length, filteredPlans.length, statusFilter]);
-
   const getStatusBadge = (status: string) => {
     const statusConfig: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
       draft: {
