@@ -29,6 +29,7 @@ type RoleFormValues = z.infer<typeof roleFormSchema>;
 interface RoleFormProps {
   role?: Role | null;
   onSuccess?: () => void;
+  onCancel?: () => void;
 }
 
 // Definición de permisos disponibles en el sistema
@@ -42,6 +43,7 @@ const AVAILABLE_PERMISSIONS = [
   // Permisos de gestión de usuarios
   { id: "manage_users", label: "Gestionar Usuarios", description: "Administrar cuentas de usuario" },
   { id: "manage_roles", label: "Gestionar Roles", description: "Administrar roles y permisos" },
+  { id: "team:manage", label: "Gestionar Equipo", description: "Gestionar miembros del equipo y asignaciones" },
   
   // Permisos específicos de riesgos
   { id: "view_risks", label: "Ver Riesgos", description: "Visualizar riesgos del sistema" },
@@ -132,7 +134,7 @@ export function RoleForm({ role, onSuccess }: RoleFormProps) {
   };
 
   const groupedPermissions = {
-    general: AVAILABLE_PERMISSIONS.filter(p => ["view_all", "create_all", "edit_all", "delete_all", "manage_users", "manage_roles"].includes(p.id)),
+    general: AVAILABLE_PERMISSIONS.filter(p => ["view_all", "create_all", "edit_all", "delete_all", "manage_users", "manage_roles", "team:manage"].includes(p.id)),
     risks: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("risk")),
     controls: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("control")),
     processes: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("process")),
@@ -284,7 +286,14 @@ export function RoleForm({ role, onSuccess }: RoleFormProps) {
           <Button
             type="button"
             variant="outline"
-            onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))}
+            onClick={() => {
+              if (onCancel) {
+                onCancel();
+              } else {
+                // Fallback: intentar cerrar el diálogo disparando evento Escape
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+              }
+            }}
             data-testid="button-cancel-role"
           >
             Cancelar

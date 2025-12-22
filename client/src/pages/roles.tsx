@@ -141,6 +141,10 @@ export default function RolesPage() {
                     setDialogOpen(false);
                     queryClient.invalidateQueries({ queryKey: ["/api/roles"] });
                   }}
+                  onCancel={() => {
+                    setDialogOpen(false);
+                    setSelectedRole(null);
+                  }}
                 />
               </div>
             </DialogContent>
