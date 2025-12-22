@@ -230,32 +230,19 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
             description: "El usuario se creó pero hubo un problema al asignar algunos roles. Por favor, verifica y asigna los roles manualmente si es necesario.",
             variant: "destructive",
           });
-        } finally {
-          // Always invalidate cache to ensure fresh data, even if there were errors
-          queryClient.invalidateQueries({ 
-            queryKey: ["/api/users"],
-            refetchType: 'active'
-          });
-          queryClient.invalidateQueries({ 
-            queryKey: ["/api/user-roles"],
-            refetchType: 'active'
-          });
-          queryClient.invalidateQueries({ 
-            queryKey: [`/api/users/${userId}/roles`],
-            refetchType: 'active'
-          });
         }
-      } else {
-        // If userId is not available, still invalidate cache
-        queryClient.invalidateQueries({ 
-          queryKey: ["/api/users"],
-          refetchType: 'active'
-        });
-        queryClient.invalidateQueries({ 
-          queryKey: ["/api/user-roles"],
-          refetchType: 'active'
-        });
       }
+      
+      // Always refetch data from server to ensure fresh data after all role operations complete
+      // Use refetchQueries with await to ensure data is fresh before showing success
+      await queryClient.refetchQueries({ 
+        queryKey: ["/api/users"],
+        type: 'active'
+      });
+      await queryClient.refetchQueries({ 
+        queryKey: ["/api/user-roles"],
+        type: 'active'
+      });
       
       toast({
         title: "Éxito",
