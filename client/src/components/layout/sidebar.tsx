@@ -22,7 +22,7 @@ const navigation = [
 const configNavigation = [
   { name: "Configuración", href: "/config", icon: Settings, requiredSection: "config" },
   { name: "Usuarios", href: "/config/users", icon: Users, requiredSection: "users" },
-  { name: "Roles", href: "/config/roles", icon: Shield, requiredSection: "roles" },
+  { name: "Roles", href: "/config/roles", icon: Shield, requiredSection: "roles", requirePlatformAdmin: true },
 ];
 
 const importNavigation = [
@@ -82,6 +82,10 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
 
   // Filter config items based on permissions - each item has its own permission check
   const filteredConfigNavigation = configNavigation.filter(item => {
+    // Check if item requires platform admin
+    if ((item as any).requirePlatformAdmin && !currentUser?.isPlatformAdmin) {
+      return false;
+    }
     // Check if item has a specific required section, otherwise fall back to "config"
     const sectionToCheck = (item as any).requiredSection || "config";
     return canViewSection(sectionToCheck);

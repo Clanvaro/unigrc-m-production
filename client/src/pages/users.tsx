@@ -137,7 +137,7 @@ export default function UsersPage() {
   }
 
   return (
-    <PermissionGuard permission="users:manage">
+    <PermissionGuard permissions={["manage_users", "view_users", "view_all"]}>
       <div className="container mx-auto p-6">
       <div className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight">Gestión de Usuarios</h1>

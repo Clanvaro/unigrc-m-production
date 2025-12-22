@@ -67,6 +67,21 @@ applyPerformanceOptimizations(app);
 const proxyCount = process.env.TRUST_PROXY_COUNT ? parseInt(process.env.TRUST_PROXY_COUNT, 10) : 1;
 app.set('trust proxy', proxyCount);
 
+// CRITICAL: Allow public routes BEFORE any other middleware
+// These routes are accessed via email links without authentication
+app.use((req, res, next) => {
+  const isPublicRoute = req.path.startsWith('/public/') ||
+                       req.path.startsWith('/api/public/') ||
+                       req.path.startsWith('/validate/') ||
+                       req.path.startsWith('/action-plan-upload/');
+  
+  if (isPublicRoute) {
+    // Skip all middleware for public routes - they'll be handled by serveStatic or API routes
+    return next();
+  }
+  next();
+});
+
 // Security headers (Helmet.js)
 app.use(helmetConfig);
 
