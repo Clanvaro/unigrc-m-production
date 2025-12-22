@@ -9733,7 +9733,9 @@ Responde SOLO con un JSON válido con este formato exacto:
             : sql``;
 
           let controlsResult;
+          const queryStartTime = Date.now();
           try {
+            console.log(`[PERF] /api/controls/with-details - Starting SQL query (filters: ${JSON.stringify(filters)})`);
             controlsResult = await requireDb().execute(sql`
           WITH controls_base AS (
             SELECT 
@@ -9796,7 +9798,7 @@ Responde SOLO con un JSON válido con este formato exacto:
               ) as owner
             FROM controls_base cb
             LEFT JOIN LATERAL (
-              SELECT co.process_owner_id, co.assigned_at
+              SELECT co.process_owner_id
               FROM control_owners co
               WHERE co.control_id = cb.id
                 AND co.is_active = true
@@ -9837,6 +9839,8 @@ Responde SOLO con un JSON válido con este formato exacto:
           CROSS JOIN controls_count cc
           ORDER BY cb.code
           `);
+          const queryDuration = Date.now() - queryStartTime;
+          console.log(`[PERF] /api/controls/with-details - SQL query completed in ${queryDuration}ms`);
           } catch (sqlError: any) {
             console.error(`[ERROR] SQL query failed in /api/controls/with-details:`, sqlError);
             console.error(`[ERROR] SQL error code:`, sqlError?.code);
@@ -9951,7 +9955,9 @@ Responde SOLO con un JSON válido con este formato exacto:
 
           // OPTIMIZED: Increase cache TTL to 5 minutes (300s) for better performance
           // Cache is invalidated granularly on mutations, so longer TTL is safe
-          await distributedCache.set(cacheKey, response, 300);
+          // Use longer TTL for filtered queries (they change less frequently)
+          const cacheTTL = filters.type || filters.status || filters.frequency ? 300 : 180;
+          await distributedCache.set(cacheKey, response, cacheTTL);
           const duration = Date.now() - requestStart;
           console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
 

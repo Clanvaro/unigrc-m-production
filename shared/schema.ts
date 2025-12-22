@@ -357,6 +357,10 @@ export const controls = pgTable("controls", {
   // Performance optimization: filter counts by validation_status and notified_at (slow count queries)
   index("idx_controls_validation_status").on(table.validationStatus),
   index("idx_controls_notified_at").on(table.notifiedAt),
+  // Performance optimization: index for type filtering (frequently used filter)
+  index("idx_controls_type").on(table.type),
+  // Composite index for common filter combinations (type + status + deleted_at)
+  index("idx_controls_type_status_deleted").on(table.type, table.status, table.deletedAt),
   // Composite index for common validation count query pattern
   index("idx_controls_deleted_validation_notified").on(table.deletedAt, table.validationStatus, table.notifiedAt),
 ]);
