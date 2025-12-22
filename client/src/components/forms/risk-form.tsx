@@ -1227,12 +1227,49 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
 
                 <FormMessage />
               </div>
+
+              {/* AI Suggestions - Compact inline version */}
+              <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-dashed">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+                  <Checkbox 
+                    id="global-documentation"
+                    checked={useGlobalDocumentation}
+                    onCheckedChange={(checked) => setUseGlobalDocumentation(checked === true)}
+                    className="h-3.5 w-3.5"
+                    data-testid="checkbox-global-documentation"
+                  />
+                  <span>Análisis global</span>
+                </label>
+                <Button 
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => aiSuggestionsMutation.mutate()}
+                  disabled={aiSuggestionsMutation.isPending || (!useGlobalDocumentation && processAssociations.length === 0)}
+                  className="h-7 px-2.5 text-xs text-purple-600 hover:text-purple-700 hover:bg-purple-50"
+                  data-testid="button-suggest-risks"
+                >
+                  {aiSuggestionsMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                      Generando...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3 w-3 mr-1.5" />
+                      Sugerir Riesgos
+                      {useGlobalDocumentation && (
+                        <span className="ml-1.5 px-1 py-0.5 text-[10px] bg-green-100 text-green-700 rounded">
+                          Global
+                        </span>
+                      )}
+                    </>
+                  )}
+                </Button>
+              </div>
             </FormItem>
           )}
         />
-
-
-
 
         <FormField
           control={form.control}
@@ -1272,60 +1309,6 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
             </FormItem>
           )}
         />
-
-        {/* AI Suggestions Configuration */}
-        <div className="space-y-3">
-          {/* Global Documentation Analysis Checkbox */}
-          <div className="flex items-center space-x-2 p-3 bg-muted/50 rounded-lg border">
-            <Checkbox 
-              id="global-documentation"
-              checked={useGlobalDocumentation}
-              onCheckedChange={(checked) => setUseGlobalDocumentation(checked === true)}
-              data-testid="checkbox-global-documentation"
-            />
-            <div className="grid gap-1.5 leading-none">
-              <label 
-                htmlFor="global-documentation" 
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-              >
-                Análisis Global de Documentación
-              </label>
-              <p className="text-xs text-muted-foreground">
-                Incluir toda la documentación del sistema en el análisis de IA para sugerencias más amplias
-              </p>
-            </div>
-          </div>
-
-          {/* AI Suggestions Button */}
-          <div className="flex justify-center py-2">
-            <Button 
-              type="button"
-              variant="outline"
-              onClick={() => aiSuggestionsMutation.mutate()}
-              disabled={aiSuggestionsMutation.isPending || (!useGlobalDocumentation && processAssociations.length === 0)}
-              className="bg-gradient-to-r from-purple-50 to-blue-50 hover:from-purple-100 hover:to-blue-100 border-purple-200 text-purple-700 hover:text-purple-800"
-              data-testid="button-suggest-risks"
-            >
-              {aiSuggestionsMutation.isPending ? (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2 animate-spin" />
-                  Generando sugerencias...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  🤖 Sugerir Riesgos
-                  {useGlobalDocumentation && (
-                    <Badge variant="secondary" className="ml-2 text-xs bg-green-100 text-green-700">
-                      Global
-                    </Badge>
-                  )}
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-
 
         <FormField
           control={form.control}
