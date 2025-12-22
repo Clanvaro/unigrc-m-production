@@ -7532,6 +7532,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - startTime;
       console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms (queries: ${queryDuration}ms)`);
 
+      // Calculate total as a separate query to ensure accuracy (count distinct risk_process_links)
+      // This ensures the total matches the sum of individual categories
+      const totalCountResult = await requireDb().execute(sql`
+        SELECT COUNT(*)::int AS total
+        FROM risk_process_links rpl
+        INNER JOIN risks r ON rpl.risk_id = r.id
+        WHERE r.deleted_at IS NULL
+      `);
+      const totalCount = (totalCountResult.rows[0] as any)?.total || 0;
+
       const response = {
         risks: {
           notified: risksCounts.notified,
@@ -7539,7 +7549,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           validated: risksCounts.validated,
           observed: risksCounts.observed,
           rejected: risksCounts.rejected,
-          total: risksCounts.notified + risksCounts.notNotified + risksCounts.validated + risksCounts.observed + risksCounts.rejected
+          // Use calculated total from separate query to ensure accuracy
+          total: totalCount
         },
         controls: {
           notified: controlsCounts.notified,

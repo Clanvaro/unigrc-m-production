@@ -1052,7 +1052,11 @@ export default function Risks() {
         }
 
         // Filter by validation status - use aggregated status instead of legacy
-        if (validationFilter !== "all" && getAggregatedValidationStatus(risk) !== validationFilter) return false;
+        if (validationFilter !== "all") {
+          const aggregatedStatus = getAggregatedValidationStatus(risk);
+          // Strict comparison: only show risks that match exactly (validated = only fully validated, not partially)
+          if (aggregatedStatus !== validationFilter) return false;
+        }
 
         // Filter by inherent risk level
         if (inherentRiskLevelFilter !== "all") {
@@ -1247,7 +1251,11 @@ export default function Risks() {
     }
 
     // Filter by validation status - use aggregated status instead of legacy
-    if (validationFilter !== "all" && getAggregatedValidationStatus(risk) !== validationFilter) return false;
+    if (validationFilter !== "all") {
+      const aggregatedStatus = getAggregatedValidationStatus(risk);
+      // Strict comparison: only show risks that match exactly (validated = only fully validated, not partially)
+      if (aggregatedStatus !== validationFilter) return false;
+    }
 
     // Filter by inherent risk level
     if (inherentRiskLevelFilter !== "all") {

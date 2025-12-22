@@ -2109,12 +2109,8 @@ export default function RiskValidationPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="text-3xl font-bold" data-testid="stat-total-risks">
-                        {validationCounts?.risks.total ??
-                          ((notifiedRisksPaginationInfo?.total || 0) +
-                            (notNotifiedRisksPaginationInfo?.total || 0) +
-                            (validationCounts?.risks.validated || filteredValidatedRiskProcessLinks.length) +
-                            (validationCounts?.risks.observed || filteredObservedRiskProcessLinks.length) +
-                            (validationCounts?.risks.rejected || filteredRejectedRiskProcessLinks.length))}
+                        {/* Use total from backend API - it's calculated as COUNT(*) to ensure accuracy */}
+                        {validationCounts?.risks.total ?? 0}
                       </div>
                     </CardContent>
                   </Card>
