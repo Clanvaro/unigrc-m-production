@@ -2696,14 +2696,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const processConditions: any[] = [];
 
           if (needsProcessJoins) {
-            // LEFT JOIN risk_process_links (only non-deleted)
+            // LEFT JOIN risk_process_links (no deleted_at field in this table)
             joins.push(sql`
-              LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id 
-                AND (rpl.deleted_at IS NULL OR rpl.deleted_at > NOW())
+              LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id
             `);
 
-            // LEFT JOIN processes for checking macroproceso_id
-            if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
+            // LEFT JOIN processes for checking macroproceso_id or process_id
+            if ((filters.macroprocesoId && filters.macroprocesoId !== 'all') ||
+                (filters.processId && filters.processId !== 'all')) {
               joins.push(sql`
                 LEFT JOIN processes p_rpl ON p_rpl.id = rpl.process_id 
                   AND (p_rpl.deleted_at IS NULL OR p_rpl.deleted_at > NOW())
@@ -2744,10 +2744,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (filters.processId && filters.processId !== 'all') {
               // Use processId as string (UUID) - don't parse as int
               const processId = filters.processId;
+              console.log(`[RISK FILTER] Filtering by processId: ${processId}`);
               processConditions.push(sql`
                 (
                   r.process_id = ${processId}
                   OR rpl.process_id = ${processId}
+                  OR p_rpl.id = ${processId}
                   OR s_rpl.proceso_id = ${processId}
                 )
               `);
