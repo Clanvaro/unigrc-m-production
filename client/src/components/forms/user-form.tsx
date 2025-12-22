@@ -122,13 +122,36 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
       const userId = user ? user.id : userData.id;
       
       // Handle role assignments for both new and existing users
-      if (selectedRoles.length > 0 && userId) {
+      if (userId) {
         try {
           if (user) {
             // For editing: first get current roles, then add/remove as needed
-            const currentRolesResponse = await fetch(`/api/users/${userId}/roles`);
+            // Use fresh fetch without cache to ensure we get the latest roles
+            const currentRolesResponse = await fetch(`/api/users/${userId}/roles`, {
+              cache: 'no-store'
+            });
             const currentRoles = currentRolesResponse.ok ? await currentRolesResponse.json() : [];
             const currentRoleIds = currentRoles.map((ur: any) => ur.roleId);
+            
+            // Update cache optimistically before making changes
+            queryClient.setQueryData(["/api/user-roles"], (old: any) => {
+              if (!old) return old;
+              // Filter out roles that will be removed
+              const rolesToKeep = old.filter((ur: any) => {
+                if (ur.userId !== userId) return true;
+                return selectedRoles.includes(ur.roleId);
+              });
+              // Add new roles optimistically
+              const newRoleAssignments = selectedRoles
+                .filter(roleId => !currentRoleIds.includes(roleId))
+                .map(roleId => ({
+                  userId,
+                  roleId,
+                  role: roles.find(r => r.id === roleId),
+                  assignedAt: new Date()
+                }));
+              return [...rolesToKeep, ...newRoleAssignments];
+            });
             
             // Remove roles that are no longer selected
             for (const currentRoleId of currentRoleIds) {
@@ -151,12 +174,25 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
           }
         } catch (error) {
           console.error("Error managing roles:", error);
+          // Rollback optimistic update on error
+          queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
         }
       }
       
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/users/${user?.id}/roles`] });
+      // Invalidate and refetch all related queries with active refetch
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/users"],
+        refetchType: 'active'
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/user-roles"],
+        refetchType: 'active'
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: [`/api/users/${userId}/roles`],
+        refetchType: 'active'
+      });
+      
       toast({
         title: "Éxito",
         description: `Usuario ${user ? "actualizado" : "creado"} exitosamente.`,
