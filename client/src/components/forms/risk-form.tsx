@@ -551,6 +551,24 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
             )
           };
         });
+
+        // CRITICAL: Update ALL bootstrap queries optimistically when editing (regardless of params) for immediate table update
+        queryClient.setQueriesData(
+          { queryKey: ["/api/risks/bootstrap"], exact: false },
+          (old: any) => {
+            if (!old?.risks?.data) return old;
+            // Update existing risk in bootstrap query
+            return {
+              ...old,
+              risks: {
+                ...old.risks,
+                data: old.risks.data.map((r: any) => 
+                  r.id === risk.id ? { ...r, ...data, id: risk.id } : r
+                )
+              }
+            };
+          }
+        );
       } else {
         // Add new risk with temporary ID
         const tempId = `temp-${Date.now()}`;
@@ -720,7 +738,12 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       );
 
       // Force immediate refetch of active bootstrap query to ensure data is fresh
-      queryClient.refetchQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, type: 'active' });
+      // Invalidate first to clear staleTime, then refetch to get latest server data
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks/bootstrap"], 
+        exact: false,
+        refetchType: 'active' // Force immediate refetch even if data is fresh
+      });
 
       // Invalidate related queries for background refresh (non-blocking, doesn't delay UI)
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
