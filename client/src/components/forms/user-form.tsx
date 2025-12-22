@@ -119,7 +119,28 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
       }
     },
     onSuccess: async (userData: any) => {
-      const userId = user ? user.id : userData.id;
+      const userId = user ? user.id : userData?.id;
+      
+      // Validate userId is available
+      if (!userId) {
+        console.error("User ID not available after creation/update:", userData);
+        toast({
+          title: "Advertencia",
+          description: "El usuario se creó pero no se pudo obtener el ID. Por favor, recarga la página y asigna los roles manualmente.",
+          variant: "destructive",
+        });
+        // Still invalidate cache to refresh the list
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/users"],
+          refetchType: 'active'
+        });
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/user-roles"],
+          refetchType: 'active'
+        });
+        onSuccess?.();
+        return;
+      }
       
       // Handle role assignments for both new and existing users
       if (userId) {
@@ -167,31 +188,74 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
               }
             }
           } else {
-            // For new users: add all selected roles
-            for (const roleId of selectedRoles) {
-              await apiRequest(`/api/users/${userId}/roles`, "POST", { roleId });
+            // For new users: update cache optimistically before assigning roles
+            if (selectedRoles.length > 0) {
+              queryClient.setQueryData(["/api/user-roles"], (old: any) => {
+                const existing = Array.isArray(old) ? old : [];
+                // Add new role assignments optimistically
+                const newRoleAssignments = selectedRoles
+                  .map(roleId => {
+                    const role = roles.find(r => r.id === roleId);
+                    if (!role) {
+                      console.warn(`Role ${roleId} not found in roles list`);
+                      return null;
+                    }
+                    return {
+                      userId,
+                      roleId,
+                      role: role,
+                      assignedAt: new Date()
+                    };
+                  })
+                  .filter(Boolean); // Remove any null entries
+                return [...existing, ...newRoleAssignments];
+              });
+              
+              // For new users: add all selected roles
+              for (const roleId of selectedRoles) {
+                try {
+                  await apiRequest(`/api/users/${userId}/roles`, "POST", { roleId });
+                } catch (roleError) {
+                  console.error(`Error assigning role ${roleId} to user ${userId}:`, roleError);
+                  // Continue with other roles even if one fails
+                }
+              }
             }
           }
         } catch (error) {
           console.error("Error managing roles:", error);
-          // Rollback optimistic update on error
-          queryClient.invalidateQueries({ queryKey: ["/api/user-roles"] });
+          // Show error toast but don't fail the entire operation
+          toast({
+            title: "Advertencia",
+            description: "El usuario se creó pero hubo un problema al asignar algunos roles. Por favor, verifica y asigna los roles manualmente si es necesario.",
+            variant: "destructive",
+          });
+        } finally {
+          // Always invalidate cache to ensure fresh data, even if there were errors
+          queryClient.invalidateQueries({ 
+            queryKey: ["/api/users"],
+            refetchType: 'active'
+          });
+          queryClient.invalidateQueries({ 
+            queryKey: ["/api/user-roles"],
+            refetchType: 'active'
+          });
+          queryClient.invalidateQueries({ 
+            queryKey: [`/api/users/${userId}/roles`],
+            refetchType: 'active'
+          });
         }
+      } else {
+        // If userId is not available, still invalidate cache
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/users"],
+          refetchType: 'active'
+        });
+        queryClient.invalidateQueries({ 
+          queryKey: ["/api/user-roles"],
+          refetchType: 'active'
+        });
       }
-      
-      // Invalidate and refetch all related queries with active refetch
-      queryClient.invalidateQueries({ 
-        queryKey: ["/api/users"],
-        refetchType: 'active'
-      });
-      queryClient.invalidateQueries({ 
-        queryKey: ["/api/user-roles"],
-        refetchType: 'active'
-      });
-      queryClient.invalidateQueries({ 
-        queryKey: [`/api/users/${userId}/roles`],
-        refetchType: 'active'
-      });
       
       toast({
         title: "Éxito",

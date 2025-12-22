@@ -159,7 +159,15 @@ export default function UsersPage() {
             roles={roles}
             onSuccess={() => {
               setDialogOpen(false);
-              queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+              // Invalidate both users and user-roles to ensure roles are updated
+              queryClient.invalidateQueries({ 
+                queryKey: ["/api/users"],
+                refetchType: 'active'
+              });
+              queryClient.invalidateQueries({ 
+                queryKey: ["/api/user-roles"],
+                refetchType: 'active'
+              });
             }}
           />
         </DialogContent>
