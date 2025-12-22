@@ -36,7 +36,7 @@ import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLat
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
-import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses, riskCategories } from "@shared/schema";
+import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses, riskCategories, auditTestAttachments, auditTests } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
 // OPTIMIZED: Lazy load heavy dependencies to reduce startup time
@@ -24385,6 +24385,298 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
     }
   );
+
+  // ============= WORKING PAPERS (PAPELES DE TRABAJO) - CONSOLIDATED AUDIT DOCUMENTS =============
+
+  // GET /api/working-papers/summary - Get summary statistics of all audit documents
+  app.get("/api/working-papers/summary",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const cacheKey = `working-papers:summary:${CACHE_VERSION}`;
+        
+        // Try cache first (30 second TTL for responsive updates)
+        const cached = await distributedCache.get(cacheKey);
+        if (cached) {
+          return res.json(cached);
+        }
+
+        // Get all audits for context
+        const { audits } = await storage.getAuditsPaginated({}, 1000, 0);
+        
+        // Get all audit test attachments with a single optimized query
+        const allTestAttachments = await db.select({
+          id: auditTestAttachments.id,
+          auditTestId: auditTestAttachments.auditTestId,
+          fileName: auditTestAttachments.fileName,
+          originalFileName: auditTestAttachments.originalFileName,
+          fileSize: auditTestAttachments.fileSize,
+          mimeType: auditTestAttachments.mimeType,
+          attachmentCode: auditTestAttachments.attachmentCode,
+          storageUrl: auditTestAttachments.storageUrl,
+          description: auditTestAttachments.description,
+          category: auditTestAttachments.category,
+          isConfidential: auditTestAttachments.isConfidential,
+          uploadedAt: auditTestAttachments.uploadedAt,
+          uploadedBy: auditTestAttachments.uploadedBy,
+          isActive: auditTestAttachments.isActive,
+        }).from(auditTestAttachments)
+          .where(sql`${auditTestAttachments.isActive} = true`)
+          .orderBy(desc(auditTestAttachments.uploadedAt));
+
+        // Get audit tests to map attachments to audits
+        const allAuditTests = await db.select({
+          id: auditTests.id,
+          auditId: auditTests.auditId,
+          code: auditTests.code,
+          name: auditTests.name,
+        }).from(auditTests);
+
+        // Create lookup map for audit tests
+        const testToAuditMap = new Map(allAuditTests.map(t => [t.id, { auditId: t.auditId, testCode: t.code, testName: t.name }]));
+
+        // Enrich attachments with audit info
+        const enrichedAttachments = allTestAttachments.map(att => {
+          const testInfo = testToAuditMap.get(att.auditTestId);
+          const audit = testInfo ? audits.find(a => a.id === testInfo.auditId) : null;
+          return {
+            ...att,
+            auditId: testInfo?.auditId || null,
+            auditName: audit?.name || 'Sin auditoría',
+            auditCode: audit?.code || '',
+            testCode: testInfo?.testCode || '',
+            testName: testInfo?.testName || '',
+            source: 'audit_test' as const,
+          };
+        });
+
+        // Calculate summary statistics
+        const byAudit = new Map<string, { count: number; totalSize: number; auditName: string; auditCode: string }>();
+        const byCategory = new Map<string, number>();
+        let totalSize = 0;
+
+        for (const att of enrichedAttachments) {
+          const auditKey = att.auditId || 'sin_auditoria';
+          const current = byAudit.get(auditKey) || { count: 0, totalSize: 0, auditName: att.auditName, auditCode: att.auditCode };
+          current.count++;
+          current.totalSize += att.fileSize || 0;
+          byAudit.set(auditKey, current);
+
+          byCategory.set(att.category, (byCategory.get(att.category) || 0) + 1);
+          totalSize += att.fileSize || 0;
+        }
+
+        const summary = {
+          totalDocuments: enrichedAttachments.length,
+          totalSize,
+          totalSizeFormatted: formatFileSize(totalSize),
+          byAudit: Array.from(byAudit.entries()).map(([auditId, data]) => ({
+            auditId,
+            auditName: data.auditName,
+            auditCode: data.auditCode,
+            documentCount: data.count,
+            totalSize: data.totalSize,
+            totalSizeFormatted: formatFileSize(data.totalSize),
+          })).sort((a, b) => b.documentCount - a.documentCount),
+          byCategory: Array.from(byCategory.entries()).map(([category, count]) => ({
+            category,
+            categoryLabel: getCategoryLabel(category),
+            count,
+          })).sort((a, b) => b.count - a.count),
+        };
+
+        // Cache for 30 seconds
+        await distributedCache.set(cacheKey, summary, 30);
+
+        res.json(summary);
+      } catch (error) {
+        console.error("Error fetching working papers summary:", error);
+        res.status(500).json({ message: "Failed to fetch working papers summary" });
+      }
+    }
+  );
+
+  // GET /api/working-papers - Get all audit documents with filters
+  app.get("/api/working-papers",
+    isAuthenticated,
+    async (req, res) => {
+      try {
+        const { auditId, category, search, limit: limitStr, offset: offsetStr } = req.query;
+        const limit = Math.min(parseInt(limitStr as string) || 50, 200);
+        const offset = parseInt(offsetStr as string) || 0;
+
+        // Build cache key
+        const filterKey = JSON.stringify({ auditId, category, search, limit, offset });
+        const cacheKey = `working-papers:list:${CACHE_VERSION}:${filterKey}`;
+
+        // Try cache first (15 second TTL)
+        const cached = await distributedCache.get(cacheKey);
+        if (cached) {
+          return res.json(cached);
+        }
+
+        // Get all audits for context
+        const { audits } = await storage.getAuditsPaginated({}, 1000, 0);
+        const auditMap = new Map(audits.map(a => [a.id, { name: a.name, code: a.code }]));
+
+        // Get audit tests for mapping
+        const allAuditTests = await db.select({
+          id: auditTests.id,
+          auditId: auditTests.auditId,
+          code: auditTests.code,
+          name: auditTests.name,
+        }).from(auditTests);
+        const testToAuditMap = new Map(allAuditTests.map(t => [t.id, { auditId: t.auditId, testCode: t.code, testName: t.name }]));
+
+        // Build conditions for audit test attachments
+        const conditions: any[] = [sql`${auditTestAttachments.isActive} = true`];
+
+        if (category && category !== 'all') {
+          conditions.push(sql`${auditTestAttachments.category} = ${category}`);
+        }
+
+        if (search) {
+          const searchPattern = `%${search}%`;
+          conditions.push(sql`(
+            ${auditTestAttachments.fileName} ILIKE ${searchPattern} OR
+            ${auditTestAttachments.originalFileName} ILIKE ${searchPattern} OR
+            ${auditTestAttachments.attachmentCode} ILIKE ${searchPattern} OR
+            ${auditTestAttachments.description} ILIKE ${searchPattern}
+          )`);
+        }
+
+        // If filtering by audit, get the test IDs first
+        let testIdsForAudit: string[] | null = null;
+        if (auditId && auditId !== 'all') {
+          testIdsForAudit = allAuditTests
+            .filter(t => t.auditId === auditId)
+            .map(t => t.id);
+          
+          if (testIdsForAudit.length === 0) {
+            // No tests for this audit, return empty
+            return res.json({ data: [], total: 0, limit, offset, hasMore: false });
+          }
+          conditions.push(sql`${auditTestAttachments.auditTestId} IN ${testIdsForAudit}`);
+        }
+
+        // Get total count
+        const [{ count: totalCount }] = await db.select({ count: sql<number>`count(*)::int` })
+          .from(auditTestAttachments)
+          .where(sql.join(conditions, sql` AND `));
+
+        // Get paginated attachments
+        const attachments = await db.select({
+          id: auditTestAttachments.id,
+          auditTestId: auditTestAttachments.auditTestId,
+          fileName: auditTestAttachments.fileName,
+          originalFileName: auditTestAttachments.originalFileName,
+          fileSize: auditTestAttachments.fileSize,
+          mimeType: auditTestAttachments.mimeType,
+          attachmentCode: auditTestAttachments.attachmentCode,
+          storageUrl: auditTestAttachments.storageUrl,
+          description: auditTestAttachments.description,
+          category: auditTestAttachments.category,
+          isConfidential: auditTestAttachments.isConfidential,
+          uploadedAt: auditTestAttachments.uploadedAt,
+          uploadedBy: auditTestAttachments.uploadedBy,
+        }).from(auditTestAttachments)
+          .where(sql.join(conditions, sql` AND `))
+          .orderBy(desc(auditTestAttachments.uploadedAt))
+          .limit(limit)
+          .offset(offset);
+
+        // Get uploader info
+        const uploaderIds = [...new Set(attachments.map(a => a.uploadedBy))];
+        const uploaders = uploaderIds.length > 0 
+          ? await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName })
+              .from(users)
+              .where(sql`${users.id} IN ${uploaderIds}`)
+          : [];
+        const uploaderMap = new Map(uploaders.map(u => [u.id, `${u.firstName || ''} ${u.lastName || ''}`.trim() || 'Usuario']));
+
+        // Enrich attachments
+        const enrichedData = attachments.map(att => {
+          const testInfo = testToAuditMap.get(att.auditTestId);
+          const auditInfo = testInfo ? auditMap.get(testInfo.auditId) : null;
+          return {
+            ...att,
+            auditId: testInfo?.auditId || null,
+            auditName: auditInfo?.name || 'Sin auditoría',
+            auditCode: auditInfo?.code || '',
+            testCode: testInfo?.testCode || '',
+            testName: testInfo?.testName || '',
+            categoryLabel: getCategoryLabel(att.category),
+            fileSizeFormatted: formatFileSize(att.fileSize),
+            uploadedByName: uploaderMap.get(att.uploadedBy) || 'Usuario',
+          };
+        });
+
+        const result = {
+          data: enrichedData,
+          total: totalCount,
+          limit,
+          offset,
+          hasMore: offset + limit < totalCount,
+        };
+
+        // Cache for 15 seconds
+        await distributedCache.set(cacheKey, result, 15);
+
+        res.json(result);
+      } catch (error) {
+        console.error("Error fetching working papers:", error);
+        res.status(500).json({ message: "Failed to fetch working papers" });
+      }
+    }
+  );
+
+  // DELETE /api/working-papers/:id - Delete a document
+  app.delete("/api/working-papers/:id",
+    isAuthenticated,
+    requirePermission("delete_attachments"),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        // Soft delete by setting isActive to false
+        await db.update(auditTestAttachments)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(eq(auditTestAttachments.id, id));
+
+        // Invalidate cache
+        await distributedCache.del(`working-papers:summary:${CACHE_VERSION}`);
+
+        res.json({ success: true, message: "Document deleted successfully" });
+      } catch (error) {
+        console.error("Error deleting working paper:", error);
+        res.status(500).json({ message: "Failed to delete document" });
+      }
+    }
+  );
+
+  // Helper function to format file size
+  function formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  // Helper function to get category label
+  function getCategoryLabel(category: string): string {
+    const labels: Record<string, string> = {
+      evidence: 'Evidencia',
+      workpaper: 'Papel de Trabajo',
+      working_paper: 'Papel de Trabajo',
+      reference: 'Referencia',
+      communication: 'Comunicación',
+      regulation: 'Normativa',
+      procedure: 'Procedimiento',
+      implementation_evidence: 'Evidencia de Implementación',
+    };
+    return labels[category] || category;
+  }
 
   // ============= AUTOMATIC AUDIT TEST GENERATION API ENDPOINTS =============
 

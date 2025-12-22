@@ -96,6 +96,7 @@ const AuditReports = lazyWithRetry(() => import("@/pages/audit-reports"));
 const AuditTests = lazyWithRetry(() => import("@/pages/audit-tests"));
 const AuditTestDetails = lazyWithRetry(() => import("@/pages/audit-test-details"));
 const AuditTestManual = lazyWithRetry(() => import("@/pages/audit-test-manual"));
+const WorkingPapers = lazyWithRetry(() => import("@/pages/working-papers"));
 const FiscalEntities = lazyWithRetry(() => import("@/pages/fiscal-entities"));
 const ProcessOwners = lazyWithRetry(() => import("@/pages/process-owners"));
 const PublicValidation = lazyWithRetry(() => import("@/pages/public-validation"));
@@ -274,6 +275,7 @@ function ProtectedRouter() {
       <Route path="/audit-plan-wizard" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditPlanWizard /></Suspense></AuditGuard>} />
       <Route path="/audit-findings" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditFindings /></Suspense></AuditGuard>} />
       <Route path="/audit-reports" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><AuditReports /></Suspense></AuditGuard>} />
+      <Route path="/working-papers" component={() => <AuditGuard><Suspense fallback={<PageLoader />}><WorkingPapers /></Suspense></AuditGuard>} />
       <Route path="/team" component={Team} />
       <Route path="/team/members" component={TeamMembers} />
       <Route path="/team/roles" component={TeamRoles} />
