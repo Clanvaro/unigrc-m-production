@@ -105,7 +105,7 @@ export function usePermissions() {
     }
     
     const sectionPermissions = {
-      dashboard: ["view_all"],
+      dashboard: ["view_dashboard", "view_all"],
       processes: ["view_processes", "view_all"],
       risks: ["view_risks", "view_all"],
       controls: ["view_controls", "view_all"],

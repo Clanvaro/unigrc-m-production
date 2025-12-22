@@ -35,7 +35,8 @@ interface RoleFormProps {
 // Definición de permisos disponibles en el sistema
 const AVAILABLE_PERMISSIONS = [
   // Permisos generales
-  { id: "view_all", label: "Ver Todo", description: "Acceso de visualización completo" },
+  { id: "view_dashboard", label: "Ver Dashboard", description: "Acceso al panel de control principal" },
+  { id: "view_all", label: "Ver Todo", description: "Acceso de visualización completo (incluye Dashboard)" },
   { id: "create_all", label: "Crear Todo", description: "Crear cualquier elemento" },
   { id: "edit_all", label: "Editar Todo", description: "Modificar cualquier elemento" },
   { id: "delete_all", label: "Eliminar Todo", description: "Eliminar cualquier elemento" },
@@ -134,7 +135,7 @@ export function RoleForm({ role, onSuccess }: RoleFormProps) {
   };
 
   const groupedPermissions = {
-    general: AVAILABLE_PERMISSIONS.filter(p => ["view_all", "create_all", "edit_all", "delete_all", "manage_users", "manage_roles", "team:manage"].includes(p.id)),
+    general: AVAILABLE_PERMISSIONS.filter(p => ["view_dashboard", "view_all", "create_all", "edit_all", "delete_all", "manage_users", "manage_roles", "team:manage"].includes(p.id)),
     risks: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("risk")),
     controls: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("control")),
     processes: AVAILABLE_PERMISSIONS.filter(p => p.id.includes("process")),
@@ -227,7 +228,7 @@ export function RoleForm({ role, onSuccess }: RoleFormProps) {
                 {Object.entries(groupedPermissions).map(([group, permissions]) => (
                   <div key={group} className="space-y-3">
                     <h4 className="text-sm font-medium text-muted-foreground">
-                      {group === "general" && "Permisos Generales"}
+                      {group === "general" && "Permisos Generales y Dashboard"}
                       {group === "risks" && "Gestión de Riesgos"}
                       {group === "controls" && "Gestión de Controles"}
                       {group === "processes" && "Gestión de Procesos"}
