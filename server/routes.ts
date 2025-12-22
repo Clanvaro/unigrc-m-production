@@ -2729,7 +2729,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
             // Build process filter conditions using JOINs
             if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-              const macroId = parseInt(filters.macroprocesoId);
+              // Use macroprocesoId as string (UUID) - don't parse as int
+              const macroId = filters.macroprocesoId;
               processConditions.push(sql`
                 (
                   r.macroproceso_id = ${macroId}
@@ -2741,7 +2742,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             if (filters.processId && filters.processId !== 'all') {
-              const processId = parseInt(filters.processId);
+              // Use processId as string (UUID) - don't parse as int
+              const processId = filters.processId;
               processConditions.push(sql`
                 (
                   r.process_id = ${processId}
@@ -2752,7 +2754,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-              const subprocesoId = parseInt(filters.subprocesoId);
+              // Use subprocesoId as string (UUID) - don't parse as int
+              const subprocesoId = filters.subprocesoId;
               processConditions.push(sql`
                 (
                   r.subproceso_id = ${subprocesoId}
@@ -2763,17 +2766,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } else {
             // No JOINs needed - use simple conditions
             if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-              const macroId = parseInt(filters.macroprocesoId);
+              // Use macroprocesoId as string (UUID) - don't parse as int
+              const macroId = filters.macroprocesoId;
               conditions.push(sql`r.macroproceso_id = ${macroId}`);
             }
 
             if (filters.processId && filters.processId !== 'all') {
-              const processId = parseInt(filters.processId);
+              // Use processId as string (UUID) - don't parse as int
+              const processId = filters.processId;
               conditions.push(sql`r.process_id = ${processId}`);
             }
 
             if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-              const subprocesoId = parseInt(filters.subprocesoId);
+              // Use subprocesoId as string (UUID) - don't parse as int
+              const subprocesoId = filters.subprocesoId;
               conditions.push(sql`r.subproceso_id = ${subprocesoId}`);
             }
           }
@@ -3754,15 +3760,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-        conditions.push(sql`r.macroproceso_id = ${parseInt(filters.macroprocesoId)}`);
+        // Use macroprocesoId as string (UUID) - don't parse as int
+        conditions.push(sql`r.macroproceso_id = ${filters.macroprocesoId}`);
       }
 
       if (filters.processId && filters.processId !== 'all') {
-        conditions.push(sql`r.process_id = ${parseInt(filters.processId)}`);
+        // Use processId as string (UUID) - don't parse as int
+        conditions.push(sql`r.process_id = ${filters.processId}`);
       }
 
       if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-        conditions.push(sql`r.subproceso_id = ${parseInt(filters.subprocesoId)}`);
+        // Use subprocesoId as string (UUID) - don't parse as int
+        conditions.push(sql`r.subproceso_id = ${filters.subprocesoId}`);
       }
 
       const whereClause = conditions.length > 0
