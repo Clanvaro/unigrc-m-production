@@ -761,13 +761,8 @@ export default function Audits() {
         auditTeam: planItem.proposedTeamMembers || (auditTeamUsers.length > 0 ? [auditTeamUsers[0].id] : ["user-1"]),
       };
 
-      const response = await fetch("/api/audits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(auditData),
-      });
-      if (!response.ok) throw new Error("Failed to create audit");
-      const createdAudit = await response.json();
+      // Use apiRequest to automatically include CSRF token
+      const createdAudit = await apiRequest("/api/audits", "POST", auditData);
 
       // Update plan item status to "scheduled" to prevent creating it again
       await apiRequest(`/api/audit-plan-items/${planItem.id}`, "PUT", {
