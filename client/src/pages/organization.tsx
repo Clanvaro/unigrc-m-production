@@ -275,14 +275,23 @@ function ProcessMapContent() {
   };
 
   const handleEditProcessSuccess = () => {
+    // Force immediate refetch to show updated process immediately in process map
+    queryClient.refetchQueries({ queryKey: ["/api/processes/basic"], type: 'active' });
+    queryClient.refetchQueries({ queryKey: ["/api/processes"], type: 'active' });
+    queryClient.refetchQueries({ queryKey: ["/api/macroprocesos"], type: 'active' });
     setEditingProcess(null);
   };
 
   const handleEditSubprocessSuccess = () => {
+    // Force immediate refetch to show updated subprocess immediately in process map
+    queryClient.refetchQueries({ queryKey: ["/api/subprocesos"], type: 'active' });
+    queryClient.refetchQueries({ queryKey: ["/api/processes/basic"], type: 'active' });
     setEditingSubprocess(null);
   };
 
   const handleEditMacroprocesoSuccess = () => {
+    // Force immediate refetch to show updated macroproceso immediately in process map
+    queryClient.refetchQueries({ queryKey: ["/api/macroprocesos"], type: 'active' });
     setEditingMacroproceso(null);
   };
 
