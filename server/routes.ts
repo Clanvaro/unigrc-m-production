@@ -7566,10 +7566,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const duration = Date.now() - startTime;
       console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms (queries: ${queryDuration}ms)`);
 
-      // Calculate total as a separate query to ensure accuracy (count distinct risk_process_links)
-      // This ensures the total matches the sum of individual categories
+      // Calculate total as a separate query to ensure accuracy (count DISTINCT risks, not links)
+      // FIXED: Count distinct risk_id to avoid double-counting risks with multiple process associations
+      // This ensures the total matches the actual number of unique risks
       const totalCountResult = await requireDb().execute(sql`
-        SELECT COUNT(*)::int AS total
+        SELECT COUNT(DISTINCT rpl.risk_id)::int AS total
         FROM risk_process_links rpl
         INNER JOIN risks r ON rpl.risk_id = r.id
         WHERE r.deleted_at IS NULL
