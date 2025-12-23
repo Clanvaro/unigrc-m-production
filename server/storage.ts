@@ -3736,13 +3736,25 @@ export class MemStorage implements IStorage {
   async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
     try {
       const [enabledConfig, precisionConfig] = await Promise.all([
-        this.getSystemConfig('risk_decimals_enabled'),
-        this.getSystemConfig('risk_decimals_precision')
+        this.getSystemConfig('risk_decimals_enabled').catch(() => undefined),
+        this.getSystemConfig('risk_decimals_precision').catch(() => undefined)
       ]);
 
+      // Safely parse values with fallbacks
+      const enabled = enabledConfig?.configValue === 'true' || false;
+      const precisionValue = precisionConfig?.configValue;
+      let precision = 0;
+      
+      if (precisionValue) {
+        const parsed = parseInt(precisionValue, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 3) {
+          precision = parsed;
+        }
+      }
+
       return {
-        enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
-        precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
+        enabled,
+        precision
       };
     } catch (error: any) {
       // Return default values if database is unavailable
@@ -13749,13 +13761,25 @@ export class DatabaseStorage extends MemStorage {
   async getRiskDecimalsConfig(): Promise<{ enabled: boolean, precision: number }> {
     try {
       const [enabledConfig, precisionConfig] = await Promise.all([
-        this.getSystemConfig('risk_decimals_enabled'),
-        this.getSystemConfig('risk_decimals_precision')
+        this.getSystemConfig('risk_decimals_enabled').catch(() => undefined),
+        this.getSystemConfig('risk_decimals_precision').catch(() => undefined)
       ]);
 
+      // Safely parse values with fallbacks
+      const enabled = enabledConfig?.configValue === 'true' || false;
+      const precisionValue = precisionConfig?.configValue;
+      let precision = 0;
+      
+      if (precisionValue) {
+        const parsed = parseInt(precisionValue, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 3) {
+          precision = parsed;
+        }
+      }
+
       return {
-        enabled: enabledConfig ? enabledConfig.configValue === 'true' : false,
-        precision: precisionConfig ? parseInt(precisionConfig.configValue) : 0
+        enabled,
+        precision
       };
     } catch (error: any) {
       // Return default values if database is unavailable
