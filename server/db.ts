@@ -186,7 +186,9 @@ if (databaseUrl) {
     // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
     // Default: Conservative 4 connections per instance (adjust based on Cloud SQL instance size)
     // Review Cloud SQL logs to detect too many connections and adjust accordingly
-    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '4', 10);
+    // OPTIMIZED: Increased from 4 to 5 for concurrency=8 config
+    // Formula: concurrency(8) / 2 = 4, +1 buffer = 5
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '5', 10);
     poolMax = cloudSqlMax;
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
@@ -194,8 +196,9 @@ if (databaseUrl) {
     poolMax = isPooled ? 10 : 6; // Neon pooled vs direct
   }
 
-  // Allow poolMin to be configured via environment variable, default to 2 for Cloud SQL
-  const poolMin = parseInt(process.env.DB_POOL_MIN || (isCloudSql ? '2' : (isRenderDb ? '5' : '2')), 10);
+  // OPTIMIZED: Reduced poolMin from 2 to 1 to save idle connections
+  // 1 connection stays warm, others created on-demand
+  const poolMin = parseInt(process.env.DB_POOL_MIN || (isCloudSql ? '1' : (isRenderDb ? '5' : '2')), 10);
 
   // PgBouncer doesn't support statement_timeout as a connection parameter
   // It has its own query timeout mechanism, so we omit it when using PgBouncer
@@ -843,7 +846,34 @@ function startPoolMonitoring() {
     }
   }, 300000); // Every 5 minutes (reducido de 60 segundos)
 
-  console.log('✅ Pool monitoring started - aggregated metrics logged every 5 minutes');
+  // NUEVO: Log frecuente de waitingCount para detectar saturación temprana
+  // Log cada 30 segundos solo si hay queries esperando o alta utilización
+  const waitingMonitorInterval = setInterval(() => {
+    const metrics = getPoolMetrics();
+    if (!metrics) return;
+    
+    const activeConnections = metrics.totalCount - metrics.idleCount;
+    const waitingCount = metrics.waitingCount || 0;
+    const utilizationPct = Math.round((activeConnections / metrics.maxConnections) * 100);
+    
+    // Log siempre si hay queries esperando (waitingCount > 0)
+    if (waitingCount > 0) {
+      console.warn(
+        `⏳ [POOL WAITING] waiting=${waitingCount}, ` +
+        `active=${activeConnections}/${metrics.maxConnections} (${utilizationPct}%), ` +
+        `idle=${metrics.idleCount}`
+      );
+    }
+    // Log cada 30s si utilización > 60% (incluso sin waiting)
+    else if (utilizationPct >= 60) {
+      console.log(
+        `📊 [POOL] active=${activeConnections}/${metrics.maxConnections} (${utilizationPct}%), ` +
+        `idle=${metrics.idleCount}, waiting=${waitingCount}`
+      );
+    }
+  }, 30000); // Every 30 seconds
+
+  console.log('✅ Pool monitoring started - stats every 5min, waitingCount every 30s');
 }
 
 function stopPoolMonitoring() {

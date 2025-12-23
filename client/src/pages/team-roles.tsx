@@ -58,8 +58,9 @@ export default function TeamRolesPage() {
     queryKey: ["/api/user-roles"],
   });
 
+  // Usando endpoint básico accesible a todos los usuarios
   const { data: roles = [] } = useQuery<Role[]>({
-    queryKey: ["/api/roles"],
+    queryKey: ["/api/roles/basic"],
   });
 
   // Filtrar usuarios activos

@@ -1714,8 +1714,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, processesWithRisks, 60);
+      // OPTIMIZED: Cache for 300 seconds (5 min) - processes change infrequently
+      // Previous: 60s caused frequent cache misses and slow queries
+      await distributedCache.set(cacheKey, processesWithRisks, 300);
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/processes COMPLETE in ${totalDuration}ms (${processesWithRisks.length} processes)`);
@@ -2553,11 +2554,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheKeyPayload = `risks-bootstrap:payload:${CACHE_VERSION}:${tenantId}:${limit}:${offset}:${filterKey}`;
 
       // Fast path: try full payload cache (string) using two-tier cache (L1+L2)
-      // OPTIMIZED: Add timeout protection to prevent slow cache operations from blocking
+      // OPTIMIZED: Increased timeout from 500ms to 1500ms to reduce DB fallbacks
+      // Cache hits are much faster than DB queries (15+ seconds)
       try {
         const cachedPayload = await Promise.race([
           bootstrapCache.get<string>(cacheKeyPayload),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 500))
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 1500))
         ]);
       if (cachedPayload) {
           console.log(`[CACHE HIT] ${cacheKeyPayload} (payload) in ${Date.now() - requestStart}ms`);
@@ -2574,12 +2576,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
-      // FIXED: Add error handling for cache operations to prevent initialization errors
+      // OPTIMIZED: Increased timeout from 2000ms to 3000ms to reduce DB fallbacks
       let catalogs: any = null;
       try {
         catalogs = await Promise.race([
           distributedCache.get(cacheKeyCatalogs),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 3000))
         ]);
       } catch (cacheError) {
         console.warn(`[CACHE] Failed to get catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
@@ -2697,14 +2699,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Pattern: Simple risks query + batch control summary query + in-memory calculation
       const risksPromise = (async () => {
         // Try risks cache first
-        // FIXED: Add error handling for cache operations to prevent initialization errors
-        // OPTIMIZED: Reduced timeout from 2000ms to 500ms for faster fallback to DB
+        // OPTIMIZED: Increased timeout from 500ms to 2000ms - cache hits much faster than 15s DB queries
+        // Better to wait for cache than trigger expensive DB query
         let cachedRisks: any = null;
         const risksCacheStart = Date.now();
         try {
           cachedRisks = await Promise.race([
             distributedCache.get(cacheKeyRisks),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 500))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
           ]);
         } catch (cacheError) {
           // Cache timeout or error - continue without cache (not a critical error)
@@ -3222,7 +3224,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // OPTIMIZED: Set cache asynchronously (don't wait for it to complete) to avoid blocking response
-      bootstrapCache.set(cacheKeyPayload, payloadString, 60).catch((cacheError) => {
+      // OPTIMIZED: Increased TTL from 60s to 300s (5 min) - bootstrap data changes infrequently
+      bootstrapCache.set(cacheKeyPayload, payloadString, 300).catch((cacheError) => {
         // Log but don't block response
         console.warn(`[CACHE] Error setting payload cache (${cacheKeyPayload}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
       });
@@ -16909,6 +16912,25 @@ Responde SOLO con un JSON válido con este formato exacto:
   });
 
   // Roles
+  
+  // Basic roles endpoint - accessible to all authenticated users
+  // Returns only id and name for display purposes (e.g., showing user's role in audit team)
+  app.get("/api/roles/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    try {
+      const roles = await storage.getRoles();
+      // Return only basic info (no permissions)
+      const basicRoles = roles.map(role => ({
+        id: role.id,
+        name: role.name,
+        description: role.description
+      }));
+      res.json(basicRoles);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch roles" });
+    }
+  });
+
+  // Full roles endpoint - requires platform admin
   app.get("/api/roles", noCacheMiddleware, isAuthenticated, requirePlatformAdmin(), async (req, res) => {
     try {
       const roles = await storage.getRoles();
@@ -19614,25 +19636,50 @@ Responde SOLO con un JSON válido con este formato exacto:
   // ============== AUDIT PLANNING & PRIORITIZATION ROUTES ==============
 
   // Audit Plans
+  // OPTIMIZED: Added cache + batch query for approvers (reduced N+1 to 2 queries)
   app.get("/api/audit-plans", isAuthenticated, async (req, res) => {
     try {
+      const startTime = Date.now();
+      
+      // Try cache first (5 min TTL)
+      const cacheKey = `audit-plans:list`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/audit-plans in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
+
       // Single-tenant mode: no tenantId needed
       const plans = await storage.getAuditPlans();
 
-      // Enrich plans with approver names
-      const enrichedPlans = await Promise.all(
-        plans.map(async (plan) => {
-          if (plan.approvedBy) {
-            const approver = await storage.getUser(plan.approvedBy);
-            return {
-              ...plan,
-              approverName: approver?.fullName || approver?.username || 'Usuario desconocido'
-            };
-          }
-          return plan;
-        })
-      );
+      // OPTIMIZED: Batch fetch all approvers in one query instead of N queries
+      const approverIds = [...new Set(plans.filter(p => p.approvedBy).map(p => p.approvedBy!))];
+      const approversMap = new Map<string, { fullName?: string; username?: string }>();
+      
+      if (approverIds.length > 0) {
+        const approvers = await requireDb()
+          .select({ id: users.id, fullName: users.fullName, username: users.username })
+          .from(users)
+          .where(inArray(users.id, approverIds));
+        approvers.forEach(a => approversMap.set(a.id, a));
+      }
 
+      // Enrich plans with approver names (all in memory)
+      const enrichedPlans = plans.map(plan => {
+        if (plan.approvedBy) {
+          const approver = approversMap.get(plan.approvedBy);
+          return {
+            ...plan,
+            approverName: approver?.fullName || approver?.username || 'Usuario desconocido'
+          };
+        }
+        return plan;
+      });
+
+      // Cache for 5 minutes
+      await distributedCache.set(cacheKey, enrichedPlans, 300);
+
+      console.log(`[PERF] /api/audit-plans completed in ${Date.now() - startTime}ms (${plans.length} plans)`);
       res.json(enrichedPlans);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch audit plans" });
@@ -20585,96 +20632,134 @@ Responde SOLO con un JSON válido con este formato exacto:
   });
 
   // Audit Universe
+  // OPTIMIZED: Added cache + removed duplicate query
   app.get("/api/audit-universe", async (req, res) => {
     try {
-      console.log('🔍 Fetching audit universe with details...');
-
-      // First check raw count
-      const rawItems = await storage.getAuditUniverse();
-      console.log(`📊 Raw audit universe items in DB: ${rawItems.length}`);
-
-      const universe = await storage.getAuditUniverseWithDetails();
-      console.log(`✅ Found ${universe.length} audit universe items with details`);
-
-      // Log if there's a mismatch
-      if (rawItems.length !== universe.length) {
-        console.warn(`⚠️ Mismatch: ${rawItems.length} raw items vs ${universe.length} with details`);
+      const startTime = Date.now();
+      
+      // Try cache first (5 min TTL)
+      const cacheKey = `audit-universe:list`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/audit-universe in ${Date.now() - startTime}ms`);
+        return res.json(cached);
       }
 
+      // OPTIMIZED: Only one query (removed duplicate getAuditUniverse call)
+      const universe = await storage.getAuditUniverseWithDetails();
+
+      // Cache for 5 minutes
+      await distributedCache.set(cacheKey, universe, 300);
+
+      console.log(`[PERF] /api/audit-universe completed in ${Date.now() - startTime}ms (${universe.length} items)`);
       res.json(universe);
     } catch (error) {
       console.error('❌ Error fetching audit universe:', error);
-      console.error('Error details:', error instanceof Error ? error.stack : error);
       res.status(500).json({ message: "Failed to fetch audit universe" });
     }
   });
 
   // Get accumulated residual risk for each audit universe entity
+  // OPTIMIZED: Uses batch queries instead of N+1 pattern (reduced from 100s of queries to 4)
   app.get("/api/audit-universe/residual-risks", isAuthenticated, async (req, res) => {
     try {
+      const startTime = Date.now();
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
-      console.log('🔍 Calculating residual risks for VALIDATED risks in audit universe entities...');
+      // OPTIMIZED: Try cache first (5 min TTL)
+      const cacheKey = `audit-universe-residual-risks:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/audit-universe/residual-risks in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
 
-      // Get all audit universe items and all validated risk-process links (single-tenant mode)
-      const universeItems = await storage.getAuditUniverse();
-      const allRisks = await storage.getRisks();
+      console.log('🔍 Calculating residual risks for VALIDATED risks (OPTIMIZED batch queries)...');
 
-      // Get validated risk-process links (single-tenant mode - no tenant filtering)
-      const allValidatedLinks = await requireDb()
-        .select({
-          id: riskProcessLinks.id,
-          riskId: riskProcessLinks.riskId,
-          macroprocesoId: riskProcessLinks.macroprocesoId,
-          processId: riskProcessLinks.processId,
-          subprocesoId: riskProcessLinks.subprocesoId,
-          validationStatus: riskProcessLinks.validationStatus,
-        })
-        .from(riskProcessLinks)
-        .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-        .where(eq(riskProcessLinks.validationStatus, 'validated'));
+      // OPTIMIZED: Fetch all data in parallel with minimal queries (4 queries total)
+      const [universeItems, allRisks, allValidatedLinks, allRiskControlsRaw, allControlsRaw] = await Promise.all([
+        storage.getAuditUniverse(),
+        storage.getRisks(),
+        requireDb()
+          .select({
+            id: riskProcessLinks.id,
+            riskId: riskProcessLinks.riskId,
+            macroprocesoId: riskProcessLinks.macroprocesoId,
+            processId: riskProcessLinks.processId,
+            subprocesoId: riskProcessLinks.subprocesoId,
+          })
+          .from(riskProcessLinks)
+          .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
+          .where(and(
+            eq(riskProcessLinks.validationStatus, 'validated'),
+            isNull(risks.deletedAt)
+          )),
+        // OPTIMIZED: Get ALL risk_controls in one query
+        requireDb()
+          .select({
+            riskId: riskControls.riskId,
+            controlId: riskControls.controlId,
+          })
+          .from(riskControls)
+          .where(isNull(riskControls.deletedAt)),
+        // OPTIMIZED: Get ALL controls with selfAssessment in one query
+        requireDb()
+          .select({
+            id: controls.id,
+            selfAssessment: controls.selfAssessment,
+          })
+          .from(controls)
+          .where(isNull(controls.deletedAt))
+      ]);
 
-      const result = [];
+      const queryDuration = Date.now() - startTime;
+      console.log(`[PERF] Batch queries completed in ${queryDuration}ms`);
 
-      // For each audit universe item, calculate its accumulated residual risk from VALIDATED risks only
-      for (const item of universeItems) {
+      // OPTIMIZED: Build lookup maps for O(1) access
+      const risksMap = new Map(allRisks.map(r => [r.id, r]));
+      const controlsMap = new Map(allControlsRaw.map(c => [c.id, c]));
+      
+      // Group risk_controls by riskId for fast lookup
+      const riskControlsMap = new Map<string, typeof allRiskControlsRaw>();
+      for (const rc of allRiskControlsRaw) {
+        if (!riskControlsMap.has(rc.riskId)) {
+          riskControlsMap.set(rc.riskId, []);
+        }
+        riskControlsMap.get(rc.riskId)!.push(rc);
+      }
+
+      // OPTIMIZED: Calculate all residual risks in memory (no additional queries)
+      const result = universeItems.map(item => {
         let accumulatedResidualRisk = 0;
 
-        // Find validated risk-process links that belong to this audit universe item
-        let relevantLinks = [];
-
+        // Find validated risk-process links for this universe item
+        let relevantLinks: typeof allValidatedLinks = [];
         if (item.entityType === 'subproceso') {
-          // Real subproceso: get links where subprocesoId matches
           relevantLinks = allValidatedLinks.filter(link => link.subprocesoId === item.subprocesoId);
         } else if (item.entityType === 'process') {
-          // Process acting as subproceso: get links where processId matches AND subprocesoId is null
           relevantLinks = allValidatedLinks.filter(link => link.processId === item.processId && !link.subprocesoId);
         } else if (item.entityType === 'macroproceso') {
-          // Macroproceso acting as process and subproceso: get links where macroprocesoId matches AND processId is null
           relevantLinks = allValidatedLinks.filter(link => link.macroprocesoId === item.macroprocesoId && !link.processId);
         }
 
-        // Calculate residual risk for each validated risk
+        // Calculate residual risk for each validated risk (all in memory)
         for (const link of relevantLinks) {
-          const risk = allRisks.find(r => r.id === link.riskId);
+          const risk = risksMap.get(link.riskId);
           if (!risk) continue;
 
-          const riskControls = await storage.getRiskControls(risk.id);
-
           let residualRisk = risk.inherentRisk || 0;
+          const riskControlsList = riskControlsMap.get(risk.id) || [];
 
-          if (riskControls.length > 0) {
-            // Calculate control effectiveness
+          if (riskControlsList.length > 0) {
             let totalEffectiveness = 0;
             let controlCount = 0;
 
-            for (const rc of riskControls) {
-              const control = await storage.getControl(rc.controlId, tenantId);
+            for (const rc of riskControlsList) {
+              const control = controlsMap.get(rc.controlId);
               if (control) {
-                // Map selfAssessment to effectiveness score (0-1)
                 const effectiveness = control.selfAssessment === 'effective' ? 0.9 :
                   control.selfAssessment === 'partially_effective' ? 0.5 :
-                    control.selfAssessment === 'ineffective' ? 0.1 : 0;
+                  control.selfAssessment === 'ineffective' ? 0.1 : 0;
                 totalEffectiveness += effectiveness;
                 controlCount++;
               }
@@ -20682,7 +20767,6 @@ Responde SOLO con un JSON válido con este formato exacto:
 
             if (controlCount > 0) {
               const avgEffectiveness = totalEffectiveness / controlCount;
-              // Reduce inherent risk based on control effectiveness
               residualRisk = risk.inherentRisk * (1 - avgEffectiveness);
             }
           }
@@ -20690,14 +20774,18 @@ Responde SOLO con un JSON válido con este formato exacto:
           accumulatedResidualRisk += residualRisk;
         }
 
-        result.push({
+        return {
           processId: item.processId,
           subprocesoId: item.subprocesoId,
-          accumulatedResidualRisk: Math.round(accumulatedResidualRisk * 100) / 100 // Round to 2 decimals
-        });
-      }
+          accumulatedResidualRisk: Math.round(accumulatedResidualRisk * 100) / 100
+        };
+      });
 
-      console.log(`✅ Calculated residual risks for ${result.length} entities (VALIDATED risks only)`);
+      // Cache result for 5 minutes
+      await distributedCache.set(cacheKey, result, 300);
+
+      const totalDuration = Date.now() - startTime;
+      console.log(`✅ Calculated residual risks for ${result.length} entities in ${totalDuration}ms (queries: ${queryDuration}ms)`);
       res.json(result);
     } catch (error) {
       console.error('❌ Error calculating residual risks:', error);

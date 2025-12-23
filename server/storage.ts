@@ -5015,7 +5015,7 @@ export class MemStorage implements IStorage {
     timestamp: number
   }> = new Map();
 
-  private readonly CACHE_TTL_MS = 300000; // 5 minutes (increased from 30s for better performance)
+  private readonly CACHE_TTL_MS = 600000; // 10 minutes (increased from 5 min for better performance on slow endpoints)
 
   // Helper to invalidate risk levels cache
   private invalidateRiskLevelsCache() {

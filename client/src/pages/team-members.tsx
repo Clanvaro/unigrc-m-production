@@ -57,9 +57,9 @@ export default function TeamMembersPage() {
     queryKey: ["/api/user-roles"],
   });
 
-  // Obtener roles
+  // Obtener roles (usando endpoint básico accesible a todos los usuarios)
   const { data: roles = [] } = useQuery<Role[]>({
-    queryKey: ["/api/roles"],
+    queryKey: ["/api/roles/basic"],
   });
 
   // Crear mapa de roles para fácil acceso

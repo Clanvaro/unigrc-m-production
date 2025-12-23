@@ -34,9 +34,9 @@ export default function TeamAvailability() {
     queryKey: ["/api/user-roles"],
   });
 
-  // Obtener roles
+  // Obtener roles (usando endpoint básico accesible a todos los usuarios)
   const { data: roles = [] } = useQuery<Role[]>({
-    queryKey: ["/api/roles"],
+    queryKey: ["/api/roles/basic"],
   });
 
   // Definir roles que pertenecen al equipo auditor

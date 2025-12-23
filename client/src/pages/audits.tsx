@@ -318,8 +318,10 @@ export default function Audits() {
     refetchOnWindowFocus: false,
   });
 
+  // Use /api/roles/basic - accessible to all authenticated users (no admin required)
+  // Only returns id, name, description for display purposes
   const { data: roles = [] } = useQuery<any[]>({
-    queryKey: ["/api/roles"],
+    queryKey: ["/api/roles/basic"],
     staleTime: 300000, // Cache for 5 minutes - roles change infrequently
     refetchOnWindowFocus: false,
   });
