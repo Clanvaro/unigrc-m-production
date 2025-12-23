@@ -7484,7 +7484,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
 
-      // Cache for 30s per page
+      // OPTIMIZED: Increased cache from 30s to 120s (2 min) for better performance
       const cacheKey = `validation:notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
@@ -7496,7 +7496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(true, limit, offset);
       const response = createPaginatedResponse(data, total, limit, offset);
 
-      await distributedCache.set(cacheKey, response, 30);
+      await distributedCache.set(cacheKey, response, 120);
       res.json(response);
     } catch (error) {
       console.error("Error fetching notified risk processes:", error);
@@ -7522,84 +7522,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Database not available" });
       }
 
-      // OPTIMIZED: Combine queries using CASE WHEN to reduce from 6 queries to 3 queries
-      // This reduces database round-trips and improves performance
+      // OPTIMIZED: Single query using CTEs to get all counts in one database round-trip
+      // Reduced from 4 queries (3 parallel + 1 total) to 1 query
       const queryStart = Date.now();
 
-      // Combined query for risks (all statuses in one query)
-      // FIXED: Ensure counts match the detail query - only count non-deleted risks
-      // This ensures consistency between /api/validation/counts and /api/risk-processes/validation/:status
-      const risksCountsPromise = requireDb().execute(sql`
+      const result = await requireDb().execute(sql`
+        WITH risks_counts AS (
+          SELECT 
+            COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
+            COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified,
+            COUNT(*) FILTER (WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL)::int AS validated,
+            COUNT(*) FILTER (WHERE rpl.validation_status = 'observed' AND r.deleted_at IS NULL)::int AS observed,
+            COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected' AND r.deleted_at IS NULL)::int AS rejected,
+            COUNT(DISTINCT rpl.risk_id) FILTER (WHERE r.deleted_at IS NULL)::int AS total
+          FROM risk_process_links rpl
+          INNER JOIN risks r ON rpl.risk_id = r.id
+          WHERE r.deleted_at IS NULL
+        ),
+        controls_counts AS (
+          SELECT 
+            COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
+            COUNT(*) FILTER (WHERE (validation_status IS NULL OR validation_status = 'pending_validation') AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
+          FROM controls
+          WHERE deleted_at IS NULL AND (validation_status IS NULL OR validation_status = 'pending_validation')
+        ),
+        action_plans_counts AS (
+          SELECT 
+            COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
+            COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
+          FROM actions
+          WHERE deleted_at IS NULL AND validation_status = 'pending_validation'
+        )
         SELECT 
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = true AND r.deleted_at IS NULL)::int AS notified,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'pending_validation' AND rpl.notification_sent = false AND r.deleted_at IS NULL)::int AS not_notified,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'validated' AND r.deleted_at IS NULL)::int AS validated,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'observed' AND r.deleted_at IS NULL)::int AS observed,
-          COUNT(*) FILTER (WHERE rpl.validation_status = 'rejected' AND r.deleted_at IS NULL)::int AS rejected
-        FROM risk_process_links rpl
-        INNER JOIN risks r ON rpl.risk_id = r.id
-        WHERE r.deleted_at IS NULL
-      `).then(r => ({
-        notified: (r.rows[0] as any)?.notified || 0,
-        notNotified: (r.rows[0] as any)?.not_notified || 0,
-        validated: (r.rows[0] as any)?.validated || 0,
-        observed: (r.rows[0] as any)?.observed || 0,
-        rejected: (r.rows[0] as any)?.rejected || 0
-      }));
+          r.notified AS risks_notified,
+          r.not_notified AS risks_not_notified,
+          r.validated AS risks_validated,
+          r.observed AS risks_observed,
+          r.rejected AS risks_rejected,
+          r.total AS risks_total,
+          c.notified AS controls_notified,
+          c.not_notified AS controls_not_notified,
+          ap.notified AS action_plans_notified,
+          ap.not_notified AS action_plans_not_notified
+        FROM risks_counts r
+        CROSS JOIN controls_counts c
+        CROSS JOIN action_plans_counts ap
+      `);
 
-      // Combined query for controls (notified + not notified in one query)
-      const controlsCountsPromise = requireDb().execute(sql`
-        SELECT 
-          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
-          COUNT(*) FILTER (WHERE (validation_status IS NULL OR validation_status = 'pending_validation') AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
-        FROM controls
-        WHERE deleted_at IS NULL AND (validation_status IS NULL OR validation_status = 'pending_validation')
-      `).then(r => ({
-        notified: (r.rows[0] as any)?.notified || 0,
-        notNotified: (r.rows[0] as any)?.not_notified || 0
-      }));
-
-      // Combined query for action plans (notified + not notified in one query)
-      const actionPlansCountsPromise = requireDb().execute(sql`
-        SELECT 
-          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NOT NULL AND deleted_at IS NULL)::int AS notified,
-          COUNT(*) FILTER (WHERE validation_status = 'pending_validation' AND notified_at IS NULL AND deleted_at IS NULL)::int AS not_notified
-        FROM actions
-        WHERE deleted_at IS NULL AND validation_status = 'pending_validation'
-      `).then(r => ({
-        notified: (r.rows[0] as any)?.notified || 0,
-        notNotified: (r.rows[0] as any)?.not_notified || 0
-      }));
-
-      const countsPromise = Promise.all([
-        risksCountsPromise,
-        controlsCountsPromise,
-        actionPlansCountsPromise
-      ]);
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout after 10 seconds')), 10000);
-      });
-
-      const [risksCounts, controlsCounts, actionPlansCounts] = await Promise.race([
-        countsPromise,
-        timeoutPromise
-      ]);
+      const row = result.rows[0] as any;
+      const risksCounts = {
+        notified: row?.risks_notified || 0,
+        notNotified: row?.risks_not_notified || 0,
+        validated: row?.risks_validated || 0,
+        observed: row?.risks_observed || 0,
+        rejected: row?.risks_rejected || 0,
+        total: row?.risks_total || 0
+      };
+      const controlsCounts = {
+        notified: row?.controls_notified || 0,
+        notNotified: row?.controls_not_notified || 0
+      };
+      const actionPlansCounts = {
+        notified: row?.action_plans_notified || 0,
+        notNotified: row?.action_plans_not_notified || 0
+      };
 
       const queryDuration = Date.now() - queryStart;
       const duration = Date.now() - startTime;
-      console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms (queries: ${queryDuration}ms)`);
-
-      // Calculate total as a separate query to ensure accuracy (count DISTINCT risks, not links)
-      // FIXED: Count distinct risk_id to avoid double-counting risks with multiple process associations
-      // This ensures the total matches the actual number of unique risks
-      const totalCountResult = await requireDb().execute(sql`
-        SELECT COUNT(DISTINCT rpl.risk_id)::int AS total
-        FROM risk_process_links rpl
-        INNER JOIN risks r ON rpl.risk_id = r.id
-        WHERE r.deleted_at IS NULL
-      `);
-      const totalCount = (totalCountResult.rows[0] as any)?.total || 0;
+      console.log(`[PERF] [validation/counts] Fetched all counts in ${duration}ms (single query: ${queryDuration}ms)`);
 
       const response = {
         risks: {
@@ -7608,8 +7598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           validated: risksCounts.validated,
           observed: risksCounts.observed,
           rejected: risksCounts.rejected,
-          // Use calculated total from separate query to ensure accuracy
-          total: totalCount
+          total: risksCounts.total
         },
         controls: {
           notified: controlsCounts.notified,
@@ -7661,7 +7650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const { limit, offset } = normalizePaginationParams(req.query);
 
-      // Cache for 30s per page
+      // OPTIMIZED: Increased cache from 30s to 120s (2 min) for better performance
       const cacheKey = `validation:not-notified-list:${CACHE_VERSION}:${tenantId}:${limit}:${offset}`;
       const cached = await distributedCache.get(cacheKey);
       if (cached !== null) {
@@ -7673,7 +7662,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { data, total } = await storage.getRiskProcessLinksByNotificationStatusPaginated(false, limit, offset);
       const response = createPaginatedResponse(data, total, limit, offset);
 
-      await distributedCache.set(cacheKey, response, 30);
+      await distributedCache.set(cacheKey, response, 120);
       res.json(response);
     } catch (error) {
       console.error("Error fetching not-notified risk processes:", error);

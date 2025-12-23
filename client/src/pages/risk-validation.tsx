@@ -272,16 +272,17 @@ export default function RiskValidationPage() {
   };
 
   // OPTIMIZED: Always fetch validation counts for summary cards (not tab-dependent)
+  // Server has 5 min cache, so we can use longer staleTime to avoid unnecessary refetches
   const { data: validationCounts } = useQuery<{
     risks: { notified: number; notNotified: number; validated?: number; observed?: number; rejected?: number; total?: number };
     controls: { notified: number; notNotified: number };
     actionPlans: { notified: number; notNotified: number };
   }>({
     queryKey: ["/api/validation/counts"],
-    staleTime: 30000, // 30 seconds - matches server cache
-    refetchOnMount: true, // Refetch to get latest counts when page loads
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min) to ensure freshness
+    refetchOnMount: false, // OPTIMIZED: Server cache handles freshness, no need to refetch on mount
     refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
-    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   // Risk-process-links notification status queries with pagination
