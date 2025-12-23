@@ -46,10 +46,13 @@
     "check:migration": "bash scripts/check-migration-status.sh",
     "verify:delete-frontend": "bash scripts/verify-before-delete-frontend.sh",
     "delete:cloud-run-frontend": "bash scripts/delete-cloud-run-frontend.sh",
-    "stress:basic": "k6 run tests/k6/basic.js",
-    "stress:critical": "k6 run tests/k6/critical-endpoints.js",
-    "stress:full": "k6 run tests/k6/full-load.js",
-    "stress:install-check": "k6 version || (echo '❌ k6 no está instalado. Instala con: brew install k6 (macOS) o visita https://k6.io/docs/getting-started/installation/' && exit 1)"
+    "stress:install": "bash scripts/install-k6.sh",
+    "stress:install-check": "k6 version || (echo '❌ k6 no está instalado. Ejecuta: npm run stress:install' && exit 1)",
+    "stress:basic": "npm run stress:install-check && k6 run tests/k6/basic.js",
+    "stress:critical": "npm run stress:install-check && k6 run tests/k6/critical-endpoints.js",
+    "stress:full": "npm run stress:install-check && k6 run tests/k6/full-load.js",
+    "stress:quick": "node tests/k6/quick-stress-test.js",
+    "stress:quick:prod": "BASE_URL=https://unigrc-backend-7joma3s3xa-tl.a.run.app node tests/k6/quick-stress-test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
