@@ -17930,7 +17930,30 @@ export class DatabaseStorage extends MemStorage {
           })
       );
 
-      // Get team performance
+      // Get all active users with audit roles (Supervisor de Auditoría, Auditor, Auditor Junior)
+      // This ensures teamSize matches the count in "Gestión del Equipo"
+      const auditRoleNames = ['Supervisor de Auditoría', 'Auditor', 'Auditor Junior'];
+      const auditRolesResult = await db.select({ id: roles.id })
+        .from(roles)
+        .where(inArray(roles.name, auditRoleNames));
+      const auditRoleIds = auditRolesResult.map(r => r.id);
+      
+      const teamMembersResult = auditRoleIds.length > 0
+        ? await db.select({ userId: userRoles.userId })
+          .from(userRoles)
+          .innerJoin(users, eq(users.id, userRoles.userId))
+          .where(
+            and(
+              inArray(userRoles.roleId, auditRoleIds),
+              eq(users.isActive, true)
+            )
+          )
+        : [];
+      
+      const allTeamMemberIds = [...new Set(teamMembersResult.map(r => r.userId))];
+      const actualTeamSize = allTeamMemberIds.length;
+
+      // Get team performance (only for executors who have tests assigned)
       const uniqueExecutors = [...new Set(supervisedTests.map(t => t.executorId))];
       const teamPerformance = await Promise.all(
         uniqueExecutors.map(async executorId => {
@@ -18039,14 +18062,14 @@ export class DatabaseStorage extends MemStorage {
       // Structure data to match frontend SupervisorDashboardMetrics interface
       return {
         teamStats: {
-          teamSize: uniqueExecutors.length,
+          teamSize: actualTeamSize, // Use actual count of all users with audit roles, not just executors with tests
           totalAssignedTests: totalTests,
           completedTests,
           pendingReviews: pendingReviewTests,
           averageReviewTime,
           teamPerformanceScore: Math.round(teamPerformanceScore * 10) / 10,
           overdueReviews: overdueTests,
-          activeExecutors: uniqueExecutors.length
+          activeExecutors: uniqueExecutors.length // Keep this as executors with tests assigned
         },
         teamMembers: teamPerformance.map(member => ({
           ...member,
