@@ -36,7 +36,7 @@ import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLat
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
-import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses, riskCategories, auditTestAttachments, auditTests } from "@shared/schema";
+import { risks, riskControls, auditPlans, actionPlanRisks, auditPlanItems, auditPrioritizationFactors, auditPlanCapacity, audits, auditStateLog, riskEvents, riskEventMacroprocesos, riskEventProcesses, riskEventSubprocesos, riskEventRisks, macroprocesos, processes, subprocesos, controls, actions, insertAuditMilestoneSchema, insertAuditRiskSchema, insertAuditStateLogSchema, updateAuditTestSchema, auditLogs, users, notifications, notificationQueue, processGerencias, gerencias, processOwners, controlOwners, riskProcessLinks, controlProcesses, riskCategories, auditTestAttachments, auditTests, fiscalEntities, macroprocesoFiscalEntities, processFiscalEntities } from "@shared/schema";
 import { z } from "zod";
 import { eq, sql, inArray, and, or, desc, isNotNull, isNull } from "drizzle-orm";
 // OPTIMIZED: Lazy load heavy dependencies to reduce startup time
@@ -8426,20 +8426,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Build context for AI
       let contextParts: string[] = [];
+      let fiscalEntityInfo: { name?: string; description?: string } | null = null;
       
       if (macroprocesoId) {
         const macroproceso = await storage.getMacroproceso(macroprocesoId);
-        if (macroproceso) contextParts.push(`Macroproceso: ${macroproceso.name}`);
+        if (macroproceso) {
+          contextParts.push(`Macroproceso: ${macroproceso.name}`);
+          
+          // Obtener entidad fiscal del macroproceso (puede ser directa o desde relación many-to-many)
+          if (macroproceso.fiscalEntityId) {
+            const fiscalEntity = await storage.getFiscalEntity(macroproceso.fiscalEntityId);
+            if (fiscalEntity) {
+              fiscalEntityInfo = {
+                name: fiscalEntity.name,
+                description: fiscalEntity.description || undefined
+              };
+            }
+          } else {
+            // Si no hay fiscalEntityId directo, buscar en relación many-to-many
+            const fiscalEntitiesFromRelation = await requireDb()
+              .select({ 
+                id: fiscalEntities.id,
+                name: fiscalEntities.name,
+                description: fiscalEntities.description
+              })
+              .from(macroprocesoFiscalEntities)
+              .innerJoin(fiscalEntities, eq(macroprocesoFiscalEntities.fiscalEntityId, fiscalEntities.id))
+              .where(eq(macroprocesoFiscalEntities.macroprocesoId, macroprocesoId))
+              .limit(1);
+            
+            if (fiscalEntitiesFromRelation.length > 0) {
+              fiscalEntityInfo = {
+                name: fiscalEntitiesFromRelation[0].name || undefined,
+                description: fiscalEntitiesFromRelation[0].description || undefined
+              };
+            }
+          }
+        }
       }
       
       if (processId) {
         const process = await storage.getProcess(processId);
-        if (process) contextParts.push(`Proceso: ${process.name} - ${process.description || ''}`);
+        if (process) {
+          contextParts.push(`Proceso: ${process.name} - ${process.description || ''}`);
+          
+          // Obtener entidad fiscal del proceso si no se obtuvo del macroproceso
+          if (!fiscalEntityInfo) {
+            if (process.fiscalEntityId) {
+              const fiscalEntity = await storage.getFiscalEntity(process.fiscalEntityId);
+              if (fiscalEntity) {
+                fiscalEntityInfo = {
+                  name: fiscalEntity.name,
+                  description: fiscalEntity.description || undefined
+                };
+              }
+            } else {
+              // Buscar en relación many-to-many
+              const fiscalEntitiesFromRelation = await requireDb()
+                .select({ 
+                  id: fiscalEntities.id,
+                  name: fiscalEntities.name,
+                  description: fiscalEntities.description
+                })
+                .from(processFiscalEntities)
+                .innerJoin(fiscalEntities, eq(processFiscalEntities.fiscalEntityId, fiscalEntities.id))
+                .where(eq(processFiscalEntities.processId, processId))
+                .limit(1);
+              
+              if (fiscalEntitiesFromRelation.length > 0) {
+                fiscalEntityInfo = {
+                  name: fiscalEntitiesFromRelation[0].name || undefined,
+                  description: fiscalEntitiesFromRelation[0].description || undefined
+                };
+              }
+            }
+          }
+        }
       }
       
       if (subprocesoId) {
         const subproceso = await storage.getSubproceso(subprocesoId);
-        if (subproceso) contextParts.push(`Subproceso: ${subproceso.name}`);
+        if (subproceso) {
+          contextParts.push(`Subproceso: ${subproceso.name}`);
+          
+          // Si el subproceso tiene proceso asociado, intentar obtener entidad fiscal del proceso
+          if (!fiscalEntityInfo && subproceso.procesoId) {
+            const parentProcess = await storage.getProcess(subproceso.procesoId);
+            if (parentProcess?.fiscalEntityId) {
+              const fiscalEntity = await storage.getFiscalEntity(parentProcess.fiscalEntityId);
+              if (fiscalEntity) {
+                fiscalEntityInfo = {
+                  name: fiscalEntity.name,
+                  description: fiscalEntity.description || undefined
+                };
+              }
+            }
+          }
+        }
+      }
+
+      // Agregar información de entidad fiscal al contexto (importante para contexto de industria)
+      if (fiscalEntityInfo) {
+        if (fiscalEntityInfo.name) {
+          contextParts.push(`Entidad Fiscal: ${fiscalEntityInfo.name}`);
+        }
+        if (fiscalEntityInfo.description) {
+          contextParts.push(`Contexto de Industria: ${fiscalEntityInfo.description}`);
+        }
       }
 
       if (userContext) {
