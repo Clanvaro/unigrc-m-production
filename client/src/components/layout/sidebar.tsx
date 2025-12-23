@@ -414,7 +414,8 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
         </div>
         )}
 
-        {/* Módulo de Equipo de Auditoría */}
+        {/* Módulo de Equipo de Auditoría - Solo mostrar si el usuario tiene permisos */}
+        {canViewSection("team") && (
         <div className="mt-8">
           {!isCollapsed && (<h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-3">
             Equipo
@@ -444,6 +445,7 @@ function SidebarContent({ onNavigate, isCollapsed, onToggleCollapsed }: { onNavi
             </li>
           </ul>
         </div>
+        )}
 
 
         {filteredConfigNavigation.length > 0 && (
