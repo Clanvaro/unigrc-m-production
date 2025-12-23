@@ -51,7 +51,7 @@ steps:
       - '--vpc-connector=unigrc-connector'
       - '--vpc-egress=private-ranges-only'
       - '--update-annotations=run.googleapis.com/cpu-throttling=false'
-      - '--min-instances=1'
+      - '--min-instances=0'
     id: 'deploy-backend'
 
 # Store images in Artifact Registry

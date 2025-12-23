@@ -211,10 +211,10 @@ export function UserForm({ user, roles, onSuccess }: UserFormProps) {
                 return [...existing, ...newRoleAssignments];
               });
               
-              // For new users: add all selected roles
-              for (const roleId of selectedRoles) {
+            // For new users: add all selected roles
+            for (const roleId of selectedRoles) {
                 try {
-                  await apiRequest(`/api/users/${userId}/roles`, "POST", { roleId });
+              await apiRequest(`/api/users/${userId}/roles`, "POST", { roleId });
                 } catch (roleError) {
                   console.error(`Error assigning role ${roleId} to user ${userId}:`, roleError);
                   // Continue with other roles even if one fails

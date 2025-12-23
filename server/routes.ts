@@ -742,19 +742,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Warmup endpoint - called by load balancer or cron to keep connections alive
+  // Warmup endpoint - called by Cloud Scheduler or load balancer to prevent cold starts
+  // OPTIMIZED: Initializes DB, warms pool, and pre-loads critical caches
   app.get("/api/warmup", async (req, res) => {
     try {
       const startTime = Date.now();
+      
+      // Step 1: Ensure database is initialized (lazy init happens here)
+      await ensureDatabaseInitialized();
+      
+      // Step 2: Start monitoring and warming if needed
+      startPoolMonitoringIfNeeded();
+      startPoolWarmingIfNeeded();
+      
+      // Step 3: Warm up connection pool (establish min connections)
       const warmResult = await warmPool(2);
+      
+      // Step 4: Pre-warm critical caches (optional - can be removed if not needed)
+      // This ensures Redis connections are established
+      try {
+        await distributedCache.get('warmup-check'); // Just to establish connection
+      } catch (cacheError) {
+        // Ignore cache errors - not critical for warmup
+      }
+      
       const poolMetrics = getPoolMetrics();
+      const totalDuration = Date.now() - startTime;
 
       res.json({
         success: warmResult.success,
         warmupDuration: warmResult.duration,
-        totalDuration: Date.now() - startTime,
+        totalDuration,
         connections: warmResult.connections,
         poolMetrics,
+        initialized: true,
         timestamp: new Date().toISOString()
       });
     } catch (error) {
@@ -2538,10 +2559,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           bootstrapCache.get<string>(cacheKeyPayload),
           new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 500))
         ]);
-        if (cachedPayload) {
+      if (cachedPayload) {
           console.log(`[CACHE HIT] ${cacheKeyPayload} (payload) in ${Date.now() - requestStart}ms`);
-          res.type("application/json").send(cachedPayload);
-          return;
+        res.type("application/json").send(cachedPayload);
+        return;
         }
       } catch (cacheError) {
         // Cache timeout or error - continue to fetch from DB (not a critical error)
@@ -2728,7 +2749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (needsProcessJoins) {
             // LEFT JOIN risk_process_links (no deleted_at field in this table)
             joins.push(sql`
-              LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id
+              LEFT JOIN risk_process_links rpl ON rpl.risk_id = r.id 
             `);
 
             // LEFT JOIN processes for checking macroproceso_id or process_id
