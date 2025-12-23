@@ -113,10 +113,27 @@ async function upsertMicrosoftUser(claims: any) {
 }
 
 export async function setupMicrosoftAuth(app: Express) {
-  // Only configure Microsoft Auth if environment variables are available
+  // Always register endpoints, but return error if not configured
   if (!isMicrosoftAuthConfigured()) {
-    console.log("⚠️  Microsoft Auth not configured - skipping setup");
+    console.log("⚠️  Microsoft Auth not configured - endpoints will return error");
     console.log("ℹ️  To enable Microsoft Auth, configure: MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET");
+    
+    // Register endpoints that return clear error messages
+    app.get("/api/auth/microsoft", (req, res) => {
+      res.status(503).json({ 
+        message: "Microsoft Authentication no está configurado",
+        error: "MICROSOFT_AUTH_NOT_CONFIGURED",
+        details: "Para habilitar autenticación con Microsoft, configure las variables de entorno MICROSOFT_CLIENT_ID y MICROSOFT_CLIENT_SECRET"
+      });
+    });
+    
+    app.get("/api/auth/microsoft/callback", (req, res) => {
+      res.status(503).json({ 
+        message: "Microsoft Authentication no está configurado",
+        error: "MICROSOFT_AUTH_NOT_CONFIGURED"
+      });
+    });
+    
     return;
   }
 
