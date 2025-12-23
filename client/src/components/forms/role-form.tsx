@@ -91,7 +91,7 @@ const AVAILABLE_PERMISSIONS = [
   { id: "manage_compliance", label: "Gestionar Cumplimiento", description: "Administración completa de cumplimiento" },
 ];
 
-export function RoleForm({ role, onSuccess }: RoleFormProps) {
+export function RoleForm({ role, onSuccess, onCancel }: RoleFormProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
