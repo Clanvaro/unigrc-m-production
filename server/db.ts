@@ -194,7 +194,8 @@ if (databaseUrl) {
     poolMax = isPooled ? 10 : 6; // Neon pooled vs direct
   }
 
-  const poolMin = isCloudSql ? 2 : (isRenderDb ? 5 : 2);
+  // Allow poolMin to be configured via environment variable, default to 2 for Cloud SQL
+  const poolMin = parseInt(process.env.DB_POOL_MIN || (isCloudSql ? '2' : (isRenderDb ? '5' : '2')), 10);
 
   // PgBouncer doesn't support statement_timeout as a connection parameter
   // It has its own query timeout mechanism, so we omit it when using PgBouncer
