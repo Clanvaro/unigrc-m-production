@@ -30,7 +30,7 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URL = __ENV.BASE_URL || 'https://unigrc-backend-7joma3s3xa-tl.a.run.app';
 
 export default function () {
   // Test 1: Dashboard/Health check
@@ -81,15 +81,30 @@ function textSummary(data, options) {
   const indent = options.indent || '';
   const enableColors = options.enableColors || false;
   
+  // Helper para obtener valores de forma segura
+  const safeGet = (obj, path, defaultValue = 0) => {
+    try {
+      const value = path.split('.').reduce((o, p) => o && o[p], obj);
+      return value !== undefined && value !== null ? value : defaultValue;
+    } catch (e) {
+      return defaultValue;
+    }
+  };
+  
+  const httpReqs = data.metrics.http_reqs?.values || {};
+  const httpDuration = data.metrics.http_req_duration?.values || {};
+  const httpFailed = data.metrics.http_req_failed?.values || {};
+  const testDuration = safeGet(data, 'state.testRunDurationMs', 0);
+  
   let summary = '\n';
   summary += `${indent}✓ Test completado\n`;
-  summary += `${indent}  Duración total: ${(data.state.testRunDurationMs / 1000).toFixed(2)}s\n`;
-  summary += `${indent}  Requests totales: ${data.metrics.http_reqs.values.count}\n`;
-  summary += `${indent}  Requests/segundo: ${data.metrics.http_reqs.values.rate.toFixed(2)}\n`;
-  summary += `${indent}  Latencia promedio: ${data.metrics.http_req_duration.values.avg.toFixed(2)}ms\n`;
-  summary += `${indent}  Latencia p95: ${data.metrics.http_req_duration.values['p(95)'].toFixed(2)}ms\n`;
-  summary += `${indent}  Latencia p99: ${data.metrics.http_req_duration.values['p(99)'].toFixed(2)}ms\n`;
-  summary += `${indent}  Errores: ${(data.metrics.http_req_failed.values.rate * 100).toFixed(2)}%\n`;
+  summary += `${indent}  Duración total: ${(testDuration / 1000).toFixed(2)}s\n`;
+  summary += `${indent}  Requests totales: ${httpReqs.count || 0}\n`;
+  summary += `${indent}  Requests/segundo: ${(httpReqs.rate || 0).toFixed(2)}\n`;
+  summary += `${indent}  Latencia promedio: ${(httpDuration.avg || 0).toFixed(2)}ms\n`;
+  summary += `${indent}  Latencia p95: ${(httpDuration['p(95)'] || 0).toFixed(2)}ms\n`;
+  summary += `${indent}  Latencia p99: ${(httpDuration['p(99)'] || 0).toFixed(2)}ms\n`;
+  summary += `${indent}  Errores: ${((httpFailed.rate || 0) * 100).toFixed(2)}%\n`;
   
   return summary;
 }
