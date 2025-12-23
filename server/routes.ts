@@ -2532,11 +2532,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const cacheKeyPayload = `risks-bootstrap:payload:${CACHE_VERSION}:${tenantId}:${limit}:${offset}:${filterKey}`;
 
       // Fast path: try full payload cache (string) using two-tier cache (L1+L2)
-      const cachedPayload = await bootstrapCache.get<string>(cacheKeyPayload);
-      if (cachedPayload) {
-        console.log(`[CACHE HIT] ${cacheKeyPayload} (payload)`);
-        res.type("application/json").send(cachedPayload);
-        return;
+      // OPTIMIZED: Add timeout protection to prevent slow cache operations from blocking
+      try {
+        const cachedPayload = await Promise.race([
+          bootstrapCache.get<string>(cacheKeyPayload),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 500))
+        ]);
+        if (cachedPayload) {
+          console.log(`[CACHE HIT] ${cacheKeyPayload} (payload) in ${Date.now() - requestStart}ms`);
+          res.type("application/json").send(cachedPayload);
+          return;
+        }
+      } catch (cacheError) {
+        // Cache timeout or error - continue to fetch from DB (not a critical error)
+        if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+          console.warn(`[CACHE] Timeout getting payload cache (${cacheKeyPayload}), fetching from DB`);
+        } else {
+          console.warn(`[CACHE] Error getting payload cache (${cacheKeyPayload}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        }
       }
 
       // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
@@ -2636,12 +2649,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // OPTIMIZED: Increased catalog cache from 5 min to 30 min (1800s)
           // FIXED: Add error handling for cache set operations
+          // OPTIMIZED: Reduced timeout from 2000ms to 1000ms and make it non-blocking
           try {
-            await Promise.race([
+            // Set cache asynchronously (don't wait for it to complete)
+            Promise.race([
               distributedCache.set(cacheKeyCatalogs, result, 1800),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
-            ]);
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 1000))
+            ]).catch((cacheError) => {
+              // Log but don't block response
+              if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+                console.warn(`[CACHE] Timeout setting catalogs cache (${cacheKeyCatalogs}), continuing without cache`);
+              } else {
+                console.warn(`[CACHE] Error setting catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+              }
+            });
           } catch (cacheError) {
+            // Fallback error handling (shouldn't happen but just in case)
             console.warn(`[CACHE] Failed to set catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
             // Continue without caching - result is still returned
           }
@@ -2654,19 +2677,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const risksPromise = (async () => {
         // Try risks cache first
         // FIXED: Add error handling for cache operations to prevent initialization errors
+        // OPTIMIZED: Reduced timeout from 2000ms to 500ms for faster fallback to DB
         let cachedRisks: any = null;
+        const risksCacheStart = Date.now();
         try {
           cachedRisks = await Promise.race([
             distributedCache.get(cacheKeyRisks),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 500))
           ]);
         } catch (cacheError) {
-          console.warn(`[CACHE] Failed to get risks cache (${cacheKeyRisks}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+          // Cache timeout or error - continue without cache (not a critical error)
+          if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+            console.warn(`[CACHE] Timeout getting risks cache (${cacheKeyRisks}) in ${Date.now() - risksCacheStart}ms, fetching from DB`);
+          } else {
+            console.warn(`[CACHE] Error getting risks cache (${cacheKeyRisks}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+          }
           // Continue without cache - will fetch from DB
           cachedRisks = null;
         }
         if (cachedRisks) {
-          console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - requestStart}ms`);
+          console.log(`[CACHE HIT] risks-bootstrap:risks in ${Date.now() - risksCacheStart}ms`);
           return cachedRisks;
         }
 
@@ -3170,7 +3200,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
 
-      await bootstrapCache.set(cacheKeyPayload, payloadString, 60); // short TTL to avoid stale payload
+      // OPTIMIZED: Set cache asynchronously (don't wait for it to complete) to avoid blocking response
+      bootstrapCache.set(cacheKeyPayload, payloadString, 60).catch((cacheError) => {
+        // Log but don't block response
+        console.warn(`[CACHE] Error setting payload cache (${cacheKeyPayload}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      });
 
       res.type("application/json").send(payloadString);
     } catch (error) {
