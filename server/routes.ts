@@ -15163,9 +15163,19 @@ Responde SOLO con un JSON válido con este formato exacto:
   // ============== UNIFIED ACTIONS API (Risk & Audit) ==============
   // Nueva API unificada para acciones de riesgos y auditoría
 
+  // OPTIMIZED: Added cache for actions endpoint
   app.get("/api/actions", requirePermission("actions:read"), async (req, res) => {
     try {
+      const startTime = Date.now();
       const origin = req.query.origin as 'risk' | 'audit' | undefined;
+
+      // Try cache first (3 min TTL)
+      const cacheKey = `actions:${origin || 'all'}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/actions in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
 
       const actions = origin
         ? await storage.getActionsByOrigin(origin)
@@ -15195,6 +15205,10 @@ Responde SOLO con un JSON válido con este formato exacto:
           associatedRisks: associatedRisksForAction
         };
       });
+
+      // Cache for 3 minutes
+      await distributedCache.set(cacheKey, actionsWithRisks, 180);
+      console.log(`[PERF] /api/actions completed in ${Date.now() - startTime}ms (${actionsWithRisks.length} actions)`);
 
       res.json(actionsWithRisks);
     } catch (error) {
@@ -16992,9 +17006,25 @@ Responde SOLO con un JSON válido con este formato exacto:
   });
 
   // User Roles
+  // OPTIMIZED: Added cache for user-roles endpoint
   app.get("/api/user-roles", async (req, res) => {
     try {
+      const startTime = Date.now();
+      
+      // Try cache first (5 min TTL)
+      const cacheKey = `user-roles:all`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/user-roles in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
+
       const userRoles = await storage.getAllUserRolesWithRoleInfo();
+      
+      // Cache for 5 minutes
+      await distributedCache.set(cacheKey, userRoles, 300);
+      console.log(`[PERF] /api/user-roles completed in ${Date.now() - startTime}ms`);
+
       res.json(userRoles);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch all user roles" });
@@ -20177,11 +20207,21 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   // ================= AUDIT FINDINGS API ROUTES =================
 
+  // OPTIMIZED: Added cache for audit-findings endpoint
   app.get("/api/audit-findings", isAuthenticated, async (req, res) => {
     try {
+      const startTime = Date.now();
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const withDetails = req.query.withDetails === 'true';
       const auditId = req.query.auditId as string;
+
+      // Try cache first (3 min TTL)
+      const cacheKey = `audit-findings:${tenantId}:${auditId || 'all'}:${withDetails}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/audit-findings in ${Date.now() - startTime}ms`);
+        return res.json(cached);
+      }
 
       let findings;
       if (auditId) {
@@ -20191,6 +20231,10 @@ Responde SOLO con un JSON válido con este formato exacto:
       } else {
         findings = await storage.getAuditFindings();
       }
+
+      // Cache for 3 minutes
+      await distributedCache.set(cacheKey, findings, 180);
+      console.log(`[PERF] /api/audit-findings completed in ${Date.now() - startTime}ms`);
 
       res.json(findings);
     } catch (error) {
