@@ -1,0 +1,4 @@
+# Resultados de pruebas k6
+results/
+*.json
+*.html
