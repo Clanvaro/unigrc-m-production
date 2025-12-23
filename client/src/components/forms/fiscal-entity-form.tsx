@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { insertFiscalEntitySchema } from "@shared/schema";
 import type { FiscalEntity, InsertFiscalEntity } from "@shared/schema";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,29 @@ export function FiscalEntityForm({ entity, onClose }: FiscalEntityFormProps) {
     },
   });
 
+  // Resetear formulario cuando cambia la entidad (importante para actualizar valores al editar)
+  useEffect(() => {
+    if (entity) {
+      form.reset({
+        code: entity.code,
+        name: entity.name,
+        type: entity.type as "matriz" | "filial" | "otra",
+        taxId: entity.taxId ?? "",
+        description: entity.description ?? "",
+        isActive: entity.isActive ?? true,
+      });
+    } else {
+      form.reset({
+        code: "",
+        name: "",
+        type: "matriz" as const,
+        taxId: "",
+        description: "",
+        isActive: true,
+      });
+    }
+  }, [entity, form]);
+
   const mutation = useMutation({
     mutationFn: async (values: z.infer<typeof formSchema>) => {
       if (entity) {
@@ -67,10 +91,42 @@ export function FiscalEntityForm({ entity, onClose }: FiscalEntityFormProps) {
         return await apiRequest("/api/fiscal-entities", "POST", values);
       }
     },
-    onSuccess: async () => {
-      // Invalidar y refetch inmediatamente
-      await queryClient.invalidateQueries({ queryKey: ["/api/fiscal-entities"] });
-      await queryClient.refetchQueries({ queryKey: ["/api/fiscal-entities"] });
+    onMutate: async (values) => {
+      // Optimistic update: actualizar cache inmediatamente
+      if (entity) {
+        await queryClient.cancelQueries({ queryKey: ["/api/fiscal-entities"] });
+        const previousEntities = queryClient.getQueryData<FiscalEntity[]>(["/api/fiscal-entities"]);
+        
+        queryClient.setQueryData<FiscalEntity[]>(["/api/fiscal-entities"], (old) => {
+          if (!old) return old;
+          return old.map(e => e.id === entity.id ? { ...e, ...values } : e);
+        });
+        
+        return { previousEntities };
+      }
+    },
+    onError: (error, values, context) => {
+      // Revertir optimistic update en caso de error
+      if (context?.previousEntities) {
+        queryClient.setQueryData(["/api/fiscal-entities"], context.previousEntities);
+      }
+      const errorMessage = error?.response?.data?.message || error?.message || "No se pudo guardar la entidad fiscal.";
+      const fieldErrors = error?.response?.data?.errors;
+      
+      toast({
+        title: "Error",
+        description: fieldErrors 
+          ? `Error de validación: ${fieldErrors.map((e: any) => e.message).join(", ")}`
+          : errorMessage,
+        variant: "destructive",
+      });
+      console.error("Error creating/updating fiscal entity:", error);
+    },
+    onSuccess: async (data) => {
+      // Invalidar y refetch para asegurar datos frescos
+      await queryClient.invalidateQueries({ queryKey: ["/api/fiscal-entities"], refetchType: 'active' });
+      await queryClient.refetchQueries({ queryKey: ["/api/fiscal-entities"], type: 'active' });
+      
       toast({
         title: entity ? "Entidad actualizada" : "Entidad creada",
         description: entity

@@ -152,7 +152,10 @@ export default function FiscalEntitiesPage() {
             </DialogHeader>
             <FiscalEntityForm 
               entity={selectedEntity} 
-              onClose={() => setDialogOpen(false)} 
+              onClose={() => {
+                setDialogOpen(false);
+                setSelectedEntity(null);
+              }} 
             />
           </DialogContent>
         </Dialog>
