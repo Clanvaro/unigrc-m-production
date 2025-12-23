@@ -51,6 +51,9 @@
     "stress:basic": "npm run stress:install-check && k6 run tests/k6/basic.js",
     "stress:critical": "npm run stress:install-check && k6 run tests/k6/critical-endpoints.js",
     "stress:full": "npm run stress:install-check && k6 run tests/k6/full-load.js",
+    "stress:spike": "npm run stress:install-check && k6 run tests/k6/spike-test.js",
+    "stress:endurance": "npm run stress:install-check && k6 run tests/k6/endurance-test.js",
+    "stress:risks": "npm run stress:install-check && k6 run tests/k6/risks-heavy.js",
     "stress:quick": "node tests/k6/quick-stress-test.js",
     "stress:quick:prod": "BASE_URL=https://unigrc-backend-7joma3s3xa-tl.a.run.app node tests/k6/quick-stress-test.js"
   },
