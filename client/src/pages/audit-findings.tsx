@@ -157,7 +157,7 @@ export default function AuditFindings() {
     return () => window.removeEventListener('globalSearch', handleSearch);
   }, []);
 
-  // Fetch audit findings from the proper API
+  // OPTIMIZED: Increased staleTime to match server cache (3 min)
   const { data: auditFindings = [], isLoading } = useQuery<AuditFindingWithDetails[]>({
     queryKey: ['/api/audit-findings'],
     queryFn: async () => {
@@ -169,9 +169,12 @@ export default function AuditFindings() {
       }
       return response.json();
     },
+    staleTime: 1000 * 60 * 2, // 2 minutes - slightly less than server cache (3 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
-  // Fetch audits for the filter
+  // OPTIMIZED: Increased staleTime to match server cache (5 min for audits)
   const { data: auditsData = [] } = useQuery<Audit[]>({
     queryKey: ['/api/audits'],
     queryFn: async () => {
@@ -191,6 +194,9 @@ export default function AuditFindings() {
       }
       return [];
     },
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
   
   // Ensure audits is always an array

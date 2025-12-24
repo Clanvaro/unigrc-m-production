@@ -20212,11 +20212,14 @@ Responde SOLO con un JSON válido con este formato exacto:
       const withDetails = req.query.withDetails === 'true';
       const auditId = req.query.auditId as string;
 
-      // Try cache first (3 min TTL)
-      const cacheKey = `audit-findings:${tenantId}:${auditId || 'all'}:${withDetails}`;
+      // OPTIMIZED: Cache key with version for proper invalidation
+      const cacheKey = `audit-findings:${CACHE_VERSION}:${tenantId}:${auditId || 'all'}:${withDetails}`;
       const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/audit-findings in ${Date.now() - startTime}ms`);
+      if (cached !== null) {
+        const duration = Date.now() - startTime;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/audit-findings in ${duration}ms`);
+        }
         return res.json(cached);
       }
 
@@ -20229,9 +20232,17 @@ Responde SOLO con un JSON válido con este formato exacto:
         findings = await storage.getAuditFindings();
       }
 
-      // Cache for 3 minutes
-      await distributedCache.set(cacheKey, findings, 180);
-      console.log(`[PERF] /api/audit-findings completed in ${Date.now() - startTime}ms`);
+      // OPTIMIZED: Cache for 3 minutes (180s) - findings can change frequently
+      try {
+        await distributedCache.set(cacheKey, findings, 180);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache for /api/audit-findings:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+      
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/audit-findings completed in ${duration}ms (${findings.length} findings)`);
+      }
 
       res.json(findings);
     } catch (error) {
