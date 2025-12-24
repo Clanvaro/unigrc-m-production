@@ -46,3 +46,4 @@ ANALYZE process_gerencias;
 ANALYZE macroproceso_gerencias;
 ANALYZE subproceso_gerencias;
 
+
