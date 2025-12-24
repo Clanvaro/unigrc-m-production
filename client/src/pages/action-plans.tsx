@@ -140,10 +140,12 @@ export default function ActionPlans() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Query unificado para todos los planes de acción
+  // OPTIMIZED: Increased staleTime to match server cache (5 min)
   const { data: allActions = [], isLoading } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   // Check URL params to auto-open create dialog with pre-selected risk or view plan detail

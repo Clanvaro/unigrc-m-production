@@ -11742,15 +11742,15 @@ Responde SOLO con un JSON válido con este formato exacto:
 
       const response = plans;
 
-      // OPTIMIZED: Cache with timeout and increased TTL from 30s to 60s
+      // OPTIMIZED: Cache with timeout and increased TTL from 60s to 300s (5 min) for better hit rate
       try {
         await Promise.all([
           Promise.race([
-            distributedCache.set(cacheKey, response, 60),
+            distributedCache.set(cacheKey, response, 300),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
           ]),
           Promise.race([
-            distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 300),
+            distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 600),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
           ])
         ]);
