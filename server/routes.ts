@@ -17874,20 +17874,36 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   // Risk trends for dashboard visualization
   app.get("/api/dashboard/risk-trends", isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       const days = parseInt(req.query.days as string) || 30;
 
-      // Generate trend data based on current stats (simulated evolution)
-      // Execute both queries in parallel for better performance
+      // OPTIMIZED: Cache key with days parameter
+      const cacheKey = `dashboard-risk-trends:${CACHE_VERSION}:${days}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/dashboard/risk-trends in ${duration}ms`);
+        }
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/dashboard/risk-trends - generating trend data`);
+
+      // OPTIMIZED: Only select needed columns instead of all risks
       const [currentStats, allRisksResult] = await Promise.all([
         storage.getDashboardStats(),
-        requireDb().select().from(risks)
+        requireDb().select({
+          id: risks.id,
+          inherentRisk: risks.inherentRisk
+        }).from(risks).where(isNull(risks.deletedAt))
       ]);
       const allRisks = allRisksResult;
 
       // Calculate current organizational risk
       const currentOrgRisk = allRisks.length > 0
-        ? allRisks.reduce((sum, r) => sum + r.inherentRisk, 0) / allRisks.length
+        ? allRisks.reduce((sum, r) => sum + (r.inherentRisk || 0), 0) / allRisks.length
         : 0;
 
       // Generate time series data (simulated)
@@ -17907,24 +17923,85 @@ Responde SOLO con un JSON válido con este formato exacto:
         });
       }
 
+      // OPTIMIZED: Cache for 5 minutes (300s) - trend data changes slowly
+      try {
+        await distributedCache.set(cacheKey, trendData, 300);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache for /api/dashboard/risk-trends:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/dashboard/risk-trends COMPLETE in ${duration}ms`);
+      }
+
       res.json(trendData);
     } catch (error) {
-      console.error("Error fetching risk trends:", error);
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/dashboard/risk-trends failed after ${duration}ms:`, error);
       res.status(500).json({ message: "Failed to fetch risk trends" });
     }
   });
 
   // Actionable alerts for dashboard
   app.get("/api/dashboard/alerts", isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
+      // OPTIMIZED: Cache key with version
+      const cacheKey = `dashboard-alerts:${CACHE_VERSION}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/dashboard/alerts in ${duration}ms`);
+        }
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/dashboard/alerts - calculating alerts`);
+
       const alerts = [];
+      const now = new Date();
+
+      // OPTIMIZED: Execute all queries in parallel and use specific WHERE clauses
+      const [
+        criticalRisks,
+        controlAssociations,
+        actionPlansData,
+        controlsData,
+        activeRisks,
+        riskProcessLinksData
+      ] = await Promise.all([
+        // Only select critical risks (inherent_risk > 19) and exclude deleted
+        requireDb().select({ id: risks.id }).from(risks)
+          .where(and(sql`inherent_risk > 19`, isNull(risks.deletedAt))),
+        // Only select riskId column for mapping
+        requireDb().select({ riskId: riskControls.riskId }).from(riskControls),
+        // Only select needed columns for overdue check
+        requireDb().select({
+          id: actions.id,
+          dueDate: actions.dueDate,
+          status: actions.status
+        }).from(actions).where(isNull(actions.deletedAt)),
+        // Only select needed columns for review check
+        requireDb().select({
+          id: controls.id,
+          lastReview: controls.lastReview
+        }).from(controls).where(isNull(controls.deletedAt)),
+        // Only select needed columns for orphaned check
+        requireDb().select({
+          id: risks.id,
+          macroprocesoId: risks.macroprocesoId,
+          processId: risks.processId,
+          subprocesoId: risks.subprocesoId
+        }).from(risks).where(and(eq(risks.status, 'active'), isNull(risks.deletedAt))),
+        // Only select riskId for mapping
+        requireDb().select({ riskId: riskProcessLinks.riskId }).from(riskProcessLinks)
+      ]);
 
       // Critical risks without controls
-      const risksQuery = await requireDb().select().from(risks).where(sql`inherent_risk > 19`);
-      const controlAssociations = await requireDb().select().from(riskControls);
       const controlMap = new Map(controlAssociations.map(rc => [rc.riskId, true]));
-
-      const risksWithoutControls = risksQuery.filter(r => !controlMap.has(r.id));
+      const risksWithoutControls = criticalRisks.filter(r => !controlMap.has(r.id));
       if (risksWithoutControls.length > 0) {
         alerts.push({
           id: 'critical-no-controls',
@@ -17937,10 +18014,9 @@ Responde SOLO con un JSON válido con este formato exacto:
         });
       }
 
-      // Overdue action plans
-      const actionPlansData = await requireDb().select().from(actions).where(isNull(actions.deletedAt));
+      // Overdue action plans (filter in memory after fetching)
       const overduePlans = actionPlansData.filter(ap =>
-        ap.dueDate && new Date(ap.dueDate) < new Date() && ap.status !== 'completed'
+        ap.dueDate && new Date(ap.dueDate) < now && ap.status !== 'completed'
       );
       if (overduePlans.length > 0) {
         alerts.push({
@@ -17955,10 +18031,9 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
 
       // Controls needing review (90+ days since last review)
-      const controlsData = await requireDb().select().from(controls);
       const controlsNeedingReview = controlsData.filter(c => {
         if (!c.lastReview) return true;
-        const daysSince = Math.floor((Date.now() - new Date(c.lastReview).getTime()) / (1000 * 60 * 60 * 24));
+        const daysSince = Math.floor((now.getTime() - new Date(c.lastReview).getTime()) / (1000 * 60 * 60 * 24));
         return daysSince > 90;
       });
       if (controlsNeedingReview.length > 0) {
@@ -17974,14 +18049,8 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
 
       // Orphaned risks (risks without process associations)
-      const allActiveRisks = await requireDb().select().from(risks).where(eq(risks.status, 'active'));
-      const allRiskProcessLinksData = await requireDb().select({
-        riskId: riskProcessLinks.riskId
-      }).from(riskProcessLinks);
-
-      const linkedRiskIds = new Set(allRiskProcessLinksData.map(link => link.riskId));
-
-      const orphanedRisks = allActiveRisks.filter(risk =>
+      const linkedRiskIds = new Set(riskProcessLinksData.map(link => link.riskId));
+      const orphanedRisks = activeRisks.filter(risk =>
         !linkedRiskIds.has(risk.id) &&
         !risk.macroprocesoId &&
         !risk.processId &&
@@ -18000,9 +18069,22 @@ Responde SOLO con un JSON válido con este formato exacto:
         });
       }
 
+      // OPTIMIZED: Cache for 3 minutes (180s) - alerts can change frequently
+      try {
+        await distributedCache.set(cacheKey, alerts, 180);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache for /api/dashboard/alerts:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/dashboard/alerts COMPLETE in ${duration}ms (${alerts.length} alerts)`);
+      }
+
       res.json(alerts);
     } catch (error) {
-      console.error("Error fetching dashboard alerts:", error);
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/dashboard/alerts failed after ${duration}ms:`, error);
       res.status(500).json({ message: "Failed to fetch alerts" });
     }
   });

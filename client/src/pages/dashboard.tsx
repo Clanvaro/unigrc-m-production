@@ -61,21 +61,30 @@ export default function Dashboard() {
   const [selectedRisks, setSelectedRisks] = useState<RiskWithProcess[]>([]);
   const [matrixInfo, setMatrixInfo] = useState({ probability: 0, impact: 0, matrixType: '' });
   
+  // OPTIMIZED: Increased staleTime to match server cache (5 min for stats)
   const { data: stats, isLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
+  // OPTIMIZED: Increased staleTime to match server cache (5 min for trends)
   const { data: trendData = [] } = useQuery<TrendDataPoint[]>({
     queryKey: ["/api/dashboard/risk-trends"],
     enabled: !!stats,
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
+  // OPTIMIZED: Increased staleTime to match server cache (3 min for alerts)
   const { data: alerts = [] } = useQuery<Alert[]>({
     queryKey: ["/api/dashboard/alerts"],
     enabled: !!stats,
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 2, // 2 minutes - slightly less than server cache (3 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
   const handleMatrixCellClick = (risks: RiskWithProcess[], probability: number, impact: number, matrixType: string) => {
