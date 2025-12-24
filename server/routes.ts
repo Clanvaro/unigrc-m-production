@@ -147,7 +147,7 @@ import { objectStorageClient } from "./objectStorage";
 const bootstrapCache = new TwoTierCache({
   l1TtlMs: 30_000,       // 30s per instance
   l2TtlSeconds: 60,      // 60s in distributed cache
-  l2TimeoutMs: 250,      // short timeout to avoid blocking on slow L2
+  l2TimeoutMs: 300,      // Short timeout (200-500ms range) - fail-open to DB if Redis is slow
   l2: distributedCache,
 });
 
@@ -4198,11 +4198,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const lookupMemoryCache = new Map<string, MemoryCacheEntry>();
   const MEMORY_CACHE_TTL = 60000; // 60 seconds
 
-  // Helper function to get from 2-tier cache
+  // Helper function to get from 2-tier cache with fail-open pattern
+  // CRITICAL: Short timeout for L2 (300ms) - if Redis fails, go directly to DB
   async function getFromTieredCache<T>(
     cacheKey: string,
     fetchFn: () => Promise<T>,
-    redisTTL: number = 300
+    redisTTL: number = 300,
+    l2TimeoutMs: number = 300 // Short timeout: 200-500ms range, default 300ms
   ): Promise<T> {
     // Tier 1: Memory cache (fastest, <10ms)
     const memCached = lookupMemoryCache.get(cacheKey);
@@ -4210,18 +4212,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return memCached.data;
     }
 
-    // Tier 2: Redis cache (fast, ~50ms)
-    const redisCached = await distributedCache.get(cacheKey);
-    if (redisCached) {
-      lookupMemoryCache.set(cacheKey, { data: redisCached, timestamp: Date.now() });
-      return redisCached;
+    // Tier 2: Redis cache with short timeout (fail-open pattern)
+    // If Redis is slow/unavailable, skip it and go directly to DB (which is fast)
+    try {
+      const redisCached = await Promise.race([
+        distributedCache.get(cacheKey),
+        new Promise<null>((_, reject) => {
+          setTimeout(() => reject(new Error('L2 cache timeout')), l2TimeoutMs);
+        })
+      ]);
+      
+      if (redisCached) {
+        lookupMemoryCache.set(cacheKey, { data: redisCached, timestamp: Date.now() });
+        return redisCached;
+      }
+    } catch (error) {
+      // CRITICAL: Fail-open - if Redis times out or errors, go directly to DB
+      // Don't block or retry - fail-fast and query DB (which is fast in logs)
+      if (error instanceof Error && error.message === 'L2 cache timeout') {
+        console.log(`[getFromTieredCache] L2 timeout for ${cacheKey} (>${l2TimeoutMs}ms) - failing open to DB`);
+      } else {
+        console.warn(`[getFromTieredCache] L2 error for ${cacheKey} (fail-open to DB):`, error instanceof Error ? error.message : 'Unknown error');
+      }
+      // Continue to DB query (fail-open pattern)
     }
 
-    // Tier 3: Database (slow, 500-1200ms)
+    // Tier 3: Database (fast in logs, 500-1200ms typical)
+    // CRITICAL: Fail-open ensures we get here quickly if Redis is slow
     const data = await fetchFn();
 
-    // Populate both caches
-    await distributedCache.set(cacheKey, data, redisTTL);
+    // Populate both caches (async, don't block)
+    distributedCache.set(cacheKey, data, redisTTL).catch(err => {
+      console.warn(`[getFromTieredCache] Failed to set L2 cache for ${cacheKey}:`, err);
+    });
     lookupMemoryCache.set(cacheKey, { data, timestamp: Date.now() });
 
     return data;

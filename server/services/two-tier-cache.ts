@@ -65,7 +65,9 @@ export class TwoTierCache {
     constructor(options: TwoTierCacheOptions = {}) {
         this.L1_DEFAULT_TTL = options.l1TtlMs ?? 30 * 1000; // default 30s
         this.L2_DEFAULT_TTL = options.l2TtlSeconds ?? 5 * 60; // default 5min
-        this.L2_TIMEOUT = options.l2TimeoutMs ?? 250; // default 250ms
+        // CRITICAL: Short timeout for L2 (200-500ms) to fail-fast and go directly to DB
+        // If Redis is slow or unavailable, we skip it and query DB (which is fast in logs)
+        this.L2_TIMEOUT = options.l2TimeoutMs ?? 300; // default 300ms (within 200-500ms range)
         this.CLEANUP_INTERVAL = options.cleanupIntervalMs ?? 60 * 1000; // default 60s
         this.l2Client = options.l2 ?? distributedCache;
 
@@ -75,6 +77,9 @@ export class TwoTierCache {
 
     /**
      * Get value from cache (L1 → L2 → null)
+     * 
+     * CRITICAL: Fail-open pattern - if L2 (Redis) fails or times out,
+     * returns null immediately to allow direct DB query (which is fast)
      */
     async get(key: string): Promise<any> {
         // L1: Check in-memory cache first (< 1ms)
@@ -86,7 +91,8 @@ export class TwoTierCache {
 
         this.stats.l1Misses++;
 
-        // L2: Check Redis/Upstash with timeout
+        // L2: Check Redis/Upstash with short timeout (fail-open pattern)
+        // If Redis is slow/unavailable, skip it and go directly to DB
         try {
             const l2Data = await this.getFromL2WithTimeout(key);
 
@@ -102,9 +108,17 @@ export class TwoTierCache {
             this.stats.l2Misses++;
             return null;
         } catch (error) {
-            // L2 failed - log and return null (will trigger DB query)
-            console.warn(`[TwoTierCache] L2 error for key ${key}:`, error instanceof Error ? error.message : 'Unknown error');
-            this.stats.l2Errors++;
+            // CRITICAL: Fail-open - L2 failed (timeout or error)
+            // Return null immediately to allow direct DB query (which is fast)
+            // Don't block or retry - fail-fast and go to DB
+            if (error instanceof Error && error.message === 'L2 cache timeout') {
+                this.stats.l2Timeouts++;
+                // Timeout is already logged in getFromL2WithTimeout
+            } else {
+                console.warn(`[TwoTierCache] L2 error for key ${key} (fail-open to DB):`, error instanceof Error ? error.message : 'Unknown error');
+                this.stats.l2Errors++;
+            }
+            // Return null to trigger DB query (fail-open pattern)
             return null;
         }
     }
@@ -228,7 +242,11 @@ export class TwoTierCache {
     }
 
     /**
-     * Get value from L2 with timeout
+     * Get value from L2 with short timeout (fail-open pattern)
+     * 
+     * CRITICAL: Uses short timeout (200-500ms) to fail-fast
+     * If Redis is slow or unavailable, throws timeout error immediately
+     * This allows the caller to go directly to DB without blocking
      */
     private async getFromL2WithTimeout(key: string): Promise<any> {
         const timeoutPromise = new Promise<null>((_, reject) => {
@@ -243,9 +261,12 @@ export class TwoTierCache {
             return result;
         } catch (error) {
             if (error instanceof Error && error.message === 'L2 cache timeout') {
-                this.stats.l2Timeouts++;
-                console.warn(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms)`);
+                // CRITICAL: Short timeout - fail-fast and go to DB
+                // Don't log as error - this is expected behavior when Redis is slow
+                // The DB query is fast, so we prefer to skip slow Redis
+                console.log(`[TwoTierCache] L2 timeout for key ${key} (>${this.L2_TIMEOUT}ms) - failing open to DB`);
             }
+            // Re-throw to be handled by caller (fail-open pattern)
             throw error;
         }
     }
