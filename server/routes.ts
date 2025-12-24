@@ -2354,10 +2354,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const responseSizeKB = Math.round(responseSizeBytes / 1024);
       mark('json-stringify');
 
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      // Increased from 10 min to 15 min for better hit rate (safe because mutations invalidate immediately)
+      // OPTIMIZED: Cache for 20 minutes (1200 seconds) - invalidated granularly on mutations
+      // Increased from 15 min to 20 min for better hit rate (safe because mutations invalidate immediately)
+      // Make cache set non-blocking to avoid delays if Redis is slow
       const cacheSetStart = Date.now();
-      await distributedCache.set(cacheKey, response, 900);
+      try {
+        await Promise.race([
+          distributedCache.set(cacheKey, response, 1200),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 3000))
+        ]);
+      } catch (cacheError) {
+        // Log but don't block response - cache is optional
+        if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+          console.warn(`[CACHE] Timeout setting page-data-lite cache after 3000ms, continuing without cache`);
+        } else {
+          console.warn(`[CACHE] Failed to set page-data-lite cache:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        }
+      }
       const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
 
@@ -2576,15 +2589,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // OPTIMIZED: Increased catalog cache from 5 min to 30 min (they rarely change)
-      // OPTIMIZED: Increased timeout from 2000ms to 3000ms to reduce DB fallbacks
+      // OPTIMIZED: Increased timeout from 3000ms to 5000ms to reduce DB fallbacks (Redis may be slow)
       let catalogs: any = null;
       try {
         catalogs = await Promise.race([
           distributedCache.get(cacheKeyCatalogs),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 3000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 5000))
         ]);
       } catch (cacheError) {
-        console.warn(`[CACHE] Failed to get catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        // Cache timeout or error - continue without cache (not a critical error)
+        if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+          console.warn(`[CACHE] Timeout getting catalogs cache (${cacheKeyCatalogs}) after 5000ms, fetching from DB`);
+        } else {
+          console.warn(`[CACHE] Failed to get catalogs cache (${cacheKeyCatalogs}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        }
         // Continue without cache - will fetch from DB
         catalogs = null;
       }

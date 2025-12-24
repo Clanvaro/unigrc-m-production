@@ -188,60 +188,165 @@ class UpstashRedisAdapter {
 
 type RedisClient = IoRedis | InMemoryCache | UpstashRedisAdapter;
 
-// FIXED: Initialize variables to prevent 'Cannot access before initialization' errors
+// CRITICAL: Singleton pattern - ONE Redis client per Cloud Run instance
+// This prevents multiple connections from being created
 let redis: RedisClient | null = null;
 let usingRealRedis = false;
+let redisInitialized = false; // Track initialization to prevent multiple initializations
+let redisInitPromise: Promise<void> | null = null; // Track ongoing initialization
 
 const REDIS_URL = process.env.REDIS_URL;
 const UPSTASH_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-if (UPSTASH_REST_URL && UPSTASH_REST_TOKEN) {
-  try {
-    redis = new UpstashRedisAdapter(UPSTASH_REST_URL, UPSTASH_REST_TOKEN);
-    usingRealRedis = true;
-    console.log('✅ Using Upstash Redis (REST API) for distributed caching');
-  } catch (error) {
-    console.warn('⚠️ Upstash Redis initialization failed, using in-memory cache:', error);
-    redis = new InMemoryCache();
+/**
+ * CRITICAL: Initialize Redis client ONCE per process instance
+ * This function ensures only ONE connection is created, even if called multiple times
+ */
+function initializeRedis(): Promise<void> {
+  // If already initialized, return immediately
+  if (redisInitialized && redis !== null) {
+    return Promise.resolve();
   }
-} else if (REDIS_URL && REDIS_URL.startsWith('redis')) {
-  try {
-    redis = new IoRedis(REDIS_URL, {
-      maxRetriesPerRequest: 3,
-      enableReadyCheck: true,
-      connectTimeout: 10000,
-      lazyConnect: true,
-      retryStrategy: (times) => Math.min(times * 100, 3000),
-    });
+  
+  // If initialization is in progress, wait for it
+  if (redisInitPromise) {
+    return redisInitPromise;
+  }
+  
+  // Start initialization
+  redisInitPromise = (async () => {
+    if (redisInitialized) {
+      console.log('⚠️ [REDIS] Redis already initialized, skipping re-initialization');
+      return;
+    }
     
-    redis.on('connect', () => {
-      console.log('✅ Connected to Redis');
-      usingRealRedis = true;
-    });
+    console.log(`🔄 [REDIS] Initializing Redis client (singleton pattern - process PID: ${process.pid})...`);
     
-    redis.on('error', (err) => {
-      console.error('❌ Redis connection error:', err.message);
-    });
-    
-    redis.connect().catch((err) => {
-      console.warn('⚠️ Redis connection failed, falling back to in-memory cache:', err.message);
+    if (UPSTASH_REST_URL && UPSTASH_REST_TOKEN) {
+      try {
+        redis = new UpstashRedisAdapter(UPSTASH_REST_URL, UPSTASH_REST_TOKEN);
+        usingRealRedis = true;
+        redisInitialized = true;
+        console.log('✅ [REDIS] Using Upstash Redis (REST API) for distributed caching (singleton)');
+      } catch (error) {
+        console.warn('⚠️ [REDIS] Upstash Redis initialization failed, using in-memory cache:', error);
+        redis = new InMemoryCache();
+        redisInitialized = true;
+      }
+    } else if (REDIS_URL && REDIS_URL.startsWith('redis')) {
+      try {
+        // OPTIMIZED: Singleton Redis client with persistent connection and keep-alive
+        // CRITICAL: One connection per Cloud Run instance, reused across all requests
+        const redisClient = new IoRedis(REDIS_URL, {
+          // Connection management
+          maxRetriesPerRequest: 3,
+          enableReadyCheck: true,
+          connectTimeout: 10000,
+          lazyConnect: true, // CRITICAL: Use lazy connect, then connect explicitly below for better control
+          
+          // CRITICAL: Keep connection alive to prevent frequent reconnections
+          keepAlive: 30000, // Send keep-alive ping every 30 seconds
+          family: 4, // Use IPv4 (faster, more reliable)
+          
+          // Retry strategy: exponential backoff with max delay
+          retryStrategy: (times) => {
+            const delay = Math.min(times * 100, 3000);
+            console.log(`[REDIS] Retry attempt ${times}, waiting ${delay}ms`);
+            return delay;
+          },
+          
+          // CRITICAL: Prevent connection from closing on idle
+          // This ensures the connection stays open between requests
+          enableOfflineQueue: true, // Queue commands when disconnected
+          
+          // CRITICAL: Auto-reconnect on connection loss (default is true, but explicit is better)
+          enableAutoPipelining: false, // Disable auto-pipelining to avoid connection issues
+          
+          // Reconnect on close (critical for Cloud Run)
+          reconnectOnError: (err) => {
+            const targetError = 'READONLY';
+            if (err.message.includes(targetError)) {
+              // Only reconnect on specific errors
+              return true;
+            }
+            return false;
+          },
+        });
+        
+        // CRITICAL: Track connection creation to detect multiple connections
+        const connectionId = `redis-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`🔄 [REDIS] Creating Redis client instance: ${connectionId} (PID: ${process.pid})`);
+        
+        // Connection event handlers with detailed logging
+        redisClient.on('connect', () => {
+          console.log(`✅ [REDIS] Connected to Redis (connection: ${connectionId}, PID: ${process.pid})`);
+          console.log(`📊 [REDIS] Connection stats: ${JSON.stringify({
+            connectionId,
+            pid: process.pid,
+            uptime: process.uptime(),
+            memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+          })}`);
+          usingRealRedis = true;
+        });
+        
+        redisClient.on('ready', () => {
+          console.log(`✅ [REDIS] Redis client ready (PID: ${process.pid})`);
+        });
+        
+        redisClient.on('error', (err) => {
+          console.error(`❌ [REDIS] Connection error (PID: ${process.pid}):`, err.message);
+          // Don't fall back to in-memory on error - let retry strategy handle it
+        });
+        
+        redisClient.on('close', () => {
+          console.warn(`⚠️ [REDIS] Connection closed (PID: ${process.pid}) - will reconnect automatically`);
+        });
+        
+        redisClient.on('reconnecting', (delay) => {
+          console.log(`🔄 [REDIS] Reconnecting in ${delay}ms... (PID: ${process.pid})`);
+        });
+        
+        redisClient.on('end', () => {
+          console.warn(`⚠️ [REDIS] Connection ended (PID: ${process.pid})`);
+        });
+        
+        redis = redisClient;
+        redisInitialized = true;
+        
+        // Connect immediately to establish connection at startup
+        await redisClient.connect().catch((err) => {
+          console.warn(`⚠️ [REDIS] Initial connection failed (PID: ${process.pid}), falling back to in-memory cache:`, err.message);
+          redis = new InMemoryCache();
+          usingRealRedis = false;
+        });
+        
+        console.log(`🔄 [REDIS] Redis connection initiated (singleton pattern - ONE connection per instance, PID: ${process.pid})...`);
+      } catch (error) {
+        console.warn(`⚠️ [REDIS] Initialization failed (PID: ${process.pid}), using in-memory cache:`, error);
+        redis = new InMemoryCache();
+        redisInitialized = true;
+      }
+    } else {
+      console.log('ℹ️  [REDIS] Using in-memory cache (set UPSTASH_REDIS_REST_URL & UPSTASH_REDIS_REST_TOKEN for distributed caching)');
       redis = new InMemoryCache();
-      usingRealRedis = false;
-    });
-    
-    console.log('🔄 Attempting Redis connection...');
-  } catch (error) {
-    console.warn('⚠️ Redis initialization failed, using in-memory cache');
-    redis = new InMemoryCache();
-  }
-} else {
-  console.log('ℹ️  Using in-memory cache (set UPSTASH_REDIS_REST_URL & UPSTASH_REDIS_REST_TOKEN for distributed caching)');
-  redis = new InMemoryCache();
+      redisInitialized = true;
+    }
+  })();
+  
+  return redisInitPromise;
 }
 
+// CRITICAL: Initialize Redis immediately when module loads
+// This ensures connection is established at startup, not on first request
+initializeRedis().catch((err) => {
+  console.error('❌ [REDIS] Failed to initialize Redis:', err);
+});
+
+// CRITICAL: Export singleton instance directly
+// The initialization happens at module load time, ensuring ONE connection per process
 export default redis;
-export { usingRealRedis };
+export { usingRealRedis, initializeRedis };
 
 export class DistributedCache {
   private readonly defaultTTL = 5 * 60;
@@ -254,7 +359,15 @@ export class DistributedCache {
   }
   
   private getRedis(): RedisClient | null {
-    // FIXED: Always get the current redis instance to handle re-initialization
+    // CRITICAL: Always return the singleton instance
+    // If Redis is not initialized yet, wait for initialization (shouldn't happen in production)
+    if (!redisInitialized && !redis) {
+      console.warn('[REDIS] Redis not initialized yet, initializing now...');
+      // This should not happen, but if it does, initialize synchronously
+      initializeRedis().catch(err => {
+        console.error('[REDIS] Failed to initialize Redis in getRedis():', err);
+      });
+    }
     return redis || null;
   }
   
