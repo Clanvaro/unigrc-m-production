@@ -442,12 +442,14 @@ export class TwoTierCache {
 
 // Export singleton instance with optimized settings for latency-resistant architecture
 // CRITICAL: Upstash is out of critical path - fail-fast, serve stale, deduplicate
+// OPTIMIZED: TTLs aumentados para catálogos estáticos (1-2 horas)
+// Prewarm se ejecuta cada 28 min, así que L2 de 2 horas está bien (cache siempre caliente)
 export const twoTierCache = new TwoTierCache({
-    l1TtlMs: 5 * 60 * 1000,        // 5 min L1 for catalogs (was 30s - too short)
-    l2TtlSeconds: 30 * 60,         // 30 min L2 for catalogs (was 5min - too short)
+    l1TtlMs: 10 * 60 * 1000,       // 10 min L1 (aumentado de 5 min para catálogos estáticos)
+    l2TtlSeconds: 2 * 60 * 60,     // 2 horas L2 para catálogos estáticos (aumentado de 30 min)
     l2TimeoutMs: 200,              // 200ms timeout (ultra-short, fail-fast)
     enableSingleFlight: true,      // Deduplicate concurrent requests
-    staleMaxAgeMs: 10 * 60 * 1000  // 10 min stale-while-revalidate for catalogs
+    staleMaxAgeMs: 30 * 60 * 1000  // 30 min stale-while-revalidate (aumentado de 10 min)
 });
 
 // Export stats endpoint helper

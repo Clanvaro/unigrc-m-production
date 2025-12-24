@@ -1687,8 +1687,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // Cache for 30 minutes (L1: 5min, L2: 30min) - static organizational structure
-      await twoTierCache.set(cacheKey, basicProcesses, 1800);
+      // Cache for 2 hours (L1: 10min, L2: 2h) - static organizational structure
+      // Prewarm refreshes every 28 min, so 2h TTL ensures cache is always warm
+      await twoTierCache.set(cacheKey, basicProcesses, 2 * 60 * 60);
 
       const totalDuration = Date.now() - requestStart;
       console.log(`[PERF] /api/processes/basic COMPLETE in ${totalDuration}ms (${basicProcesses.length} processes)`);

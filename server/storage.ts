@@ -5116,6 +5116,20 @@ export class MemStorage implements IStorage {
     const results = await batchQueries(queryFunctions, 5);
     const [allRisks, allRiskControls, allMacroprocesos, allProcesses, allSubprocesos, method, weights, ranges] = results;
 
+    // OPTIMIZED: Use SQL GROUP BY for simple aggregation methods (average/worst_case)
+    // This reduces memory processing significantly for large datasets
+    const useSqlAggregation = method === 'average' || method === 'worst_case';
+    
+    if (useSqlAggregation && allRisks.length > 100) {
+      // For large datasets, use SQL GROUP BY for better performance
+      return await this.getAllRiskLevelsOptimizedWithSqlGroupBy(
+        needSubprocesos, needProcesses, needMacroprocesos,
+        allMacroprocesos, allProcesses, allSubprocesos,
+        method, cacheKey
+      );
+    }
+
+    // For small datasets or weighted method, use in-memory processing (existing logic)
     // Create risk-control mapping for quick lookup
     // Use a Map<string, number[]> to store just the residual risks
     const riskControlMap = new Map<string, number[]>();
@@ -5308,6 +5322,207 @@ export class MemStorage implements IStorage {
     };
 
     // Update cache for this specific tenant + entities combination
+    this.riskLevelsCache.set(cacheKey, {
+      data: result,
+      timestamp: Date.now()
+    });
+
+    return result;
+  }
+
+  /**
+   * OPTIMIZED: Use SQL GROUP BY for risk level aggregation (for average/worst_case methods)
+   * This significantly reduces memory processing for large datasets
+   */
+  private async getAllRiskLevelsOptimizedWithSqlGroupBy(
+    needSubprocesos: boolean,
+    needProcesses: boolean,
+    needMacroprocesos: boolean,
+    allMacroprocesos: any[],
+    allProcesses: any[],
+    allSubprocesos: any[],
+    method: string,
+    cacheKey: string
+  ): Promise<{
+    macroprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    processes: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>,
+    subprocesos: Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>
+  }> {
+    const { sql } = await import('drizzle-orm');
+    const { requireDb } = await import('./db');
+    const db = requireDb();
+    
+    // Build SQL aggregation based on method
+    const inherentAgg = method === 'average' 
+      ? sql`AVG(r.inherent_risk)`
+      : sql`MAX(r.inherent_risk)`; // worst_case
+    
+    const residualAgg = method === 'average'
+      ? sql`AVG(COALESCE(rc_min.min_residual_risk, r.inherent_risk))`
+      : sql`MAX(COALESCE(rc_min.min_residual_risk, r.inherent_risk))`; // worst_case
+
+    const subprocesoRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
+    const processRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
+    const macroprocesoRiskLevels = new Map<string, { inherentRisk: number, residualRisk: number, riskCount: number }>();
+
+    // Calculate for subprocesos using SQL GROUP BY
+    if (needSubprocesos) {
+      const subprocesoResults = await db.execute(sql`
+        SELECT 
+          r.subproceso_id as entity_id,
+          COUNT(*)::integer as risk_count,
+          ROUND(${inherentAgg}::numeric, 1) as inherent_risk,
+          ROUND(${residualAgg}::numeric, 1) as residual_risk
+        FROM risks r
+        LEFT JOIN (
+          SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+          FROM risk_controls
+          GROUP BY risk_id
+        ) rc_min ON r.id = rc_min.risk_id
+        WHERE r.deleted_at IS NULL 
+          AND r.status = 'active'
+          AND r.subproceso_id IS NOT NULL
+        GROUP BY r.subproceso_id
+      `);
+      
+      for (const row of subprocesoResults.rows as any[]) {
+        subprocesoRiskLevels.set(row.entity_id, {
+          inherentRisk: Number(row.inherent_risk) || 0,
+          residualRisk: Number(row.residual_risk) || 0,
+          riskCount: Number(row.risk_count) || 0
+        });
+      }
+    }
+
+    // Calculate for processes using SQL GROUP BY (includes direct + subprocess risks)
+    if (needProcesses) {
+      const processResults = await db.execute(sql`
+        WITH process_risks AS (
+          -- Direct process risks
+          SELECT r.process_id as entity_id, r.inherent_risk, 
+                 COALESCE(rc_min.min_residual_risk, r.inherent_risk) as residual_risk
+          FROM risks r
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
+          WHERE r.deleted_at IS NULL 
+            AND r.status = 'active'
+            AND r.process_id IS NOT NULL
+          
+          UNION ALL
+          
+          -- Subprocess risks (via subproceso -> process relationship)
+          SELECT s.proceso_id as entity_id, r.inherent_risk,
+                 COALESCE(rc_min.min_residual_risk, r.inherent_risk) as residual_risk
+          FROM risks r
+          INNER JOIN subprocesos s ON r.subproceso_id = s.id AND s.deleted_at IS NULL
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
+          WHERE r.deleted_at IS NULL 
+            AND r.status = 'active'
+            AND r.subproceso_id IS NOT NULL
+            AND s.proceso_id IS NOT NULL
+        )
+        SELECT 
+          entity_id,
+          COUNT(*)::integer as risk_count,
+          ROUND(${inherentAgg}::numeric, 1) as inherent_risk,
+          ROUND(${residualAgg}::numeric, 1) as residual_risk
+        FROM process_risks
+        GROUP BY entity_id
+      `);
+      
+      for (const row of processResults.rows as any[]) {
+        processRiskLevels.set(row.entity_id, {
+          inherentRisk: Number(row.inherent_risk) || 0,
+          residualRisk: Number(row.residual_risk) || 0,
+          riskCount: Number(row.risk_count) || 0
+        });
+      }
+    }
+
+    // Calculate for macroprocesos using SQL GROUP BY (includes direct + process + subprocess risks)
+    if (needMacroprocesos) {
+      const macroprocesoResults = await db.execute(sql`
+        WITH macroproceso_risks AS (
+          -- Direct macroproceso risks
+          SELECT r.macroproceso_id as entity_id, r.id as risk_id, r.inherent_risk,
+                 COALESCE(rc_min.min_residual_risk, r.inherent_risk) as residual_risk
+          FROM risks r
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
+          WHERE r.deleted_at IS NULL 
+            AND r.status = 'active'
+            AND r.macroproceso_id IS NOT NULL
+          
+          UNION ALL
+          
+          -- Process risks (via process -> macroproceso relationship)
+          SELECT p.macroproceso_id as entity_id, r.id as risk_id, r.inherent_risk,
+                 COALESCE(rc_min.min_residual_risk, r.inherent_risk) as residual_risk
+          FROM risks r
+          INNER JOIN processes p ON r.process_id = p.id AND p.deleted_at IS NULL
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
+          WHERE r.deleted_at IS NULL 
+            AND r.status = 'active'
+            AND r.process_id IS NOT NULL
+            AND p.macroproceso_id IS NOT NULL
+          
+          UNION ALL
+          
+          -- Subprocess risks (via subproceso -> process -> macroproceso relationship)
+          SELECT p.macroproceso_id as entity_id, r.id as risk_id, r.inherent_risk,
+                 COALESCE(rc_min.min_residual_risk, r.inherent_risk) as residual_risk
+          FROM risks r
+          INNER JOIN subprocesos s ON r.subproceso_id = s.id AND s.deleted_at IS NULL
+          INNER JOIN processes p ON s.proceso_id = p.id AND p.deleted_at IS NULL
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk::numeric) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
+          WHERE r.deleted_at IS NULL 
+            AND r.status = 'active'
+            AND r.subproceso_id IS NOT NULL
+            AND p.macroproceso_id IS NOT NULL
+        )
+        SELECT 
+          entity_id,
+          COUNT(DISTINCT risk_id)::integer as risk_count,
+          ROUND(${inherentAgg}::numeric, 1) as inherent_risk,
+          ROUND(${residualAgg}::numeric, 1) as residual_risk
+        FROM macroproceso_risks
+        GROUP BY entity_id
+      `);
+      
+      for (const row of macroprocesoResults.rows as any[]) {
+        macroprocesoRiskLevels.set(row.entity_id, {
+          inherentRisk: Number(row.inherent_risk) || 0,
+          residualRisk: Number(row.residual_risk) || 0,
+          riskCount: Number(row.risk_count) || 0
+        });
+      }
+    }
+
+    const result = {
+      macroprocesos: macroprocesoRiskLevels,
+      processes: processRiskLevels,
+      subprocesos: subprocesoRiskLevels
+    };
+
+    // Update cache
     this.riskLevelsCache.set(cacheKey, {
       data: result,
       timestamp: Date.now()

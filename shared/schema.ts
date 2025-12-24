@@ -227,6 +227,12 @@ export const risks = pgTable("risks", {
   // Performance optimization: filter counts by inherent_risk (slow count queries)
   index("idx_risks_inherent_risk").on(table.inherentRisk),
   // Composite index for efficient pagination queries (filters by status, sorts by created_at)
+  // CRITICAL: Composite index for common query pattern: WHERE deleted_at IS NULL AND status = 'active' ORDER BY created_at
+  index("idx_risks_active_created").on(table.status, table.createdAt).where(sql`${table.deletedAt} IS NULL`),
+  // CRITICAL: Composite index for filtering by process/subproceso with status filter
+  index("idx_risks_process_active").on(table.processId, table.status).where(sql`${table.deletedAt} IS NULL`),
+  index("idx_risks_subproceso_active").on(table.subprocesoId, table.status).where(sql`${table.deletedAt} IS NULL`),
+  index("idx_risks_macroproceso_active").on(table.macroprocesoId, table.status).where(sql`${table.deletedAt} IS NULL`),
 ]);
 
 // Nueva tabla para manejar la relación muchos-a-muchos entre riesgos y procesos
@@ -433,6 +439,8 @@ export const riskControls = pgTable("risk_controls", {
   index("idx_rc_risk_id").on(table.riskId),
   index("idx_rc_control_id").on(table.controlId),
   index("idx_rc_risk_control").on(table.riskId, table.controlId),
+  // CRITICAL: Index for MIN(residual_risk) aggregation queries (used in getAllRiskLevelsOptimized)
+  index("idx_rc_risk_residual").on(table.riskId, table.residualRisk),
   // Constraint único para evitar asociaciones duplicadas
   uniqueIndex("unique_risk_control").on(table.riskId, table.controlId),
 ]);
