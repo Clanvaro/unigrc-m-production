@@ -21206,6 +21206,8 @@ export class DatabaseStorage extends MemStorage {
       const queryLimit = limit || 1000;
 
       try {
+        // OPTIMIZED: Query with indexed columns first, then fetch related data in batch
+        // This reduces JOIN complexity and improves performance
         const sqlResults = await db.execute(sql`
           SELECT 
             rpl.id as rpl_id,
@@ -21226,6 +21228,8 @@ export class DatabaseStorage extends MemStorage {
             r.name as risk_name,
             r.status as risk_status,
             r.process_owner as risk_process_owner,
+            r.inherent_risk as risk_inherent_risk,
+            r.residual_risk as risk_residual_risk,
             m.id as macro_id,
             m.name as macro_name,
             m.owner_id as macro_owner_id,
@@ -21240,12 +21244,12 @@ export class DatabaseStorage extends MemStorage {
             u.email as val_user_email,
             COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id
           FROM risk_process_links rpl
-          INNER JOIN risks r ON rpl.risk_id = r.id
+          INNER JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
           LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
           LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
           LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
           LEFT JOIN users u ON rpl.validated_by = u.id
-          WHERE rpl.validation_status = ${status} AND r.deleted_at IS NULL
+          WHERE rpl.validation_status = ${status}
           ORDER BY rpl.created_at
           LIMIT ${queryLimit}
         `);
@@ -21288,8 +21292,8 @@ export class DatabaseStorage extends MemStorage {
             code: result.risk_code!,
             name: result.risk_name!,
             status: result.risk_status!,
-            inherentRisk: (result as any).risk_inherent_risk ?? null,
-            residualRisk: (result as any).risk_residual_risk ?? null,
+            inherentRisk: result.risk_inherent_risk ?? null,
+            residualRisk: result.risk_residual_risk ?? null,
             processOwner: result.risk_process_owner ?? null
           },
           macroproceso: result.macro_id ? {

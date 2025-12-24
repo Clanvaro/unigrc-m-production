@@ -110,23 +110,25 @@ export default function RiskValidationPage() {
   const notNotifiedActionPlansPagination = usePagination({ pageSize: 50 });
 
   // New queries for risk-process links instead of whole risks
-  // OPTIMIZATION: Only fetch when risks tab is active + cache optimization to prevent unnecessary refetches
+  // OPTIMIZED: Increased staleTime to match server cache (5 min for pending)
   const { data: pendingRiskProcessLinks = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/pending"],
     enabled: activeTab === "risks",
-    staleTime: 30000,
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
-    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    gcTime: 1000 * 60 * 15, // Mantener cache 15 minutos
   });
 
+  // OPTIMIZED: Removed refetchOnMount - server cache (10 min) handles freshness
+  // Only refetch on window focus if user might have validated from another tab
   const { data: validatedRiskProcessLinks = [], refetch: refetchValidated, isLoading: isValidatedLoading, error: validatedError } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/validated"],
     enabled: activeTab === "risks",
-    staleTime: 60000,
-    refetchOnMount: true, // Refetch al montar para asegurar datos frescos
+    staleTime: 1000 * 60 * 9, // 9 minutes - slightly less than server cache (10 min)
+    refetchOnMount: false, // OPTIMIZED: Server cache handles freshness, no need to refetch on mount
     refetchOnWindowFocus: true, // Refetch al volver a la ventana (usuario puede haber validado desde otra pestaña)
-    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    gcTime: 1000 * 60 * 15, // Mantener cache 15 minutos
     retry: 2, // Reintentar 2 veces si falla
   });
 
@@ -146,22 +148,23 @@ export default function RiskValidationPage() {
     }
   }, [statusFilter, activeTab, refetchValidated, queryClient]);
 
+  // OPTIMIZED: Increased staleTime to match server cache (10 min for rejected/observed)
   const { data: rejectedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/rejected"],
     enabled: activeTab === "risks",
-    staleTime: 60000,
+    staleTime: 1000 * 60 * 9, // 9 minutes - slightly less than server cache (10 min)
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: true, // Refetch al volver a la ventana
-    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    gcTime: 1000 * 60 * 15, // Mantener cache 15 minutos
   });
 
   const { data: observedRiskProcessLinks = [] } = useQuery<any[]>({
     queryKey: ["/api/risk-processes/validation/observed"],
     enabled: activeTab === "risks",
-    staleTime: 60000,
+    staleTime: 1000 * 60 * 9, // 9 minutes - slightly less than server cache (10 min)
     refetchOnMount: false, // NO refetch al montar componente
     refetchOnWindowFocus: true, // Refetch al volver a la ventana
-    gcTime: 1000 * 60 * 10, // Mantener cache 10 minutos
+    gcTime: 1000 * 60 * 15, // Mantener cache 15 minutos
   });
 
   // Shared catalog queries (always enabled) with 2-minute staleTime
