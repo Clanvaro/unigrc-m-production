@@ -297,26 +297,27 @@ export async function getRelationsLite(
   // Si los datos vienen del read-model, esto puede ser opcional
   // Pero si necesitas datos adicionales no en read-model, hacer queries agregadas
 
-  // Construir condiciones base (mismas que getRisksFromReadModel)
-  const baseConditions: any[] = [sql`r.status <> 'deleted'`];
+  // OPTIMIZADO: Usar risk_list_view para obtener IDs (más rápido que risks)
+  // Construir condiciones (mismas que getRisksFromReadModel)
+  const baseConditions: any[] = [sql`status <> 'deleted'`];
 
   if (filters.search) {
     const searchPattern = `%${filters.search}%`;
     baseConditions.push(
-      sql`(r.name ILIKE ${searchPattern} OR r.code ILIKE ${searchPattern})`
+      sql`(name ILIKE ${searchPattern} OR code ILIKE ${searchPattern})`
     );
   }
 
   if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
-    baseConditions.push(sql`r.macroproceso_id = ${filters.macroprocesoId}`);
+    baseConditions.push(sql`macroproceso_id = ${filters.macroprocesoId}`);
   }
 
   if (filters.processId && filters.processId !== 'all') {
-    baseConditions.push(sql`r.process_id = ${filters.processId}`);
+    baseConditions.push(sql`process_id = ${filters.processId}`);
   }
 
   if (filters.subprocesoId && filters.subprocesoId !== 'all') {
-    baseConditions.push(sql`r.subproceso_id = ${filters.subprocesoId}`);
+    baseConditions.push(sql`subproceso_id = ${filters.subprocesoId}`);
   }
 
   const baseWhereClause =
@@ -324,9 +325,9 @@ export async function getRelationsLite(
       ? sql`WHERE ${sql.join(baseConditions, sql` AND `)}`
       : sql``;
 
-  // Obtener risk IDs que cumplen los filtros (para optimizar queries de relaciones)
+  // OPTIMIZADO: Obtener risk IDs desde read-model (más rápido)
   const riskIdsResult = await db.execute(sql`
-    SELECT id FROM risks r
+    SELECT id FROM risk_list_view
     ${baseWhereClause}
   `);
   const riskIds = (riskIdsResult.rows as any[]).map((r) => r.id);

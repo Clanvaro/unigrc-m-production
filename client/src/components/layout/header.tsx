@@ -155,6 +155,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   // Get tenant/user identifier for cache key (single-tenant mode uses fixed value)
   const tenantId = currentUser?.id || 'single-tenant';
   
+  // DISABLED: Ya no se usa page-data-lite porque la página de riesgos usa el endpoint BFF /api/pages/risks
+  // Esto evita llamadas duplicadas y mejora el rendimiento
+  // Si necesitas datos de riesgos en el header, usa el endpoint BFF directamente
   const { data: risksPageData } = useQuery<PageDataLite>({
     queryKey: ['risks-page-data-lite', tenantId],
     queryFn: async () => {
@@ -162,15 +165,15 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       if (!response.ok) throw new Error("Failed to fetch page data");
       return response.json();
     },
-    staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - reduces refetch frequency while keeping data fresh (invalidated on mutations)
-    gcTime: 10 * 60 * 1000, // ⬆️ 10 minutes - keep in cache longer for better performance
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh - prevents duplicate requests with bootstrap
-    enabled: location === "/risks",
-    retry: 1, // Only retry once on error
+    refetchOnMount: false,
+    enabled: false, // DISABLED: La página de riesgos usa /api/pages/risks (BFF), no necesitamos esta query
+    retry: 1,
     retryDelay: 1000,
-    placeholderData: (previousData) => previousData, // Keep previous data while loading (stale-while-revalidate pattern)
+    placeholderData: (previousData) => previousData,
   });
 
   // Common data queries (used by multiple filter sections)

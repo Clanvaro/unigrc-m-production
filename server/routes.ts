@@ -2749,12 +2749,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // SingleFlight: si 20 requests llegan simultáneamente, solo 1 ejecuta la query
       const pageData = await bootstrapCache.get(cacheKey, async () => {
         // Esta función solo se ejecuta una vez (SingleFlight)
+        const fetchStart = Date.now();
         const [risksData, counts, catalogs, relationsLite] = await Promise.all([
           getRisksFromReadModel({ limit, offset, filters }),
           getRiskCounts(filters),
           getMinimalCatalogs(),
           getRelationsLite(filters),
         ]);
+        
+        const fetchDuration = Date.now() - fetchStart;
+        console.log(`[PERF] /api/pages/risks data fetch: ${fetchDuration}ms (risks: ${risksData.risks.length}, total: ${risksData.total})`);
 
         // Usar Record en lugar de Map para serialización JSON
         const response = {
