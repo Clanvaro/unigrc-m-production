@@ -440,8 +440,15 @@ export class TwoTierCache {
     }
 }
 
-// Export singleton instance
-export const twoTierCache = new TwoTierCache();
+// Export singleton instance with optimized settings for latency-resistant architecture
+// CRITICAL: Upstash is out of critical path - fail-fast, serve stale, deduplicate
+export const twoTierCache = new TwoTierCache({
+    l1TtlMs: 5 * 60 * 1000,        // 5 min L1 for catalogs (was 30s - too short)
+    l2TtlSeconds: 30 * 60,         // 30 min L2 for catalogs (was 5min - too short)
+    l2TimeoutMs: 200,              // 200ms timeout (ultra-short, fail-fast)
+    enableSingleFlight: true,      // Deduplicate concurrent requests
+    staleMaxAgeMs: 10 * 60 * 1000  // 10 min stale-while-revalidate for catalogs
+});
 
 // Export stats endpoint helper
 export function getCacheStatsForEndpoint() {

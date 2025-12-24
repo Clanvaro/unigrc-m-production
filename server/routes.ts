@@ -28184,6 +28184,49 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   console.log('🔍 Query Analyzer routes registered (admin only)');
 
+  // ============= CACHE PREWARM ENDPOINTS =============
+  // Endpoint para trigger manual de prewarm (útil para Cloud Scheduler)
+  app.get("/api/cache/prewarm", isAuthenticated, async (req, res) => {
+    try {
+      const { cachePrewarmService } = await import('./jobs/prewarm-cache');
+      const result = await cachePrewarmService.triggerPrewarm();
+      
+      if (result.success) {
+        const status = cachePrewarmService.getStatus();
+        res.json({
+          success: true,
+          message: result.message,
+          status
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: result.message
+        });
+      }
+    } catch (error) {
+      console.error('Error triggering prewarm:', error);
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Endpoint para obtener status del prewarm service
+  app.get("/api/cache/prewarm/status", isAuthenticated, async (req, res) => {
+    try {
+      const { cachePrewarmService } = await import('./jobs/prewarm-cache');
+      const status = cachePrewarmService.getStatus();
+      res.json(status);
+    } catch (error) {
+      console.error('Error getting prewarm status:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // ============= INITIALIZE NOTIFICATION SCHEDULER =============
   console.log('📅 Starting NotificationScheduler with automated tasks...');
 

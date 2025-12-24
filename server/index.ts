@@ -6,6 +6,7 @@ dotenv.config();
 import express, { type Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import { registerRoutes, warmCacheForAllTenants } from "./routes";
+import { cachePrewarmService } from "./jobs/prewarm-cache";
 import { serveStatic, log } from "./static";
 import { performanceMiddleware, errorLoggingMiddleware } from "./middleware/performance";
 import { logger } from "./logger";
@@ -219,13 +220,11 @@ app.use((req, res, next) => {
       console.warn('⚠️ Could not load OpenAI Service:', error);
     }
 
-    // OPTIMIZED: Cache warming is now lazy - triggered by getFromTieredCache on first access
-    // // Warm cache in background (non-blocking) after server is ready
-    // // This pre-loads common data to Redis to eliminate cold cache latency on first load
-    // setTimeout(() => {
-    //   warmCacheForAllTenants().catch((error) => {
-    //     console.warn('⚠️ Background cache warming failed:', error);
-    //   });
-    // }, 2000); // Wait 2s for DB pool to stabilize before warming cache
+    // Start cache prewarm service (latency-resistant architecture)
+    // Precarga catálogos críticos cada 25 minutos para mantener cache siempre caliente
+    // Esto asegura que Upstash nunca esté en el camino crítico
+    setTimeout(() => {
+      cachePrewarmService.start();
+    }, 5000); // Wait 5s for DB pool to stabilize before prewarming
   });
 })();
