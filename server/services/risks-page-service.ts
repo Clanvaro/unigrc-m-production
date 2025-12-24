@@ -102,6 +102,7 @@ export async function getRisksFromReadModel(params: {
       : sql``;
 
   // Query simple desde read-model (sin JOINs complejos)
+  const queryStart = Date.now();
   const [risksResult, countResult] = await Promise.all([
     db.execute(sql`
       SELECT 
@@ -122,6 +123,11 @@ export async function getRisksFromReadModel(params: {
       ${whereClause}
     `),
   ]);
+  
+  const queryDuration = Date.now() - queryStart;
+  if (queryDuration > 1000) {
+    console.warn(`[PERF] Slow query in getRisksFromReadModel: ${queryDuration}ms (limit: ${limit}, offset: ${offset}, filters: ${Object.keys(filters).length})`);
+  }
 
   return {
     risks: risksResult.rows as any[],
