@@ -17686,6 +17686,14 @@ Responde SOLO con un JSON válido con este formato exacto:
       });
 
       const result = await Promise.race([dashboardPromise, timeoutPromise]);
+      
+      // OPTIMIZED: Cache result with 5 min TTL (300s) for better performance
+      try {
+        await distributedCache.set(cacheKey, result, 300);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set dashboard-stats cache:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+      
       res.json(result);
     } catch (error) {
       const duration = Date.now() - startTime;

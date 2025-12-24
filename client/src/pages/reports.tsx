@@ -14,11 +14,13 @@ import type { RiskWithProcess, Control, Action } from "@shared/schema";
 export default function Reports() {
   const { toast } = useToast();
   
-  // Use the with-details endpoint to get full risk information including process associations
+  // OPTIMIZED: Increased staleTime to match server cache (15 min)
   const { data: risksData, isLoading: risksLoading, isError: risksError } = useQuery<RiskWithProcess[]>({
     queryKey: ["/api/risks-with-details"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 14, // 14 minutes - slightly less than server cache (15 min)
+    refetchOnMount: false, // Server cache handles freshness
     refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 20, // Keep cache 20 minutes
     retry: 1, // Solo reintentar una vez en caso de error
   });
 
@@ -44,24 +46,33 @@ export default function Reports() {
     retry: 1,
   });
 
+  // OPTIMIZED: Increased staleTime to match server cache (3-5 min)
   const { data: controlsResponse, isLoading: controlsLoading, isError: controlsError } = useQuery<{ data: Control[], pagination: { limit: number, offset: number, total: number } }>({
     queryKey: ["/api/controls"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
     refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
     retry: 1,
   });
 
+  // OPTIMIZED: Increased staleTime to match server cache (5 min)
   const { data: actionPlansData, isLoading: actionPlansLoading, isError: actionPlansError } = useQuery<Action[]>({
     queryKey: ["/api/action-plans"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
     refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
     retry: 1,
   });
 
+  // OPTIMIZED: Increased staleTime to match server cache (5 min)
   const { data: stats, isError: statsError } = useQuery({
     queryKey: ["/api/dashboard/stats"],
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 1000 * 60 * 4, // 4 minutes - slightly less than server cache (5 min)
+    refetchOnMount: false, // Server cache handles freshness
     refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
     retry: 1,
   });
 
