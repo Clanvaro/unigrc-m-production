@@ -8,6 +8,7 @@ import cookieParser from "cookie-parser";
 import { registerRoutes, warmCacheForAllTenants } from "./routes";
 import { cachePrewarmService } from "./jobs/prewarm-cache";
 import { riskListViewRefreshService } from "./jobs/refresh-risk-list-view";
+import { riskEventsListViewRefreshService } from "./jobs/refresh-risk-events-list-view";
 import { serveStatic, log } from "./static";
 import { performanceMiddleware, errorLoggingMiddleware } from "./middleware/performance";
 import { logger } from "./logger";
@@ -292,6 +293,7 @@ app.use((req, res, next) => {
     // Refresca la vista materializada cada 5 minutos si está marcada como stale
     setTimeout(() => {
       riskListViewRefreshService.start();
+      riskEventsListViewRefreshService.start(); // Start risk events refresh service
     }, 15000); // Wait 15s for DB pool to stabilize before starting refresh service
   });
 })();

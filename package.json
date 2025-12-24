@@ -33,6 +33,8 @@
     "apply-rpl-index": "tsx scripts/apply-rpl-index.ts",
     "apply-risk-list-view": "tsx scripts/apply-risk-list-view.ts",
     "verify-risk-list-view": "tsx scripts/verify-risk-list-view.ts",
+    "apply-risk-events-list-view": "tsx scripts/apply-risk-events-list-view.ts",
+    "verify-risk-events-list-view": "tsx scripts/verify-risk-events-list-view.ts",
     "verify-calculation": "tsx scripts/verify-calculation.ts",
     "firebase:setup": "bash scripts/setup-firebase-hosting.sh",
     "firebase:deploy": "firebase deploy --only hosting",

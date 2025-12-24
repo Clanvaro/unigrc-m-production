@@ -28,6 +28,16 @@ import {
   invalidateRiskListView,
   isRiskListViewStale,
 } from './jobs/refresh-risk-list-view';
+import {
+  getRiskEventsFromReadModel,
+  getRiskEventCounts,
+  getMinimalCatalogsForEvents,
+} from './services/risk-events-page-service';
+import {
+  refreshRiskEventsListView,
+  invalidateRiskEventsListView,
+  isRiskEventsListViewStale,
+} from './jobs/refresh-risk-events-list-view';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
 import {
@@ -9327,6 +9337,114 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   // OPTIMIZED: Lightweight endpoint for risk events page
   // Strategy: Return minimal event fields + relation IDs only
+  // ============== BFF ENDPOINT (Backend For Frontend) - Risk Events ==============
+  // Nuevo endpoint optimizado: 1 endpoint por pantalla usando read-model
+  // Reemplaza múltiples llamadas paralelas con 1 sola llamada optimizada
+  // Usa vista materializada (risk_events_list_view) para consultas rápidas y predecibles
+  app.get("/api/pages/risk-events", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      // Parse filters (normalizar valores)
+      const filters = {
+        status: (req.query.status as string) || undefined,
+        severity: (req.query.severity as string) || undefined,
+        eventType: (req.query.eventType as string) || undefined,
+        riskId: (req.query.riskId as string) || undefined,
+        controlId: (req.query.controlId as string) || undefined,
+        search: (req.query.search as string) || undefined,
+        startDate: (req.query.startDate as string) || undefined,
+        endDate: (req.query.endDate as string) || undefined,
+      };
+
+      // Cache key canónica y estable
+      const cacheKey = buildStableCacheKey('pages:risk-events', {
+        limit,
+        offset,
+        ...filters,
+      });
+
+      // Cache con timeout corto (200ms) y fail-open
+      let cached: any = null;
+      try {
+        cached = await Promise.race([
+          bootstrapCache.get(cacheKey),
+          new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error('Cache timeout')), 200)
+          ),
+        ]);
+      } catch (cacheError) {
+        if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
+          console.warn(`[CACHE] Timeout getting ${cacheKey}, proceeding without cache`);
+        }
+        cached = null;
+      }
+
+      if (cached) {
+        return res.json(cached);
+      }
+
+      // SingleFlight: si 20 requests llegan simultáneamente, solo 1 ejecuta la query
+      const pageData = await bootstrapCache.get(cacheKey, async () => {
+        // Esta función solo se ejecuta una vez (SingleFlight)
+        const [eventsData, counts, catalogs] = await Promise.all([
+          getRiskEventsFromReadModel({ limit, offset, filters }),
+          getRiskEventCounts(filters),
+          getMinimalCatalogsForEvents(),
+        ]);
+
+        const response = {
+          riskEvents: {
+            data: eventsData.events,
+            pagination: {
+              limit,
+              offset,
+              total: eventsData.total,
+              hasMore: offset + limit < eventsData.total,
+            },
+          },
+          counts: {
+            total: counts.total,
+            byStatus: counts.byStatus,
+            bySeverity: counts.bySeverity,
+            byType: counts.byType,
+          },
+          catalogs: {
+            risks: catalogs.risks,
+            controls: catalogs.controls,
+            macroprocesos: catalogs.macroprocesos,
+            processes: catalogs.processes,
+            subprocesos: catalogs.subprocesos,
+          },
+          _meta: {
+            fetchedAt: new Date().toISOString(),
+            duration: Date.now() - requestStart,
+          },
+        };
+
+        // Cache set no bloqueante (fire-and-forget)
+        bootstrapCache.set(cacheKey, response, 300).catch((err) => {
+          console.warn(`[CACHE] Failed to set cache for ${cacheKey}:`, err);
+        });
+
+        return response;
+      });
+
+      res.json(pageData);
+    } catch (error) {
+      console.error('[ERROR] /api/pages/risk-events failed:', error);
+      res.status(500).json({
+        message: 'Failed to fetch risk events page data',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  // ============== RISK EVENTS PAGE DATA (LEGACY) ==============
+  // Mantener por compatibilidad, pero se recomienda usar /api/pages/risk-events
   // Frontend prefetches catalogs (macroprocesos/processes/subprocesos) and does client-side joins
   app.get("/api/risk-events/page-data", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
@@ -9817,7 +9935,8 @@ Responde SOLO con un JSON válido con este formato exacto:
       // Fire-and-forget cache invalidation (granular - fast)
       Promise.all([
         invalidateRiskDataCaches(),
-        invalidateRiskEventsPageDataCache()
+        invalidateRiskEventsPageDataCache(),
+        invalidateRiskEventsListView(event.id) // Invalidar read-model
       ]).catch(err => console.error('Cache invalidation failed:', err));
     } catch (error) {
       if (error instanceof ActiveTenantError) {
@@ -9959,7 +10078,8 @@ Responde SOLO con un JSON válido con este formato exacto:
       // Invalidate risk caches (granular - fast)
       await Promise.all([
         invalidateRiskDataCaches(),
-        invalidateRiskEventsPageDataCache()
+        invalidateRiskEventsPageDataCache(),
+        invalidateRiskEventsListView(req.params.id) // Invalidar read-model
       ]);
 
       // Serialize dates and return with relations loaded
@@ -9992,10 +10112,10 @@ Responde SOLO con un JSON válido con este formato exacto:
       }
 
       // Invalidate risk caches (granular - fast)
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
       await Promise.all([
         invalidateRiskDataCaches(),
-        invalidateRiskEventsPageDataCache()
+        invalidateRiskEventsPageDataCache(),
+        invalidateRiskEventsListView(req.params.id) // Invalidar read-model
       ]);
 
       res.status(204).send();

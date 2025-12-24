@@ -467,47 +467,66 @@ export default function RiskEvents() {
     failedControl: { id: string; code: string; name: string } | null;
   }
 
+  // ============== BFF ENDPOINT (Backend For Frontend) ==============
+  // Nuevo endpoint optimizado usando read-model (vista materializada)
+  // 1 endpoint por pantalla - reemplaza múltiples llamadas paralelas
+  // Usa risk_events_list_view para consultas rápidas y predecibles
   interface RiskEventsPageData {
     riskEvents: {
       data: LightweightRiskEvent[];
-      pagination: { limit: number; offset: number; total: number };
+      pagination: { limit: number; offset: number; total: number; hasMore: boolean };
+    };
+    counts: {
+      total: number;
+      byStatus: Record<string, number>;
+      bySeverity: Record<string, number>;
+      byType: Record<string, number>;
+    };
+    catalogs: {
+      risks: CatalogItem[];
+      controls: CatalogItem[];
+      macroprocesos: CatalogItem[];
+      processes: CatalogItem[];
+      subprocesos: CatalogItem[];
+    };
+    _meta: {
+      fetchedAt: string;
+      duration: number;
     };
   }
   
-  // OPTIMIZED: Lazy load catalogs - only fetch when needed, don't block initial render
-  // Fetch risks catalog only (needed for description column) - load others on demand
-  const { data: risksCatalog = [] } = useQuery<CatalogItem[]>({
-    queryKey: ["/api/risks-basic"],
-    staleTime: 60 * 60 * 1000, // 60 min - increased cache since not critical
+  // OPTIMIZED: Server-side pagination - load only what's needed
+  const [paginationOffset, setPaginationOffset] = useState(0);
+  const paginationLimit = 25; // Match backend default
+  
+  // BFF: 1 endpoint que devuelve todo (eventos, counts, catálogos)
+  const { data: pageData, isLoading: isPageDataLoading } = useQuery<RiskEventsPageData>({
+    queryKey: ["/api/pages/risk-events", paginationOffset, paginationLimit],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        limit: paginationLimit.toString(),
+        offset: paginationOffset.toString(),
+      });
+      
+      const response = await fetch(`/api/pages/risk-events?${params}`);
+      if (!response.ok) throw new Error('Failed to fetch events');
+      return response.json();
+    },
+    staleTime: 2 * 60 * 1000, // 2 minutes - invalidated on mutations
+    gcTime: 10 * 60 * 1000, // 10 minutes cache retention
     refetchOnWindowFocus: false,
-    // Only fetch if we have events with riskIds
-    enabled: true, // Always fetch as it's small and needed for display
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    placeholderData: (previousData) => previousData,
   });
   
-  // OPTIMIZED: Lazy load other catalogs only when viewing event details or when process column is visible
-  const needsProcessCatalogs = viewingEvent !== null || columnVisibility.process !== false;
-  const { data: macroprocesosCatalog = [] } = useQuery<CatalogItem[]>({
-    queryKey: ["/api/macroprocesos/basic"],
-    staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    refetchOnWindowFocus: false,
-    enabled: needsProcessCatalogs, // Lazy load
-  });
+  // Extraer catálogos del BFF response
+  const risksCatalog = pageData?.catalogs?.risks || [];
+  const macroprocesosCatalog = pageData?.catalogs?.macroprocesos || [];
+  const processesCatalog = pageData?.catalogs?.processes || [];
+  const subprocesosCatalog = pageData?.catalogs?.subprocesos || [];
   
-  const { data: processesCatalog = [] } = useQuery<CatalogItem[]>({
-    queryKey: ["/api/processes/basic"],
-    staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    refetchOnWindowFocus: false,
-    enabled: needsProcessCatalogs, // Lazy load
-  });
-  
-  const { data: subprocesosCatalog = [] } = useQuery<CatalogItem[]>({
-    queryKey: ["/api/subprocesos/basic"],
-    staleTime: 60 * 60 * 1000, // 60 min - increased cache
-    refetchOnWindowFocus: false,
-    enabled: needsProcessCatalogs, // Lazy load
-  });
-  
-  // Build lookup maps for O(1) client-side joins
+  // Build lookup maps for O(1) client-side joins (si se necesitan para compatibilidad)
   const catalogMaps = useMemo(() => ({
     macroprocesos: new Map(macroprocesosCatalog.map(m => [m.id, m])),
     processes: new Map(processesCatalog.map(p => [p.id, p])),
@@ -515,32 +534,17 @@ export default function RiskEvents() {
     risks: new Map(risksCatalog.map(r => [r.id, r])),
   }), [macroprocesosCatalog, processesCatalog, subprocesosCatalog, risksCatalog]);
   
-  // OPTIMIZED: Server-side pagination - load only what's needed
-  const [paginationOffset, setPaginationOffset] = useState(0);
-  const paginationLimit = 25; // Match backend default
-  
-  // OPTIMIZED: Increased cache and disabled refetch on window focus
-  const { data: pageData, isLoading: isPageDataLoading } = useQuery<RiskEventsPageData>({
-    queryKey: ["/api/risk-events/page-data", paginationOffset, paginationLimit],
-    queryFn: async () => {
-      const response = await fetch(`/api/risk-events/page-data?limit=${paginationLimit}&offset=${paginationOffset}`);
-      if (!response.ok) throw new Error('Failed to fetch events');
-      return response.json();
-    },
-    staleTime: 30 * 60 * 1000, // 30 min - increased from 30 seconds
-    refetchOnWindowFocus: false, // Don't refetch when window regains focus
-  });
-  
-  // Transform lightweight events to include resolved names for display
+  // Transform events - los datos ya vienen con nombres desde el read-model
   const riskEvents = useMemo(() => {
     const events = pageData?.riskEvents?.data || [];
     return events.map(event => ({
       ...event,
-      // Use description from backend (now included in the response)
       description: event.description || '',
-      // estimatedLoss comes directly from backend, no mapping needed
-      // failedControl comes directly from backend (already resolved)
-      // Client-side resolve names from cached catalogs
+      // Los IDs de relaciones ya vienen desde el read-model
+      macroprocesoIds: event.macroprocesoIds || [],
+      processIds: event.processIds || [],
+      subprocesoIds: event.subprocesoIds || [],
+      // Resolver nombres desde catálogos (si se necesitan para compatibilidad)
       relatedMacroprocesos: (event.macroprocesoIds || [])
         .map(id => catalogMaps.macroprocesos.get(id))
         .filter((item): item is CatalogItem => item !== undefined),
@@ -574,6 +578,7 @@ export default function RiskEvents() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+      queryClient.invalidateQueries({ queryKey: ["/api/pages/risk-events"], exact: false, refetchType: 'all' }); // BFF endpoint
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
       queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
       toast({ title: "Evento eliminado", description: "El evento de riesgo ha sido eliminado exitosamente." });
@@ -588,6 +593,7 @@ export default function RiskEvents() {
   const handleEditSuccess = () => {
     setEditingEvent(null);
     queryClient.invalidateQueries({ queryKey: ["/api/risk-events/page-data"], exact: false, refetchType: 'all' });
+    queryClient.invalidateQueries({ queryKey: ["/api/pages/risk-events"], exact: false, refetchType: 'all' }); // BFF endpoint
     queryClient.invalidateQueries({ queryKey: ["/api/risk-events"], exact: false, refetchType: 'all' });
     queryClient.invalidateQueries({ queryKey: ["/api/risk-events/fraud-history/check"] });
     toast({ title: "Evento actualizado", description: "El evento de riesgo ha sido actualizado exitosamente." });
