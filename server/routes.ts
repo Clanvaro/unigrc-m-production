@@ -21495,11 +21495,41 @@ Responde SOLO con un JSON válido con este formato exacto:
   });
 
   app.get("/api/audits/:auditId/tests/details", isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const tests = await storage.getAuditTestsWithDetails(req.params.auditId, tenantId);
+      const { auditId } = req.params;
+
+      // OPTIMIZED: Cache key with audit ID and tenant
+      const cacheKey = `audit-tests-details:${CACHE_VERSION}:${auditId}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/audits/${auditId}/tests/details in ${duration}ms`);
+        }
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/audits/${auditId}/tests/details - fetching`);
+      const tests = await storage.getAuditTestsWithDetails(auditId, tenantId);
+
+      // OPTIMIZED: Cache with 3 min TTL (180s) - tests can change frequently
+      try {
+        await distributedCache.set(cacheKey, tests, 180);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache for /api/audits/${auditId}/tests/details:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/audits/${auditId}/tests/details COMPLETE in ${duration}ms (${tests.length} tests)`);
+      }
+
       res.json(tests);
     } catch (error) {
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/audits/:auditId/tests/details failed after ${duration}ms:`, error);
       res.status(500).json({ message: "Failed to fetch audit tests with details" });
     }
   });
@@ -21557,40 +21587,67 @@ Responde SOLO con un JSON válido con este formato exacto:
 
   // Get my assigned tests - returns all tests assigned to current authenticated user
   app.get("/api/audit-tests/my-tests", isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       // Get current authenticated user ID
       const userId = getAuthenticatedUserId(req);
       const { tenantId } = await resolveActiveTenant(req, { required: true });
-      console.log(`[MY-TESTS] Fetching audit tests for user: ${userId}`);
+
+      // OPTIMIZED: Cache key with user ID and tenant
+      const cacheKey = `audit-tests-my-tests:${CACHE_VERSION}:${userId}:${tenantId}`;
+      const cached = await distributedCache.get(cacheKey);
+      if (cached !== null) {
+        const duration = Date.now() - requestStart;
+        if (duration > 100) {
+          console.log(`[CACHE HIT] /api/audit-tests/my-tests in ${duration}ms`);
+        }
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/audit-tests/my-tests - fetching for user: ${userId}`);
 
       // Get all tests assigned to this user
       const myTests = await storage.getAuditTestsByAssignee(userId, tenantId);
       console.log(`[MY-TESTS] Found ${myTests.length} tests assigned to user ${userId}`);
 
-      // Enrich tests with audit information for better context
-      const testsWithAuditInfo = await Promise.all(
-        myTests.map(async (test) => {
-          try {
-            // Get audit details for context
-            const audit = await storage.getAudit(test.auditId);
-            return {
-              ...test,
-              audit: audit || null
-            };
-          } catch (error) {
-            console.warn(`[MY-TESTS] Could not get audit info for test ${test.id}:`, error);
-            return {
-              ...test,
-              audit: null
-            };
+      // OPTIMIZED: Batch fetch audits instead of N+1 queries
+      const auditIds = [...new Set(myTests.map(test => test.auditId).filter(Boolean))];
+      const auditsMap = new Map();
+      if (auditIds.length > 0) {
+        const audits = await Promise.all(
+          auditIds.map(auditId => storage.getAudit(auditId).catch(() => null))
+        );
+        audits.forEach((audit, index) => {
+          if (audit) {
+            auditsMap.set(auditIds[index], audit);
           }
-        })
-      );
+        });
+      }
+
+      // Enrich tests with audit information from map (O(1) lookup)
+      const testsWithAuditInfo = myTests.map(test => ({
+        ...test,
+        audit: auditsMap.get(test.auditId) || null
+      }));
 
       console.log(`[MY-TESTS] Successfully enriched ${testsWithAuditInfo.length} tests with audit information`);
+
+      // OPTIMIZED: Cache with 3 min TTL (180s) - tests can change frequently
+      try {
+        await distributedCache.set(cacheKey, testsWithAuditInfo, 180);
+      } catch (cacheError) {
+        console.warn(`[CACHE] Failed to set cache for /api/audit-tests/my-tests:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+      }
+
+      const duration = Date.now() - requestStart;
+      if (duration > 1000) {
+        console.log(`[PERF] /api/audit-tests/my-tests COMPLETE in ${duration}ms (${testsWithAuditInfo.length} tests)`);
+      }
+
       res.json(testsWithAuditInfo);
     } catch (error) {
-      console.error("[MY-TESTS] Error fetching my tests:", error);
+      const duration = Date.now() - requestStart;
+      console.error(`[ERROR] /api/audit-tests/my-tests failed after ${duration}ms:`, error);
 
       // Handle authentication errors specifically
       if (error instanceof Error && error.message === "User not authenticated") {

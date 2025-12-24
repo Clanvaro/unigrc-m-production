@@ -56,7 +56,7 @@ export default function AuditTests() {
   const [selectedTest, setSelectedTest] = useState<AuditTestWithDetails | null>(null);
   const [, setLocation] = useLocation();
 
-  // Fetch user's assigned audit tests
+  // OPTIMIZED: Increased staleTime to match server cache (3 min)
   const { data: auditTests = [], isLoading, error } = useQuery<AuditTestWithDetails[]>({
     queryKey: ['/api/audit-tests/my-tests'],
     queryFn: async () => {
@@ -68,7 +68,9 @@ export default function AuditTests() {
       }
       return response.json();
     },
-    staleTime: 0, // Always fetch fresh data
+    staleTime: 1000 * 60 * 2, // 2 minutes - slightly less than server cache (3 min)
+    refetchOnMount: false, // Server cache handles freshness
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
   // Filter tests based on search term and filters
