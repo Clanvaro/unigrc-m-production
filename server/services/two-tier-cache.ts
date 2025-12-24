@@ -1,6 +1,92 @@
 import { distributedCache } from './redis';
 
 /**
+ * SingleFlight: Deduplicate in-flight requests for cold cache keys
+ * 
+ * When multiple requests try to fetch the same cold cache key:
+ * - Only ONE request executes the fetch function
+ * - Other requests wait for the same result
+ * - Prevents "thundering herd" problem when cache is cold
+ * - Optionally returns stale data while fresh data is being computed
+ */
+class SingleFlight {
+    private inFlight = new Map<string, Promise<any>>();
+    private staleData = new Map<string, { data: any; timestamp: number }>();
+
+    /**
+     * Execute function with singleflight deduplication
+     * 
+     * @param key - Cache key to deduplicate
+     * @param fn - Function to execute (only once per key)
+     * @param staleMaxAgeMs - Optional: return stale data if available and fresh data is being computed
+     * @returns Result from function execution (shared across concurrent requests)
+     */
+    async do<T>(
+        key: string,
+        fn: () => Promise<T>,
+        staleMaxAgeMs?: number
+    ): Promise<T> {
+        // Check if there's already a request in-flight for this key
+        const existing = this.inFlight.get(key);
+        if (existing) {
+            // Another request is already computing this - wait for it
+            console.log(`[SingleFlight] Deduplicating request for key ${key} - waiting for in-flight computation`);
+            
+            // If stale data is available and fresh data is being computed, return stale immediately
+            if (staleMaxAgeMs) {
+                const stale = this.staleData.get(key);
+                if (stale && (Date.now() - stale.timestamp) < staleMaxAgeMs) {
+                    console.log(`[SingleFlight] Returning stale data for key ${key} while fresh data is computed`);
+                    // Still wait for fresh data in background, but return stale immediately
+                    existing.catch(() => {}); // Don't let errors in background computation affect stale response
+                    return stale.data as T;
+                }
+            }
+            
+            // Wait for the in-flight request
+            return existing as Promise<T>;
+        }
+
+        // First request for this key - create promise and execute
+        const promise = (async () => {
+            try {
+                const result = await fn();
+                // Store result as stale data for future use
+                this.staleData.set(key, { data: result, timestamp: Date.now() });
+                return result;
+            } finally {
+                // Remove from in-flight map when done
+                this.inFlight.delete(key);
+            }
+        })();
+
+        this.inFlight.set(key, promise);
+        return promise;
+    }
+
+    /**
+     * Clear stale data for a key
+     */
+    clearStale(key: string): void {
+        this.staleData.delete(key);
+    }
+
+    /**
+     * Clear all stale data
+     */
+    clearAllStale(): void {
+        this.staleData.clear();
+    }
+
+    /**
+     * Get number of in-flight requests
+     */
+    getInFlightCount(): number {
+        return this.inFlight.size;
+    }
+}
+
+/**
  * Two-Tier Cache Implementation
  * 
  * L1 (In-Memory): Fast access (< 1ms), short TTL (30-60s)
@@ -11,6 +97,7 @@ import { distributedCache } from './redis';
  * - 80-90% reduction in Redis calls
  * - Automatic fallback if Redis is slow/unavailable
  * - Resilient to network issues
+ * - SingleFlight deduplication for cold cache keys
  */
 
 interface TwoTierCacheOptions {
@@ -25,6 +112,9 @@ interface TwoTierCacheOptions {
         invalidate?: (key?: string) => Promise<void>;
         invalidatePattern?: (pattern: string) => Promise<void>;
     };
+    // SingleFlight options
+    enableSingleFlight?: boolean; // Enable singleflight deduplication (default: true)
+    staleMaxAgeMs?: number; // Return stale data if available while fresh data is computed (default: disabled)
 }
 
 interface CacheEntry {
@@ -40,6 +130,7 @@ interface CacheStats {
     l2Misses: number;
     l2Timeouts: number;
     l2Errors: number;
+    singleFlightDedups?: number; // Number of requests deduplicated by SingleFlight
 }
 
 export class TwoTierCache {
@@ -59,6 +150,11 @@ export class TwoTierCache {
     private readonly L2_TIMEOUT: number; // ms
     private readonly CLEANUP_INTERVAL: number; // ms
     private readonly l2Client: NonNullable<TwoTierCacheOptions["l2"]>;
+    private readonly enableSingleFlight: boolean;
+    private readonly staleMaxAgeMs?: number;
+
+    // SingleFlight for deduplicating in-flight requests when cache is cold
+    private readonly singleFlight: SingleFlight;
 
     private cleanupTimer: NodeJS.Timeout;
 
@@ -70,6 +166,11 @@ export class TwoTierCache {
         this.L2_TIMEOUT = options.l2TimeoutMs ?? 300; // default 300ms (within 200-500ms range)
         this.CLEANUP_INTERVAL = options.cleanupIntervalMs ?? 60 * 1000; // default 60s
         this.l2Client = options.l2 ?? distributedCache;
+        this.enableSingleFlight = options.enableSingleFlight ?? true; // default: enabled
+        this.staleMaxAgeMs = options.staleMaxAgeMs; // optional: return stale data while computing fresh
+
+        // Initialize SingleFlight for deduplication
+        this.singleFlight = new SingleFlight();
 
         // Start periodic cleanup of expired L1 entries
         this.cleanupTimer = setInterval(() => this.cleanupL1(), this.CLEANUP_INTERVAL);
@@ -80,8 +181,12 @@ export class TwoTierCache {
      * 
      * CRITICAL: Fail-open pattern - if L2 (Redis) fails or times out,
      * returns null immediately to allow direct DB query (which is fast)
+     * 
+     * SingleFlight: When cache is cold, deduplicates concurrent requests
+     * - Only ONE request queries DB
+     * - Other requests wait for the same result
      */
-    async get(key: string): Promise<any> {
+    async get(key: string, fetchFn?: () => Promise<any>): Promise<any> {
         // L1: Check in-memory cache first (< 1ms)
         const l1Entry = this.l1Cache.get(key);
         if (l1Entry && !this.isExpired(l1Entry)) {
@@ -106,6 +211,23 @@ export class TwoTierCache {
             }
 
             this.stats.l2Misses++;
+            
+            // CRITICAL: Cache is cold - use SingleFlight to deduplicate concurrent requests
+            // If fetchFn is provided and SingleFlight is enabled, deduplicate DB queries
+            if (fetchFn && this.enableSingleFlight) {
+                return await this.singleFlight.do(
+                    key,
+                    async () => {
+                        // Execute fetch function (DB query)
+                        const data = await fetchFn();
+                        // Populate caches with fresh data
+                        await this.set(key, data);
+                        return data;
+                    },
+                    this.staleMaxAgeMs
+                );
+            }
+            
             return null;
         } catch (error) {
             // CRITICAL: Fail-open - L2 failed (timeout or error)
@@ -118,6 +240,23 @@ export class TwoTierCache {
                 console.warn(`[TwoTierCache] L2 error for key ${key} (fail-open to DB):`, error instanceof Error ? error.message : 'Unknown error');
                 this.stats.l2Errors++;
             }
+            
+            // CRITICAL: Cache is cold - use SingleFlight to deduplicate concurrent requests
+            // If fetchFn is provided and SingleFlight is enabled, deduplicate DB queries
+            if (fetchFn && this.enableSingleFlight) {
+                return await this.singleFlight.do(
+                    key,
+                    async () => {
+                        // Execute fetch function (DB query)
+                        const data = await fetchFn();
+                        // Populate caches with fresh data
+                        await this.set(key, data);
+                        return data;
+                    },
+                    this.staleMaxAgeMs
+                );
+            }
+            
             // Return null to trigger DB query (fail-open pattern)
             return null;
         }
@@ -146,6 +285,7 @@ export class TwoTierCache {
         if (key) {
             // Invalidate specific key
             this.l1Cache.delete(key);
+            this.singleFlight.clearStale(key); // Clear stale data
             if (this.l2Client.invalidate) {
                 await this.l2Client.invalidate(key).catch(err => {
                     console.warn(`[TwoTierCache] Failed to invalidate L2 key ${key}:`, err);
@@ -154,6 +294,7 @@ export class TwoTierCache {
         } else {
             // Invalidate all
             this.l1Cache.clear();
+            this.singleFlight.clearAllStale(); // Clear all stale data
             if (this.l2Client.invalidate) {
                 await this.l2Client.invalidate().catch(err => {
                     console.warn('[TwoTierCache] Failed to invalidate all L2 keys:', err);
@@ -185,7 +326,7 @@ export class TwoTierCache {
     /**
      * Get cache statistics
      */
-    getStats(): CacheStats & { l1Size: number; l1HitRate: string; l2HitRate: string } {
+    getStats(): CacheStats & { l1Size: number; l1HitRate: string; l2HitRate: string; inFlightCount: number } {
         const l1Total = this.stats.l1Hits + this.stats.l1Misses;
         const l2Total = this.stats.l2Hits + this.stats.l2Misses;
 
@@ -193,7 +334,8 @@ export class TwoTierCache {
             ...this.stats,
             l1Size: this.l1Cache.size,
             l1HitRate: l1Total > 0 ? `${((this.stats.l1Hits / l1Total) * 100).toFixed(1)}%` : '0%',
-            l2HitRate: l2Total > 0 ? `${((this.stats.l2Hits / l2Total) * 100).toFixed(1)}%` : '0%'
+            l2HitRate: l2Total > 0 ? `${((this.stats.l2Hits / l2Total) * 100).toFixed(1)}%` : '0%',
+            inFlightCount: this.singleFlight.getInFlightCount()
         };
     }
 

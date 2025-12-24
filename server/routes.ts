@@ -1605,8 +1605,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const requestStart = Date.now();
     try {
       // Try two-tier cache first (L1: <1ms, L2: <100ms with timeout)
+      // CRITICAL: SingleFlight deduplicates concurrent requests when cache is cold
       const cacheKey = `processes-basic:single-tenant`;
-      const cached = await twoTierCache.get(cacheKey);
+      const cached = await twoTierCache.get(cacheKey, async () => {
+        // This function is only executed once when cache is cold (SingleFlight deduplication)
+        console.log(`[CACHE MISS] /api/processes/basic - fetching data (SingleFlight deduplication)`);
+        const fetchStart = Date.now();
+
+        // PERFORMANCE: Only fetch process risk levels (not all entities)
+        const [processes, allRiskLevels] = await Promise.all([
+          storage.getProcessesWithOwners(),
+          storage.getAllRiskLevelsOptimized({ entities: ['processes'] })
+        ]);
+
+        const fetchDuration = Date.now() - fetchStart;
+        console.log(`[DB] /api/processes/basic fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
+
+        if (fetchDuration > 3000) {
+          console.warn(`⚠️ Slow /api/processes/basic query: ${fetchDuration}ms`);
+        }
+
+        // Return essential fields with risk count for display
+        const basicProcesses = processes.map((process) => {
+          const riskLevels = allRiskLevels.processes.get(process.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+          return {
+            id: process.id,
+            code: process.code,
+            name: process.name,
+            description: process.description,
+            ownerId: process.ownerId,
+            macroprocesoId: process.macroprocesoId,
+            owner: process.owner,
+            inherentRisk: riskLevels.inherentRisk,
+            residualRisk: riskLevels.residualRisk,
+            riskCount: riskLevels.riskCount
+          };
+        });
+
+        return basicProcesses;
+      });
+
       if (cached !== null) {
         const duration = Date.now() - requestStart;
         if (duration > 100) {
@@ -1615,6 +1653,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(cached);
       }
 
+      // This should not happen if fetchFn is provided, but handle gracefully
       console.log(`[CACHE MISS] /api/processes/basic - fetching data`);
       const fetchStart = Date.now();
 
@@ -4198,13 +4237,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const lookupMemoryCache = new Map<string, MemoryCacheEntry>();
   const MEMORY_CACHE_TTL = 60000; // 60 seconds
 
-  // Helper function to get from 2-tier cache with fail-open pattern
+  // SingleFlight instance for deduplicating in-flight requests when cache is cold
+  // CRITICAL: Prevents "thundering herd" - when cache is cold, only ONE request queries DB
+  class SingleFlight {
+    private inFlight = new Map<string, Promise<any>>();
+    private staleData = new Map<string, { data: any; timestamp: number }>();
+
+    async do<T>(
+      key: string,
+      fn: () => Promise<T>,
+      staleMaxAgeMs?: number
+    ): Promise<T> {
+      const existing = this.inFlight.get(key);
+      if (existing) {
+        // Another request is already computing this - wait for it
+        console.log(`[SingleFlight] Deduplicating request for key ${key} - waiting for in-flight computation`);
+        
+        // If stale data is available and fresh data is being computed, return stale immediately
+        if (staleMaxAgeMs) {
+          const stale = this.staleData.get(key);
+          if (stale && (Date.now() - stale.timestamp) < staleMaxAgeMs) {
+            console.log(`[SingleFlight] Returning stale data for key ${key} while fresh data is computed`);
+            existing.catch(() => {}); // Don't let errors in background computation affect stale response
+            return stale.data as T;
+          }
+        }
+        
+        return existing as Promise<T>;
+      }
+
+      // First request for this key - create promise and execute
+      const promise = (async () => {
+        try {
+          const result = await fn();
+          this.staleData.set(key, { data: result, timestamp: Date.now() });
+          return result;
+        } finally {
+          this.inFlight.delete(key);
+        }
+      })();
+
+      this.inFlight.set(key, promise);
+      return promise;
+    }
+
+    clearStale(key: string): void {
+      this.staleData.delete(key);
+    }
+  }
+
+  const singleFlight = new SingleFlight();
+
+  // Helper function to get from 2-tier cache with fail-open pattern and SingleFlight deduplication
   // CRITICAL: Short timeout for L2 (300ms) - if Redis fails, go directly to DB
+  // CRITICAL: SingleFlight deduplicates concurrent requests when cache is cold
   async function getFromTieredCache<T>(
     cacheKey: string,
     fetchFn: () => Promise<T>,
     redisTTL: number = 300,
-    l2TimeoutMs: number = 300 // Short timeout: 200-500ms range, default 300ms
+    l2TimeoutMs: number = 300, // Short timeout: 200-500ms range, default 300ms
+    enableSingleFlight: boolean = true // Enable singleflight deduplication (default: true)
   ): Promise<T> {
     // Tier 1: Memory cache (fastest, <10ms)
     const memCached = lookupMemoryCache.get(cacheKey);
@@ -4238,15 +4330,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     // Tier 3: Database (fast in logs, 500-1200ms typical)
-    // CRITICAL: Fail-open ensures we get here quickly if Redis is slow
-    const data = await fetchFn();
+    // CRITICAL: Cache is cold - use SingleFlight to deduplicate concurrent requests
+    // Only ONE request queries DB, others wait for the same result
+    if (enableSingleFlight) {
+      return await singleFlight.do(
+        cacheKey,
+        async () => {
+          const data = await fetchFn();
+          // Populate both caches (async, don't block)
+          distributedCache.set(cacheKey, data, redisTTL).catch(err => {
+            console.warn(`[getFromTieredCache] Failed to set L2 cache for ${cacheKey}:`, err);
+          });
+          lookupMemoryCache.set(cacheKey, { data, timestamp: Date.now() });
+          return data;
+        }
+      );
+    }
 
-    // Populate both caches (async, don't block)
+    // SingleFlight disabled - execute directly
+    const data = await fetchFn();
     distributedCache.set(cacheKey, data, redisTTL).catch(err => {
       console.warn(`[getFromTieredCache] Failed to set L2 cache for ${cacheKey}:`, err);
     });
     lookupMemoryCache.set(cacheKey, { data, timestamp: Date.now() });
-
     return data;
   }
 
