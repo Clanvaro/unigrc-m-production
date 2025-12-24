@@ -8995,45 +8995,194 @@ export async function registerRoutes(app: Express): Promise<Server> {
         existingRiskNames = existingRisks.map(r => r.name.toLowerCase());
       }
 
-      const prompt = `Eres un experto en gestión de riesgos empresariales. Genera exactamente 5 sugerencias de riesgos operacionales para el siguiente contexto organizacional:
+      // Construir información adicional del contexto
+      let processInfo = '';
+      let subprocesoInfo = '';
+      let macroprocesoInfo = '';
+      
+      if (subprocesoId) {
+        const subproceso = await storage.getSubproceso(subprocesoId);
+        if (subproceso) {
+          subprocesoInfo = `Subproceso: ${subproceso.name}${subproceso.description ? ` - ${subproceso.description}` : ''}`;
+        }
+      }
+      
+      if (processId) {
+        const process = await storage.getProcess(processId);
+        if (process) {
+          processInfo = `Proceso: ${process.name}${process.description ? ` - ${process.description}` : ''}`;
+        }
+      }
+      
+      if (macroprocesoId) {
+        const macroproceso = await storage.getMacroproceso(macroprocesoId);
+        if (macroproceso) {
+          macroprocesoInfo = `Macroproceso: ${macroproceso.name}${macroproceso.description ? ` - ${macroproceso.description}` : ''}`;
+        }
+      }
 
-${contextParts.join('\n')}
+      // Obtener información general del sistema (riesgos existentes para contexto)
+      const allRisks = await storage.getRisks();
+      const existingRisksInfo = existingRiskNames.length > 0 
+        ? `\nRiesgos Existentes del Sistema (NO duplicar):\n${allRisks.slice(0, 20).map(r => `- ${r.name}: ${r.description || ''}`).join('\n')}`
+        : '';
 
-${existingRiskNames.length > 0 ? `\nNOTA: Evita sugerir riesgos similares a estos ya existentes: ${existingRiskNames.slice(0, 10).join(', ')}` : ''}
+      const prompt = `📋 PROMPT DE IDENTIFICACIÓN DE RIESGOS
 
-Para cada riesgo sugerido, proporciona:
-1. name: Nombre corto y descriptivo del riesgo (máximo 80 caracteres)
-2. description: Descripción detallada del riesgo (100-200 caracteres)
-3. category: Categoría del riesgo (una de: ["Operacional", "Financiero", "Cumplimiento", "Tecnológico", "Reputacional", "Estratégico"])
-4. frequencyOccurrence: Frecuencia estimada de ocurrencia (1-5, donde 1=muy raro, 5=muy frecuente)
-5. impact: Impacto estimado (1-5, donde 1=muy bajo, 5=muy alto)
+1️⃣ DATOS DE ENTRADA
 
-Responde SOLO con un JSON válido con este formato exacto:
+Contexto Empresarial:
+${fiscalEntityInfo?.description || 'No especificado'}
+
+Estructura Organizacional:
+${contextParts.filter(c => c.includes('Entidad Fiscal')).join('\n') || 'No especificado'}
+
+Alcance Operacional:
+${macroprocesoInfo || 'No especificado'}
+${processInfo || ''}
+${subprocesoInfo || ''}
+
+${userContext ? `Contexto Adicional del Usuario:\n${userContext}` : ''}
+
+${existingRisksInfo}
+
+2️⃣ METODOLOGÍA DE IDENTIFICACIÓN
+
+Sigue este proceso paso a paso:
+
+A. Define el alcance del ${subprocesoInfo ? 'Subproceso' : processInfo ? 'Proceso' : 'Macroproceso'} especificado arriba.
+
+B. Identifica recursos críticos que podrían verse afectados:
+   - Financieros (dinero, activos, inversiones)
+   - Imagen (reputación, marca, confianza)
+   - Infraestructura (instalaciones, equipos, sistemas)
+   - Información (datos confidenciales, propiedad intelectual)
+   - Personas (empleados, clientes, terceros)
+   - Permisos (licencias, autorizaciones, certificaciones)
+   - Propiedad Intelectual (patentes, marcas, secretos comerciales)
+
+C. Realiza una tormenta de eventos de riesgo:
+   - Errores humanos (omisiones, equivocaciones, falta de capacitación)
+   - Omisiones (procedimientos no seguidos, controles no aplicados)
+   - Fallas de control (controles inadecuados, inexistentes o ineficaces)
+   - Fraudes (apropiación indebida, falsificación, corrupción)
+   - Incumplimientos (normativas, regulaciones, políticas internas)
+
+D. Construye riesgos usando la fórmula: DAÑO AL RECURSO + EVENTO CAUSANTE
+   Ejemplo: "Pérdida financiera por apropiación indebida de fondos"
+
+E. Mapea estrictamente los daños según el recurso afectado:
+   - Si afecta Financieros → pérdida económica, reducción de patrimonio
+   - Si afecta Imagen → deterioro de reputación, pérdida de confianza
+   - Si afecta Infraestructura → interrupción operativa, daño físico
+   - Si afecta Información → fuga de datos, acceso no autorizado
+   - Si afecta Personas → lesiones, pérdida de talento
+   - Si afecta Permisos → pérdida de licencias, sanciones
+   - Si afecta Propiedad Intelectual → uso no autorizado, pérdida de ventaja competitiva
+
+F. Consolida riesgos relacionados en un solo riesgo cuando sea apropiado.
+
+G. Redacta de forma neutral y objetiva, sin juicios de valor.
+
+3️⃣ TAXONOMÍA DE RIESGOS
+
+Tipo: Operacional
+Subtipos permitidos:
+- Errores (errores humanos, omisiones, fallas operativas)
+- Fraude (apropiación indebida, falsificación, corrupción)
+- Cumplimiento (incumplimiento normativo, regulatorio, de políticas)
+
+4️⃣ FORMATO DE SALIDA
+
+Genera entre 5 y 10 riesgos (más riesgos si hay documentos extensos o procesos complejos).
+
+Cada riesgo debe seguir este formato JSON (una línea por riesgo, formato NDJSON):
+{"risk_base":"Daño + evento", "risk_name":"Nombre corto", "risk_description":"Descripción detallada", "risk_type":"Operacional", "risk_subtype":"Errores|Fraude|Cumplimiento"}
+
+5️⃣ RIESGOS CRÍTICOS POR TIPO DE PROCESO
+
+Si el proceso identificado corresponde a alguno de estos tipos, incluye los riesgos obligatorios correspondientes:
+
+- Gestión de Honorarios/Pagos: Errores en cálculo, pagos duplicados, apropiación indebida
+- Compras/Adquisiciones: Sobrecostos, proveedores no autorizados, conflictos de interés
+- Inventarios/Almacén: Pérdidas, robos, deterioro, desfases contables
+- Nómina/RRHH: Errores en pagos, datos incorrectos, fraude de identidad
+- Tesorería: Desvío de fondos, errores en transferencias, falta de controles
+- Facturación: Facturas no emitidas, errores en montos, fraude
+- Créditos/Cobranzas: Morosidad no detectada, falta de seguimiento, pérdidas por incobrabilidad
+
+6️⃣ CRITERIOS DE CALIDAD
+
+- Vinculación directa: Cada riesgo debe estar directamente relacionado con el ${subprocesoInfo ? 'subproceso' : processInfo ? 'proceso' : 'macroproceso'} especificado
+- Fundamentación: Basa cada riesgo en actividades reales del proceso
+- Exhaustividad: Genera entre 5 y 10 riesgos (más si el proceso es complejo)
+- Cobertura completa: Cubre todas las actividades principales del proceso
+- Diversidad de subtipos: Incluye riesgos de tipo Errores, Fraude y Cumplimiento
+- No duplicación: NO generes riesgos similares a los ya existentes listados arriba
+
+7️⃣ ESTILO DE REDACCIÓN
+
+- Claridad: Lenguaje claro y directo
+- Concreción: Específico y accionable
+- Español neutro: Objetivo y profesional
+- Sin juicios: Descripción neutral de hechos
+
+IMPORTANTE: Responde SOLO con un JSON válido con este formato exacto (array de suggestions):
 {
   "suggestions": [
     {
-      "name": "Nombre del riesgo",
-      "description": "Descripción del riesgo",
-      "category": ["Operacional"],
+      "name": "Nombre corto del riesgo (máximo 80 caracteres)",
+      "description": "Descripción detallada del riesgo (100-300 caracteres). Debe incluir: el daño al recurso + el evento causante. Ejemplo: 'Pérdida financiera por apropiación indebida de fondos debido a falta de controles de autorización en pagos'",
+      "category": "Operacional",
       "frequencyOccurrence": 3,
-      "impact": 4
+      "impact": 4,
+      "risk_subtype": "Fraude"
     }
   ]
-}`;
+}
 
-      const response = await openAIService.generateText(prompt, "Eres un experto en gestión de riesgos GRC.");
+Cada riesgo debe tener:
+- name: Nombre corto y descriptivo (máximo 80 caracteres)
+- description: Descripción detallada que incluya DAÑO + EVENTO CAUSANTE (100-300 caracteres)
+- category: Siempre "Operacional"
+- frequencyOccurrence: 1-5 (1=muy raro, 5=muy frecuente)
+- impact: 1-5 (1=muy bajo, 5=muy alto)
+- risk_subtype: "Errores", "Fraude" o "Cumplimiento"
+
+Genera entre 5 y 10 riesgos de alta calidad, diversos en subtipos, y directamente vinculados al proceso especificado.`;
+
+      const systemPrompt = `Eres un experto en gestión de riesgos empresariales con especialización en identificación sistemática de riesgos operacionales. 
+Sigas metodologías estrictas de análisis de riesgos y proporcionas identificaciones profesionales, objetivas y accionables.
+Tu enfoque es metódico: identificas recursos críticos, analizas eventos causantes, y construyes riesgos con la fórmula DAÑO + EVENTO.
+Redactas en español neutro, claro y profesional.`;
+      
+      const response = await openAIService.generateText(prompt, systemPrompt);
       
       // Parse the response
       let suggestions = [];
       try {
-        // Try to extract JSON from the response
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        // Try to extract JSON from the response (puede venir con markdown code blocks)
+        let jsonText = response;
+        
+        // Remover markdown code blocks si existen
+        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+        
+        // Buscar el objeto JSON
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          suggestions = parsed.suggestions || [];
+          suggestions = (parsed.suggestions || []).map((s: any) => ({
+            name: s.name,
+            description: s.description,
+            category: s.category || 'Operacional',
+            frequencyOccurrence: s.frequencyOccurrence || 3,
+            impact: s.impact || 3,
+            risk_subtype: s.risk_subtype || 'Errores' // Incluir risk_subtype si viene en la respuesta
+          }));
         }
       } catch (parseError) {
         console.error("Error parsing AI response:", parseError);
+        console.error("Response was:", response.substring(0, 500));
         suggestions = [];
       }
 
