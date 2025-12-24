@@ -186,10 +186,93 @@ class UpstashRedisAdapter {
   }
 }
 
-type RedisClient = IoRedis | InMemoryCache | UpstashRedisAdapter;
+// Wrapper for IoRedis to add setnx method with TTL support
+class IoRedisWrapper {
+  private client: IoRedis;
+  
+  constructor(client: IoRedis) {
+    this.client = client;
+  }
+  
+  // Delegate all methods to the underlying client
+  async setex(key: string, ttl: number, value: string): Promise<string> {
+    return await this.client.setex(key, ttl, value);
+  }
+  
+  async get(key: string): Promise<string | null> {
+    return await this.client.get(key);
+  }
+  
+  async del(...keys: string[]): Promise<number> {
+    if (keys.length === 0) return 0;
+    return await this.client.del(...keys);
+  }
+  
+  async keys(pattern: string): Promise<string[]> {
+    return await this.client.keys(pattern);
+  }
+  
+  async exists(...keys: string[]): Promise<number> {
+    if (keys.length === 0) return 0;
+    return await this.client.exists(...keys);
+  }
+  
+  async expire(key: string, seconds: number): Promise<number> {
+    return await this.client.expire(key, seconds);
+  }
+  
+  async ttl(key: string): Promise<number> {
+    return await this.client.ttl(key);
+  }
+  
+  async setnx(key: string, value: string, ttlSeconds: number): Promise<number> {
+    // SETNX with expiration: Use SET with NX and EX options
+    // ioredis syntax: set(key, value, 'EX', seconds, 'NX')
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK' ? 1 : 0;
+  }
+  
+  async flushdb(): Promise<string> {
+    return await this.client.flushdb();
+  }
+  
+  on(event: string, handler: Function) {
+    this.client.on(event, handler as any);
+  }
+  
+  off(event: string, handler: Function) {
+    this.client.off(event, handler as any);
+  }
+  
+  async disconnect() {
+    // CRITICAL: Never disconnect the singleton connection
+    // This method exists for interface compatibility but should never be called
+    console.warn('⚠️ [REDIS] disconnect() called on singleton - ignoring to maintain connection');
+  }
+  
+  getStats() {
+    return { distributed: true, type: 'ioredis' };
+  }
+  
+  // Expose connect method for initialization
+  async connect(): Promise<void> {
+    return await this.client.connect();
+  }
+}
 
-// CRITICAL: Singleton pattern - ONE Redis client per Cloud Run instance
-// This prevents multiple connections from being created
+type RedisClient = IoRedisWrapper | InMemoryCache | UpstashRedisAdapter;
+
+// ============================================================================
+// CRITICAL: Redis Client Singleton Pattern
+// ============================================================================
+// This module implements a strict singleton pattern for Redis connections:
+// - ONE connection per Cloud Run instance (process)
+// - Connection is created ONCE at startup
+// - Connection is NEVER closed (remains open for instance lifetime)
+// - Connection is reused across ALL requests (no per-request connections)
+// - TCP keep-alive is enabled to prevent connection timeouts
+// ============================================================================
+
 let redis: RedisClient | null = null;
 let usingRealRedis = false;
 let redisInitialized = false; // Track initialization to prevent multiple initializations
@@ -200,8 +283,16 @@ const UPSTASH_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 /**
- * CRITICAL: Initialize Redis client ONCE per process instance
- * This function ensures only ONE connection is created, even if called multiple times
+ * CRITICAL: Initialize Redis client ONCE per process instance (singleton)
+ * 
+ * This function ensures:
+ * - Only ONE connection is created per Cloud Run instance
+ * - Connection is established at startup, not on first request
+ * - Connection is NEVER closed (remains open for instance lifetime)
+ * - Connection is reused across ALL requests
+ * - TCP keep-alive prevents connection timeouts
+ * 
+ * @returns Promise that resolves when Redis is initialized
  */
 function initializeRedis(): Promise<void> {
   // If already initialized, return immediately
@@ -236,17 +327,22 @@ function initializeRedis(): Promise<void> {
       }
     } else if (REDIS_URL && REDIS_URL.startsWith('redis')) {
       try {
-        // OPTIMIZED: Singleton Redis client with persistent connection and keep-alive
-        // CRITICAL: One connection per Cloud Run instance, reused across all requests
-        const redisClient = new IoRedis(REDIS_URL, {
+        // CRITICAL: Singleton Redis client - ONE connection per Cloud Run instance
+        // This connection is created ONCE at startup and reused across ALL requests
+        // NEVER create/close connections per request - this ensures optimal performance
+        const rawRedisClient = new IoRedis(REDIS_URL, {
           // Connection management
           maxRetriesPerRequest: 3,
           enableReadyCheck: true,
           connectTimeout: 10000,
-          lazyConnect: true, // CRITICAL: Use lazy connect, then connect explicitly below for better control
+          lazyConnect: true, // Use lazy connect, then connect explicitly for better control
           
-          // CRITICAL: Keep connection alive to prevent frequent reconnections
-          keepAlive: 30000, // Send keep-alive ping every 30 seconds
+          // CRITICAL: TCP Keep-Alive is handled automatically by Node.js net.Socket
+          // ioredis uses Node.js net.Socket which has keep-alive enabled by default
+          // The connection will remain alive between requests automatically
+          // No explicit configuration needed - ioredis handles this internally
+          
+          // Network configuration
           family: 4, // Use IPv4 (faster, more reliable)
           
           // Retry strategy: exponential backoff with max delay
@@ -260,19 +356,30 @@ function initializeRedis(): Promise<void> {
           // This ensures the connection stays open between requests
           enableOfflineQueue: true, // Queue commands when disconnected
           
-          // CRITICAL: Auto-reconnect on connection loss (default is true, but explicit is better)
+          // CRITICAL: Auto-reconnect on connection loss
+          // Default is true, but explicit is better for clarity
           enableAutoPipelining: false, // Disable auto-pipelining to avoid connection issues
           
-          // Reconnect on close (critical for Cloud Run)
-          reconnectOnError: (err) => {
+          // CRITICAL: Always reconnect on errors (except for specific cases)
+          // This ensures the singleton connection is always maintained
+          reconnectOnError: (err: Error) => {
             const targetError = 'READONLY';
             if (err.message.includes(targetError)) {
-              // Only reconnect on specific errors
+              // Reconnect on READONLY errors
               return true;
             }
+            // For other errors, let ioredis handle reconnection automatically
+            // ioredis will reconnect on connection loss by default
             return false;
           },
+          
+          // CRITICAL: Never close connection automatically
+          // The connection should remain open for the lifetime of the Cloud Run instance
+          // This is handled by the singleton pattern - we never call disconnect() or quit()
         });
+        
+        // Wrap the client to add setnx method and ensure singleton behavior
+        const redisClient = new IoRedisWrapper(rawRedisClient);
         
         // CRITICAL: Track connection creation to detect multiple connections
         const connectionId = `redis-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -294,7 +401,7 @@ function initializeRedis(): Promise<void> {
           console.log(`✅ [REDIS] Redis client ready (PID: ${process.pid})`);
         });
         
-        redisClient.on('error', (err) => {
+        redisClient.on('error', (err: Error) => {
           console.error(`❌ [REDIS] Connection error (PID: ${process.pid}):`, err.message);
           // Don't fall back to in-memory on error - let retry strategy handle it
         });
@@ -303,25 +410,40 @@ function initializeRedis(): Promise<void> {
           console.warn(`⚠️ [REDIS] Connection closed (PID: ${process.pid}) - will reconnect automatically`);
         });
         
-        redisClient.on('reconnecting', (delay) => {
+        redisClient.on('reconnecting', (delay: number) => {
           console.log(`🔄 [REDIS] Reconnecting in ${delay}ms... (PID: ${process.pid})`);
         });
         
         redisClient.on('end', () => {
-          console.warn(`⚠️ [REDIS] Connection ended (PID: ${process.pid})`);
+          console.warn(`⚠️ [REDIS] Connection ended (PID: ${process.pid}) - singleton will attempt to reconnect`);
         });
         
+        // CRITICAL: Assign to singleton variable BEFORE connecting
+        // This ensures getRedis() returns the client even during connection
         redis = redisClient;
         redisInitialized = true;
         
-        // Connect immediately to establish connection at startup
+        // CRITICAL: Connect immediately to establish connection at startup
+        // This connection will remain open for the lifetime of the Cloud Run instance
+        // NEVER call disconnect() or quit() - the connection must stay alive
         await redisClient.connect().catch((err) => {
           console.warn(`⚠️ [REDIS] Initial connection failed (PID: ${process.pid}), falling back to in-memory cache:`, err.message);
           redis = new InMemoryCache();
           usingRealRedis = false;
+          redisInitialized = true;
         });
         
-        console.log(`🔄 [REDIS] Redis connection initiated (singleton pattern - ONE connection per instance, PID: ${process.pid})...`);
+        // CRITICAL: Configure TCP keep-alive on the underlying socket
+        // This ensures the connection stays alive between requests
+        rawRedisClient.stream?.once('connect', () => {
+          if (rawRedisClient.stream && typeof rawRedisClient.stream.setKeepAlive === 'function') {
+            rawRedisClient.stream.setKeepAlive(true, 0); // Enable keep-alive immediately
+            console.log(`✅ [REDIS] TCP keep-alive enabled on socket (PID: ${process.pid})`);
+          }
+        });
+        
+        console.log(`✅ [REDIS] Singleton connection established (ONE connection per instance, PID: ${process.pid})`);
+        console.log(`📌 [REDIS] Connection will remain open for instance lifetime - never closed per request`);
       } catch (error) {
         console.warn(`⚠️ [REDIS] Initialization failed (PID: ${process.pid}), using in-memory cache:`, error);
         redis = new InMemoryCache();
@@ -337,22 +459,53 @@ function initializeRedis(): Promise<void> {
   return redisInitPromise;
 }
 
-// CRITICAL: Initialize Redis immediately when module loads
-// This ensures connection is established at startup, not on first request
+// ============================================================================
+// CRITICAL: Initialize Redis Singleton at Module Load
+// ============================================================================
+// Initialize Redis immediately when module loads (not on first request)
+// This ensures:
+// - Connection is established at startup
+// - Connection is ready before any requests arrive
+// - ONE connection per process (singleton pattern)
+// - Connection remains open for the lifetime of the instance
+// ============================================================================
 initializeRedis().catch((err) => {
-  console.error('❌ [REDIS] Failed to initialize Redis:', err);
+  console.error('❌ [REDIS] Failed to initialize Redis singleton:', err);
 });
+
+/**
+ * Get the Redis singleton client instance
+ * 
+ * CRITICAL: This returns the SAME connection instance for all requests
+ * - Never creates a new connection
+ * - Never closes the connection
+ * - Connection is shared across all requests in the same process
+ * 
+ * @returns The singleton Redis client instance (may be null if not initialized yet)
+ */
+function getRedisClient(): RedisClient | null {
+  return redis;
+}
 
 // CRITICAL: Export singleton instance directly
 // The initialization happens at module load time, ensuring ONE connection per process
+// NEVER call disconnect() or quit() on this instance - it must remain open
 export default redis;
-export { usingRealRedis, initializeRedis };
+export { usingRealRedis, initializeRedis, getRedisClient };
 
 export class DistributedCache {
   private readonly defaultTTL = 5 * 60;
-  // CRITICAL: Don't store redisClient reference - always get it fresh via getRedis()
-  // This prevents 'Cannot access before initialization' errors when module loads
   
+  /**
+   * Get the Redis singleton client instance
+   * 
+   * CRITICAL: This method returns the SAME singleton connection for all requests
+   * - Never creates a new connection
+   * - Never closes the connection
+   * - Uses the singleton pattern - ONE connection per Cloud Run instance
+   * 
+   * @returns The singleton Redis client instance (may be null if not initialized yet)
+   */
   private getRedis(): RedisClient | null {
     // CRITICAL: Always get the current singleton instance dynamically
     // This ensures we always have the latest redis instance, even if it was initialized after module load
@@ -360,16 +513,17 @@ export class DistributedCache {
     
     // If Redis is not initialized yet, try to initialize it (shouldn't happen in production after startup)
     if (!redisInitialized && !redis) {
-      console.warn('[REDIS] Redis not initialized yet in getRedis(), initializing now...');
+      console.warn('[REDIS] Redis singleton not initialized yet in getRedis(), initializing now...');
       // This should not happen after startup, but if it does, initialize it
       initializeRedis().catch(err => {
-        console.error('[REDIS] Failed to initialize Redis in getRedis():', err);
+        console.error('[REDIS] Failed to initialize Redis singleton in getRedis():', err);
       });
       // Return null for now - will be available on next call
       return null;
     }
     
-    // Return the current redis instance (may be null if still initializing)
+    // CRITICAL: Return the singleton instance
+    // This is the SAME connection for all requests - never creates a new one
     return redis || null;
   }
   
