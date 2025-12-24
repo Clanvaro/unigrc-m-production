@@ -19221,41 +19221,49 @@ Responde SOLO con un JSON válido con este formato exacto:
 
       const cacheKey = `subprocesos:single-tenant`;
 
-      // Try to get from two-tier cache first (L1: <1ms, L2: <100ms with timeout)
-      const cached = await timed('cache:get', () => twoTierCache.get(cacheKey));
+      const startTime = Date.now();
+
+      // OPTIMIZED: Use two-tier cache with SingleFlight to deduplicate concurrent requests
+      const cached = await timed('cache:get', () => twoTierCache.get(cacheKey, async () => {
+        // This function is only executed once when cache is cold (SingleFlight deduplication)
+        console.log(`[CACHE MISS] /api/subprocesos - fetching data (SingleFlight deduplication)`);
+        const fetchStart = Date.now();
+
+        // PERFORMANCE: Only fetch subproceso risk levels (not all entities)
+        const [subprocesos, allRiskLevels] = await Promise.all([
+          storage.getSubprocesosWithOwners(),
+          storage.getAllRiskLevelsOptimized({ entities: ['subprocesos'] })
+        ]);
+
+        const fetchDuration = Date.now() - fetchStart;
+        console.log(`[DB] /api/subprocesos fetched ${subprocesos.length} subprocesos and risk levels in ${fetchDuration}ms`);
+
+        if (fetchDuration > 3000) {
+          console.warn(`⚠️ Slow /api/subprocesos query: ${fetchDuration}ms`);
+        }
+
+        // Filter out soft-deleted records
+        const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
+
+        // Use optimized risk levels lookup
+        const subprocesosWithRisks = activeSubprocesos.map((subproceso) => {
+          const riskLevels = allRiskLevels.subprocesos.get(subproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+          return {
+            ...subproceso,
+            ...riskLevels
+          };
+        });
+
+        return subprocesosWithRisks;
+      }));
+
       if (cached) {
         if (profile) {
+          timings['total'] = Date.now() - startTime;
           console.log('[PROFILE] /api/subprocesos CACHE HIT', { timings, pool: getPoolMetrics() });
         }
         return res.json(cached);
       }
-
-      const startTime = Date.now();
-
-      // PERFORMANCE: Only fetch subproceso risk levels (not all entities)
-      const [subprocesos, allRiskLevels] = await Promise.all([
-        timed('db:subprocesos', () => storage.getSubprocesosWithOwners()),
-        timed('db:riskLevels', () => storage.getAllRiskLevelsOptimized({ entities: ['subprocesos'] }))
-      ]);
-
-      // Filter out soft-deleted records
-      const filterStart = Date.now();
-      const activeSubprocesos = subprocesos.filter((s: any) => s.status !== 'deleted');
-      if (profile) timings['filter'] = Date.now() - filterStart;
-
-      // Use optimized risk levels lookup
-      const mapStart = Date.now();
-      const subprocesosWithRisks = activeSubprocesos.map((subproceso) => {
-        const riskLevels = allRiskLevels.subprocesos.get(subproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-        return {
-          ...subproceso,
-          ...riskLevels
-        };
-      });
-      if (profile) timings['map'] = Date.now() - mapStart;
-
-      // Cache for 60 seconds (L1: 30s, L2: 60s)
-      await timed('cache:set', () => twoTierCache.set(cacheKey, subprocesosWithRisks, 60));
 
       if (profile) {
         timings['total'] = Date.now() - startTime;

@@ -279,6 +279,10 @@ export const riskProcessLinks = pgTable("risk_process_links", {
   // Performance optimization: Composite index for validation center count queries
   // Covers: WHERE validation_status = X AND notification_sent = Y
   index("idx_rpl_validation_notification").on(table.validationStatus, table.notificationSent),
+  // CRITICAL: Composite index for paginated queries with ORDER BY
+  // Covers: WHERE validation_status = X AND notification_sent = Y ORDER BY created_at
+  // This dramatically improves performance for /api/risk-processes/validation/*/list endpoints
+  index("idx_rpl_validation_notification_created").on(table.validationStatus, table.notificationSent, table.createdAt),
 ]);
 
 // Historial de validaciones de riskProcessLinks para auditoría completa

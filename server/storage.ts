@@ -5015,7 +5015,7 @@ export class MemStorage implements IStorage {
     timestamp: number
   }> = new Map();
 
-  private readonly CACHE_TTL_MS = 600000; // 10 minutes (increased from 5 min for better performance on slow endpoints)
+  private readonly CACHE_TTL_MS = 900000; // 15 minutes (increased for better performance on slow endpoints - risk levels change infrequently)
 
   // Helper to invalidate risk levels cache
   private invalidateRiskLevelsCache() {
@@ -5070,23 +5070,30 @@ export class MemStorage implements IStorage {
           : undefined
       )),
 
-      // Risk controls (lightweight)
-      () => db.select({
-        riskId: riskControls.riskId,
-        residualRisk: riskControls.residualRisk
-      })
-        .from(riskControls)
-        .innerJoin(risks, eq(riskControls.riskId, risks.id))
-        .innerJoin(controls, eq(riskControls.controlId, controls.id))
-        .where(and(
-          isNull(risks.deletedAt),
-          eq(risks.status, 'active'),
-          isNull(controls.deletedAt),
-          // Optimization: Same filter as above
-          needSubprocesos && !needProcesses && !needMacroprocesos
-            ? isNotNull(risks.subprocesoId)
-            : undefined
-        )),
+      // Risk controls (lightweight) - OPTIMIZED: Only fetch for requested entities
+      () => {
+        // If only subprocesos needed, filter by subprocesoId
+        // If only processes needed, filter by processId (risks linked to processes or their subprocesos)
+        const riskFilter = needSubprocesos && !needProcesses && !needMacroprocesos
+          ? isNotNull(risks.subprocesoId)
+          : needProcesses && !needMacroprocesos
+            ? or(isNotNull(risks.processId), isNotNull(risks.subprocesoId))
+            : undefined;
+        
+        return db.select({
+          riskId: riskControls.riskId,
+          residualRisk: riskControls.residualRisk
+        })
+          .from(riskControls)
+          .innerJoin(risks, eq(riskControls.riskId, risks.id))
+          .innerJoin(controls, eq(riskControls.controlId, controls.id))
+          .where(and(
+            isNull(risks.deletedAt),
+            eq(risks.status, 'active'),
+            isNull(controls.deletedAt),
+            riskFilter
+          ));
+      },
 
       // Only fetch requested entities (lightweight - IDs only)
       needMacroprocesos
@@ -21350,57 +21357,88 @@ export class DatabaseStorage extends MemStorage {
     limit: number = 50,
     offset: number = 0
   ): Promise<{ data: RiskProcessLinkWithDetails[], total: number }> {
-    // First, get total count (fast with index)
+    // OPTIMIZED: Use raw SQL for better performance with complex JOINs
+    // This query benefits from idx_rpl_validation_notification_created index
+    const queryStart = Date.now();
+    
+    // First, get total count (fast with index idx_rpl_validation_notification)
     // IMPORTANT: Filter out deleted risks by joining with risks table
-    const countResult = await db.select({ count: sql<number>`cast(count(*) as integer)` })
-      .from(riskProcessLinks)
-      .innerJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .where(and(
-        eq(riskProcessLinks.validationStatus, 'pending_validation'),
-        eq(riskProcessLinks.notificationSent, notified),
-        isNull(risks.deletedAt)
-      ));
-    const total = countResult[0]?.count || 0;
+    const countResult = await db.execute(sql`
+      SELECT COUNT(*)::integer as count
+      FROM risk_process_links rpl
+      INNER JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
+      WHERE rpl.validation_status = 'pending_validation'
+        AND rpl.notification_sent = ${notified}
+    `);
+    const total = (countResult.rows[0] as any)?.count || 0;
 
     // If no results, return early
     if (total === 0) {
       return { data: [], total: 0 };
     }
 
-    // Get paginated results with LIMIT/OFFSET at DB level
-    const baseResults = await db.select({
-      riskProcessLink: riskProcessLinks,
-      risk: risks,
-      macroproceso: macroprocesos,
-      process: processes,
-      subproceso: subprocesos,
-      validatedByUser: users,
-      responsibleOwnerId: sql<string>`
-        COALESCE(
-          ${riskProcessLinks.responsibleOverrideId},
-          ${subprocesos.ownerId},
-          ${processes.ownerId},
-          ${macroprocesos.ownerId}
-        )
-      `.as('responsible_owner_id')
-    })
-      .from(riskProcessLinks)
-      .leftJoin(risks, eq(riskProcessLinks.riskId, risks.id))
-      .leftJoin(macroprocesos, eq(riskProcessLinks.macroprocesoId, macroprocesos.id))
-      .leftJoin(processes, eq(riskProcessLinks.processId, processes.id))
-      .leftJoin(subprocesos, eq(riskProcessLinks.subprocesoId, subprocesos.id))
-      .leftJoin(users, eq(riskProcessLinks.validatedBy, users.id))
-      .where(and(
-        eq(riskProcessLinks.validationStatus, 'pending_validation'),
-        eq(riskProcessLinks.notificationSent, notified),
-        isNull(risks.deletedAt)
-      ))
-      .orderBy(riskProcessLinks.createdAt)
-      .limit(limit)
-      .offset(offset);
+    // OPTIMIZED: Get paginated results using raw SQL for better performance
+    // Uses idx_rpl_validation_notification_created index for optimal ORDER BY
+    const baseResults = await db.execute(sql`
+      SELECT 
+        rpl.id as rpl_id,
+        rpl.risk_id as rpl_risk_id,
+        rpl.macroproceso_id as rpl_macroproceso_id,
+        rpl.process_id as rpl_process_id,
+        rpl.subproceso_id as rpl_subproceso_id,
+        rpl.responsible_override_id as rpl_responsible_override_id,
+        rpl.validated_by as rpl_validated_by,
+        rpl.validation_status as rpl_validation_status,
+        rpl.validation_comments as rpl_validation_comments,
+        rpl.validated_at as rpl_validated_at,
+        rpl.notification_sent as rpl_notified,
+        rpl.created_at as rpl_created_at,
+        rpl.updated_at as rpl_updated_at,
+        r.id as risk_id,
+        r.code as risk_code,
+        r.name as risk_name,
+        r.status as risk_status,
+        r.process_owner as risk_process_owner,
+        r.inherent_risk as risk_inherent_risk,
+        COALESCE(rc_min.min_residual_risk, r.inherent_risk) as risk_residual_risk,
+        m.id as macro_id,
+        m.name as macro_name,
+        m.owner_id as macro_owner_id,
+        p.id as proc_id,
+        p.name as proc_name,
+        p.owner_id as proc_owner_id,
+        s.id as sub_id,
+        s.name as sub_name,
+        s.owner_id as sub_owner_id,
+        u.id as val_user_id,
+        u.full_name as val_user_full_name,
+        u.email as val_user_email,
+        COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id
+      FROM risk_process_links rpl
+      INNER JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
+      LEFT JOIN (
+        SELECT risk_id, MIN(residual_risk) as min_residual_risk
+        FROM risk_controls
+        GROUP BY risk_id
+      ) rc_min ON r.id = rc_min.risk_id
+      LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
+      LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
+      LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
+      LEFT JOIN users u ON rpl.validated_by = u.id
+      WHERE rpl.validation_status = 'pending_validation'
+        AND rpl.notification_sent = ${notified}
+      ORDER BY rpl.created_at
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `);
+    
+    const queryDuration = Date.now() - queryStart;
+    if (queryDuration > 1000) {
+      console.warn(`[PERF] getRiskProcessLinksByNotificationStatusPaginated query took ${queryDuration}ms (notified=${notified}, limit=${limit}, offset=${offset})`);
+    }
 
     // Batch-fetch process owners for this page only
-    const ownerIds = [...new Set(baseResults.map(r => r.responsibleOwnerId).filter(Boolean))];
+    const ownerIds = [...new Set((baseResults.rows as any[]).map((r: any) => r.responsible_owner_id).filter(Boolean))];
     const owners = ownerIds.length > 0
       ? await db.select({
         id: processOwners.id,
@@ -21412,15 +21450,50 @@ export class DatabaseStorage extends MemStorage {
       : [];
     const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
 
-    // Map results
-    const data = baseResults.map((result) => ({
-      ...result.riskProcessLink,
-      risk: result.risk!,
-      macroproceso: result.macroproceso || undefined,
-      process: result.process || undefined,
-      subproceso: result.subproceso || undefined,
-      responsibleUser: result.responsibleOwnerId ? ownersMap.get(result.responsibleOwnerId) : undefined,
-      validatedByUser: result.validatedByUser || undefined,
+    // Map SQL results (snake_case) to expected format (camelCase)
+    const data = (baseResults.rows as any[]).map((result: any) => ({
+      // RiskProcessLink fields
+      id: result.rpl_id,
+      riskId: result.rpl_risk_id,
+      macroprocesoId: result.rpl_macroproceso_id,
+      processId: result.rpl_process_id,
+      subprocesoId: result.rpl_subproceso_id,
+      responsibleOverrideId: result.rpl_responsible_override_id,
+      validatedBy: result.rpl_validated_by,
+      validationStatus: result.rpl_validation_status,
+      validationComments: result.rpl_validation_comments,
+      validatedAt: result.rpl_validated_at,
+      notified: result.rpl_notified,
+      createdAt: result.rpl_created_at,
+      updatedAt: result.rpl_updated_at,
+      // Related entities (minimal objects)
+      risk: {
+        id: result.risk_id!,
+        code: result.risk_code!,
+        name: result.risk_name!,
+        status: result.risk_status!,
+        inherentRisk: result.risk_inherent_risk ?? null,
+        residualRisk: result.risk_residual_risk ?? null,
+        processOwner: result.risk_process_owner ?? null
+      },
+      macroproceso: result.macro_id ? {
+        id: result.macro_id,
+        name: result.macro_name!
+      } : undefined,
+      process: result.proc_id ? {
+        id: result.proc_id,
+        name: result.proc_name!
+      } : undefined,
+      subproceso: result.sub_id ? {
+        id: result.sub_id,
+        name: result.sub_name!
+      } : undefined,
+      responsibleUser: result.responsible_owner_id ? ownersMap.get(result.responsible_owner_id) : undefined,
+      validatedByUser: result.val_user_id ? {
+        id: result.val_user_id,
+        fullName: result.val_user_full_name,
+        email: result.val_user_email
+      } : undefined,
     }));
 
     return { data, total };
