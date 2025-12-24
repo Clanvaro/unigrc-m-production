@@ -79,27 +79,70 @@ export async function getRiskEventsFromReadModel(params: {
       : sql``;
 
   // Query simple desde read-model
-  const [eventsResult, countResult] = await Promise.all([
-    db.execute(sql`
-      SELECT 
-        id, code, event_date, event_type, status, severity,
-        description, estimated_loss, actual_loss, risk_id, control_id,
-        process_id, involved_persons, reported_by, investigated_by,
-        resolution_notes, created_at,
-        risk_code, risk_name, risk_category,
-        control_code, control_name,
-        macroproceso_ids, process_ids, subproceso_ids
-      FROM risk_events_list_view
-      ${whereClause}
-      ORDER BY event_date DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `),
-    db.execute(sql`
-      SELECT COUNT(*)::int as total
-      FROM risk_events_list_view
-      ${whereClause}
-    `),
-  ]);
+  // Si la vista no existe, fallback a tabla risk_events
+  let eventsResult: any;
+  let countResult: any;
+  
+  try {
+    const queryStart = Date.now();
+    [eventsResult, countResult] = await Promise.all([
+      db.execute(sql`
+        SELECT 
+          id, code, event_date, event_type, status, severity,
+          description, estimated_loss, actual_loss, risk_id, control_id,
+          process_id, involved_persons, reported_by, investigated_by,
+          resolution_notes, created_at,
+          risk_code, risk_name, risk_category,
+          control_code, control_name,
+          macroproceso_ids, process_ids, subproceso_ids
+        FROM risk_events_list_view
+        ${whereClause}
+        ORDER BY event_date DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `),
+      db.execute(sql`
+        SELECT COUNT(*)::int as total
+        FROM risk_events_list_view
+        ${whereClause}
+      `),
+    ]);
+    
+    const queryDuration = Date.now() - queryStart;
+    if (queryDuration > 1000) {
+      console.warn(`[PERF] Slow query in getRiskEventsFromReadModel: ${queryDuration}ms`);
+    }
+  } catch (error: any) {
+    // Si la vista no existe, usar tabla risk_events directamente
+    if (error?.message?.includes('does not exist') || error?.message?.includes('relation')) {
+      console.warn('[WARN] risk_events_list_view does not exist, falling back to risk_events table');
+      console.warn('[WARN] Run: npm run apply-risk-events-list-view to create the materialized view');
+      
+      // Fallback: usar tabla risk_events directamente
+      [eventsResult, countResult] = await Promise.all([
+        db.execute(sql`
+          SELECT 
+            id, code, event_date, event_type, status, severity,
+            description, estimated_loss, actual_loss, risk_id, control_id,
+            process_id, involved_persons, reported_by, investigated_by,
+            resolution_notes, created_at,
+            NULL as risk_code, NULL as risk_name, NULL as risk_category,
+            NULL as control_code, NULL as control_name,
+            ARRAY[]::text[] as macroproceso_ids, ARRAY[]::text[] as process_ids, ARRAY[]::text[] as subproceso_ids
+          FROM risk_events
+          ${whereClause}
+          ORDER BY event_date DESC
+          LIMIT ${limit} OFFSET ${offset}
+        `),
+        db.execute(sql`
+          SELECT COUNT(*)::int as total
+          FROM risk_events
+          ${whereClause}
+        `),
+      ]);
+    } else {
+      throw error;
+    }
+  }
 
   return {
     events: eventsResult.rows as any[],

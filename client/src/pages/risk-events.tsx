@@ -500,7 +500,7 @@ export default function RiskEvents() {
   const paginationLimit = 25; // Match backend default
   
   // BFF: 1 endpoint que devuelve todo (eventos, counts, catálogos)
-  const { data: pageData, isLoading: isPageDataLoading } = useQuery<RiskEventsPageData>({
+  const { data: pageData, isLoading: isPageDataLoading, error: pageDataError } = useQuery<RiskEventsPageData>({
     queryKey: ["/api/pages/risk-events", paginationOffset, paginationLimit],
     queryFn: async () => {
       const params = new URLSearchParams({
@@ -509,8 +509,17 @@ export default function RiskEvents() {
       });
       
       const response = await fetch(`/api/pages/risk-events?${params}`);
-      if (!response.ok) throw new Error('Failed to fetch events');
-      return response.json();
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[ERROR] Failed to fetch risk events:', errorData);
+        throw new Error(errorData.message || 'Failed to fetch events');
+      }
+      const data = await response.json();
+      console.log('[DEBUG] Risk events response:', { 
+        eventsCount: data?.riskEvents?.data?.length || 0, 
+        total: data?.riskEvents?.pagination?.total || 0 
+      });
+      return data;
     },
     staleTime: 2 * 60 * 1000, // 2 minutes - invalidated on mutations
     gcTime: 10 * 60 * 1000, // 10 minutes cache retention
@@ -519,6 +528,11 @@ export default function RiskEvents() {
     refetchOnReconnect: false,
     placeholderData: (previousData) => previousData,
   });
+  
+  // Log error si existe
+  if (pageDataError) {
+    console.error('[ERROR] Risk events query error:', pageDataError);
+  }
   
   // Extraer catálogos del BFF response
   const risksCatalog = pageData?.catalogs?.risks || [];

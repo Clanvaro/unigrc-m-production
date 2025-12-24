@@ -9543,11 +9543,15 @@ Redactas en español neutro, claro y profesional.`;
       // SingleFlight: si 20 requests llegan simultáneamente, solo 1 ejecuta la query
       const pageData = await bootstrapCache.get(cacheKey, async () => {
         // Esta función solo se ejecuta una vez (SingleFlight)
+        const fetchStart = Date.now();
         const [eventsData, counts, catalogs] = await Promise.all([
           getRiskEventsFromReadModel({ limit, offset, filters }),
           getRiskEventCounts(filters),
           getMinimalCatalogsForEvents(),
         ]);
+        
+        const fetchDuration = Date.now() - fetchStart;
+        console.log(`[PERF] /api/pages/risk-events data fetch: ${fetchDuration}ms (events: ${eventsData.events.length}, total: ${eventsData.total})`);
 
         const response = {
           riskEvents: {
