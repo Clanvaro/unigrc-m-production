@@ -747,15 +747,28 @@ export default function Risks() {
       };
     },
     onSuccess: () => {
+      // CRITICAL: Invalidate BFF endpoint first for immediate update
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/pages/risks"], 
+        exact: false,
+        refetchType: 'active' 
+      });
+      // Force immediate refetch to remove deleted risk instantly
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/pages/risks"],
+        exact: false,
+        type: 'active'
+      });
+      
+      // Also invalidate legacy endpoints
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
-      queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"], refetchType: 'active' });
       toast({ title: "Riesgo eliminado", description: "El riesgo ha sido movido a la papelera." });
       setDeletionReason("");
       setDeleteConfirmRisk(null);
@@ -1454,43 +1467,59 @@ export default function Risks() {
 
   const handleEditSuccess = () => {
     setEditingRisk(null);
-    // CRITICAL: Invalidate ALL risk-related queries for immediate updates across all views
-    // Bootstrap is the main data source for risks page - invalidate first
-    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/pages/risks"] });
-    queryClient.invalidateQueries({
-      queryKey: ["/api/risks"],
-      exact: false
+    // CRITICAL: Invalidate BFF endpoint first for immediate update
+    queryClient.invalidateQueries({ 
+      queryKey: ["/api/pages/risks"], 
+      exact: false,
+      refetchType: 'active' 
     });
-    queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/risks/heatmap-data"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-snapshots/dates"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
+    // Force immediate refetch
+    queryClient.refetchQueries({ 
+      queryKey: ["/api/pages/risks"],
+      exact: false,
+      type: 'active'
+    });
+    
+    // Also invalidate legacy endpoints
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks"], exact: false, refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/heatmap-data"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-snapshots/dates"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"], refetchType: 'active' });
   };
 
 
   const handleCreateSuccess = () => {
     setIsCreateDialogOpen(false);
-    // CRITICAL: Invalidate ALL risk queries including paginated ones for immediate UI refresh
-    // Bootstrap is the main data source for risks page - invalidate first
-    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
-    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/pages/risks"] });
-    queryClient.invalidateQueries({
-      queryKey: ["/api/risks"],
-      exact: false
+    // CRITICAL: Invalidate BFF endpoint first for immediate update
+    queryClient.invalidateQueries({ 
+      queryKey: ["/api/pages/risks"], 
+      exact: false,
+      refetchType: 'active' 
     });
-    queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
+    // Force immediate refetch to show new risk instantly
+    queryClient.refetchQueries({ 
+      queryKey: ["/api/pages/risks"],
+      exact: false,
+      type: 'active'
+    });
+    
+    // Also invalidate legacy endpoints
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks"], exact: false, refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/processes"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/subprocesos"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"], refetchType: 'active' });
+    queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"], refetchType: 'active' });
   };
 
   const handleCreateDialogOpen = (open: boolean) => {

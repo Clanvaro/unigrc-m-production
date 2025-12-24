@@ -738,13 +738,27 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       );
 
       // Force immediate refetch of active bootstrap query to ensure data is fresh
-      // Invalidate first to clear staleTime, then refetch to get latest server data
+      // CRITICAL: Invalidate BFF endpoint used by risks page - MUST be first for immediate update
+      // This is the primary endpoint that the risks page uses
       queryClient.invalidateQueries({ 
-        queryKey: ["/api/risks/bootstrap"], 
+        queryKey: ["/api/pages/risks"],
         exact: false,
         refetchType: 'active' // Force immediate refetch even if data is fresh
       });
-
+      
+      // Also invalidate legacy endpoints for backward compatibility
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks/bootstrap"], 
+        exact: false,
+        refetchType: 'active'
+      });
+      
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/risks/page-data"],
+        exact: false,
+        refetchType: 'active'
+      });
+      
       // Invalidate related queries for background refresh (non-blocking, doesn't delay UI)
       queryClient.invalidateQueries({ queryKey: ["/api/risk-processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/process-owners"] });
@@ -757,23 +771,7 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
       queryClient.invalidateQueries({ queryKey: queryKeys.risks.processes(riskId) });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-associations"] });
       
-      // CRITICAL: Invalidate bootstrap endpoint used by risks page (matches any params)
-      // This ensures the risks list updates immediately after creating/updating a risk
-      queryClient.invalidateQueries({ 
-        queryKey: ["/api/risks/bootstrap"],
-        exact: false,
-        refetchType: 'active' // Force immediate refetch of active queries only
-      });
-      
-      // CRITICAL: Invalidate page-data endpoint used by risks page
-      queryClient.invalidateQueries({ 
-        queryKey: ["/api/risks/page-data"],
-        exact: false,
-        refetchType: 'active'
-      });
-      
       // CRITICAL: Invalidate ALL paginated risks queries (matches any params) to update main risks table immediately
-      // Using exact:false ensures we match all queries starting with ["/api/risks", "paginated", ...]
       queryClient.invalidateQueries({ 
         queryKey: ["/api/risks", "paginated"],
         exact: false
@@ -784,6 +782,13 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
         queryKey: ["/api/risks"],
         exact: false,
         refetchType: 'active'
+      });
+      
+      // Force immediate refetch of the active BFF query to show changes instantly
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/pages/risks"],
+        exact: false,
+        type: 'active'
       });
       
       // CRITICAL: Invalidate individual risk detail query to update detail view immediately (only if riskId exists)
