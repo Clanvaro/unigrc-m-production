@@ -858,26 +858,37 @@ export default function Risks() {
       return { previousControls, riskId, previousBootstrapData };
     },
     onSuccess: async (_data, _variables, context) => {
-      // OPTIMIZED: Surgical cache invalidation - only invalidate what changed
-      // The optimistic update already shows the change, so we just need to sync with server
+      // CRITICAL: Invalidate BFF endpoint first for immediate update
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/pages/risks"], 
+        exact: false,
+        refetchType: 'active' 
+      });
+      // Force immediate refetch
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/pages/risks"],
+        exact: false,
+        type: 'active'
+      });
+      
+      // Also invalidate specific risk queries
       if (context?.riskId) {
-        // Invalidate only the specific risk's controls summary (most important)
         queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.riskId, "controls/summary"],
-          exact: false
+          exact: false,
+          refetchType: 'active'
         });
-        // Invalidate the specific risk's controls list
         queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.riskId, "controls"],
-          exact: false
+          exact: false,
+          refetchType: 'active'
         });
       }
-      // Invalidate risk-controls-with-details (used in table) - single endpoint
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
-      // Invalidate bootstrap only for control counts (already optimistically updated)
+      
+      // Invalidate other endpoints
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId], refetchType: 'active' });
 
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
@@ -958,26 +969,37 @@ export default function Risks() {
       return { previousControls, currentRisk, previousBootstrapData };
     },
     onSuccess: async (_data, _variables, context) => {
-      // OPTIMIZED: Surgical cache invalidation - only invalidate what changed
-      // The optimistic update already shows the change, so we just need to sync with server
+      // CRITICAL: Invalidate BFF endpoint first for immediate update
+      queryClient.invalidateQueries({ 
+        queryKey: ["/api/pages/risks"], 
+        exact: false,
+        refetchType: 'active' 
+      });
+      // Force immediate refetch
+      queryClient.refetchQueries({ 
+        queryKey: ["/api/pages/risks"],
+        exact: false,
+        type: 'active'
+      });
+      
+      // Also invalidate specific risk queries
       if (context?.currentRisk) {
-        // Invalidate only the specific risk's controls summary (most important)
         queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.currentRisk.id, "controls/summary"],
-          exact: false
+          exact: false,
+          refetchType: 'active'
         });
-        // Invalidate the specific risk's controls list
         queryClient.invalidateQueries({
           queryKey: ["/api/risks", context.currentRisk.id, "controls"],
-          exact: false
+          exact: false,
+          refetchType: 'active'
         });
       }
-      // Invalidate risk-controls-with-details (used in table) - single endpoint
-      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"] });
-      // Invalidate bootstrap only for control counts (already optimistically updated)
+      
+      // Invalidate other endpoints
+      queryClient.invalidateQueries({ queryKey: ["/api/risk-controls-with-details"], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
+      queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId], refetchType: 'active' });
 
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
