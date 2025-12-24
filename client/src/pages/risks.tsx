@@ -238,22 +238,37 @@ export default function Risks() {
     setCurrentPage(1);
   }, [filters]);
 
-  // ============== CONSOLIDATED BOOTSTRAP ENDPOINT ==============
-  // Single optimized endpoint that returns risks + catalogs in one call
-  // Replaces 5+ parallel API calls with 1 optimized call (<1.5s target)
-  interface BootstrapResponse {
+  // ============== BFF ENDPOINT (Backend For Frontend) ==============
+  // Nuevo endpoint optimizado usando read-model (vista materializada)
+  // 1 endpoint por pantalla - reemplaza múltiples llamadas paralelas
+  // Usa risk_list_view para consultas rápidas y predecibles
+  interface PagesRisksResponse {
     risks: {
       data: any[];
       pagination: { limit: number; offset: number; total: number; hasMore: boolean };
+    };
+    counts: {
+      total: number;
+      byStatus: Record<string, number>;
+      byLevel: {
+        low: number;
+        medium: number;
+        high: number;
+        critical: number;
+      };
     };
     catalogs: {
       gerencias: any[];
       macroprocesos: any[];
       processes: any[];
       subprocesos: any[];
-      processOwners: any[];
-      processGerencias: any[];
       riskCategories: any[];
+      processOwners: any[];
+    };
+    relations: {
+      controlsByRisk: Record<string, { count: number; avgEffectiveness: number }>;
+      processesByRisk: Record<string, string[]>;
+      actionPlansByRisk: Record<string, number>;
     };
     _meta: {
       fetchedAt: string;
@@ -261,8 +276,8 @@ export default function Risks() {
     };
   }
 
-  const { data: bootstrapData, isLoading: isBootstrapLoading, isFetching, refetch: refetchRisks } = useQuery<BootstrapResponse>({
-    queryKey: ["/api/risks/bootstrap", {
+  const { data: pageData, isLoading: isBootstrapLoading, isFetching, refetch: refetchRisks } = useQuery<PagesRisksResponse>({
+    queryKey: ["/api/pages/risks", {
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
       ...filters
@@ -284,17 +299,27 @@ export default function Risks() {
       if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') params.append('residualRiskLevel', filters.residualRiskLevel);
       if (filters.owner && filters.owner !== 'all') params.append('ownerId', filters.owner);
 
-      const response = await fetch(`/api/risks/bootstrap?${params}`);
-      if (!response.ok) throw new Error("Failed to fetch bootstrap data");
+      const response = await fetch(`/api/pages/risks?${params}`);
+      if (!response.ok) throw new Error("Failed to fetch risks page data");
       return response.json();
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes - invalidated on mutations
-    gcTime: 1000 * 60 * 15, // 15 minutes cache retention
+    staleTime: 1000 * 60 * 2, // 2 minutes - invalidated on mutations
+    gcTime: 1000 * 60 * 10, // 10 minutes cache retention
     refetchOnWindowFocus: false,
     refetchOnMount: false, // OPTIMIZED: No refetch on mount if data is fresh (within staleTime) - prevents slow reloads
     refetchOnReconnect: false, // OPTIMIZED: No refetch on reconnect - data is cached
     placeholderData: (previousData) => previousData, // Keep previous data while fetching new page for smooth transitions
   });
+
+  // Alias para compatibilidad con código existente
+  const bootstrapData = pageData ? {
+    risks: pageData.risks,
+    catalogs: {
+      ...pageData.catalogs,
+      processGerencias: pageData.catalogs.processGerencias || [],
+    },
+    _meta: pageData._meta
+  } : null;
 
   // Extract data from bootstrap response
   const risks = bootstrapData?.risks?.data || [];
@@ -724,6 +749,7 @@ export default function Risks() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
       queryClient.invalidateQueries({ queryKey: ["/api/risks-with-details"] });
       queryClient.invalidateQueries({ queryKey: ["/api/processes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/macroprocesos"] });
@@ -838,6 +864,7 @@ export default function Risks() {
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
 
       toast({ title: "Control asociado", description: "El control ha sido asociado al riesgo exitosamente." });
     },
@@ -937,6 +964,7 @@ export default function Risks() {
       // Invalidate bootstrap only for control counts (already optimistically updated)
       queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false, refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['risks-page-data-lite', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/pages/risks'] });
 
       toast({ title: "Control removido", description: "El control ha sido removido del riesgo." });
     },
@@ -1430,6 +1458,7 @@ export default function Risks() {
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
     queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/pages/risks"] });
     queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
       exact: false
@@ -1451,6 +1480,7 @@ export default function Risks() {
     // Bootstrap is the main data source for risks page - invalidate first
     queryClient.invalidateQueries({ queryKey: ["/api/risks/bootstrap"], exact: false });
     queryClient.invalidateQueries({ queryKey: ["/api/risks/page-data-lite"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/pages/risks"] });
     queryClient.invalidateQueries({
       queryKey: ["/api/risks"],
       exact: false

@@ -16,6 +16,18 @@ import { analyzeCriticalQuery, analyzeAllCriticalQueries, CRITICAL_QUERIES, type
 import { distributedCache } from './services/redis';
 import { TwoTierCache } from './services/two-tier-cache';
 import { twoTierCache, getCacheStatsForEndpoint } from './services/two-tier-cache';
+import { buildStableCacheKey } from './utils/cache-key-builder';
+import {
+  getRisksFromReadModel,
+  getRiskCounts,
+  getMinimalCatalogs,
+  getRelationsLite,
+} from './services/risks-page-service';
+import {
+  refreshRiskListView,
+  invalidateRiskListView,
+  isRiskListViewStale,
+} from './jobs/refresh-risk-list-view';
 import { QueueService } from './services/queue';
 import { handleStreamingUpload, FileProcessor } from './services/fileStreaming';
 import {
@@ -2666,7 +2678,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ============== RISKS BOOTSTRAP - CONSOLIDATED ENDPOINT FOR PAGE LOAD ==============
+  // ============== BFF ENDPOINT (Backend For Frontend) ==============
+  // Nuevo endpoint optimizado: 1 endpoint por pantalla usando read-model
+  // Reemplaza múltiples llamadas paralelas con 1 sola llamada optimizada
+  // Usa vista materializada (risk_list_view) para consultas rápidas y predecibles
+  app.get("/api/pages/risks", isAuthenticated, noCacheMiddleware, async (req, res) => {
+    const requestStart = Date.now();
+
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      // Parse filters (normalizar valores)
+      const filters = {
+        status: (req.query.status as string) || undefined,
+        gerenciaId: (req.query.gerenciaId as string) || undefined,
+        macroprocesoId: (req.query.macroprocesoId as string) || undefined,
+        processId: (req.query.processId as string) || undefined,
+        subprocesoId: (req.query.subprocesoId as string) || undefined,
+        search: (req.query.search as string) || undefined,
+        inherentRiskLevel: (req.query.inherentRiskLevel as string) || undefined,
+        residualRiskLevel: (req.query.residualRiskLevel as string) || undefined,
+        ownerId: (req.query.ownerId as string) || undefined,
+      };
+
+      // Cache key canónica y estable (evita problemas con JSON.stringify)
+      const cacheKey = buildStableCacheKey('pages:risks', {
+        limit,
+        offset,
+        ...filters,
+      });
+
+      // Cache con timeout corto (200ms) y fail-open
+      // SingleFlight ya está integrado en bootstrapCache.get() con fetchFn
+      let cached: any = null;
+      try {
+        cached = await Promise.race([
+          bootstrapCache.get(cacheKey),
+          new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error('Cache timeout')), 200)
+          ),
+        ]);
+      } catch (cacheError) {
+        // Fail-open: si cache timeout, continuar sin cache
+        if (
+          cacheError instanceof Error &&
+          cacheError.message === 'Cache timeout'
+        ) {
+          console.warn(
+            `[CACHE] Timeout getting ${cacheKey}, proceeding without cache`
+          );
+        }
+        cached = null;
+      }
+
+      if (cached) {
+        return res.json(cached);
+      }
+
+      // SingleFlight: si 20 requests llegan simultáneamente, solo 1 ejecuta la query
+      const pageData = await bootstrapCache.get(cacheKey, async () => {
+        // Esta función solo se ejecuta una vez (SingleFlight)
+        const [risksData, counts, catalogs, relationsLite] = await Promise.all([
+          getRisksFromReadModel({ limit, offset, filters }),
+          getRiskCounts(filters),
+          getMinimalCatalogs(),
+          getRelationsLite(filters),
+        ]);
+
+        // Usar Record en lugar de Map para serialización JSON
+        const response = {
+          risks: {
+            data: risksData.risks,
+            pagination: {
+              limit,
+              offset,
+              total: risksData.total,
+              hasMore: offset + limit < risksData.total,
+            },
+          },
+          counts: {
+            total: counts.total,
+            byStatus: counts.byStatus,
+            byLevel: counts.byLevel,
+          },
+          catalogs: {
+            gerencias: catalogs.gerencias,
+            macroprocesos: catalogs.macroprocesos,
+            processes: catalogs.processes,
+            subprocesos: catalogs.subprocesos,
+            riskCategories: catalogs.riskCategories,
+            processOwners: catalogs.processOwners,
+            processGerencias: catalogs.processGerencias,
+          },
+          // Record en lugar de Map para serialización JSON
+          relations: {
+            controlsByRisk: relationsLite.controlsByRisk,
+            processesByRisk: relationsLite.processesByRisk,
+            actionPlansByRisk: relationsLite.actionPlansByRisk,
+          },
+          _meta: {
+            fetchedAt: new Date().toISOString(),
+            duration: Date.now() - requestStart,
+          },
+        };
+
+        // Cache set no bloqueante (fire-and-forget)
+        bootstrapCache.set(cacheKey, response, 300).catch((err) => {
+          console.warn(`[CACHE] Failed to set cache for ${cacheKey}:`, err);
+        });
+
+        return response;
+      });
+
+      res.json(pageData);
+    } catch (error) {
+      console.error('[ERROR] /api/pages/risks failed:', error);
+      res.status(500).json({
+        message: 'Failed to fetch risks page data',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  // ============== RISKS BOOTSTRAP - CONSOLIDATED ENDPOINT FOR PAGE LOAD (LEGACY) ==============
+  // Mantener por compatibilidad, pero se recomienda usar /api/pages/risks
   // Single endpoint that returns everything the risks page needs in one call
   // Replaces 5+ parallel API calls with 1 optimized call
   app.get("/api/risks/bootstrap", isAuthenticated, noCacheMiddleware, async (req, res) => {
@@ -5184,6 +5320,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       invalidateRiskDataCaches().catch(err => {
         console.error('Error invalidating risk data caches (non-critical):', err);
       });
+
+      // Invalidar read-model (vista materializada)
+      invalidateRiskListView(risk.id).catch(err => {
+        console.warn('[CACHE] Failed to invalidate risk_list_view:', err);
+      });
     } catch (error) {
       console.error("Risk creation validation error:", error);
       if (error instanceof z.ZodError) {
@@ -5472,6 +5613,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await invalidateRiskDataCaches();
       }
 
+      // Invalidar read-model (vista materializada)
+      invalidateRiskListView(req.params.id).catch(err => {
+        console.warn('[CACHE] Failed to invalidate risk_list_view:', err);
+      });
+
       res.json(risk);
     } catch (error) {
       console.error("Risk update error:", error);
@@ -5515,6 +5661,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // OPTIMIZED: Use granular cache invalidation for risk deletion
       await invalidateRiskDataCaches();
+
+      // Invalidar read-model (vista materializada)
+      invalidateRiskListView(req.params.id).catch(err => {
+        console.warn('[CACHE] Failed to invalidate risk_list_view:', err);
+      });
 
       res.status(204).send();
     } catch (error) {

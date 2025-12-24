@@ -7,6 +7,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import { registerRoutes, warmCacheForAllTenants } from "./routes";
 import { cachePrewarmService } from "./jobs/prewarm-cache";
+import { riskListViewRefreshService } from "./jobs/refresh-risk-list-view";
 import { serveStatic, log } from "./static";
 import { performanceMiddleware, errorLoggingMiddleware } from "./middleware/performance";
 import { logger } from "./logger";
@@ -286,5 +287,11 @@ app.use((req, res, next) => {
     setTimeout(() => {
       cachePrewarmService.start();
     }, 5000); // Wait 5s for DB pool to stabilize before prewarming
+
+    // Start risk_list_view refresh service
+    // Refresca la vista materializada cada 5 minutos si está marcada como stale
+    setTimeout(() => {
+      riskListViewRefreshService.start();
+    }, 15000); // Wait 15s for DB pool to stabilize before starting refresh service
   });
 })();
