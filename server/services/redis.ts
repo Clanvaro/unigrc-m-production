@@ -350,24 +350,26 @@ export { usingRealRedis, initializeRedis };
 
 export class DistributedCache {
   private readonly defaultTTL = 5 * 60;
-  private redisClient: RedisClient | null = null;
-  
-  constructor() {
-    // FIXED: Initialize redisClient reference after redis is initialized
-    // This prevents 'Cannot access before initialization' errors
-    this.redisClient = redis || null;
-  }
+  // CRITICAL: Don't store redisClient reference - always get it fresh via getRedis()
+  // This prevents 'Cannot access before initialization' errors when module loads
   
   private getRedis(): RedisClient | null {
-    // CRITICAL: Always return the singleton instance
-    // If Redis is not initialized yet, wait for initialization (shouldn't happen in production)
+    // CRITICAL: Always get the current singleton instance dynamically
+    // This ensures we always have the latest redis instance, even if it was initialized after module load
+    // The redis variable is initialized asynchronously, so we can't reference it in the constructor
+    
+    // If Redis is not initialized yet, try to initialize it (shouldn't happen in production after startup)
     if (!redisInitialized && !redis) {
-      console.warn('[REDIS] Redis not initialized yet, initializing now...');
-      // This should not happen, but if it does, initialize synchronously
+      console.warn('[REDIS] Redis not initialized yet in getRedis(), initializing now...');
+      // This should not happen after startup, but if it does, initialize it
       initializeRedis().catch(err => {
         console.error('[REDIS] Failed to initialize Redis in getRedis():', err);
       });
+      // Return null for now - will be available on next call
+      return null;
     }
+    
+    // Return the current redis instance (may be null if still initializing)
     return redis || null;
   }
   
