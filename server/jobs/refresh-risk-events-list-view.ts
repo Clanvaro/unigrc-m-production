@@ -3,7 +3,7 @@
  * Usa advisory lock para evitar refreshes concurrentes
  */
 
-import { requireDb } from '../db';
+import { db } from '../db';
 import { sql } from 'drizzle-orm';
 
 const REFRESH_LOCK_ID = 12346; // ID único para advisory lock (diferente al de risks)
@@ -13,8 +13,6 @@ const REFRESH_LOCK_ID = 12346; // ID único para advisory lock (diferente al de 
  * Asegura que solo 1 refresh corra a la vez
  */
 export async function refreshRiskEventsListView(): Promise<void> {
-  const db = requireDb();
-  
   console.log('[JOB] Attempting to refresh risk_events_list_view...');
   const start = Date.now();
   

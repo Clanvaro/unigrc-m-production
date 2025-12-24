@@ -4,10 +4,10 @@
  * Usa read-model (risk_events_list_view) para consultas rápidas y predecibles
  */
 
-import { requireDb } from '../db';
-import { sql } from 'drizzle-orm';
+import { db } from '../db';
+import { sql, isNull } from 'drizzle-orm';
 import { storage } from '../storage';
-import { controls, isNull } from '@shared/schema';
+import { controls } from '@shared/schema';
 
 interface RiskEventFilters {
   status?: string;
@@ -33,7 +33,7 @@ export async function getRiskEventsFromReadModel(params: {
   events: any[];
   total: number;
 }> {
-  const db = requireDb();
+  // Usar db global
   const { limit, offset, filters } = params;
 
   const conditions: any[] = [sql`deleted_at IS NULL`];
@@ -118,7 +118,7 @@ export async function getRiskEventCounts(
   bySeverity: Record<string, number>;
   byType: Record<string, number>;
 }> {
-  const db = requireDb();
+  // Usar db global
 
   const conditions: any[] = [sql`deleted_at IS NULL`];
 
@@ -201,7 +201,7 @@ export async function getMinimalCatalogsForEvents(): Promise<{
   processes: Array<{ id: string; code: string; name: string }>;
   subprocesos: Array<{ id: string; code: string; name: string }>;
 }> {
-  const db = requireDb();
+  // Usar db global
 
   const [risks, controlsData, macroprocesos, processes, subprocesos] = await Promise.all([
     // Riesgos básicos

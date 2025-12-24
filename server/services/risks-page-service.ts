@@ -4,7 +4,7 @@
  * Usa read-model (risk_list_view) para consultas rápidas y predecibles
  */
 
-import { requireDb } from '../db';
+import { db } from '../db';
 import { sql } from 'drizzle-orm';
 import { storage } from '../storage';
 
@@ -32,7 +32,7 @@ export async function getRisksFromReadModel(params: {
   risks: any[];
   total: number;
 }> {
-  const db = requireDb();
+  // Usar db global
   const { limit, offset, filters } = params;
 
   // Construir condiciones WHERE
@@ -144,7 +144,7 @@ export async function getRiskCounts(
     critical: number;
   };
 }> {
-  const db = requireDb();
+  // Usar db global
 
   // Construir condiciones (mismas que getRisksFromReadModel)
   const conditions: any[] = [sql`status <> 'deleted'`];
@@ -292,7 +292,7 @@ export async function getRelationsLite(
   processesByRisk: Record<string, string[]>; // Array de process IDs
   actionPlansByRisk: Record<string, number>;
 }> {
-  const db = requireDb();
+  // Usar db global
 
   // Si los datos vienen del read-model, esto puede ser opcional
   // Pero si necesitas datos adicionales no en read-model, hacer queries agregadas
