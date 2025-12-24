@@ -1203,11 +1203,14 @@ export async function getHealthStatus(): Promise<{
 
 // OPTIMIZED: Pool warming is now lazy - starts on first API request
 let poolWarmingStarted = false;
+let initialWarmingPromise: Promise<void> | null = null;
+
 export function startPoolWarmingIfNeeded() {
   if (poolWarmingStarted || !pool) return;
 
-  // Initial warm in background after delay
-  setTimeout(async () => {
+  // OPTIMIZED: Start warming immediately (no delay) and make it awaitable
+  // This ensures pool is ready before first requests complete
+  initialWarmingPromise = (async () => {
     if (isQuietHours()) {
       console.log('🌙 Quiet hours (00:00-07:00 Chile time) - skipping initial pool warming');
       startPoolWarming(); // Start the interval anyway, it will skip pings during quiet hours
@@ -1219,19 +1222,27 @@ export function startPoolWarmingIfNeeded() {
       const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
       // Match actual pool config: Render max=20, Cloud SQL max=10 (configurable), Neon max=6
       const poolMax = isRender ? 20 : (isCloudSql ? parseInt(process.env.DB_POOL_MAX || '10', 10) : 6);
-      // Warm up to min connections to ensure fast initial requests
-      // Render: 8, Cloud SQL: 3, Neon: 3
+      // OPTIMIZED: More aggressive warming - warm up to poolMin immediately
+      // This ensures connections are ready for first requests
+      const poolMin = parseInt(process.env.DB_POOL_MIN || (isCloudSql ? '1' : (isRender ? '5' : '2')), 10);
       const warmCount = Math.min(
-        isRender ? 8 : (isCloudSql ? 3 : 3),
+        Math.max(poolMin, isRender ? 5 : (isCloudSql ? 2 : 2)), // At least poolMin, but more aggressive
         poolMax
       );
       console.log(`🔥 Starting aggressive pool warming (${warmCount} of ${poolMax} connections)...`);
       await warmPool(warmCount);
       startPoolWarming();
     }
-  }, 500); // Start even sooner for faster cold start
+  })();
 
   poolWarmingStarted = true;
+}
+
+// Export function to await initial warming (useful for warmup endpoint)
+export async function awaitInitialPoolWarming(): Promise<void> {
+  if (initialWarmingPromise) {
+    await initialWarmingPromise;
+  }
 }
 
 // Cleanup on shutdown

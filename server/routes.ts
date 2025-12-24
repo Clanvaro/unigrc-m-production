@@ -32,7 +32,7 @@ import {
   invalidateMacroprocesoHierarchy,
   CACHE_VERSION
 } from './cache-helpers';
-import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry } from "./db";
+import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, awaitInitialPoolWarming } from "./db";
 import { usingRealRedis } from "./services/redis";
 import { openAIService } from "./openai-service";
 import { runDatabaseOptimizations } from "./db-optimize";
@@ -679,10 +679,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // OPTIMIZED: Lazy initialization middleware - triggers on first API request
   // This defers database initialization, pool monitoring, and pool warming until first use
   // This significantly reduces Cloud Run cold start latency
+  // OPTIMIZED: For critical endpoints, await initial pool warming to ensure fast response
   app.use('/api', async (req, res, next) => {
     await ensureDatabaseInitialized();
     startPoolMonitoringIfNeeded();
     startPoolWarmingIfNeeded();
+    
+    // OPTIMIZED: For data-heavy endpoints, wait for pool to be warm (max 2s wait)
+    // This ensures first request isn't slow due to cold pool
+    const isDataHeavyEndpoint = 
+      req.path.includes('/dashboard/risk-matrix') ||
+      req.path.includes('/risks/matrix-data') ||
+      req.path.includes('/risks/bootstrap') ||
+      req.path.includes('/dashboard/stats');
+    
+    if (isDataHeavyEndpoint) {
+      try {
+        // Wait max 2 seconds for pool warming - don't block indefinitely
+        await Promise.race([
+          awaitInitialPoolWarming(),
+          new Promise(resolve => setTimeout(resolve, 2000))
+        ]);
+      } catch (error) {
+        // Ignore errors - proceed anyway, pool will warm eventually
+      }
+    }
+    
     next();
   });
 
@@ -727,8 +749,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   await setupMicrosoftAuth(app);
 
   // Health check and warmup endpoints (no auth required for load balancer/monitoring)
+  // OPTIMIZED: Start pool warming on health check to prepare for incoming requests
   app.get("/api/health", async (req, res) => {
     try {
+      // Start pool warming in background (non-blocking) to prepare for requests
+      startPoolWarmingIfNeeded();
+      
       const health = await getHealthStatus();
       const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
       res.status(statusCode).json(health);
@@ -755,13 +781,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       startPoolMonitoringIfNeeded();
       startPoolWarmingIfNeeded();
       
-      // Step 3: Warm up connection pool (establish min connections)
-      const warmResult = await warmPool(2);
+      // Step 3: Wait for initial pool warming to complete
+      await awaitInitialPoolWarming();
       
-      // Step 4: Pre-warm critical caches (optional - can be removed if not needed)
-      // This ensures Redis connections are established
+      // Step 4: Additional aggressive warming (establish more connections)
+      const isRender = process.env.RENDER_DATABASE_URL?.includes('render.com') || false;
+      const isCloudSql = process.env.IS_GCP_DEPLOYMENT === 'true' || false;
+      const poolMax = isRender ? 20 : (isCloudSql ? parseInt(process.env.DB_POOL_MAX || '10', 10) : 6);
+      const warmCount = Math.min(
+        isRender ? 5 : (isCloudSql ? 3 : 3),
+        poolMax
+      );
+      const warmResult = await warmPool(warmCount);
+      
+      // Step 5: Pre-warm critical caches for common endpoints
+      // This ensures cache is ready for first user requests
       try {
         await distributedCache.get('warmup-check'); // Just to establish connection
+        
+        // OPTIMIZED: Pre-warm cache for most common endpoints (in background, don't block)
+        const cacheWarmupPromises = [
+          distributedCache.get(`dashboard-risk-matrix:${CACHE_VERSION}:single-tenant`).catch(() => null),
+          distributedCache.get(`risk-matrix:data:${CACHE_VERSION}:single-tenant`).catch(() => null),
+        ];
+        Promise.all(cacheWarmupPromises).catch(() => {
+          // Ignore cache errors - not critical for warmup
+        });
       } catch (cacheError) {
         // Ignore cache errors - not critical for warmup
       }
