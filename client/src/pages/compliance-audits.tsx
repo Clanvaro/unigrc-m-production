@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,32 +38,19 @@ export default function ComplianceAudits() {
   const [scopeEntity, setScopeEntity] = useState("");
   const [reviewPeriod, setReviewPeriod] = useState("");
 
-  // Listen for header button clicks
+  // OPTIMIZED: Simplified header button listener - use event delegation instead of polling
   useEffect(() => {
-    const handleHeaderButtonClick = () => {
-      setShowAuditDialog(true);
-    };
-
-    const checkHeaderButton = () => {
-      const headerButton = document.querySelector('[data-testid="button-create-compliance-audit"]');
-      if (headerButton) {
-        headerButton.addEventListener('click', handleHeaderButtonClick);
-        return () => headerButton.removeEventListener('click', handleHeaderButtonClick);
+    const handleHeaderButtonClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-testid="button-create-compliance-audit"]')) {
+        setShowAuditDialog(true);
       }
     };
 
-    // Check immediately and set up an interval to check periodically
-    const cleanup = checkHeaderButton();
-    const interval = setInterval(() => {
-      const existingCleanup = checkHeaderButton();
-      if (existingCleanup) {
-        clearInterval(interval);
-      }
-    }, 100);
-
+    // Use event delegation on document instead of polling
+    document.addEventListener('click', handleHeaderButtonClick);
     return () => {
-      clearInterval(interval);
-      if (cleanup) cleanup();
+      document.removeEventListener('click', handleHeaderButtonClick);
     };
   }, []);
   const [editingAudit, setEditingAudit] = useState<Audit | null>(null);
@@ -142,67 +129,107 @@ export default function ComplianceAudits() {
     );
   }
 
-  // Data queries - solo ejecutar si tiene permisos
+  // OPTIMIZED: Increased staleTime and disabled refetch on window focus for faster loading
   const { data: audits = [], isLoading } = useQuery<Audit[]>({
     queryKey: ["/api/audits"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
-    staleTime: 0,
+    staleTime: 1000 * 60 * 2, // 2 minutes - matches server cache
+    refetchOnMount: false, // Server cache handles freshness
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
     select: (data: any) => data.data || []
   });
 
+  // OPTIMIZED: Users are relatively static, cache longer
   const { data: users = [] } = useQuery<User[]>({
     queryKey: ["/api/users"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
+  // OPTIMIZED: Roles are static catalogs, cache longer
   const { data: roles = [] } = useQuery({
     queryKey: ["/api/roles"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
+  // OPTIMIZED: User roles are relatively static, cache longer
   const { data: userRoles = [] } = useQuery({
     queryKey: ["/api/user-roles"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
+  // OPTIMIZED: Regulations are static catalogs, cache longer
   const { data: regulations = [] } = useQuery({
     queryKey: ["/api/regulations"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
+  // OPTIMIZED: Macroprocesos are static catalogs, cache longer
   const { data: macroprocesos = [] } = useQuery({
     queryKey: ["/api/macroprocesos"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
+  // OPTIMIZED: Processes are static catalogs, cache longer
   const { data: processes = [] } = useQuery({
     queryKey: ["/api/processes"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
+  // OPTIMIZED: Subprocesos are static catalogs, cache longer
   const { data: subprocesos = [] } = useQuery({
     queryKey: ["/api/subprocesos"],
     enabled: canViewCompliance, // Solo ejecutar si tiene permisos
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
-  // Get selected regulation controls
+  // OPTIMIZED: Only load regulation controls when needed (lazy load)
   const selectedRegulationId = form.watch("regulationId");
   const { data: regulationControls = [] } = useQuery({
     queryKey: ["/api/regulations", selectedRegulationId, "controls"],
     enabled: canViewCompliance && !!selectedRegulationId, // Solo si tiene permisos Y hay regulation seleccionada
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
-  // Filter audits to show only compliance audits
-  const complianceAudits = audits.filter((audit: Audit) => audit.type === "compliance");
+  // OPTIMIZED: Use useMemo to prevent unnecessary recalculations
+  const complianceAudits = useMemo(() => {
+    return audits.filter((audit: Audit) => audit.type === "compliance");
+  }, [audits]);
 
-  // Apply search and filters
-  const filteredAudits = complianceAudits.filter((audit: Audit) => {
-    const matchesSearch = audit.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         audit.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         audit.scope.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "all" || audit.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  // OPTIMIZED: Memoize filtered audits to prevent recalculation on every render
+  const filteredAudits = useMemo(() => {
+    const searchLower = searchTerm.toLowerCase();
+    return complianceAudits.filter((audit: Audit) => {
+      const matchesSearch = !searchTerm || 
+        audit.name.toLowerCase().includes(searchLower) ||
+        audit.code.toLowerCase().includes(searchLower) ||
+        audit.scope?.toLowerCase().includes(searchLower);
+      const matchesStatus = statusFilter === "all" || audit.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [complianceAudits, searchTerm, statusFilter]);
 
   // Initialize scope values when viewing audit details
   useEffect(() => {

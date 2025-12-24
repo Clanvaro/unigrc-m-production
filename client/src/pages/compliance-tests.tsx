@@ -24,21 +24,34 @@ export default function ComplianceTests() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  // OPTIMIZED: Increased staleTime and disabled refetch on window focus for faster loading
   const { data: complianceTests = [], isLoading } = useQuery({
     queryKey: ["/api/compliance-tests"],
+    staleTime: 1000 * 60 * 2, // 2 minutes - matches server cache
+    refetchOnMount: false, // Server cache handles freshness
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
+  // OPTIMIZED: Regulations are static catalogs, cache longer
   const { data: regulations = [] } = useQuery({
     queryKey: ["/api/regulations"],
+    staleTime: 1000 * 60 * 15, // 15 minutes - static catalogs
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 30, // Keep cache 30 minutes
   });
 
+  // OPTIMIZED: Only load details when viewing (lazy load)
   const { data: viewingTestDetails, isLoading: isLoadingDetails } = useQuery({
     queryKey: ["/api/compliance-tests", viewingTest?.id, "details"],
     queryFn: async () => {
       if (!viewingTest) return null;
       return await fetch(`/api/compliance-tests/${viewingTest.id}/details`).then(r => r.json());
     },
-    enabled: !!viewingTest?.id,
+    enabled: !!viewingTest?.id, // Only fetch when viewing a test
+    staleTime: 1000 * 60 * 2, // 2 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
   const deleteMutation = useMutation({
@@ -145,11 +158,8 @@ export default function ComplianceTests() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Pruebas de Cumplimiento</h1>
-          <p className="text-muted-foreground">
-            Gestione las auditorías y pruebas de cumplimiento de normativas
-          </p>
+        <div className="flex-1">
+          {/* Título eliminado - se muestra en el header */}
         </div>
         <Button 
           data-testid="button-create-test"

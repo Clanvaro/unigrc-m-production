@@ -185,6 +185,7 @@ export default function RiskMatrix() {
   // ===================================================================================
 
   // PRIMARY: Aggregated heatmap data with controls summary from new endpoint
+  // OPTIMIZED: Added refetchOnWindowFocus and refetchOnMount false for faster loading
   const { data: matrixData, isLoading: liteLoading } = useQuery<{
     risks: Array<{
       id: string;
@@ -214,33 +215,47 @@ export default function RiskMatrix() {
       if (!response.ok) throw new Error("Failed to fetch risk matrix data");
       return response.json();
     },
-    staleTime: 120000, // 2 minutos - reducir refetches durante navegación rápida
+    staleTime: 120000, // 2 minutos - matches server cache
+    refetchOnMount: false, // Server cache handles freshness
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    gcTime: 1000 * 60 * 5, // Keep cache 5 minutes
   });
 
   // CATALOGS: Loaded in parallel with 5-min staleTime (rarely change)
+  // OPTIMIZED: Added refetchOnWindowFocus false to prevent unnecessary refetches
   const { data: macroprocesosData } = useQuery<Array<{ id: string; code: string; name: string; type: string }>>({
     queryKey: ["/api/lookups/macroprocesos"],
-    staleTime: 300000,
+    staleTime: 300000, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   const { data: processesData } = useQuery<Array<{ id: string; code: string; name: string; macroprocesoId: string }>>({
     queryKey: ["/api/lookups/processes"],
-    staleTime: 300000,
+    staleTime: 300000, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   const { data: subprocesosData } = useQuery<Array<{ id: string; code: string; name: string; procesoId: string }>>({
     queryKey: ["/api/lookups/subprocesos"],
-    staleTime: 300000,
+    staleTime: 300000, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   const { data: gerenciasData } = useQuery<Array<{ id: string; code: string; name: string }>>({
     queryKey: ["/api/lookups/gerencias"],
-    staleTime: 300000,
+    staleTime: 300000, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   const { data: riskCategoriesData } = useQuery<Array<{ id: string; name: string; color: string }>>({
     queryKey: ["/api/lookups/risk-categories"],
-    staleTime: 300000,
+    staleTime: 300000, // 5 minutes
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 10, // Keep cache 10 minutes
   });
 
   // Transform matrix data to match expected format for heatmap components

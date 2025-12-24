@@ -207,6 +207,14 @@ app.use((req, res, next) => {
   }, async () => {
     log(`serving on port ${port} (host: ${host})`);
 
+    // Start system metrics collection
+    try {
+      const { startSystemMetricsCollection } = await import('./middleware/system-metrics');
+      startSystemMetricsCollection();
+    } catch (error) {
+      console.warn('⚠️ Could not start system metrics collection:', error);
+    }
+
     // OPTIMIZED: Lazy load OpenAI Service - only check status if needed
     try {
       const { openAIService } = await import("./openai-service");
@@ -219,6 +227,58 @@ app.use((req, res, next) => {
     } catch (error) {
       console.warn('⚠️ Could not load OpenAI Service:', error);
     }
+
+    // OPTIMIZED: Auto-warmup on server start to prevent cold start inconsistency
+    // COST-AWARE: Skips during quiet hours (00:00-07:00 Chile) and uses minimal connections
+    setTimeout(async () => {
+      try {
+        // Check if we're in quiet hours - skip warmup to save costs
+        const now = new Date();
+        const chileTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Santiago" }));
+        const hour = chileTime.getHours();
+        const isQuietHours = hour >= 0 && hour < 7;
+        
+        if (isQuietHours) {
+          console.log('🌙 Quiet hours (00:00-07:00 Chile) - skipping auto-warmup to save costs');
+          return; // Skip warmup during quiet hours
+        }
+        
+        console.log('🔥 Starting cost-aware automatic warmup on server start...');
+        const { ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, awaitInitialPoolWarming, warmPool, getPoolMetrics } = await import('./db');
+        const { distributedCache } = await import('./services/redis');
+        const { CACHE_VERSION } = await import('./cache-helpers');
+        
+        // Step 1: Ensure database is initialized
+        await ensureDatabaseInitialized();
+        
+        // Step 2: Start monitoring and warming (minimal - just start the interval)
+        startPoolMonitoringIfNeeded();
+        startPoolWarmingIfNeeded(); // This will do minimal warming (poolMin connections)
+        
+        // Step 3: Wait for initial pool warming (max 1s timeout to save time)
+        await Promise.race([
+          awaitInitialPoolWarming(),
+          new Promise(resolve => setTimeout(resolve, 1000)) // Reduced timeout to 1s
+        ]);
+        
+        // Step 4: COST-AWARE: Minimal additional warming (only 1-2 connections, not aggressive)
+        // Only warm if pool is completely empty to ensure at least 1 connection is ready
+        const poolMetrics = getPoolMetrics();
+        if (poolMetrics && poolMetrics.totalCount === 0) {
+          // Only warm 1 connection minimum - very cost-conscious
+          await warmPool(1).catch(() => {}); // Ignore errors
+        }
+        
+        // Step 5: Pre-warm critical caches (non-blocking, minimal - just establish connection)
+        // Don't actually fetch data, just check cache connection to avoid unnecessary costs
+        distributedCache.get('warmup-check').catch(() => {}); // Just establish connection
+        
+        const finalMetrics = getPoolMetrics();
+        console.log(`✅ Cost-aware auto-warmup complete - Pool: ${finalMetrics?.totalCount || 0} connections ready`);
+      } catch (error) {
+        console.warn('⚠️ Auto-warmup failed (non-critical):', error instanceof Error ? error.message : error);
+      }
+    }, 3000); // Wait 3s for server to be fully ready
 
     // Start cache prewarm service (latency-resistant architecture)
     // Precarga catálogos críticos cada 25 minutos para mantener cache siempre caliente

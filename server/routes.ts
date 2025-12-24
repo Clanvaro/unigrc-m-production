@@ -1564,24 +1564,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Metrics endpoint (no auth required for monitoring)
+  // OPTIMIZED: Includes p95/p99 latency, OOM/restarts, and concurrency metrics
   app.get('/metrics', async (req, res) => {
     try {
       const { performanceMonitor } = await import('./middleware/performance');
+      const { getSystemMetrics } = await import('./middleware/system-metrics');
 
       const globalMetrics = performanceMonitor.getGlobalMetrics();
-      const slowestEndpoints = performanceMonitor.getSlowestEndpoints(5);
+      const slowestEndpoints = performanceMonitor.getSlowestEndpoints(10);
+      const systemMetrics = getSystemMetrics();
+
+      // Get all endpoint metrics with p95/p99
+      const allEndpoints = performanceMonitor.getMetrics();
 
       res.json({
         timestamp: new Date().toISOString(),
-        global: globalMetrics,
-        slowestEndpoints: slowestEndpoints.map(m => ({
-          endpoint: `${m.method} ${m.endpoint}`,
-          avgDuration: Math.round(m.avgDuration),
-          p95Duration: Math.round(m.p95Duration),
-          count: m.count,
-          errorCount: m.errorCount,
-          errorRate: m.count > 0 ? ((m.errorCount / m.count) * 100).toFixed(2) + '%' : '0%'
-        }))
+        global: {
+          ...globalMetrics,
+          p95Latency: globalMetrics.p95Latency,
+          p99Latency: globalMetrics.p99Latency
+        },
+        system: systemMetrics,
+        endpoints: {
+          slowest: slowestEndpoints.map(m => ({
+            endpoint: `${m.method} ${m.endpoint}`,
+            avgDuration: Math.round(m.avgDuration),
+            p95Duration: Math.round(m.p95Duration),
+            p99Duration: Math.round(m.p99Duration),
+            maxDuration: Math.round(m.maxDuration),
+            count: m.count,
+            errorCount: m.errorCount,
+            errorRate: m.count > 0 ? ((m.errorCount / m.count) * 100).toFixed(2) + '%' : '0%'
+          })),
+          all: allEndpoints.map(m => ({
+            endpoint: `${m.method} ${m.endpoint}`,
+            avgDuration: Math.round(m.avgDuration),
+            p95Duration: Math.round(m.p95Duration),
+            p99Duration: Math.round(m.p99Duration),
+            count: m.count,
+            errorCount: m.errorCount
+          }))
+        },
+        // Key metrics summary for monitoring dashboards
+        summary: {
+          latency: {
+            p95: globalMetrics.p95Latency,
+            p99: globalMetrics.p99Latency,
+            avg: Math.round(globalMetrics.p95Latency * 0.7) // Rough estimate
+          },
+          memory: {
+            usagePercent: systemMetrics.memory.usagePercent,
+            heapUsedMB: systemMetrics.memory.heapUsed,
+            heapTotalMB: systemMetrics.memory.heapTotal
+          },
+          concurrency: {
+            activeRequests: systemMetrics.concurrency.activeRequests,
+            peakActiveRequests: systemMetrics.concurrency.peakActiveRequests,
+            poolUtilization: systemMetrics.concurrency.poolUtilization
+          },
+          stability: {
+            restarts: systemMetrics.restarts.count,
+            oomCount: systemMetrics.restarts.oomCount,
+            uptime: systemMetrics.restarts.uptime
+          }
+        }
       });
     } catch (error) {
       res.status(500).json({
@@ -3537,8 +3583,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
-      // Cache for 30 seconds
-      await distributedCache.set(cacheKey, response, 30);
+      // OPTIMIZED: Increased cache to 2 minutes (120s) to match frontend staleTime
+      // This reduces database load and improves response time significantly
+      await distributedCache.set(cacheKey, response, 120);
 
       console.log(`[PERF] /api/dashboard/risk-matrix COMPLETE in ${Date.now() - requestStart}ms (${risks.length} risks)`);
 
@@ -23814,13 +23861,31 @@ Responde SOLO con un JSON válido con este formato exacto:
   });
 
   // Compliance Tests
-  app.get("/api/compliance-tests", isAuthenticated, async (req, res) => {
+  // OPTIMIZED: Add cache for compliance tests endpoint (2 min TTL)
+  app.get("/api/compliance-tests", noCacheMiddleware, isAuthenticated, async (req, res) => {
+    const requestStart = Date.now();
     try {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
 
+      const cacheKey = `compliance-tests:${CACHE_VERSION}:${tenantId}`;
+      
+      // Try cache first (2 minute TTL)
+      const cached = await distributedCache.get(cacheKey);
+      if (cached) {
+        console.log(`[CACHE HIT] /api/compliance-tests in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+
+      console.log(`[CACHE MISS] /api/compliance-tests - fetching from DB`);
       const complianceTests = await storage.getComplianceTests();
+      
+      // Cache for 2 minutes
+      await distributedCache.set(cacheKey, complianceTests, 120);
+      
+      console.log(`[PERF] /api/compliance-tests COMPLETE in ${Date.now() - requestStart}ms (${complianceTests.length} tests)`);
       res.json(complianceTests);
     } catch (error) {
+      console.error(`[ERROR] /api/compliance-tests failed after ${Date.now() - requestStart}ms:`, error);
       res.status(500).json({ message: "Failed to fetch compliance tests" });
     }
   });

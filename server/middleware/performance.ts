@@ -1,6 +1,26 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger';
 
+// Lazy import to avoid circular dependency - cached after first load
+let systemMetricsModule: typeof import('./system-metrics') | null = null;
+let systemMetricsLoaded = false;
+
+// Load system metrics module once (non-blocking)
+function ensureSystemMetricsLoaded() {
+  if (!systemMetricsLoaded && !systemMetricsModule) {
+    systemMetricsLoaded = true; // Mark as loading to prevent multiple loads
+    import('./system-metrics').then(module => {
+      systemMetricsModule = module;
+    }).catch(() => {
+      // Ignore if not available
+      systemMetricsLoaded = false;
+    });
+  }
+}
+
+// Initialize on module load
+ensureSystemMetricsLoaded();
+
 interface PerformanceMetrics {
   endpoint: string;
   method: string;
@@ -8,6 +28,7 @@ interface PerformanceMetrics {
   maxDuration: number;
   minDuration: number;
   p95Duration: number;
+  p99Duration: number;
   count: number;
   errorCount: number;
   durations: number[];
@@ -50,6 +71,7 @@ class PerformanceMonitor {
         maxDuration: Math.max(existing.maxDuration, duration),
         minDuration: Math.min(existing.minDuration, duration),
         p95Duration: this.calculateP95(updatedDurations),
+        p99Duration: this.calculateP99(updatedDurations),
         count: newCount,
         errorCount: newErrorCount,
         durations: updatedDurations
@@ -62,6 +84,7 @@ class PerformanceMonitor {
         maxDuration: duration,
         minDuration: duration,
         p95Duration: duration,
+        p99Duration: duration,
         count: 1,
         errorCount: isError ? 1 : 0,
         durations: [duration]
@@ -92,6 +115,13 @@ class PerformanceMonitor {
     return sorted[Math.max(0, index)];
   }
 
+  private calculateP99(durations: number[]): number {
+    if (durations.length === 0) return 0;
+    const sorted = [...durations].sort((a, b) => a - b);
+    const index = Math.ceil(sorted.length * 0.99) - 1;
+    return sorted[Math.max(0, index)];
+  }
+
   getRequestsPerMinute(): number {
     const now = Date.now();
     const oneMinuteAgo = now - 60000;
@@ -104,6 +134,11 @@ class PerformanceMonitor {
     return this.calculateP95(recentDurations);
   }
 
+  getGlobalP99(): number {
+    const recentDurations = this.recentRequests.map(r => r.duration);
+    return this.calculateP99(recentDurations);
+  }
+
   getGlobalMetrics() {
     const uptimeSeconds = Math.floor((Date.now() - this.startTime) / 1000);
     return {
@@ -114,6 +149,7 @@ class PerformanceMonitor {
         : '0%',
       requestsPerMinute: this.getRequestsPerMinute(),
       p95Latency: Math.round(this.getGlobalP95()),
+      p99Latency: Math.round(this.getGlobalP99()),
       uptimeSeconds,
       uptimeHuman: this.formatUptime(uptimeSeconds)
     };
@@ -147,6 +183,17 @@ export const performanceMonitor = new PerformanceMonitor();
 
 export function performanceMiddleware(req: Request, res: Response, next: NextFunction): void {
   const startTime = Date.now();
+  
+  // OPTIMIZED: Track request start synchronously (no async overhead)
+  // System metrics module is loaded in background, tracking is optional
+  let requestId: number | null = null;
+  if (systemMetricsModule) {
+    try {
+      requestId = systemMetricsModule.trackRequestStart();
+    } catch (error) {
+      // Ignore if tracking fails - metrics are optional
+    }
+  }
 
   res.on('finish', () => {
     const duration = Date.now() - startTime;
@@ -154,6 +201,15 @@ export function performanceMiddleware(req: Request, res: Response, next: NextFun
     
     const endpoint = req.route?.path || req.path;
     performanceMonitor.recordRequest(req.method, endpoint, duration, isError);
+    
+    // OPTIMIZED: Track request end synchronously (no async overhead)
+    if (requestId !== null && systemMetricsModule) {
+      try {
+        systemMetricsModule.trackRequestEnd(requestId);
+      } catch (error) {
+        // Ignore if tracking fails - metrics are optional
+      }
+    }
     
     logger.logRequest(req, res, duration);
   });
