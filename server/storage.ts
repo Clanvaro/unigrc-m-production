@@ -21229,7 +21229,7 @@ export class DatabaseStorage extends MemStorage {
             r.status as risk_status,
             r.process_owner as risk_process_owner,
             r.inherent_risk as risk_inherent_risk,
-            r.residual_risk as risk_residual_risk,
+            COALESCE(rc_min.min_residual_risk, r.inherent_risk) as risk_residual_risk,
             m.id as macro_id,
             m.name as macro_name,
             m.owner_id as macro_owner_id,
@@ -21245,6 +21245,11 @@ export class DatabaseStorage extends MemStorage {
             COALESCE(rpl.responsible_override_id, s.owner_id, p.owner_id, m.owner_id) as responsible_owner_id
           FROM risk_process_links rpl
           INNER JOIN risks r ON rpl.risk_id = r.id AND r.deleted_at IS NULL
+          LEFT JOIN (
+            SELECT risk_id, MIN(residual_risk) as min_residual_risk
+            FROM risk_controls
+            GROUP BY risk_id
+          ) rc_min ON r.id = rc_min.risk_id
           LEFT JOIN macroprocesos m ON rpl.macroproceso_id = m.id AND m.deleted_at IS NULL
           LEFT JOIN processes p ON rpl.process_id = p.id AND p.deleted_at IS NULL
           LEFT JOIN subprocesos s ON rpl.subproceso_id = s.id AND s.deleted_at IS NULL
