@@ -2609,10 +2609,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Sort by risk count descending
       result.sort((a, b) => b.riskCount - a.riskCount);
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, result, 60);
-
       console.log(`[PERF] /api/risks/grouped-by-process COMPLETE in ${Date.now() - requestStart}ms, ${result.length} processes (SQL GROUP BY)`);
+
+      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setImmediate(() => {
+        distributedCache.set(cacheKey, result, 60).catch(() => {});
+      });
 
       res.json(result);
     } catch (error) {
@@ -2646,10 +2648,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Sort by risk count descending
       result.sort((a, b) => b.riskCount - a.riskCount);
 
-      // Cache for 60 seconds
-      await distributedCache.set(cacheKey, result, 60);
-
       console.log(`[PERF] /api/risks/grouped-by-owner COMPLETE in ${Date.now() - requestStart}ms, ${result.length} owners (SQL GROUP BY)`);
+
+      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setImmediate(() => {
+        distributedCache.set(cacheKey, result, 60).catch(() => {});
+      });
 
       res.json(result);
     } catch (error) {
@@ -3707,11 +3711,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
-      // OPTIMIZED: Increased cache to 2 minutes (120s) to match frontend staleTime
-      // This reduces database load and improves response time significantly
-      await distributedCache.set(cacheKey, response, 120);
-
       console.log(`[PERF] /api/dashboard/risk-matrix COMPLETE in ${Date.now() - requestStart}ms (${risks.length} risks)`);
+
+      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setImmediate(() => {
+        distributedCache.set(cacheKey, response, 120).catch(() => {});
+      });
 
       res.json(response);
     } catch (error) {
@@ -3813,10 +3818,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       };
 
-      // Cache for 15 minutes (900 seconds) - invalidated granularly on mutations
-      await distributedCache.set(cacheKey, response, 900);
-
       console.log(`[PERF] /api/risks-overview COMPLETE in ${Date.now() - startTime}ms, ${risksData.rows.length} risks`);
+
+      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setImmediate(() => {
+        distributedCache.set(cacheKey, response, 900).catch(() => {});
+      });
 
       res.json(response);
     } catch (error) {
@@ -3846,8 +3853,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(risks)
         .where(isNull(risks.deletedAt));
 
-      // Cache for 5 minutes (risks change more often than processes)
-      await distributedCache.set(cacheKey, data, 300);
+      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setImmediate(() => {
+        distributedCache.set(cacheKey, data, 300).catch(() => {});
+      });
 
       res.json(data);
     } catch (error) {
@@ -10747,13 +10756,17 @@ Redactas en español neutro, claro y profesional.`;
             }
           };
 
-          // OPTIMIZED: Increase cache TTL to 5 minutes (300s) for better performance
-          // Cache is invalidated granularly on mutations, so longer TTL is safe
-          // Use longer TTL for filtered queries (they change less frequently)
-          const cacheTTL = filters.type || filters.status || filters.frequency ? 300 : 180;
-          await distributedCache.set(cacheKey, response, cacheTTL);
           const duration = Date.now() - requestStart;
           console.log(`[PERF] /api/controls/with-details COMPLETE in ${duration}ms (${controls.length} controls, total: ${total})`);
+
+          // PERFORMANCE FIX: Cache set is now async (fire-and-forget)
+          // This eliminates ~1.9 seconds of blocking Upstash latency
+          const cacheTTL = filters.type || filters.status || filters.frequency ? 300 : 180;
+          setImmediate(() => {
+            distributedCache.set(cacheKey, response, cacheTTL)
+              .then(() => console.log(`[CACHE] controls/with-details cache set in background`))
+              .catch((err) => console.warn(`[CACHE] Failed to set controls cache:`, err));
+          });
 
           res.json(response);
         }, {
