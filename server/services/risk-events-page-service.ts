@@ -119,7 +119,7 @@ export async function getRiskEventsFromReadModel(params: {
       
       // Fallback: usar tabla risk_events directamente
       // Reconstruir condiciones para tabla risk_events (usa deleted_at en lugar de status)
-      const fallbackConditions: any[] = [sql`deleted_at IS NULL];
+      const fallbackConditions: any[] = [sql`deleted_at IS NULL`];
       
       if (filters.status && filters.status !== 'all') {
         fallbackConditions.push(sql`status = ${filters.status}`);
