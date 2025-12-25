@@ -118,6 +118,41 @@ export async function getRiskEventsFromReadModel(params: {
       console.warn('[WARN] Run: npm run apply-risk-events-list-view to create the materialized view');
       
       // Fallback: usar tabla risk_events directamente
+      // Reconstruir condiciones para tabla risk_events (usa deleted_at en lugar de status)
+      const fallbackConditions: any[] = [sql`deleted_at IS NULL];
+      
+      if (filters.status && filters.status !== 'all') {
+        fallbackConditions.push(sql`status = ${filters.status}`);
+      }
+      if (filters.severity && filters.severity !== 'all') {
+        fallbackConditions.push(sql`severity = ${filters.severity}`);
+      }
+      if (filters.eventType && filters.eventType !== 'all') {
+        fallbackConditions.push(sql`event_type = ${filters.eventType}`);
+      }
+      if (filters.riskId && filters.riskId !== 'all') {
+        fallbackConditions.push(sql`risk_id = ${filters.riskId}`);
+      }
+      if (filters.controlId && filters.controlId !== 'all') {
+        fallbackConditions.push(sql`control_id = ${filters.controlId}`);
+      }
+      if (filters.search) {
+        const searchPattern = `%${filters.search}%`;
+        fallbackConditions.push(
+          sql`(description ILIKE ${searchPattern} OR code ILIKE ${searchPattern})`
+        );
+      }
+      if (filters.startDate) {
+        fallbackConditions.push(sql`event_date >= ${filters.startDate}::timestamp`);
+      }
+      if (filters.endDate) {
+        fallbackConditions.push(sql`event_date <= ${filters.endDate}::timestamp`);
+      }
+      
+      const fallbackWhereClause = fallbackConditions.length > 0
+        ? sql`WHERE ${sql.join(fallbackConditions, sql` AND `)}`
+        : sql``;
+      
       [eventsResult, countResult] = await Promise.all([
         db.execute(sql`
           SELECT 
@@ -129,14 +164,14 @@ export async function getRiskEventsFromReadModel(params: {
             NULL as control_code, NULL as control_name,
             ARRAY[]::text[] as macroproceso_ids, ARRAY[]::text[] as process_ids, ARRAY[]::text[] as subproceso_ids
           FROM risk_events
-          ${whereClause}
+          ${fallbackWhereClause}
           ORDER BY event_date DESC
           LIMIT ${limit} OFFSET ${offset}
         `),
         db.execute(sql`
           SELECT COUNT(*)::int as total
           FROM risk_events
-          ${whereClause}
+          ${fallbackWhereClause}
         `),
       ]);
     } else {
