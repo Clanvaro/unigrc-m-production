@@ -2944,7 +2944,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               })
           ]);
 
-          const riskCategories = riskCategoriesResult || [];
+          // FIXED: Renamed to avoid shadowing riskCategories schema import (caused TDZ bundling error)
+          const riskCategoriesData = riskCategoriesResult || [];
 
           // Filter out deleted records and map to minimal fields
           const result = {
@@ -2964,7 +2965,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               id: po.id, name: po.name, position: po.position
             })),
             processGerencias: processGerenciasRelations,
-            riskCategories: riskCategories.filter((c: any) => c.isActive).map((c: any) => ({
+            riskCategories: riskCategoriesData.filter((c: any) => c.isActive).map((c: any) => ({
               id: c.id, name: c.name, color: c.color || "#6b7280"
             }))
           };
