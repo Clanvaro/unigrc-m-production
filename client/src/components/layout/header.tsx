@@ -732,8 +732,12 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const exportControlsToExcel = async () => {
     if (location !== "/controls") return;
 
-    // Fetch controls data
-    const controlsResponse = await fetch('/api/controls');
+    // Fetch controls data (use with-details endpoint for better compatibility)
+    const controlsResponse = await fetch('/api/controls/with-details?limit=10000');
+    if (!controlsResponse.ok) {
+      console.error('[ERROR] Failed to fetch controls:', controlsResponse.status, controlsResponse.statusText);
+      return;
+    }
     const controlsData = await controlsResponse.json();
     const controls = controlsData.data || [];
 
@@ -828,8 +832,12 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     const risks = risksData.data || [];
     const risksMap = new Map(risks.map((r: any) => [r.id, r]));
 
-    // Fetch controls data to map controlId to control name
-    const controlsResponse = await fetch('/api/controls');
+    // Fetch controls data to map controlId to control name (use with-details endpoint)
+    const controlsResponse = await fetch('/api/controls/with-details?limit=10000');
+    if (!controlsResponse.ok) {
+      console.error('[ERROR] Failed to fetch controls:', controlsResponse.status, controlsResponse.statusText);
+      return;
+    }
     const controlsData = await controlsResponse.json();
     const controls = controlsData.data || [];
     const controlsMap = new Map(controls.map((c: any) => [c.id, c]));
