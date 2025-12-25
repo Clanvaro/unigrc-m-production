@@ -1,6 +1,15 @@
 {
   "projects": {
     "default": "unigrc-m"
-  }
+  },
+  "targets": {
+    "unigrc-m": {
+      "hosting": {
+        "unigrc-app": [
+          "unigrc-m"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
-

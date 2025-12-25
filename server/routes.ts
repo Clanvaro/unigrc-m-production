@@ -60,7 +60,12 @@ import {
   setPageDataLiteLock,
   getCatalogFromCache,
   setCatalogCache,
-  invalidateCatalogCache
+  invalidateCatalogCache,
+  getPagesRisksFromCache,
+  setPagesRisksCache,
+  invalidatePagesRisksCache,
+  getPagesRisksLock,
+  setPagesRisksLock
 } from './cache-helpers';
 import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, awaitInitialPoolWarming } from "./db";
 import { usingRealRedis } from "./services/redis";
@@ -2696,48 +2701,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...filters,
       });
 
-      // Cache con timeout corto (200ms) y fail-open
-      // SingleFlight ya está integrado en bootstrapCache.get() con fetchFn
-      let cached: any = null;
-      try {
-        cached = await Promise.race([
-          bootstrapCache.get(cacheKey),
-          new Promise<null>((_, reject) =>
-            setTimeout(() => reject(new Error('Cache timeout')), 200)
-          ),
-        ]);
-      } catch (cacheError) {
-        // Fail-open: si cache timeout, continuar sin cache
-        if (
-          cacheError instanceof Error &&
-          cacheError.message === 'Cache timeout'
-        ) {
-          console.warn(
-            `[CACHE] Timeout getting ${cacheKey}, proceeding without cache`
-          );
-        }
-        cached = null;
-      }
-
+      // ===== LOCAL CACHE ONLY (NO UPSTASH) =====
+      // Check local cache first (instant, <1ms)
+      const cached = getPagesRisksFromCache(cacheKey);
       if (cached) {
+        console.log(`[PERF] /api/pages/risks from cache in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
 
-      // SingleFlight: si 20 requests llegan simultáneamente, solo 1 ejecuta la query
-      const pageData = await bootstrapCache.get(cacheKey, async () => {
-        // Esta función solo se ejecuta una vez (SingleFlight)
+      // Single-flight pattern: check if another request is already computing
+      const existingLock = getPagesRisksLock(cacheKey);
+      if (existingLock) {
+        console.log(`[SINGLE-FLIGHT] /api/pages/risks waiting for in-flight computation`);
+        const result = await existingLock;
+        console.log(`[PERF] /api/pages/risks from single-flight in ${Date.now() - requestStart}ms`);
+        return res.json(result);
+      }
+
+      // Compute the data (first request wins)
+      const computePromise = (async () => {
         const fetchStart = Date.now();
         const [risksData, counts, catalogs, relationsLite] = await Promise.all([
           getRisksFromReadModel({ limit, offset, filters }),
           getRiskCounts(filters),
           getMinimalCatalogs(),
-          getRelationsLite(filters, limit, offset), // OPTIMIZADO: Solo procesar riesgos de la página actual
+          getRelationsLite(filters, limit, offset),
         ]);
         
         const fetchDuration = Date.now() - fetchStart;
         console.log(`[PERF] /api/pages/risks data fetch: ${fetchDuration}ms (risks: ${risksData.risks.length}, total: ${risksData.total})`);
 
-        // Usar Record en lugar de Map para serialización JSON
         const response = {
           risks: {
             data: risksData.risks,
@@ -2762,7 +2755,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             processOwners: catalogs.processOwners,
             processGerencias: catalogs.processGerencias,
           },
-          // Record en lugar de Map para serialización JSON
           relations: {
             controlsByRisk: relationsLite.controlsByRisk,
             processesByRisk: relationsLite.processesByRisk,
@@ -2774,13 +2766,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
         };
 
-        // Cache set no bloqueante (fire-and-forget)
-        bootstrapCache.set(cacheKey, response, 300).catch((err) => {
-          console.warn(`[CACHE] Failed to set cache for ${cacheKey}:`, err);
-        });
+        // Cache locally (instant, no network)
+        setPagesRisksCache(cacheKey, response);
 
         return response;
-      });
+      })();
+
+      // Set single-flight lock
+      setPagesRisksLock(cacheKey, computePromise);
+
+      const pageData = await computePromise;
+      console.log(`[PERF] /api/pages/risks computed in ${Date.now() - requestStart}ms`);
 
       res.json(pageData);
     } catch (error) {
@@ -26779,42 +26775,29 @@ Redactas en español neutro, claro y profesional.`;
   // ============= PROCESS OWNERS MANAGEMENT =============
 
   // Get all process owners
+  // OPTIMIZED: Uses local cache only (no Upstash latency)
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     try {
-      // Single-tenant mode: tenantId not required
-      let tenantId: string | undefined;
-      try {
-        const tenant = await resolveActiveTenant(req, { required: false });
-        tenantId = tenant?.tenantId;
-      } catch (error) {
-        // In single-tenant mode, continue without tenantId
-        console.warn("Could not resolve tenant (single-tenant mode?):", error);
+      // Try local cache first (instant, <1ms)
+      const cached = getCatalogFromCache<any[]>('processOwners');
+      if (cached) {
+        console.log(`[CACHE HIT] /api/process-owners in ${Date.now() - startTime}ms`);
+        return res.json(cached);
       }
 
-      // Use two-tier cache (L1 memory + L2 Redis) for better performance
-      // TTL 5 min - process owners change infrequently
-      const cacheKey = `process-owners:${CACHE_VERSION}:${tenantId || 'single-tenant'}`;
-      const processOwners = await getFromTieredCache(
-        cacheKey,
-        async () => {
-          const queryStart = Date.now();
-          const owners = await storage.getProcessOwners();
-          const queryDuration = Date.now() - queryStart;
-          console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
-          return owners;
-        },
-        300 // 5 minutes - process owners change infrequently
-      );
+      const queryStart = Date.now();
+      const owners = await storage.getProcessOwners();
+      const queryDuration = Date.now() - queryStart;
+      console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
+
+      // Cache locally (1 hour TTL)
+      setCatalogCache('processOwners', owners);
 
       const duration = Date.now() - startTime;
-      if (duration > 1000) {
-        console.warn(`[SLOW] /api/process-owners took ${duration}ms`);
-      } else if (duration < 10) {
-        console.log(`[CACHE HIT] /api/process-owners in ${duration}ms`);
-      }
+      console.log(`[CACHE SET] /api/process-owners in ${duration}ms`);
 
-      res.json(processOwners);
+      res.json(owners);
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);

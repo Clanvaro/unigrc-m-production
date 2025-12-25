@@ -42,8 +42,9 @@ export async function invalidateRiskMatrixCache() {
 export async function invalidateRiskProcessLinkCaches() {
   const startTime = Date.now();
   try {
-    // Invalidate local cache first (instant)
+    // Invalidate local caches first (instant)
     invalidatePageDataLiteCache();
+    invalidatePagesRisksCache();
     
     await Promise.all([
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
@@ -71,8 +72,9 @@ export async function invalidateRiskProcessLinkCaches() {
 export async function invalidateRiskDataCaches() {
   const startTime = Date.now();
   try {
-    // Invalidate local cache first (instant)
+    // Invalidate local caches first (instant)
     invalidatePageDataLiteCache();
+    invalidatePagesRisksCache();
     
     await Promise.all([
       distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`),
@@ -105,8 +107,9 @@ export async function invalidateRiskDataCaches() {
 export async function invalidateControlDataCaches() {
   const startTime = Date.now();
   try {
-    // Invalidate local cache first (instant)
+    // Invalidate local caches first (instant)
     invalidatePageDataLiteCache();
+    invalidatePagesRisksCache();
     
     await Promise.all([
       distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
@@ -572,4 +575,89 @@ export async function invalidateSystemConfigCache(): Promise<void> {
   } catch (error) {
     console.error('Error invalidating system config cache:', error);
   }
+}
+
+// ============================================
+// PAGES/RISKS LOCAL CACHE (NO UPSTASH)
+// ============================================
+
+interface PagesRisksCacheEntry {
+  data: any;
+  timestamp: number;
+}
+
+// Local cache for /api/pages/risks (per cache key including filters)
+const pagesRisksCache = new Map<string, PagesRisksCacheEntry>();
+const PAGES_RISKS_TTL = 5 * 60 * 1000; // 5 minutes TTL
+
+// Single-flight locks for pages/risks
+const pagesRisksLocks = new Map<string, Promise<any>>();
+
+/**
+ * Get pages/risks from local cache
+ */
+export function getPagesRisksFromCache(cacheKey: string): any | null {
+  const entry = pagesRisksCache.get(cacheKey);
+  if (!entry) {
+    console.log(`[PAGES-RISKS CACHE MISS] ${cacheKey.substring(0, 50)}...`);
+    return null;
+  }
+
+  const now = Date.now();
+  if (now - entry.timestamp > PAGES_RISKS_TTL) {
+    console.log(`[PAGES-RISKS CACHE EXPIRED] ${cacheKey.substring(0, 50)}... (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
+    pagesRisksCache.delete(cacheKey);
+    return null;
+  }
+
+  console.log(`[PAGES-RISKS CACHE HIT] ${cacheKey.substring(0, 50)}... (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
+  return entry.data;
+}
+
+/**
+ * Set pages/risks in local cache
+ */
+export function setPagesRisksCache(cacheKey: string, data: any): void {
+  pagesRisksCache.set(cacheKey, {
+    data,
+    timestamp: Date.now(),
+  });
+  console.log(`[PAGES-RISKS CACHE SET] ${cacheKey.substring(0, 50)}... (TTL: ${PAGES_RISKS_TTL / 1000}s)`);
+}
+
+/**
+ * Invalidate pages/risks cache
+ */
+export function invalidatePagesRisksCache(cacheKey?: string): void {
+  if (cacheKey) {
+    if (pagesRisksCache.has(cacheKey)) {
+      pagesRisksCache.delete(cacheKey);
+      console.log(`[PAGES-RISKS CACHE INVALIDATED] ${cacheKey.substring(0, 50)}...`);
+    }
+  } else {
+    const count = pagesRisksCache.size;
+    pagesRisksCache.clear();
+    console.log(`[PAGES-RISKS CACHE CLEARED] ${count} entries invalidated`);
+  }
+}
+
+/**
+ * Get lock for single-flight pattern
+ */
+export function getPagesRisksLock(cacheKey: string): Promise<any> | null {
+  return pagesRisksLocks.get(cacheKey) || null;
+}
+
+/**
+ * Set lock for single-flight pattern
+ */
+export function setPagesRisksLock(cacheKey: string, promise: Promise<any>): void {
+  pagesRisksLocks.set(cacheKey, promise);
+  // Auto-cleanup after promise resolves (with timeout fallback)
+  Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(resolve, 30000)) // 30 second max lock
+  ]).finally(() => {
+    pagesRisksLocks.delete(cacheKey);
+  });
 }
