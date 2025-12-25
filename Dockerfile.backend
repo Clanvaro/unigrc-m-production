@@ -163,4 +163,6 @@ EXPOSE 5000
 ENTRYPOINT ["dumb-init", "--"]
 
 # Run the backend server
-CMD ["node", "dist/index.js"]
+# IMPORTANT: Set max-old-space-size to use available container memory (1.5GB of 2Gi)
+# Without this, Node.js uses default heap limit (~78-170MB) causing GC pressure and slow responses
+CMD ["node", "--max-old-space-size=1536", "dist/index.js"]
