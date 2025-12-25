@@ -57,6 +57,14 @@ export function serveStatic(app: Express) {
     return; // In dev, Vite handles serving
   }
 
+  // Check if index.html exists - critical for SPA routing
+  const indexHtmlPath = path.resolve(distPath, "index.html");
+  const hasIndexHtml = fs.existsSync(indexHtmlPath);
+  if (!hasIndexHtml) {
+    log(`WARNING: index.html not found at ${indexHtmlPath}. SPA routing will not work on this server.`, "static");
+    log(`This backend instance is API-only. Frontend routes should be handled by Firebase Hosting or another frontend server.`, "static");
+  }
+
   // List files in public for debugging
   try {
     const publicFiles = fs.readdirSync(distPath);
@@ -106,6 +114,19 @@ export function serveStatic(app: Express) {
     
     // For non-API routes, serve index.html for SPA routing
     console.log(`[STATIC] Fallback to index.html for: ${req.path}`);
+    
+    // If index.html doesn't exist, this is an API-only backend
+    // Return a helpful message instead of a cryptic 404
+    if (!hasIndexHtml) {
+      console.log(`[STATIC] No index.html available - this is an API-only backend`);
+      // Return 404 with a clear message for frontend routes
+      return res.status(404).json({
+        error: "Frontend not available on this server",
+        message: "This backend serves API endpoints only. Frontend routes should be served by Firebase Hosting.",
+        path: req.path,
+        suggestion: "If you're seeing this error, ensure your request is routed to the correct frontend server."
+      });
+    }
     
     // Always send fresh index.html for SPA routing
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

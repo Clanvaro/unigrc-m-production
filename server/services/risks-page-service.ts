@@ -289,10 +289,13 @@ export async function getMinimalCatalogs(): Promise<{
 
 /**
  * Obtiene relaciones lite (solo totales, no detalles completos)
+ * OPTIMIZADO: Solo procesa los riesgos de la página actual (limit/offset)
  * Devuelve Record en lugar de Map para serialización JSON
  */
 export async function getRelationsLite(
-  filters: RiskFilters
+  filters: RiskFilters,
+  limit: number,
+  offset: number
 ): Promise<{
   controlsByRisk: Record<string, { count: number; avgEffectiveness: number }>;
   processesByRisk: Record<string, string[]>; // Array de process IDs
@@ -300,18 +303,19 @@ export async function getRelationsLite(
 }> {
   // Usar db global
 
-  // Si los datos vienen del read-model, esto puede ser opcional
-  // Pero si necesitas datos adicionales no en read-model, hacer queries agregadas
-
-  // OPTIMIZADO: Usar risk_list_view para obtener IDs (más rápido que risks)
-  // Construir condiciones (mismas que getRisksFromReadModel)
+  // CRITICAL OPTIMIZATION: Solo obtener IDs de la página actual (limit/offset)
+  // Esto evita procesar miles de riesgos cuando solo necesitamos 25-50
   const baseConditions: any[] = [sql`status <> 'deleted'`];
 
   if (filters.search) {
     const searchPattern = `%${filters.search}%`;
     baseConditions.push(
-      sql`(name ILIKE ${searchPattern} OR code ILIKE ${searchPattern})`
+      sql`(name ILIKE ${searchPattern} OR code ILIKE ${searchPattern} OR description ILIKE ${searchPattern})`
     );
+  }
+
+  if (filters.status && filters.status !== 'all') {
+    baseConditions.push(sql`status = ${filters.status}`);
   }
 
   if (filters.macroprocesoId && filters.macroprocesoId !== 'all') {
@@ -326,17 +330,60 @@ export async function getRelationsLite(
     baseConditions.push(sql`subproceso_id = ${filters.subprocesoId}`);
   }
 
+  // Filtros de nivel de riesgo (mismos que getRisksFromReadModel)
+  if (filters.inherentRiskLevel && filters.inherentRiskLevel !== 'all') {
+    switch (filters.inherentRiskLevel) {
+      case 'low':
+        baseConditions.push(sql`inherent_risk < 9`);
+        break;
+      case 'medium':
+        baseConditions.push(sql`inherent_risk >= 9 AND inherent_risk < 16`);
+        break;
+      case 'high':
+        baseConditions.push(sql`inherent_risk >= 16 AND inherent_risk < 20`);
+        break;
+      case 'critical':
+        baseConditions.push(sql`inherent_risk >= 20`);
+        break;
+    }
+  }
+
+  if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') {
+    switch (filters.residualRiskLevel) {
+      case 'low':
+        baseConditions.push(sql`residual_risk_approx < 9`);
+        break;
+      case 'medium':
+        baseConditions.push(sql`residual_risk_approx >= 9 AND residual_risk_approx < 16`);
+        break;
+      case 'high':
+        baseConditions.push(sql`residual_risk_approx >= 16 AND residual_risk_approx < 20`);
+        break;
+      case 'critical':
+        baseConditions.push(sql`residual_risk_approx >= 20`);
+        break;
+    }
+  }
+
   const baseWhereClause =
     baseConditions.length > 0
       ? sql`WHERE ${sql.join(baseConditions, sql` AND `)}`
       : sql``;
 
-  // OPTIMIZADO: Obtener risk IDs desde read-model (más rápido)
+  // CRITICAL: Solo obtener IDs de la página actual (mismo orden que getRisksFromReadModel)
+  const queryStart = Date.now();
   const riskIdsResult = await db.execute(sql`
     SELECT id FROM risk_list_view
     ${baseWhereClause}
+    ORDER BY created_at DESC
+    LIMIT ${limit} OFFSET ${offset}
   `);
   const riskIds = (riskIdsResult.rows as any[]).map((r) => r.id);
+  
+  const queryDuration = Date.now() - queryStart;
+  if (queryDuration > 500) {
+    console.warn(`[PERF] Slow query in getRelationsLite (risk IDs): ${queryDuration}ms (limit: ${limit}, offset: ${offset})`);
+  }
 
   if (riskIds.length === 0) {
     return {

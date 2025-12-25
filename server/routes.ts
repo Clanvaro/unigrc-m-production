@@ -2754,7 +2754,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           getRisksFromReadModel({ limit, offset, filters }),
           getRiskCounts(filters),
           getMinimalCatalogs(),
-          getRelationsLite(filters),
+          getRelationsLite(filters, limit, offset), // OPTIMIZADO: Solo procesar riesgos de la página actual
         ]);
         
         const fetchDuration = Date.now() - fetchStart;
