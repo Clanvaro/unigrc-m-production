@@ -36,7 +36,8 @@ export async function getRiskEventsFromReadModel(params: {
   // Usar db global
   const { limit, offset, filters } = params;
 
-  const conditions: any[] = [sql`deleted_at IS NULL`];
+  // NO filtrar por deleted_at (la columna puede no existir en la base de datos)
+  const conditions: any[] = [];
 
   if (filters.status && filters.status !== 'all') {
     conditions.push(sql`status = ${filters.status}`);
@@ -198,7 +199,8 @@ export async function getRiskEventCounts(
 }> {
   // Usar db global
 
-  const conditions: any[] = [sql`deleted_at IS NULL`];
+  // NO filtrar por deleted_at (la columna puede no existir en la base de datos)
+  const conditions: any[] = [];
 
   if (filters.search) {
     const searchPattern = `%${filters.search}%`;
