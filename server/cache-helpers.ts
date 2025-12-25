@@ -371,6 +371,7 @@ const CATALOG_TTL = {
   roles: 4 * 60 * 60 * 1000,          // 4 hours - roles rarely change (admin only)
   users: 10 * 60 * 1000,              // 10 minutes - users change more frequently
   processesWithRisks: 5 * 60 * 1000,  // 5 minutes - includes risk calculations
+  processGerencias: 2 * 60 * 60 * 1000, // 2 hours - relation data rarely changes
 };
 
 type CatalogKey = keyof typeof CATALOG_TTL;

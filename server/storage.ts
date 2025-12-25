@@ -10036,14 +10036,12 @@ export class DatabaseStorage extends MemStorage {
     return `R-${nextNumber.toString().padStart(4, '0')}`;
   }
 
-  // ============== RISK CATEGORIES - Use Database ==============
+  // ============== RISK CATEGORIES - Use Local Cache ==============
   async getRiskCategories(): Promise<RiskCategory[]> {
-    const cacheKey = 'risk-categories';
-
-    // Try to get from cache first
-    const cached = await distributedCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
+    const localCached = getCatalogFromCache<RiskCategory[]>('riskCategories');
+    if (localCached) {
+      return localCached;
     }
 
     // Query database with retry for Neon cold starts
@@ -10052,8 +10050,8 @@ export class DatabaseStorage extends MemStorage {
         .where(eq(riskCategories.isActive, true));
     });
 
-    // Store in cache for 10 minutes (600 seconds)
-    await distributedCache.set(cacheKey, categories, 600);
+    // Store in local cache (2 hour TTL)
+    setCatalogCache('riskCategories', categories);
 
     return categories;
   }
@@ -14839,35 +14837,13 @@ export class DatabaseStorage extends MemStorage {
   // ============== GERENCIAS DATABASE IMPLEMENTATION ==============
 
   async getGerencias(): Promise<Gerencia[]> {
-    // TIER 1: Check in-memory cache first (<1ms) - 2 hour TTL for static catalog data
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
     const localCached = getCatalogFromCache<Gerencia[]>('gerencias');
     if (localCached) {
       return localCached;
     }
 
-    // TIER 2: Check distributed cache (Upstash) - 60s TTL
-    const cacheKey = 'gerencias:single-tenant';
-    const cacheStart = Date.now();
-    
-    try {
-      const cached = await Promise.race([
-        distributedCache.get(cacheKey),
-        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('L2 timeout')), 200))
-      ]);
-      const cacheDuration = Date.now() - cacheStart;
-
-      if (cached) {
-        console.log(`[DB] getGerencias: L2 cache hit in ${cacheDuration}ms`);
-        // Populate L1 cache for next request
-        setCatalogCache('gerencias', cached);
-        return cached;
-      }
-    } catch (err) {
-      // L2 timeout or error - fail-open to DB (which is fast)
-      console.log(`[DB] getGerencias: L2 cache skipped (${Date.now() - cacheStart}ms) - querying DB`);
-    }
-
-    // TIER 3: Query database
+    // Query database
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       // OPTIMIZED: Only select fields needed for filters/display (reduces data transfer by ~40%)
@@ -14892,11 +14868,8 @@ export class DatabaseStorage extends MemStorage {
     const queryDuration = Date.now() - queryStart;
     console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
 
-    // Populate both caches (async for L2 - don't block response)
+    // Store in local cache (2 hour TTL)
     setCatalogCache('gerencias', result);
-    distributedCache.set(cacheKey, result, 60).catch(err => {
-      console.warn('[DB] getGerencias: Failed to set L2 cache:', err);
-    });
 
     return result;
   }
@@ -15675,13 +15648,17 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== ALL PROCESS-GERENCIA AND PROCESS-OBJETIVO RELATIONS ==============
   async getAllProcessGerenciasRelations(): Promise<any[]> {
-    return await withRetry(async () => {
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static relation data
+    const localCached = getCatalogFromCache<any[]>('processGerencias');
+    if (localCached) {
+      return localCached;
+    }
+
+    const result = await withRetry(async () => {
       // OPTIMIZED: Eliminated unnecessary JOINs to parent tables
       // If *_gerencias tables only contain valid relations, we don't need to JOIN
       // to filter deleted_at - this reduces query time from ~1800ms to ~50-200ms
-      // The JOINs were only used to filter deleted_at IS NULL, which is unnecessary
-      // if the relation tables are properly maintained (only active relations)
-      const result = await db.execute(sql`
+      const queryResult = await db.execute(sql`
         SELECT 
           mg.macroproceso_id as "macroprocesoId",
           NULL::text as "processId",
@@ -15708,8 +15685,13 @@ export class DatabaseStorage extends MemStorage {
         FROM subproceso_gerencias sg
       `);
 
-      return result.rows as any[];
+      return queryResult.rows as any[];
     });
+
+    // Store in local cache (2 hour TTL)
+    setCatalogCache('processGerencias', result);
+
+    return result;
   }
 
   // ============== ACTION PLANS DATABASE IMPLEMENTATION ==============
