@@ -57,7 +57,10 @@ import {
   setPageDataLiteCache,
   invalidatePageDataLiteCache,
   getPageDataLiteLock,
-  setPageDataLiteLock
+  setPageDataLiteLock,
+  getCatalogFromCache,
+  setCatalogCache,
+  invalidateCatalogCache
 } from './cache-helpers';
 import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, awaitInitialPoolWarming } from "./db";
 import { usingRealRedis } from "./services/redis";
@@ -1830,18 +1833,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Processes - Full endpoint with risk calculations (legacy) - with 60s distributed cache
+  // Processes - Full endpoint with risk calculations
+  // OPTIMIZED: Uses local in-memory cache (eliminates Upstash latency)
   app.get("/api/processes", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const requestStart = Date.now();
     try {
-      // Try distributed cache first (60s TTL)
-      const cacheKey = `processes:single-tenant`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        const duration = Date.now() - requestStart;
-        if (duration > 100) {
-          console.log(`[CACHE HIT] /api/processes in ${duration}ms`);
-        }
+      // Try local cache first (instant, <1ms)
+      const cached = getCatalogFromCache<any[]>('processesWithRisks');
+      if (cached) {
+        console.log(`[CACHE HIT] /api/processes in ${Date.now() - requestStart}ms`);
         return res.json(cached);
       }
 
@@ -1857,10 +1857,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const fetchDuration = Date.now() - fetchStart;
       console.log(`[DB] /api/processes fetched ${processes.length} processes and risk levels in ${fetchDuration}ms`);
 
-      if (fetchDuration > 3000) {
-        console.warn(`⚠️ Slow /api/processes query: ${fetchDuration}ms`);
-      }
-
       // Filter out soft-deleted records
       const activeProcesses = processes.filter((process: any) => process.status !== 'deleted');
 
@@ -1872,12 +1868,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
 
-      // OPTIMIZED: Cache for 300 seconds (5 min) - processes change infrequently
-      // Previous: 60s caused frequent cache misses and slow queries
-      await distributedCache.set(cacheKey, processesWithRisks, 300);
+      // Cache for 5 minutes (includes risk calculations)
+      setCatalogCache('processesWithRisks', processesWithRisks);
 
       const totalDuration = Date.now() - requestStart;
-      console.log(`[PERF] /api/processes COMPLETE in ${totalDuration}ms (${processesWithRisks.length} processes)`);
+      console.log(`[CACHE SET] /api/processes in ${totalDuration}ms (${processesWithRisks.length} processes)`);
 
       res.json(processesWithRisks);
     } catch (error) {
@@ -17419,38 +17414,29 @@ Redactas en español neutro, claro y profesional.`;
     }
   });
 
-  // Users - with two-tier cache (L1 memory + L2 Redis) for better performance
+  // Users - OPTIMIZED: Uses local in-memory cache (eliminates Upstash latency)
   app.get("/api/users", noCacheMiddleware, isAuthenticated, requireAnyPermission(["view_users", "users:manage", "manage_users"]), async (req, res) => {
     try {
       const requestStart = Date.now();
 
-      // Use two-tier cache: L1 memory (<1ms) + L2 Redis (~50ms) for optimal performance
-      // TTL increased to 300s (5 min) as users don't change frequently
-      const cacheKey = `users:all`;
-      const users = await getFromTieredCache(
-        cacheKey,
-        async () => {
-          const fetchStart = Date.now();
-          // OPTIMIZED: getUsers() uses indexed query with ORDER BY created_at DESC
-          // The index idx_users_created_at will make this query fast
-          const fetchedUsers = await storage.getUsers();
-          const fetchDuration = Date.now() - fetchStart;
-          console.log(`✅ Successfully fetched ${fetchedUsers.length} users in ${fetchDuration}ms`);
+      // Try local cache first (instant, <1ms)
+      const cached = getCatalogFromCache<any[]>('users');
+      if (cached) {
+        console.log(`[CACHE HIT] /api/users in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
 
-          // Safety check: If query takes too long or returns too many users, log a warning
-          if (fetchDuration > 5000) {
-            console.warn(`⚠️ Slow getUsers() query: ${fetchDuration}ms for ${fetchedUsers.length} users`);
-          }
+      const fetchStart = Date.now();
+      // OPTIMIZED: getUsers() uses indexed query with ORDER BY created_at DESC
+      const users = await storage.getUsers();
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`✅ Successfully fetched ${users.length} users in ${fetchDuration}ms`);
 
-          return fetchedUsers;
-        },
-        300 // 5 minutes - users change infrequently
-      );
+      // Cache for 10 minutes (users change infrequently)
+      setCatalogCache('users', users);
 
       const totalDuration = Date.now() - requestStart;
-      if (totalDuration > 100) {
-        console.log(`[PERF] /api/users completed in ${totalDuration}ms (cached: ${totalDuration < 50})`);
-      }
+      console.log(`[CACHE SET] /api/users in ${totalDuration}ms`);
 
       res.json(users);
     } catch (error) {
@@ -17516,7 +17502,8 @@ Redactas en español neutro, claro y profesional.`;
       const validatedData = insertUserSchema.parse(req.body);
       const user = await storage.createUser(validatedData);
 
-      // Invalidate users cache
+      // Invalidate users cache (local + distributed)
+      invalidateCatalogCache('users');
       await distributedCache.invalidate(`users:all`);
 
       res.status(201).json(user);
@@ -17536,7 +17523,8 @@ Redactas en español neutro, claro y profesional.`;
       // Invalidate BOTH auth caches for this user (profile changed)
       authCache.invalidate(req.params.id);
       await distributedCache.invalidate(`auth-me:${req.params.id}`);
-      // Invalidate users list cache
+      // Invalidate users list cache (local + distributed)
+      invalidateCatalogCache('users');
       await distributedCache.invalidate(`users:all`);
 
       res.json(user);
@@ -17552,7 +17540,8 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Invalidate users list cache
+      // Invalidate users list cache (local + distributed)
+      invalidateCatalogCache('users');
       await distributedCache.invalidate(`users:all`);
 
       res.status(204).send();
@@ -17565,8 +17554,18 @@ Redactas en español neutro, claro y profesional.`;
   
   // Basic roles endpoint - accessible to all authenticated users
   // Returns only id and name for display purposes (e.g., showing user's role in audit team)
+  // OPTIMIZED: Uses local in-memory cache (roles rarely change)
   app.get("/api/roles/basic", noCacheMiddleware, isAuthenticated, async (req, res) => {
     try {
+      const requestStart = Date.now();
+      
+      // Try local cache first (instant, <1ms)
+      const cached = getCatalogFromCache<any[]>('roles');
+      if (cached) {
+        console.log(`[CACHE HIT] /api/roles/basic in ${Date.now() - requestStart}ms`);
+        return res.json(cached);
+      }
+      
       const roles = await storage.getRoles();
       // Return only basic info (no permissions)
       const basicRoles = roles.map(role => ({
@@ -17574,6 +17573,11 @@ Redactas en español neutro, claro y profesional.`;
         name: role.name,
         description: role.description
       }));
+      
+      // Cache for 4 hours (roles rarely change)
+      setCatalogCache('roles', basicRoles);
+      console.log(`[CACHE SET] /api/roles/basic in ${Date.now() - requestStart}ms`);
+      
       res.json(basicRoles);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch roles" });
@@ -17606,6 +17610,8 @@ Redactas en español neutro, claro y profesional.`;
     try {
       const validatedData = insertRoleSchema.parse(req.body);
       const role = await storage.createRole(validatedData);
+      // Invalidate roles cache
+      invalidateCatalogCache('roles');
       res.status(201).json(role);
     } catch (error) {
       res.status(400).json({ message: "Invalid role data" });
@@ -17620,7 +17626,8 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(404).json({ message: "Role not found" });
       }
 
-      // Invalidate ALL users' auth cache because role permissions changed
+      // Invalidate roles cache + ALL users' auth cache because role permissions changed
+      invalidateCatalogCache('roles');
       authCache.invalidateAll();
 
       res.json(role);
@@ -17635,6 +17642,8 @@ Redactas en español neutro, claro y profesional.`;
       if (!deleted) {
         return res.status(404).json({ message: "Role not found" });
       }
+      // Invalidate roles cache
+      invalidateCatalogCache('roles');
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ message: "Failed to delete role" });

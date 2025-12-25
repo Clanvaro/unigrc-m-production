@@ -253,6 +253,10 @@ export function getRiskControlCacheVersion(): string {
  */
 export async function invalidateProcessRelationsCaches() {
   try {
+    // Invalidate local caches first (instant)
+    invalidateCatalogCache('processesWithRisks');
+    invalidatePageDataLiteCache();
+    
     await Promise.all([
       distributedCache.invalidate(`process-gerencias:${TENANT_KEY}`),
       // Also invalidate consolidated risks page data cache
@@ -361,6 +365,9 @@ const CATALOG_TTL = {
   processOwners: 1 * 60 * 60 * 1000,  // 1 hour - ownership changes infrequently
   riskCategories: 2 * 60 * 60 * 1000, // 2 hours - static configuration
   fiscalEntities: 2 * 60 * 60 * 1000, // 2 hours - organizational structure rarely changes
+  roles: 4 * 60 * 60 * 1000,          // 4 hours - roles rarely change (admin only)
+  users: 10 * 60 * 1000,              // 10 minutes - users change more frequently
+  processesWithRisks: 5 * 60 * 1000,  // 5 minutes - includes risk calculations
 };
 
 type CatalogKey = keyof typeof CATALOG_TTL;
