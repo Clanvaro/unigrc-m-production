@@ -335,16 +335,17 @@ interface CatalogCacheEntry<T> {
 const catalogCache = new Map<string, CatalogCacheEntry<any>>();
 
 // Cache TTLs in milliseconds
-// Aggressive caching for static catalogs to reduce DB load on Render Basic (0.5 CPU)
+// OPTIMIZED: Long TTLs for static catalogs - these rarely change and are invalidated on mutation
+// Benefits: 1) Near-zero latency (<1ms vs 60-115ms from Upstash) 2) No network calls 3) Free (uses allocated memory)
 const CATALOG_TTL = {
-  macroprocesos: 30 * 60 * 1000,      // 30 min - organizational structure rarely changes
-  processes: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
-  subprocesos: 30 * 60 * 1000,        // 30 min - organizational structure rarely changes
-  gerencias: 30 * 60 * 1000,          // 30 min - organizational structure rarely changes
-  controls: 15 * 60 * 1000,           // 15 min - control definitions change infrequently
-  processOwners: 15 * 60 * 1000,      // 15 min - ownership changes infrequently
-  riskCategories: 30 * 60 * 1000,     // 30 min - static configuration
-  fiscalEntities: 30 * 60 * 1000,     // 30 min - organizational structure rarely changes
+  macroprocesos: 2 * 60 * 60 * 1000,  // 2 hours - organizational structure rarely changes
+  processes: 2 * 60 * 60 * 1000,      // 2 hours - organizational structure rarely changes
+  subprocesos: 2 * 60 * 60 * 1000,    // 2 hours - organizational structure rarely changes
+  gerencias: 2 * 60 * 60 * 1000,      // 2 hours - organizational structure rarely changes
+  controls: 1 * 60 * 60 * 1000,       // 1 hour - control definitions change infrequently
+  processOwners: 1 * 60 * 60 * 1000,  // 1 hour - ownership changes infrequently
+  riskCategories: 2 * 60 * 60 * 1000, // 2 hours - static configuration
+  fiscalEntities: 2 * 60 * 60 * 1000, // 2 hours - organizational structure rarely changes
 };
 
 type CatalogKey = keyof typeof CATALOG_TTL;

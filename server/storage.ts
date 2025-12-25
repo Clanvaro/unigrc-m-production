@@ -18,7 +18,10 @@ import { distributedCache } from "./services/redis";
 import {
   getSystemConfigFromCache,
   setSystemConfigCache,
-  invalidateSystemConfigCache
+  invalidateSystemConfigCache,
+  getCatalogFromCache,
+  setCatalogCache,
+  invalidateCatalogCache
 } from "./cache-helpers";
 import {
   type Macroproceso, type InsertMacroproceso,
@@ -14826,20 +14829,35 @@ export class DatabaseStorage extends MemStorage {
   // ============== GERENCIAS DATABASE IMPLEMENTATION ==============
 
   async getGerencias(): Promise<Gerencia[]> {
-    const cacheKey = 'gerencias:single-tenant';
-
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cacheStart = Date.now();
-    const cached = await distributedCache.get(cacheKey);
-    const cacheDuration = Date.now() - cacheStart;
-
-    if (cached) {
-      console.log(`[DB] getGerencias: Cache hit in ${cacheDuration}ms`);
-      return cached;
+    // TIER 1: Check in-memory cache first (<1ms) - 2 hour TTL for static catalog data
+    const localCached = getCatalogFromCache<Gerencia[]>('gerencias');
+    if (localCached) {
+      return localCached;
     }
 
-    console.log(`[DB] getGerencias: Cache miss (checked in ${cacheDuration}ms), querying database...`);
+    // TIER 2: Check distributed cache (Upstash) - 60s TTL
+    const cacheKey = 'gerencias:single-tenant';
+    const cacheStart = Date.now();
+    
+    try {
+      const cached = await Promise.race([
+        distributedCache.get(cacheKey),
+        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('L2 timeout')), 200))
+      ]);
+      const cacheDuration = Date.now() - cacheStart;
 
+      if (cached) {
+        console.log(`[DB] getGerencias: L2 cache hit in ${cacheDuration}ms`);
+        // Populate L1 cache for next request
+        setCatalogCache('gerencias', cached);
+        return cached;
+      }
+    } catch (err) {
+      // L2 timeout or error - fail-open to DB (which is fast)
+      console.log(`[DB] getGerencias: L2 cache skipped (${Date.now() - cacheStart}ms) - querying DB`);
+    }
+
+    // TIER 3: Query database
     const queryStart = Date.now();
     const result = await withRetry(async () => {
       // OPTIMIZED: Only select fields needed for filters/display (reduces data transfer by ~40%)
@@ -14864,11 +14882,11 @@ export class DatabaseStorage extends MemStorage {
     const queryDuration = Date.now() - queryStart;
     console.log(`[DB] getGerencias: Query completed in ${queryDuration}ms, returned ${result.length} rows`);
 
-    // Cache for 60 seconds
-    const cacheSetStart = Date.now();
-    await distributedCache.set(cacheKey, result, 60);
-    const cacheSetDuration = Date.now() - cacheSetStart;
-    console.log(`[DB] getGerencias: Cache set completed in ${cacheSetDuration}ms`);
+    // Populate both caches (async for L2 - don't block response)
+    setCatalogCache('gerencias', result);
+    distributedCache.set(cacheKey, result, 60).catch(err => {
+      console.warn('[DB] getGerencias: Failed to set L2 cache:', err);
+    });
 
     return result;
   }
@@ -14923,6 +14941,8 @@ export class DatabaseStorage extends MemStorage {
       };
 
       const [created] = await db.insert(gerencias).values(gerenciaData).returning();
+      // Invalidate local cache so next request gets fresh data
+      invalidateCatalogCache('gerencias');
       return created;
     });
   }
@@ -14956,6 +14976,8 @@ export class DatabaseStorage extends MemStorage {
         .set(updateData)
         .where(eq(gerencias.id, id))
         .returning();
+      // Invalidate local cache so next request gets fresh data
+      invalidateCatalogCache('gerencias');
       return updated;
     });
   }
@@ -14977,6 +14999,8 @@ export class DatabaseStorage extends MemStorage {
           })
           .where(eq(gerencias.id, id))
           .returning();
+        // Invalidate local cache so next request gets fresh data
+        if (deleted) invalidateCatalogCache('gerencias');
         return !!deleted;
       } catch (error) {
         console.error('Error soft deleting gerencia:', error);
@@ -14998,6 +15022,8 @@ export class DatabaseStorage extends MemStorage {
         })
         .where(eq(gerencias.id, id))
         .returning();
+      // Invalidate local cache so next request gets fresh data
+      if (restored) invalidateCatalogCache('gerencias');
       return restored;
     });
   }
