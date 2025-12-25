@@ -118,8 +118,8 @@ export async function getRiskEventsFromReadModel(params: {
       console.warn('[WARN] Run: npm run apply-risk-events-list-view to create the materialized view');
       
       // Fallback: usar tabla risk_events directamente
-      // Reconstruir condiciones para tabla risk_events (usa deleted_at en lugar de status)
-      const fallbackConditions: any[] = [sql`deleted_at IS NULL`];
+      // NO filtrar por deleted_at en fallback (la columna puede no existir)
+      const fallbackConditions: any[] = [];
       
       if (filters.status && filters.status !== 'all') {
         fallbackConditions.push(sql`status = ${filters.status}`);
