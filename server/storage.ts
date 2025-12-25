@@ -8471,12 +8471,10 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== MACROPROCESOS - Use Database ==============
   async getMacroprocesos(): Promise<Macroproceso[]> {
-    const cacheKey = 'macroprocesos:single-tenant';
-
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cached = await distributedCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
+    const localCached = getCatalogFromCache<Macroproceso[]>('macroprocesos');
+    if (localCached) {
+      return localCached;
     }
 
     const result = await withRetry(async () => {
@@ -8499,8 +8497,8 @@ export class DatabaseStorage extends MemStorage {
         ));
     });
 
-    // Cache for 60 seconds
-    await distributedCache.set(cacheKey, result, 60);
+    // Cache locally for 2 hours (static catalog data)
+    setCatalogCache('macroprocesos', result);
     return result;
   }
 
@@ -8537,6 +8535,8 @@ export class DatabaseStorage extends MemStorage {
     };
 
     const [created] = await db.insert(macroprocesos).values(dataToInsert).returning();
+    // Invalidate local cache
+    invalidateCatalogCache('macroprocesos');
     return created;
   }
 
@@ -8562,6 +8562,8 @@ export class DatabaseStorage extends MemStorage {
       .set(update)
       .where(eq(macroprocesos.id, id))
       .returning();
+    // Invalidate local cache
+    invalidateCatalogCache('macroprocesos');
     return updated;
   }
 
@@ -8608,7 +8610,10 @@ export class DatabaseStorage extends MemStorage {
 
       const result = await db.delete(macroprocesos)
         .where(eq(macroprocesos.id, id));
-      return (result.rowCount ?? 0) > 0;
+      const deleted = (result.rowCount ?? 0) > 0;
+      // Invalidate local cache
+      if (deleted) invalidateCatalogCache('macroprocesos');
+      return deleted;
     } catch (error) {
       return false;
     }
@@ -8645,12 +8650,10 @@ export class DatabaseStorage extends MemStorage {
 
   // ============== PROCESSES - Use Database ==============
   async getProcesses(): Promise<Process[]> {
-    const cacheKey = 'processes:single-tenant';
-
-    // Try cache first (60s TTL - catalog data changes infrequently)
-    const cached = await distributedCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
+    const localCached = getCatalogFromCache<Process[]>('processes');
+    if (localCached) {
+      return localCached;
     }
 
     const result = await withRetry(async () => {
@@ -8669,8 +8672,8 @@ export class DatabaseStorage extends MemStorage {
         ));
     });
 
-    // Cache for 60 seconds
-    await distributedCache.set(cacheKey, result, 60);
+    // Cache locally for 2 hours (static catalog data)
+    setCatalogCache('processes', result);
     return result;
   }
 
@@ -8748,6 +8751,8 @@ export class DatabaseStorage extends MemStorage {
     };
 
     const [created] = await db.insert(processes).values(processData).returning();
+    // Invalidate local cache
+    invalidateCatalogCache('processes');
     return created;
   }
 
@@ -8773,6 +8778,8 @@ export class DatabaseStorage extends MemStorage {
       .set(update)
       .where(eq(processes.id, id))
       .returning();
+    // Invalidate local cache
+    invalidateCatalogCache('processes');
     return updated;
   }
 
@@ -8803,7 +8810,10 @@ export class DatabaseStorage extends MemStorage {
 
     const result = await db.delete(processes)
       .where(eq(processes.id, id));
-    return (result.rowCount ?? 0) > 0;
+    const deleted = (result.rowCount ?? 0) > 0;
+    // Invalidate local cache
+    if (deleted) invalidateCatalogCache('processes');
+    return deleted;
   }
 
   // UNIFIED FUNCTION FOR ALL RISK-CONTROL ASSOCIATIONS
@@ -15597,11 +15607,17 @@ export class DatabaseStorage extends MemStorage {
   }
 
   async getSubprocesosWithOwners(): Promise<SubprocesoWithOwner[]> {
-    return await withRetry(async () => {
+    // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
+    const localCached = getCatalogFromCache<SubprocesoWithOwner[]>('subprocesos');
+    if (localCached) {
+      return localCached;
+    }
+
+    const result = await withRetry(async () => {
       // OPTIMIZED: Use raw SQL with specific columns instead of SELECT *
       // This reduces data transfer and serialization time
       // Avoids invalid SQL like "process_owners.* as owner"
-      const result = await db.execute(sql`
+      const queryResult = await db.execute(sql`
         SELECT
           s.id,
           s.name,
@@ -15628,7 +15644,7 @@ export class DatabaseStorage extends MemStorage {
       `);
 
       // Map results to expected format
-      return (result.rows as any[]).map((row: any) => ({
+      return (queryResult.rows as any[]).map((row: any) => ({
         id: row.id,
         name: row.name,
         description: row.description,
@@ -15651,6 +15667,10 @@ export class DatabaseStorage extends MemStorage {
         } : null,
       }));
     });
+
+    // Cache locally for 2 hours (static catalog data)
+    setCatalogCache('subprocesos', result);
+    return result;
   }
 
   // ============== ALL PROCESS-GERENCIA AND PROCESS-OBJETIVO RELATIONS ==============
@@ -20001,7 +20021,13 @@ export class DatabaseStorage extends MemStorage {
   // ============= PROCESS OWNERS MANAGEMENT =============
 
   async getProcessOwners(): Promise<ProcessOwner[]> {
-    return withRetry(async () => {
+    // OPTIMIZED: Use local cache only (no Upstash) - 1 hour TTL
+    const localCached = getCatalogFromCache<ProcessOwner[]>('processOwners');
+    if (localCached) {
+      return localCached;
+    }
+
+    const result = await withRetry(async () => {
       // OPTIMIZED: Add timeout wrapper to prevent this query from blocking pool
       // This query should be fast (<500ms) with the composite index on (isActive, name)
       const queryPromise = db.select({
@@ -20024,6 +20050,10 @@ export class DatabaseStorage extends MemStorage {
 
       return await Promise.race([queryPromise, timeoutPromise]);
     });
+
+    // Cache locally for 1 hour
+    setCatalogCache('processOwners', result);
+    return result;
   }
 
   async getProcessOwner(id: string): Promise<ProcessOwner | undefined> {
@@ -20069,6 +20099,8 @@ export class DatabaseStorage extends MemStorage {
       };
 
       await db.insert(processOwners).values(newOwner);
+      // Invalidate local cache
+      invalidateCatalogCache('processOwners');
       return newOwner;
     } catch (error) {
       console.error('Error creating process owner:', error);
@@ -20102,6 +20134,8 @@ export class DatabaseStorage extends MemStorage {
         .where(eq(processOwners.id, id))
         .returning();
 
+      // Invalidate local cache
+      if (result[0]) invalidateCatalogCache('processOwners');
       return result[0];
     } catch (error) {
       console.error('Error updating process owner:', error);
@@ -20117,7 +20151,10 @@ export class DatabaseStorage extends MemStorage {
         .where(eq(processOwners.id, id))
         .returning();
 
-      return result.length > 0;
+      const deleted = result.length > 0;
+      // Invalidate local cache
+      if (deleted) invalidateCatalogCache('processOwners');
+      return deleted;
     } catch (error) {
       console.error('Error deleting process owner:', error);
       return false;
