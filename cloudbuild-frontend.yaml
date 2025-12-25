@@ -1,5 +1,5 @@
 # Cloud Build configuration for Frontend
-# Migrated from Docker/Cloud Run to Cloud Storage + CDN
+# Deploys to Firebase Hosting
 # Triggered on push to main branch
 
 steps:
@@ -9,63 +9,30 @@ steps:
     args: ['ci', '--legacy-peer-deps']
     id: 'install-dependencies'
 
-  # Build the frontend with Vite (only frontend, not backend)
+  # Build the frontend with Vite
   - name: 'node:20'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         export NODE_ENV=production
-        export VITE_API_URL=https://unigrc-backend-524018293934.southamerica-west1.run.app
         echo "🔨 Building frontend..."
         npx vite build
         echo "✅ Frontend built"
+        ls -la dist/public/
     id: 'build-frontend'
 
-  # Upload to Cloud Storage (production bucket)
-  - name: 'gcr.io/cloud-builders/gsutil'
-    args:
-      - 'rsync'
-      - '-r'
-      - '-d'
-      - 'dist/public/'
-      - 'gs://unigrc-frontend-prod/'
-    id: 'upload-to-storage'
-
-  # Set cache headers for static assets
-  - name: 'gcr.io/cloud-builders/gsutil'
+  # Deploy to Firebase Hosting
+  - name: 'node:20'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        # Set no-cache for index.html
-        gsutil setmeta -h "Cache-Control: no-cache, no-store, must-revalidate" gs://unigrc-frontend-prod/index.html
-        
-        # Set long cache for JS/CSS files
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.js || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.css || true
-        
-        # Set long cache for fonts and images
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.woff2 || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.woff || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.ttf || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.png || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.jpg || true
-        gsutil -m setmeta -h "Cache-Control: public, max-age=31536000, immutable" gs://unigrc-frontend-prod/assets/*.svg || true
-    id: 'set-cache-headers'
-
-  # Invalidate CDN cache for index.html
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'gcloud'
-    args:
-      - 'compute'
-      - 'url-maps'
-      - 'invalidate-cdn-cache'
-      - 'unigrc-frontend-url-map'
-      - '--path=/index.html'
-      - '--project=$PROJECT_ID'
-    id: 'invalidate-cdn'
-    waitFor: ['upload-to-storage']
+        echo "🚀 Deploying to Firebase Hosting..."
+        npm install -g firebase-tools
+        firebase deploy --only hosting --project=$PROJECT_ID
+        echo "✅ Deployed to Firebase Hosting"
+    id: 'deploy-firebase'
 
 # Build timeout
 timeout: '1800s'
@@ -74,5 +41,3 @@ timeout: '1800s'
 options:
   machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
-
-# Note: Substitutions removed - bucket name hardcoded for simplicity
