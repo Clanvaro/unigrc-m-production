@@ -52,7 +52,12 @@ import {
   invalidateValidationCaches,
   invalidateCatalogBasicCaches,
   invalidateMacroprocesoHierarchy,
-  CACHE_VERSION
+  CACHE_VERSION,
+  getPageDataLiteFromCache,
+  setPageDataLiteCache,
+  invalidatePageDataLiteCache,
+  getPageDataLiteLock,
+  setPageDataLiteLock
 } from './cache-helpers';
 import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, awaitInitialPoolWarming } from "./db";
 import { usingRealRedis } from "./services/redis";
@@ -2236,67 +2241,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       mark('start');
 
-      // Declare variables outside try block so they're available in catch
-      let lockKey: string | undefined;
-      let shouldReleaseLock = false;
+      // Declare variables for single-flight lock
+      let resolveComputation: ((value: any) => void) | undefined;
+      let rejectComputation: ((error: any) => void) | undefined;
 
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       mark('tenant-resolved');
 
-      const cacheKey = `risks-page-data-lite:${CACHE_VERSION}:${tenantId}`;
-      lockKey = `risks-page-data-lite:lock:${tenantId}`; // Set lockKey after tenantId is resolved
-
-      // Try cache first with detailed Redis timing
+      // OPTIMIZED: Use LOCAL in-memory cache instead of Upstash
+      // Eliminates ~1.5 seconds of network latency per cache miss
       const cacheGetStart = Date.now();
-      const cached = await distributedCache.get(cacheKey);
+      const cached = getPageDataLiteFromCache(tenantId);
       const cacheGetDuration = Date.now() - cacheGetStart;
 
       if (cached) {
         mark('cache-hit');
-        console.log('[page-data-lite] CACHE HIT', {
+        console.log('[page-data-lite] LOCAL CACHE HIT', {
           total: Date.now() - start,
-          redisGetMs: cacheGetDuration,
+          cacheGetMs: cacheGetDuration,
           steps,
         });
         return res.json(cached);
       }
       mark('cache-miss');
-      console.log('[page-data-lite] CACHE MISS', {
-        redisGetMs: cacheGetDuration,
+      console.log('[page-data-lite] LOCAL CACHE MISS', {
+        cacheGetMs: cacheGetDuration,
         step: 'cache-check',
       });
 
-      // SINGLE FLIGHT PATTERN: Prevent cache stampede/herd effect
-      // If cache expires and multiple requests arrive, only one should compute
-      let lockAcquired = await distributedCache.setnx(lockKey, '1', 10); // 10 second lock
-
-      if (lockAcquired === 0) {
-        // Another request is computing, wait and retry cache get
-        console.log('[page-data-lite] Lock acquired by another request, waiting...');
-        await new Promise(resolve => setTimeout(resolve, 150)); // Wait 150ms
-
-        // Retry cache get - the other request should have populated it
-        const retryCacheGetStart = Date.now();
-        const retryCached = await distributedCache.get(cacheKey);
-        const retryCacheGetDuration = Date.now() - retryCacheGetStart;
-
-        if (retryCached) {
+      // SINGLE FLIGHT PATTERN: Use local lock (no Upstash latency)
+      // Prevents duplicate computation within the same instance
+      const existingLock = getPageDataLiteLock(tenantId);
+      if (existingLock) {
+        // Another request is computing, wait for it
+        console.log('[page-data-lite] Waiting for existing computation...');
+        try {
+          const lockedResult = await existingLock;
           mark('cache-hit-after-lock');
-          console.log('[page-data-lite] CACHE HIT (after lock wait)', {
+          console.log('[page-data-lite] Got result from existing computation', {
             total: Date.now() - start,
-            redisGetMs: retryCacheGetDuration,
-            waitMs: 150,
-            steps,
           });
-          return res.json(retryCached);
+          return res.json(lockedResult);
+        } catch (lockError) {
+          // Lock computation failed, proceed with our own computation
+          console.log('[page-data-lite] Existing computation failed, proceeding with fresh computation');
         }
-
-        // Still no cache after wait - proceed with computation (fallback)
-        console.log('[page-data-lite] Still no cache after lock wait, proceeding with computation');
-      } else {
-        console.log('[page-data-lite] Lock acquired, computing fresh data');
-        shouldReleaseLock = true; // Mark that we need to release lock on completion/error
       }
+
+      // Create computation promise and register lock for single-flight
+      const computationPromise = new Promise<any>((resolve, reject) => {
+        resolveComputation = resolve;
+        rejectComputation = reject;
+      });
+      setPageDataLiteLock(tenantId, computationPromise);
+      console.log('[page-data-lite] Lock acquired, computing fresh data');
 
       // MEASURE DB CONNECT/PING: Test database connection latency before queries
       const dbPingStart = Date.now();
@@ -2507,32 +2505,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const responseSizeKB = Math.round(responseSizeBytes / 1024);
       mark('json-stringify');
 
-      // OPTIMIZED: Cache for 20 minutes (1200 seconds) - invalidated granularly on mutations
-      // Increased from 15 min to 20 min for better hit rate (safe because mutations invalidate immediately)
-      // Make cache set non-blocking to avoid delays if Redis is slow
+      // OPTIMIZED: Use local in-memory cache (instant, no network latency)
+      // Eliminates ~1.5 seconds of Upstash latency per cache miss
       const cacheSetStart = Date.now();
-      try {
-        await Promise.race([
-          distributedCache.set(cacheKey, response, 1200),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 3000))
-        ]);
-      } catch (cacheError) {
-        // Log but don't block response - cache is optional
-        if (cacheError instanceof Error && cacheError.message === 'Cache timeout') {
-          console.warn(`[CACHE] Timeout setting page-data-lite cache after 3000ms, continuing without cache`);
-        } else {
-          console.warn(`[CACHE] Failed to set page-data-lite cache:`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
-        }
-      }
+      setPageDataLiteCache(tenantId, response);
       const cacheSetDuration = Date.now() - cacheSetStart;
       mark('cache-set');
-
-      // Release lock after cache is set
-      try {
-        await distributedCache.invalidate(lockKey);
-      } catch (lockError) {
-        console.warn('[page-data-lite] Failed to release lock:', lockError);
-      }
+      console.log(`[page-data-lite] LOCAL CACHE SET in ${cacheSetDuration}ms`);
+      
+      // Resolve the single-flight lock so waiting requests get the result
+      resolveComputation!(response);
 
       const totalDuration = Date.now() - start;
 
@@ -2601,13 +2583,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error('Stack trace:', err.stack);
       }
 
-      // Release lock on error if we acquired it
-      if (shouldReleaseLock && lockKey) {
-        try {
-          await distributedCache.invalidate(lockKey);
-        } catch (lockError) {
-          console.warn('[page-data-lite] Failed to release lock on error:', lockError);
-        }
+      // Reject the single-flight lock so waiting requests know computation failed
+      if (typeof rejectComputation !== 'undefined') {
+        rejectComputation(err);
       }
 
       res.status(500).json({ message: "Failed to fetch page-data-lite", error: String(err) });

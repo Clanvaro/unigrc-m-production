@@ -42,6 +42,9 @@ export async function invalidateRiskMatrixCache() {
 export async function invalidateRiskProcessLinkCaches() {
   const startTime = Date.now();
   try {
+    // Invalidate local cache first (instant)
+    invalidatePageDataLiteCache();
+    
     await Promise.all([
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
@@ -68,6 +71,9 @@ export async function invalidateRiskProcessLinkCaches() {
 export async function invalidateRiskDataCaches() {
   const startTime = Date.now();
   try {
+    // Invalidate local cache first (instant)
+    invalidatePageDataLiteCache();
+    
     await Promise.all([
       distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`),
       distributedCache.invalidatePattern(`risks-bootstrap:risks:${CACHE_VERSION}:*`),
@@ -99,6 +105,9 @@ export async function invalidateRiskDataCaches() {
 export async function invalidateControlDataCaches() {
   const startTime = Date.now();
   try {
+    // Invalidate local cache first (instant)
+    invalidatePageDataLiteCache();
+    
     await Promise.all([
       distributedCache.invalidatePattern(`controls:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidatePattern(`controls:${TENANT_KEY}:*`),
@@ -125,6 +134,9 @@ export async function invalidateControlDataCaches() {
 export async function invalidateRiskControlAssociationCaches() {
   const startTime = Date.now();
   try {
+    // Invalidate local cache first (instant)
+    invalidatePageDataLiteCache();
+    
     await Promise.all([
       distributedCache.invalidatePattern(`risk-control-associations:${CACHE_VERSION}:${TENANT_KEY}:*`),
       distributedCache.invalidate(`risk-controls-with-details:${TENANT_KEY}`),
@@ -179,6 +191,9 @@ export async function invalidateRiskControlCaches() {
   console.log(`[CACHE INVALIDATION START] Nuclear invalidation (consider using granular functions)`);
 
   try {
+    // Invalidate local cache first (instant)
+    invalidatePageDataLiteCache();
+    
     // Execute all invalidations in parallel for speed
     await Promise.all([
       // Risk caches
@@ -416,6 +431,92 @@ export function invalidateAllCatalogCaches(): void {
 export function invalidateMacroprocesoHierarchy(): void {
   invalidateCatalogCaches(['macroprocesos', 'processes', 'subprocesos']);
   console.log(`[CATALOG CACHE] Macroproceso hierarchy invalidated`);
+}
+
+// ============================================
+// LOCAL CACHE FOR PAGE-DATA-LITE
+// Eliminates Upstash latency (~1.5s per cache miss)
+// ============================================
+
+interface PageDataLiteCacheEntry {
+  data: any;
+  timestamp: number;
+}
+
+// Single-tenant cache for page-data-lite
+const pageDataLiteCache = new Map<string, PageDataLiteCacheEntry>();
+const PAGE_DATA_LITE_TTL = 20 * 60 * 1000; // 20 minutes (same as previous Upstash TTL)
+
+// Local lock for single-flight pattern (prevents duplicate computation in same instance)
+const pageDataLiteLocks = new Map<string, Promise<any>>();
+
+/**
+ * Get page-data-lite from local cache
+ */
+export function getPageDataLiteFromCache(tenantId: string): any | null {
+  const entry = pageDataLiteCache.get(tenantId);
+  if (!entry) {
+    console.log(`[PAGE-DATA-LITE CACHE MISS] ${tenantId}`);
+    return null;
+  }
+
+  const now = Date.now();
+  if (now - entry.timestamp > PAGE_DATA_LITE_TTL) {
+    console.log(`[PAGE-DATA-LITE CACHE EXPIRED] ${tenantId} (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
+    pageDataLiteCache.delete(tenantId);
+    return null;
+  }
+
+  console.log(`[PAGE-DATA-LITE CACHE HIT] ${tenantId} (age: ${Math.round((now - entry.timestamp) / 1000)}s)`);
+  return entry.data;
+}
+
+/**
+ * Set page-data-lite in local cache
+ */
+export function setPageDataLiteCache(tenantId: string, data: any): void {
+  pageDataLiteCache.set(tenantId, {
+    data,
+    timestamp: Date.now(),
+  });
+  console.log(`[PAGE-DATA-LITE CACHE SET] ${tenantId} (TTL: ${PAGE_DATA_LITE_TTL / 1000}s)`);
+}
+
+/**
+ * Invalidate page-data-lite cache
+ */
+export function invalidatePageDataLiteCache(tenantId?: string): void {
+  if (tenantId) {
+    if (pageDataLiteCache.has(tenantId)) {
+      pageDataLiteCache.delete(tenantId);
+      console.log(`[PAGE-DATA-LITE CACHE INVALIDATED] ${tenantId}`);
+    }
+  } else {
+    pageDataLiteCache.clear();
+    console.log(`[PAGE-DATA-LITE CACHE CLEARED] All entries invalidated`);
+  }
+}
+
+/**
+ * Get or acquire lock for single-flight pattern
+ * Returns existing promise if computation is in progress, null otherwise
+ */
+export function getPageDataLiteLock(tenantId: string): Promise<any> | null {
+  return pageDataLiteLocks.get(tenantId) || null;
+}
+
+/**
+ * Set lock for single-flight pattern
+ */
+export function setPageDataLiteLock(tenantId: string, promise: Promise<any>): void {
+  pageDataLiteLocks.set(tenantId, promise);
+  // Auto-cleanup after promise resolves (with timeout fallback)
+  Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(resolve, 30000)) // 30 second max lock
+  ]).finally(() => {
+    pageDataLiteLocks.delete(tenantId);
+  });
 }
 
 /**
