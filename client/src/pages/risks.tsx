@@ -343,6 +343,31 @@ export default function Risks() {
   // Process owners from bootstrap (for basic display)
   const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
 
+  // OPTIMIZATION: Populate React Query cache with catalogs from /api/pages/risks
+  // This eliminates redundant API calls from RiskSearchAndFilterDialog (in header)
+  // The component queries /api/processes, /api/macroprocesos, etc. which now get data from cache
+  useEffect(() => {
+    if (bootstrapData?.catalogs) {
+      const { catalogs } = bootstrapData;
+      // Populate cache with catalogs (they will be served instantly from cache)
+      if (catalogs.processes?.length) {
+        queryClient.setQueryData(["/api/processes"], catalogs.processes);
+      }
+      if (catalogs.macroprocesos?.length) {
+        queryClient.setQueryData(["/api/macroprocesos"], catalogs.macroprocesos);
+      }
+      if (catalogs.subprocesos?.length) {
+        queryClient.setQueryData(["/api/subprocesos"], catalogs.subprocesos);
+      }
+      if (catalogs.gerencias?.length) {
+        queryClient.setQueryData(["/api/gerencias"], catalogs.gerencias);
+      }
+      if (catalogs.processOwners?.length) {
+        queryClient.setQueryData(["/api/process-owners"], catalogs.processOwners);
+      }
+    }
+  }, [bootstrapData?.catalogs, queryClient]);
+
   // Legacy compatibility - these were separate queries before
   const isPageDataLoading = isBootstrapLoading;
   const isRisksLoading = isBootstrapLoading;

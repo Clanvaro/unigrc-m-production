@@ -29,32 +29,22 @@ const routePrefetchMap: Record<string, () => Promise<any>> = {
 
 /**
  * API prefetch mapping for data-heavy pages
- * Prefetches critical API data when hovering over navigation links
+ * OPTIMIZED: Uses /api/pages/risks (BFF) instead of multiple legacy endpoints
+ * This eliminates redundant API calls when navigating to risks page
  */
 const apiPrefetchMap: Record<string, () => void> = {
   '/risks': () => {
-    // Prefetch bootstrap data (risks list)
+    // OPTIMIZED: Prefetch the single BFF endpoint that contains everything
+    // This replaces separate calls to /api/risks/bootstrap and /api/risks/page-data-lite
     queryClient.prefetchQuery({
-      queryKey: ["/api/risks/bootstrap", { limit: 50, offset: 0 }],
+      queryKey: ["/api/pages/risks", { limit: 50, offset: 0 }],
       queryFn: async () => {
-        const response = await fetch('/api/risks/bootstrap?limit=50&offset=0');
+        const response = await fetch('/api/pages/risks?limit=50&offset=0');
         if (!response.ok) throw new Error('Failed to prefetch');
         return response.json();
       },
-      staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - matches header.tsx staleTime
-    });
-    
-    // Prefetch page-data-lite (catalogs and filters) - critical for fast initial render
-    const tenantId = 'single-tenant'; // Default tenant ID
-    queryClient.prefetchQuery({
-      queryKey: ['risks-page-data-lite', tenantId],
-      queryFn: async () => {
-        const response = await fetch("/api/risks/page-data-lite");
-        if (!response.ok) throw new Error("Failed to prefetch page data");
-        return response.json();
-      },
-      staleTime: 5 * 60 * 1000, // ⬆️ 5 minutes - matches header.tsx staleTime
-      gcTime: 10 * 60 * 1000, // ⬆️ 10 minutes - keep in cache
+      staleTime: 2 * 60 * 1000, // 2 minutes - matches risks.tsx staleTime
+      gcTime: 10 * 60 * 1000, // 10 minutes - keep in cache
     });
   },
 };
