@@ -81,17 +81,28 @@ export function startSystemMetricsCollection() {
   }
 
   // Check memory every 30 seconds
+  // NOTE: With --max-old-space-size=1536, V8 can grow up to 1.5GB
+  // heapTotal is the currently allocated heap, not the max available
+  // So heapUsed/heapTotal will often be >90% which is normal and healthy
+  const MAX_HEAP_MB = 1536; // Must match --max-old-space-size in Dockerfile
+  
   memoryCheckInterval = setInterval(() => {
     const memUsage = process.memoryUsage();
-    const usagePercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+    const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
+    const heapTotalMB = memUsage.heapTotal / 1024 / 1024;
+    
+    // Calculate usage against max available heap, not just allocated
+    const usagePercent = (heapUsedMB / MAX_HEAP_MB) * 100;
+    const allocatedPercent = (heapUsedMB / heapTotalMB) * 100;
     
     if (usagePercent > peakMemoryUsage) {
       peakMemoryUsage = usagePercent;
     }
 
-    // Warn if memory usage is high
-    if (usagePercent > 90) {
-      console.warn(`⚠️ [MEMORY] High memory usage: ${usagePercent.toFixed(1)}% (${(memUsage.heapUsed / 1024 / 1024).toFixed(1)}MB / ${(memUsage.heapTotal / 1024 / 1024).toFixed(1)}MB)`);
+    // Only warn if using >80% of max available heap (not allocated)
+    // This prevents false positives when V8 hasn't expanded the heap yet
+    if (usagePercent > 80) {
+      console.warn(`⚠️ [MEMORY] High memory usage: ${usagePercent.toFixed(1)}% of max (${heapUsedMB.toFixed(1)}MB / ${MAX_HEAP_MB}MB)`);
     }
   }, 30000);
 
