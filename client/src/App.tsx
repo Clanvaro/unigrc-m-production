@@ -22,10 +22,24 @@ import { useAuth } from "@/hooks/useAuth";
 import { lazyWithRetry } from "@/lib/lazyWithRetry";
 import { usePermissions } from "@/hooks/usePermissions";
 
-// Silence harmless browser extension and message port errors (safe, non-critical errors)
+// Silence harmless browser extension, chunk loading, and message port errors
 if (typeof window !== "undefined") {
   window.addEventListener("unhandledrejection", (event) => {
     const errorMessage = event.reason?.message || event.reason?.toString() || "";
+    const errorName = event.reason?.name || "";
+    
+    // Silence chunk load errors (handled by ErrorBoundary with user-friendly message)
+    if (
+      errorName === "ChunkLoadError" ||
+      errorMessage.includes("dynamically imported module") ||
+      errorMessage.includes("Loading chunk") ||
+      errorMessage.includes("MIME type") ||
+      errorMessage.includes("text/html") ||
+      (errorMessage.includes("Failed to fetch") && errorMessage.includes("module"))
+    ) {
+      event.preventDefault();
+      return;
+    }
     
     // Silence message port errors (usually from browser extensions or cancelled requests)
     if (
@@ -34,7 +48,6 @@ if (typeof window !== "undefined") {
       errorMessage.includes("Failed to fetch") && errorMessage.includes("aborted")
     ) {
       event.preventDefault();
-      console.debug("Silenced harmless error:", errorMessage);
       return;
     }
     
@@ -45,7 +58,22 @@ if (typeof window !== "undefined") {
       errorMessage.includes("AbortError")
     ) {
       event.preventDefault();
-      console.debug("Silenced query cancellation error:", errorMessage);
+      return;
+    }
+  });
+  
+  // Also catch regular errors for chunk loading issues
+  window.addEventListener("error", (event) => {
+    const errorMessage = event.message || "";
+    
+    // Silence chunk/module loading errors in error event
+    if (
+      errorMessage.includes("Loading chunk") ||
+      errorMessage.includes("Loading CSS chunk") ||
+      errorMessage.includes("MIME type") ||
+      errorMessage.includes("module script")
+    ) {
+      event.preventDefault();
       return;
     }
   });

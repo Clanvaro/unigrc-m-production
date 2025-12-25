@@ -34,16 +34,34 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('Error caught by boundary:', error, errorInfo);
+    // Don't spam console for chunk load errors - these are expected during deploys
+    const isChunkError = this.isChunkLoadError(error);
+    if (!isChunkError) {
+      console.error('Error caught by boundary:', error, errorInfo);
+    }
     
     this.setState({
       error,
       errorInfo
     });
 
-    if (this.props.onError) {
+    if (this.props.onError && !isChunkError) {
       this.props.onError(error, errorInfo);
     }
+  }
+  
+  isChunkLoadError(error: Error | null): boolean {
+    if (!error) return false;
+    const msg = error.message || '';
+    const name = error.name || '';
+    return (
+      name === 'ChunkLoadError' ||
+      msg.includes('Nueva versión disponible') ||
+      msg.includes('dynamically imported module') ||
+      msg.includes('Loading chunk') ||
+      msg.includes('MIME type') ||
+      msg.includes('text/html')
+    );
   }
 
   handleReset = () => {
@@ -64,30 +82,55 @@ export class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback;
       }
 
-      // Check if it's a module loading error (including 404 errors)
-      const isModule404Error = this.state.error?.message?.includes('Module not found') ||
-                               this.state.error?.message?.includes('404') ||
-                               (this.state.error?.message?.includes('Failed to fetch dynamically imported module') &&
-                                this.state.error?.message?.includes('not found'));
+      // Check if it's a chunk/module loading error (new version available)
+      const isChunkError = this.isChunkLoadError(this.state.error);
       
-      const isModuleError = isModule404Error ||
-                           this.state.error?.message?.includes('Failed to fetch dynamically imported module') ||
-                           this.state.error?.message?.includes('Loading chunk') ||
-                           this.state.error?.message?.includes('Loading CSS chunk');
+      // Check for other module loading errors
+      const isModuleError = !isChunkError && (
+        this.state.error?.message?.includes('Failed to fetch dynamically imported module') ||
+        this.state.error?.message?.includes('Loading chunk') ||
+        this.state.error?.message?.includes('Loading CSS chunk')
+      );
+
+      // Special UI for chunk errors - clean and simple
+      if (isChunkError) {
+        return (
+          <div className="min-h-[400px] flex items-center justify-center p-6">
+            <Alert className="max-w-md border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
+              <RefreshCw className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <AlertTitle className="text-lg font-semibold mb-2 text-blue-900 dark:text-blue-100">
+                Nueva versión disponible
+              </AlertTitle>
+              <AlertDescription className="space-y-4">
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  Hay una actualización de la aplicación. Recarga la página para obtener la última versión.
+                </p>
+                <Button
+                  onClick={this.handleReload}
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                  data-testid="button-chunk-reload"
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Recargar ahora
+                </Button>
+              </AlertDescription>
+            </Alert>
+          </div>
+        );
+      }
 
       return (
         <div className="min-h-[400px] flex items-center justify-center p-6">
           <Alert variant="destructive" className="max-w-2xl">
             <AlertTriangle className="h-5 w-5" />
             <AlertTitle className="text-lg font-semibold mb-2">
-              {isModule404Error ? 'Módulo no encontrado' : isModuleError ? 'Error al cargar el módulo' : 'Algo salió mal'}
+              {isModuleError ? 'Error al cargar el módulo' : 'Algo salió mal'}
             </AlertTitle>
             <AlertDescription className="space-y-4">
               <p className="text-sm">
-                {isModule404Error
-                  ? 'El módulo solicitado no está disponible. Esto puede indicar un problema con el build o el deployment. Por favor, recarga la página o contacta al administrador si el problema persiste.'
-                  : isModuleError 
-                    ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red temporal. Por favor, recarga la página.'
+                {isModuleError 
+                  ? 'No se pudo cargar un módulo necesario. Esto puede deberse a un problema de red temporal. Por favor, recarga la página.'
                   : 'Ha ocurrido un error inesperado. Por favor, intenta recargar la página.'}
               </p>
               
@@ -133,15 +176,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
 export function PageErrorBoundary({ children }: { children: ReactNode }) {
   return (
-    <ErrorBoundary
-      onError={(error, errorInfo) => {
-        console.error('Page error:', {
-          error: error.toString(),
-          stack: error.stack,
-          componentStack: errorInfo.componentStack
-        });
-      }}
-    >
+    <ErrorBoundary>
       {children}
     </ErrorBoundary>
   );
