@@ -1682,9 +1682,56 @@ export default function Risks() {
 
   // Loading state - skeleton shown during initial load
 
+  // ---------- Sanitize data before render to avoid React error #185 ----------
+  const sanitizeRiskForRender = (risk: any) => {
+    // Ensure basic string fields
+    const safeString = (val: any) => (typeof val === 'string' ? val : val == null ? '' : String(val));
+
+    // Normalize categories to string[]
+    const categories: string[] = Array.isArray(risk.category)
+      ? risk.category.filter((c: any) => typeof c === 'string' && c.trim())
+      : (typeof risk.category === 'string' && risk.category.trim())
+        ? [risk.category.trim()]
+        : [];
+
+    // Normalize summaries to safe string values
+    const processesSummary = Array.isArray(risk.processesSummary)
+      ? risk.processesSummary
+          .filter((p: any) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
+          .map((p: any) => ({ name: p.name.trim(), type: p.type || 'process' }))
+      : undefined;
+
+    const controlsSummary = Array.isArray(risk.controlsSummary)
+      ? risk.controlsSummary
+          .filter((c: any) => c && typeof c === 'object' && typeof c.code === 'string' && c.code.trim())
+          .map((c: any) => ({ code: c.code.trim() }))
+      : undefined;
+
+    const actionPlansSummary = Array.isArray(risk.actionPlansSummary)
+      ? risk.actionPlansSummary
+          .filter((a: any) => a && typeof a === 'object' && typeof a.code === 'string' && a.code.trim())
+          .map((a: any) => ({
+            code: a.code.trim(),
+            status: typeof a.status === 'string' ? a.status.trim() : ''
+          }))
+      : undefined;
+
+    return {
+      ...risk,
+      name: safeString(risk.name),
+      description: safeString(risk.description),
+      code: safeString(risk.code),
+      category: categories,
+      processesSummary,
+      controlsSummary,
+      actionPlansSummary,
+    };
+  };
+
   // Data selection: use mock data for testing or filtered paginated data
   // Note: With pagination, filters are applied only to the current page
-  const displayData = testMode50k ? generateMockRisks(50000) as any[] : filteredRisks;
+  const displayDataRaw = testMode50k ? generateMockRisks(50000) as any[] : filteredRisks;
+  const displayData = useMemo(() => displayDataRaw.map(sanitizeRiskForRender), [displayDataRaw]);
 
   // Memoize columns to prevent recreation on every render
   const columns: VirtualizedTableColumn<Risk>[] = useMemo(() => [
