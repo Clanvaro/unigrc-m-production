@@ -72,9 +72,10 @@ export async function invalidateRiskProcessLinkCaches() {
 export async function invalidateRiskDataCaches() {
   const startTime = Date.now();
   try {
-    // Invalidate local caches first (instant)
+    // Invalidate L1 local caches first (instant)
     invalidatePageDataLiteCache();
     invalidatePagesRisksCache();
+    invalidateRisksGroupedL1Cache();
     
     await Promise.all([
       distributedCache.invalidatePattern(`risks:${TENANT_KEY}:*`),
@@ -89,9 +90,11 @@ export async function invalidateRiskDataCaches() {
       distributedCache.invalidate(`risk-processes:${CACHE_VERSION}:${TENANT_KEY}`),
       distributedCache.invalidate(`risk-processes:${TENANT_KEY}`),
       distributedCache.invalidatePattern(`validation:risks:${CACHE_VERSION}:*:${TENANT_KEY}`),
+      // Invalidate risks-grouped-by-process L2 cache
+      distributedCache.invalidatePattern(`risks-grouped-by-process:${CACHE_VERSION}:*`),
     ]);
     await invalidateRiskMatrixCache();
-    console.log(`[GRANULAR] Risk data caches invalidated in ${Date.now() - startTime}ms`);
+    console.log(`[GRANULAR] Risk data caches (L1 + L2) invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {
     console.error(`Error invalidating risk data caches:`, error);
   }
@@ -165,6 +168,9 @@ export async function invalidateRiskControlAssociationCaches() {
 export async function invalidateValidationCaches() {
   const startTime = Date.now();
   try {
+    // Invalidate L1 in-memory cache immediately (instant)
+    invalidateValidationStatusL1Cache();
+    
     // Keys in routes.ts follow: validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}
     // and validation:controls:validated:${CACHE_VERSION}:${tenantId}
     await Promise.all([
@@ -178,7 +184,7 @@ export async function invalidateValidationCaches() {
       // Also invalidate the counts cache which uses: validation:counts:${CACHE_VERSION}:${tenantId}
       distributedCache.invalidatePattern(`validation:counts:${CACHE_VERSION}:${TENANT_KEY}`)
     ]);
-    console.log(`[GRANULAR] Validation caches invalidated in ${Date.now() - startTime}ms`);
+    console.log(`[GRANULAR] Validation caches (L1 + L2) invalidated in ${Date.now() - startTime}ms`);
   } catch (error) {
     console.error(`Error invalidating validation caches:`, error);
   }
@@ -663,3 +669,153 @@ export function setPagesRisksLock(cacheKey: string, promise: Promise<any>): void
     pagesRisksLocks.delete(cacheKey);
   });
 }
+
+// ============================================
+// L1 IN-MEMORY CACHE FOR SLOW ENDPOINTS
+// Provides instant response times for frequently accessed data
+// ============================================
+
+interface L1CacheEntry {
+  data: any;
+  timestamp: number;
+}
+
+// L1 caches for slow endpoints
+const risksGroupedByProcessCache = new Map<string, L1CacheEntry>();
+const validationStatusCache = new Map<string, L1CacheEntry>();
+const actionPlansListCache = new Map<string, L1CacheEntry>();
+
+// TTLs in milliseconds
+const RISKS_GROUPED_TTL = 2 * 60 * 1000; // 2 minutes (aggregated data changes less frequently)
+const VALIDATION_STATUS_TTL = 60 * 1000; // 1 minute (validation updates need to reflect faster)
+const ACTION_PLANS_TTL = 2 * 60 * 1000; // 2 minutes
+
+// Single-flight locks
+const risksGroupedLocks = new Map<string, Promise<any>>();
+const validationStatusLocks = new Map<string, Promise<any>>();
+const actionPlansLocks = new Map<string, Promise<any>>();
+
+// ============= RISKS GROUPED BY PROCESS =============
+
+export function getRisksGroupedFromL1Cache(tenantId: string): any | null {
+  const entry = risksGroupedByProcessCache.get(tenantId);
+  if (!entry) return null;
+  
+  if (Date.now() - entry.timestamp > RISKS_GROUPED_TTL) {
+    risksGroupedByProcessCache.delete(tenantId);
+    return null;
+  }
+  
+  return entry.data;
+}
+
+export function setRisksGroupedL1Cache(tenantId: string, data: any): void {
+  risksGroupedByProcessCache.set(tenantId, { data, timestamp: Date.now() });
+}
+
+export function invalidateRisksGroupedL1Cache(): void {
+  risksGroupedByProcessCache.clear();
+}
+
+export function getRisksGroupedLock(key: string): Promise<any> | null {
+  return risksGroupedLocks.get(key) || null;
+}
+
+export function setRisksGroupedLock(key: string, promise: Promise<any>): void {
+  risksGroupedLocks.set(key, promise);
+  promise.finally(() => risksGroupedLocks.delete(key));
+}
+
+// ============= VALIDATION STATUS =============
+
+export function getValidationStatusFromL1Cache(cacheKey: string): any | null {
+  const entry = validationStatusCache.get(cacheKey);
+  if (!entry) return null;
+  
+  if (Date.now() - entry.timestamp > VALIDATION_STATUS_TTL) {
+    validationStatusCache.delete(cacheKey);
+    return null;
+  }
+  
+  return entry.data;
+}
+
+export function setValidationStatusL1Cache(cacheKey: string, data: any): void {
+  validationStatusCache.set(cacheKey, { data, timestamp: Date.now() });
+}
+
+export function invalidateValidationStatusL1Cache(status?: string): void {
+  if (status) {
+    // Invalidate only entries matching this status
+    for (const key of validationStatusCache.keys()) {
+      if (key.includes(`:${status}`)) {
+        validationStatusCache.delete(key);
+      }
+    }
+  } else {
+    validationStatusCache.clear();
+  }
+}
+
+export function getValidationStatusLock(key: string): Promise<any> | null {
+  return validationStatusLocks.get(key) || null;
+}
+
+export function setValidationStatusLock(key: string, promise: Promise<any>): void {
+  validationStatusLocks.set(key, promise);
+  promise.finally(() => validationStatusLocks.delete(key));
+}
+
+// ============= ACTION PLANS =============
+
+export function getActionPlansFromL1Cache(tenantId: string): any | null {
+  const entry = actionPlansListCache.get(tenantId);
+  if (!entry) return null;
+  
+  if (Date.now() - entry.timestamp > ACTION_PLANS_TTL) {
+    actionPlansListCache.delete(tenantId);
+    return null;
+  }
+  
+  return entry.data;
+}
+
+export function setActionPlansL1Cache(tenantId: string, data: any): void {
+  actionPlansListCache.set(tenantId, { data, timestamp: Date.now() });
+}
+
+export function invalidateActionPlansL1Cache(): void {
+  actionPlansListCache.clear();
+}
+
+export function getActionPlansLock(key: string): Promise<any> | null {
+  return actionPlansLocks.get(key) || null;
+}
+
+export function setActionPlansLock(key: string, promise: Promise<any>): void {
+  actionPlansLocks.set(key, promise);
+  promise.finally(() => actionPlansLocks.delete(key));
+}
+
+// Cleanup expired entries periodically
+setInterval(() => {
+  const now = Date.now();
+  
+  for (const [key, entry] of risksGroupedByProcessCache.entries()) {
+    if (now - entry.timestamp > RISKS_GROUPED_TTL) {
+      risksGroupedByProcessCache.delete(key);
+    }
+  }
+  
+  for (const [key, entry] of validationStatusCache.entries()) {
+    if (now - entry.timestamp > VALIDATION_STATUS_TTL) {
+      validationStatusCache.delete(key);
+    }
+  }
+  
+  for (const [key, entry] of actionPlansListCache.entries()) {
+    if (now - entry.timestamp > ACTION_PLANS_TTL) {
+      actionPlansListCache.delete(key);
+    }
+  }
+}, 60 * 1000); // Run every minute

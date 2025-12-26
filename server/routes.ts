@@ -65,7 +65,23 @@ import {
   setPagesRisksCache,
   invalidatePagesRisksCache,
   getPagesRisksLock,
-  setPagesRisksLock
+  setPagesRisksLock,
+  // L1 caches for slow endpoints
+  getRisksGroupedFromL1Cache,
+  setRisksGroupedL1Cache,
+  invalidateRisksGroupedL1Cache,
+  getRisksGroupedLock,
+  setRisksGroupedLock,
+  getValidationStatusFromL1Cache,
+  setValidationStatusL1Cache,
+  invalidateValidationStatusL1Cache,
+  getValidationStatusLock,
+  setValidationStatusLock,
+  getActionPlansFromL1Cache,
+  setActionPlansL1Cache,
+  invalidateActionPlansL1Cache,
+  getActionPlansLock,
+  setActionPlansLock,
 } from './cache-helpers';
 import { db, pool, getHealthStatus, warmPool, getPoolMetrics, measureDatabaseLatency, ensureDatabaseInitialized, startPoolMonitoringIfNeeded, startPoolWarmingIfNeeded, withRetry, awaitInitialPoolWarming } from "./db";
 import { usingRealRedis } from "./services/redis";
@@ -2528,6 +2544,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============== RISKS GROUPED BY PROCESS (for tab view) ==============
   // Returns aggregated counts of risks per process using SQL GROUP BY (efficient)
+  // OPTIMIZED: L1 in-memory cache + L2 distributed cache + single-flight
   app.get("/api/risks/grouped-by-process", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
 
@@ -2535,24 +2552,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       const cacheKey = `risks-grouped-by-process:${CACHE_VERSION}:${tenantId}`;
 
-      // Try cache first (60 second TTL)
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
-        return res.json(cached);
+      // L1: Check in-memory cache first (instant, ~0ms)
+      const l1Cached = getRisksGroupedFromL1Cache(tenantId);
+      if (l1Cached) {
+        console.log(`[L1 CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+        return res.json(l1Cached);
       }
 
-      // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
-      const result = await storage.getRisksGroupedByProcess();
+      // Single-flight: Check if another request is already fetching
+      const existingLock = getRisksGroupedLock(cacheKey);
+      if (existingLock) {
+        const result = await existingLock;
+        console.log(`[SINGLE-FLIGHT] ${cacheKey} deduped in ${Date.now() - requestStart}ms`);
+        return res.json(result);
+      }
 
-      // Sort by risk count descending
-      result.sort((a, b) => b.riskCount - a.riskCount);
+      // L2: Check distributed cache (with timeout)
+      try {
+        const l2Cached = await Promise.race([
+          distributedCache.get(cacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('L2 timeout')), 500))
+        ]);
+        if (l2Cached) {
+          // Populate L1 from L2
+          setRisksGroupedL1Cache(tenantId, l2Cached);
+          console.log(`[L2 CACHE HIT] ${cacheKey} in ${Date.now() - requestStart}ms`);
+          return res.json(l2Cached);
+        }
+      } catch {
+        // L2 timeout or error - continue to DB
+      }
 
-      console.log(`[PERF] /api/risks/grouped-by-process COMPLETE in ${Date.now() - requestStart}ms, ${result.length} processes (SQL GROUP BY)`);
+      // Create single-flight lock
+      const fetchPromise = (async () => {
+        // Use efficient SQL GROUP BY aggregation (single query, no in-memory processing)
+        const result = await storage.getRisksGroupedByProcess();
+        // Sort by risk count descending
+        result.sort((a, b) => b.riskCount - a.riskCount);
+        return result;
+      })();
 
-      // PERFORMANCE: Cache set async (fire-and-forget) to avoid blocking
+      setRisksGroupedLock(cacheKey, fetchPromise);
+      const result = await fetchPromise;
+
+      console.log(`[PERF] /api/risks/grouped-by-process COMPLETE in ${Date.now() - requestStart}ms, ${result.length} processes`);
+
+      // Set L1 cache immediately (synchronous)
+      setRisksGroupedL1Cache(tenantId, result);
+
+      // Set L2 cache async (fire-and-forget) with 5 min TTL
       setImmediate(() => {
-        distributedCache.set(cacheKey, result, 60).catch(() => {});
+        distributedCache.set(cacheKey, result, 300).catch(() => {});
       });
 
       res.json(result);
@@ -7698,6 +7748,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get risk-process links by validation status (cached 15s for validation center)
+  // OPTIMIZED: L1 in-memory cache + L2 distributed cache + single-flight
   app.get("/api/risk-processes/validation/:status", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
     try {
@@ -7714,73 +7765,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Convert 'pending' to 'pending_validation' for backward compatibility
       const actualStatus = status === 'pending' ? 'pending_validation' : status;
+      const l1CacheKey = `${tenantId}:${actualStatus}`;
+      const l2CacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
 
-      // OPTIMIZED: Increased cache TTL for all statuses to reduce database load
-      // pending_validation: 5 minutes (300s) - increased from 2min for better hit rate
-      // validated/rejected/observed: 10 minutes (600s) - increased from 5min (they rarely change)
-      const cacheTTL = actualStatus === 'pending_validation' ? 300 : 600;
-      const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached !== null) {
-        const duration = Date.now() - startTime;
-        const cachedLength = Array.isArray(cached) ? cached.length : 0;
-        console.log(`[CACHE HIT] ${cacheKey} in ${duration}ms (${cachedLength} links)`);
-        
-        // CRITICAL: If cached result is empty for validated/observed/rejected, invalidate and refetch
-        // This handles cases where cache was set with empty array but data exists
-        if (cachedLength === 0 && (actualStatus === 'validated' || actualStatus === 'observed' || actualStatus === 'rejected')) {
-          console.warn(`[CACHE] Empty cached result for ${actualStatus}, invalidating and refetching...`);
-          await distributedCache.delete(cacheKey);
-          // Continue to fetch fresh data below
-        } else {
-          return res.json(cached);
-        }
+      // L1: Check in-memory cache first (instant, ~0ms)
+      const l1Cached = getValidationStatusFromL1Cache(l1CacheKey);
+      if (l1Cached !== null) {
+        const cachedLength = Array.isArray(l1Cached) ? l1Cached.length : 0;
+        console.log(`[L1 CACHE HIT] ${l2CacheKey} in ${Date.now() - startTime}ms (${cachedLength} links)`);
+        return res.json(l1Cached);
       }
 
-      console.log(`[CACHE MISS] ${cacheKey} - fetching data`);
-      const queryStart = Date.now();
+      // Single-flight: Check if another request is already fetching
+      const existingLock = getValidationStatusLock(l2CacheKey);
+      if (existingLock) {
+        const result = await existingLock;
+        console.log(`[SINGLE-FLIGHT] ${l2CacheKey} deduped in ${Date.now() - startTime}ms`);
+        return res.json(result);
+      }
 
-      // OPTIMIZED: Use withRetry with timeout wrapper to prevent 504 errors
-      // The query now has a default LIMIT of 1000 to prevent loading all records
-      const riskProcessLinks = await withRetry(async () => {
+      // L2: Check distributed cache (with short timeout)
+      try {
+        const l2Cached = await Promise.race([
+          distributedCache.get(l2CacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('L2 timeout')), 500))
+        ]);
+        if (l2Cached !== null) {
+          const cachedLength = Array.isArray(l2Cached) ? l2Cached.length : 0;
+          // Skip empty results for non-pending statuses (might be stale)
+          if (cachedLength > 0 || actualStatus === 'pending_validation') {
+            setValidationStatusL1Cache(l1CacheKey, l2Cached);
+            console.log(`[L2 CACHE HIT] ${l2CacheKey} in ${Date.now() - startTime}ms (${cachedLength} links)`);
+            return res.json(l2Cached);
+          }
+        }
+      } catch {
+        // L2 timeout or error - continue to DB
+      }
+
+      console.log(`[CACHE MISS] ${l2CacheKey} - fetching data`);
+
+      // Create single-flight lock
+      const fetchPromise = (async () => {
         const result = await storage.getRiskProcessLinksByValidationStatus(actualStatus, tenantId);
-        console.log(`[DB DEBUG] getRiskProcessLinksByValidationStatus returned ${result.length} links for status: ${actualStatus}`);
-        if (result.length > 0) {
-          console.log(`[DB DEBUG] Sample link:`, {
-            id: result[0]?.id,
-            riskId: result[0]?.riskId,
-            hasRisk: !!result[0]?.risk,
-            validationStatus: result[0]?.validationStatus
-          });
-        }
         return result;
-      }, {
-        maxRetries: 1 // Only retry once for timeout scenarios
-      });
+      })();
 
-      const queryDuration = Date.now() - queryStart;
-      console.log(`[DB] /api/risk-processes/validation/${actualStatus} fetched ${riskProcessLinks.length} links in ${queryDuration}ms`);
-
-      if (queryDuration > 5000) {
-        console.warn(`⚠️ Slow /api/risk-processes/validation/${actualStatus} query: ${queryDuration}ms`);
-      }
-
-      // CRITICAL: Only cache if we got results, otherwise cache might store empty array
-      if (riskProcessLinks.length > 0) {
-        await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
-      } else {
-        // If no results, check if there should be results by comparing with counts
-        console.warn(`[WARN] /api/risk-processes/validation/${actualStatus} returned 0 results - this might indicate a data inconsistency`);
-        // Don't cache empty results for validated/observed/rejected to allow retry
-        if (actualStatus === 'validated' || actualStatus === 'observed' || actualStatus === 'rejected') {
-          console.log(`[CACHE] Skipping cache for empty ${actualStatus} results to allow retry`);
-        } else {
-          await distributedCache.set(cacheKey, riskProcessLinks, cacheTTL);
-        }
-      }
+      setValidationStatusLock(l2CacheKey, fetchPromise);
+      const riskProcessLinks = await fetchPromise;
 
       const totalDuration = Date.now() - startTime;
       console.log(`[PERF] /api/risk-processes/validation/${actualStatus} COMPLETE in ${totalDuration}ms (${riskProcessLinks.length} links)`);
+
+      // Set L1 cache (synchronous)
+      setValidationStatusL1Cache(l1CacheKey, riskProcessLinks);
+
+      // Set L2 cache async with longer TTL (5-10 min)
+      const cacheTTL = actualStatus === 'pending_validation' ? 300 : 600;
+      if (riskProcessLinks.length > 0 || actualStatus === 'pending_validation') {
+        setImmediate(() => {
+          distributedCache.set(l2CacheKey, riskProcessLinks, cacheTTL).catch(() => {});
+        });
+      }
 
       res.json(riskProcessLinks);
     } catch (error) {
@@ -7792,11 +7838,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { tenantId } = await resolveActiveTenant(req, { required: true });
         const { status } = req.params;
         const actualStatus = status === 'pending' ? 'pending_validation' : status;
-        const cacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
-        const cached = await distributedCache.get(cacheKey);
-        if (cached) {
-          console.log(`[FALLBACK] Returning cached risk-processes validation data`);
-          return res.json(cached);
+        const l1CacheKey = `${tenantId}:${actualStatus}`;
+        const l1Cached = getValidationStatusFromL1Cache(l1CacheKey);
+        if (l1Cached) {
+          console.log(`[FALLBACK] Returning L1 cached validation data`);
+          return res.json(l1Cached);
+        }
+        const l2CacheKey = `validation:risk-processes:${CACHE_VERSION}:${tenantId}:${actualStatus}`;
+        const l2Cached = await distributedCache.get(l2CacheKey);
+        if (l2Cached) {
+          console.log(`[FALLBACK] Returning L2 cached validation data`);
+          return res.json(l2Cached);
         }
       } catch (cacheError) {
         // Ignore cache errors
@@ -7810,16 +7862,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Enhanced error logging
-      console.error(`[ERROR] Full error details:`, {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        name: error instanceof Error ? error.name : undefined,
-        status: req.params.status
-      });
-
       // Return empty array as fallback to prevent frontend errors
-      // This allows the UI to render even if the query fails
       console.warn(`[WARNING] Returning empty array as fallback for validation status: ${req.params.status}`);
       res.json([]);
     }
@@ -12138,7 +12181,7 @@ Redactas en español neutro, claro y profesional.`;
     }
   });
 
-  // Action Plans - OPTIMIZED: Parallel queries to reduce cold start latency
+  // Action Plans - OPTIMIZED: L1 in-memory cache + L2 distributed cache + single-flight
   app.get("/api/action-plans", isAuthenticated, noCacheMiddleware, async (req, res) => {
     const requestStart = Date.now();
     try {
@@ -12147,31 +12190,45 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(400).json({ message: "Tenant ID is required" });
       }
 
-      // OPTIMIZED: Cache key with version
-      const cacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
+      const l2CacheKey = `action-plans:${CACHE_VERSION}:${tenantId}`;
 
-      // OPTIMIZED: Try cache with timeout
+      // L1: Check in-memory cache first (instant, ~0ms)
+      const l1Cached = getActionPlansFromL1Cache(tenantId);
+      if (l1Cached) {
+        console.log(`[L1 CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
+        return res.json(l1Cached);
+      }
+
+      // Single-flight: Check if another request is already fetching
+      const existingLock = getActionPlansLock(l2CacheKey);
+      if (existingLock) {
+        const result = await existingLock;
+        console.log(`[SINGLE-FLIGHT] /api/action-plans deduped in ${Date.now() - requestStart}ms`);
+        return res.json(result);
+      }
+
+      // L2: Check distributed cache with timeout
       try {
-        const cached = await Promise.race([
-          distributedCache.get(cacheKey),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
+        const l2Cached = await Promise.race([
+          distributedCache.get(l2CacheKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('L2 timeout')), 500))
         ]);
-        if (cached !== null) {
-          const duration = Date.now() - requestStart;
-          if (duration > 100) {
-            console.log(`[CACHE HIT] /api/action-plans in ${duration}ms`);
-          }
-          return res.json(cached);
+        if (l2Cached !== null) {
+          setActionPlansL1Cache(tenantId, l2Cached);
+          console.log(`[L2 CACHE HIT] /api/action-plans in ${Date.now() - requestStart}ms`);
+          return res.json(l2Cached);
         }
       } catch (cacheError) {
-        console.warn(`[CACHE] Failed to get cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
+        // L2 timeout or error - continue to DB
       }
 
       console.log(`[CACHE MISS] /api/action-plans - fetching aggregated data`);
 
-      // OPTIMIZED: Single aggregated query with CTEs and JOINs
-      // Get action plans with reschedule counts, risk-process links, and gerencias in one query
-      const actionPlansResult = await requireDb().execute(sql`
+      // Create single-flight lock for the fetch operation
+      const fetchPromise = (async () => {
+        // OPTIMIZED: Single aggregated query with CTEs and JOINs
+        // Get action plans with reschedule counts, risk-process links, and gerencias in one query
+        const actionPlansResult = await requireDb().execute(sql`
         WITH action_plans_base AS (
           SELECT 
             a.id,
@@ -12355,42 +12412,44 @@ Redactas en español neutro, claro y profesional.`;
         associatedRisks: Array.isArray(row.associated_risks) ? row.associated_risks : (row.associated_risks ? JSON.parse(row.associated_risks) : [])
       }));
 
-      const response = plans;
+        return plans;
+      })();
 
-      // OPTIMIZED: Cache with timeout and increased TTL from 60s to 300s (5 min) for better hit rate
-      try {
-        await Promise.all([
-          Promise.race([
-            distributedCache.set(cacheKey, response, 300),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
-          ]),
-          Promise.race([
-            distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 600),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache timeout')), 2000))
-          ])
-        ]);
-      } catch (cacheError) {
-        console.warn(`[CACHE] Failed to set cache (${cacheKey}):`, cacheError instanceof Error ? cacheError.message : 'Unknown error');
-      }
+      setActionPlansLock(l2CacheKey, fetchPromise);
+      const response = await fetchPromise;
 
       const duration = Date.now() - requestStart;
-      console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${plans.length} plans)`);
+      console.log(`[PERF] /api/action-plans COMPLETE in ${duration}ms (${response.length} plans)`);
 
-      if (duration > 3000) {
-        console.warn(`⚠️ [PERFORMANCE] /api/action-plans took ${duration}ms (threshold: 3000ms)`);
-      }
+      // Set L1 cache immediately (synchronous)
+      setActionPlansL1Cache(tenantId, response);
+
+      // Set L2 cache async (fire-and-forget) with 5 min TTL
+      setImmediate(() => {
+        distributedCache.set(l2CacheKey, response, 300).catch(() => {});
+        distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`, response, 600).catch(() => {});
+      });
 
       res.json(response);
     } catch (error) {
       const duration = Date.now() - requestStart;
       console.error(`[ERROR] /api/action-plans failed after ${duration}ms:`, error);
 
-      // Try fallback cache
-      const { tenantId } = await resolveActiveTenant(req, { required: true });
-      const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
-      if (fallbackCache) {
-        console.log(`[FALLBACK] Returning cached action-plans data`);
-        return res.json(fallbackCache);
+      // Try L1 cache first, then L2 fallback
+      try {
+        const { tenantId } = await resolveActiveTenant(req, { required: true });
+        const l1Cached = getActionPlansFromL1Cache(tenantId);
+        if (l1Cached) {
+          console.log(`[FALLBACK] Returning L1 cached action-plans data`);
+          return res.json(l1Cached);
+        }
+        const fallbackCache = await distributedCache.get(`action-plans:${CACHE_VERSION}:${tenantId}:fallback`);
+        if (fallbackCache) {
+          console.log(`[FALLBACK] Returning L2 cached action-plans data`);
+          return res.json(fallbackCache);
+        }
+      } catch {
+        // Ignore cache errors
       }
 
       res.status(500).json({ message: "Failed to fetch action plans", error: error instanceof Error ? error.message : String(error) });
@@ -12399,6 +12458,9 @@ Redactas en español neutro, claro y profesional.`;
 
   // Helper function to invalidate action plan caches
   async function invalidateActionPlanCaches(tenantId: string) {
+    // Invalidate L1 cache immediately
+    invalidateActionPlansL1Cache();
+    // Invalidate L2 distributed cache
     await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}`, null, 0);
     // Also invalidate risks page cache so action plans column updates in risks list
     invalidatePagesRisksCache();
