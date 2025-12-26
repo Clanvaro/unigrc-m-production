@@ -129,11 +129,31 @@ export async function getRisksFromReadModel(params: {
     console.warn(`[PERF] Slow query in getRisksFromReadModel: ${queryDuration}ms (limit: ${limit}, offset: ${offset}, filters: ${Object.keys(filters).length})`);
   }
 
-  // Normalize category field to always be a string array
+  // Helper to ensure value is a string (prevents React error #185 on frontend)
+  const safeString = (val: any): string => {
+    if (val == null) return '';
+    if (typeof val === 'string') return val;
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    return ''; // Objects become empty string
+  };
+
+  // Normalize and sanitize all risk fields to prevent React error #185
   // PostgreSQL text[] can come as string '{val1,val2}' or array depending on driver
   const normalizedRisks = (risksResult.rows as any[]).map(risk => ({
     ...risk,
+    id: safeString(risk.id),
+    code: safeString(risk.code),
+    name: safeString(risk.name),
+    description: safeString(risk.description),
+    status: safeString(risk.status),
     category: normalizeCategory(risk.category),
+    macroproceso_name: safeString(risk.macroproceso_name),
+    macroproceso_code: safeString(risk.macroproceso_code),
+    process_name: safeString(risk.process_name),
+    process_code: safeString(risk.process_code),
+    subproceso_name: safeString(risk.subproceso_name),
+    subproceso_code: safeString(risk.subproceso_code),
+    validation_status: safeString(risk.validation_status),
   }));
 
   return {
@@ -240,8 +260,17 @@ export async function getRiskCounts(
   };
 }
 
+// Helper to ensure value is a string (prevents React error #185 on frontend)
+function safeStr(val: any): string {
+  if (val == null) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  return ''; // Objects become empty string
+}
+
 /**
  * Obtiene catálogos mínimos (solo IDs y nombres para filtros)
+ * All values are sanitized to strings to prevent React error #185
  */
 export async function getMinimalCatalogs(): Promise<{
   gerencias: Array<{ id: string; name: string; code: string }>;
@@ -273,46 +302,46 @@ export async function getMinimalCatalogs(): Promise<{
   return {
     gerencias: gerencias
       .filter((g: any) => g.status !== 'deleted')
-      .map((g: any) => ({ id: g.id, name: g.name, code: g.code })),
+      .map((g: any) => ({ id: safeStr(g.id), name: safeStr(g.name), code: safeStr(g.code) })),
     macroprocesos: macroprocesos
       .filter((m: any) => m.status !== 'deleted')
       .map((m: any) => ({
-        id: m.id,
-        name: m.name,
-        code: m.code,
-        gerenciaId: m.gerenciaId,
+        id: safeStr(m.id),
+        name: safeStr(m.name),
+        code: safeStr(m.code),
+        gerenciaId: m.gerenciaId ? safeStr(m.gerenciaId) : undefined,
       })),
     processes: processes
       .filter((p: any) => p.status !== 'deleted')
       .map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        code: p.code,
-        macroprocesoId: p.macroprocesoId,
+        id: safeStr(p.id),
+        name: safeStr(p.name),
+        code: safeStr(p.code),
+        macroprocesoId: p.macroprocesoId ? safeStr(p.macroprocesoId) : undefined,
       })),
     subprocesos: subprocesos
       .filter((s: any) => !s.deletedAt)
       .map((s: any) => ({
-        id: s.id,
-        name: s.name,
-        code: s.code,
-        processId: s.procesoId,
+        id: safeStr(s.id),
+        name: safeStr(s.name),
+        code: safeStr(s.code),
+        processId: s.procesoId ? safeStr(s.procesoId) : undefined,
       })),
     riskCategories: riskCategories
       .filter((c: any) => c.isActive)
       .map((c: any) => ({
-        id: c.id,
-        name: c.name,
-        color: c.color || '#6b7280',
+        id: safeStr(c.id),
+        name: safeStr(c.name),
+        color: safeStr(c.color) || '#6b7280',
       })),
     processOwners: processOwners.map((po: any) => ({
-      id: po.id,
-      name: po.name,
-      position: po.position,
+      id: safeStr(po.id),
+      name: safeStr(po.name),
+      position: po.position ? safeStr(po.position) : undefined,
     })),
     processGerencias: processGerenciasRelations.map((pg: any) => ({
-      processId: pg.processId,
-      gerenciaId: pg.gerenciaId,
+      processId: safeStr(pg.processId),
+      gerenciaId: safeStr(pg.gerenciaId),
     })),
   };
 }
