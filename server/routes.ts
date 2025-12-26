@@ -1076,140 +1076,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize email service from configuration
   await initializeEmailService(storage);
 
-  // Shared handler for current user endpoint - with in-memory cache (5 min TTL)
-  // SINGLE-TENANT MODE: Simplified auth handler without tenant logic
-  // OPTIMIZED: Uses authCache to avoid DB queries on every request
+  // Shared handler for current user endpoint - OPTIMIZED & SIMPLIFIED
+  // Uses authCache (5 min TTL) to avoid DB queries on every request
   const getCurrentUserHandler = async (req: any, res: any) => {
+    // Helper to send JSON response only if headers not sent
+    const safeJson = (data: any) => {
+      if (!res.headersSent) return res.json(data);
+    };
+
+    // Standard unauthenticated response
+    const unauthResponse = { authenticated: false, user: null, permissions: [] };
+
     try {
-      const user = req.user as any;
-
-      // Check if user is authenticated (includes dev mode check)
+      // Early exit: Check authentication
       if (!req.isAuthenticated() && process.env.NODE_ENV !== 'development') {
-        const unauthResponse = {
-          authenticated: false,
-          user: null,
-          permissions: []
-        };
-        if (!res.headersSent) {
-          return res.json(unauthResponse);
-        }
-        return;
+        return safeJson(unauthResponse);
       }
 
-      // Get effective user ID - prioritize switched user from session if present
-      const userId = (req.session as any)?.switchedUserId || user?.id;
-
+      // Get effective user ID (supports user switching for demo)
+      const userId = (req.session as any)?.switchedUserId || req.user?.id;
       if (!userId) {
-        if (!res.headersSent) {
-          return res.json({
-            authenticated: false,
-            user: null,
-            permissions: []
-          });
-        }
-        return;
+        return safeJson(unauthResponse);
       }
 
-      // OPTIMIZATION: Check in-memory cache first (5 min TTL)
-      let cached;
-      try {
-        cached = authCache.get(userId);
-      } catch (cacheError: any) {
-        console.error('[getCurrentUserHandler] Cache error:', cacheError?.message || String(cacheError));
-        cached = null; // Continue without cache
-      }
-
-      if (cached) {
-        const response = {
-          authenticated: true,
-          user: {
-            id: cached.user.id,
-            email: cached.user.email,
-            firstName: cached.user.firstName,
-            lastName: cached.user.lastName,
-            fullName: cached.user.fullName,
-            profileImageUrl: cached.user.profileImageUrl,
-            isAdmin: cached.user.isAdmin ?? false,
-            isPlatformAdmin: cached.user.isPlatformAdmin ?? cached.user.isAdmin ?? false
-          },
-          permissions: cached.permissions || []
-        };
-        return res.json(response);
-      }
-
-      // Cache miss - fetch from database
-      let dbUser, userPermissions;
-      try {
-        [dbUser, userPermissions] = await Promise.all([
-          storage.getUser(userId),
-          storage.getUserPermissions(userId)
-        ]);
-      } catch (dbError: any) {
-        console.error('[getCurrentUserHandler] Database error:', dbError?.message || String(dbError));
-        // Return unauthenticated response instead of 500
-        if (!res.headersSent) {
-          return res.json({
-            authenticated: false,
-            user: null,
-            permissions: []
-          });
-        }
-        return;
-      }
-
-      if (!dbUser) {
-        if (!res.headersSent) {
-          return res.json({
-            authenticated: false,
-            user: null,
-            permissions: []
-          });
-        }
-        return;
-      }
-
-      // Store in cache for next request (don't fail if cache fails)
-      try {
-        authCache.set(userId, {
-          user: dbUser,
-          tenants: [],
-          permissions: userPermissions || [],
-          cachedAt: Date.now()
-        });
-      } catch (cacheError: any) {
-        console.warn('[getCurrentUserHandler] Cache set error (non-fatal):', cacheError?.message || String(cacheError));
-        // Continue without caching
-      }
-
-      const response = {
+      // Build response from user data (reusable for cache hit and miss)
+      const buildResponse = (user: any, permissions: string[]) => ({
         authenticated: true,
         user: {
-          id: dbUser.id,
-          email: dbUser.email,
-          firstName: dbUser.firstName,
-          lastName: dbUser.lastName,
-          fullName: dbUser.fullName,
-          profileImageUrl: dbUser.profileImageUrl,
-          isAdmin: dbUser.isAdmin ?? false,
-          isPlatformAdmin: dbUser.isAdmin ?? false
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          fullName: user.fullName,
+          profileImageUrl: user.profileImageUrl,
+          isAdmin: user.isAdmin ?? false,
+          isPlatformAdmin: user.isAdmin ?? false
         },
-        permissions: userPermissions || []
-      };
+        permissions
+      });
 
-      if (!res.headersSent) {
-        return res.json(response);
+      // L1: Check in-memory cache first (instant, <1ms)
+      const cached = authCache.get(userId);
+      if (cached) {
+        return safeJson(buildResponse(cached.user, cached.permissions));
       }
+
+      // Cache miss - fetch from database in parallel
+      const [dbUser, userPermissions] = await Promise.all([
+        storage.getUser(userId),
+        storage.getUserPermissions(userId)
+      ]);
+
+      if (!dbUser) {
+        return safeJson(unauthResponse);
+      }
+
+      // Store in cache for next request
+      authCache.set(userId, {
+        user: dbUser,
+        tenants: [], // Keep for interface compatibility
+        permissions: userPermissions || [],
+        cachedAt: Date.now()
+      });
+
+      return safeJson(buildResponse(dbUser, userPermissions || []));
+
     } catch (error: any) {
-      console.error('[getCurrentUserHandler] Outer error:', error?.message || String(error));
-      console.error('[getCurrentUserHandler] Stack:', error?.stack);
-      // Return unauthenticated response instead of 500
-      if (!res.headersSent) {
-        return res.json({
-          authenticated: false,
-          user: null,
-          permissions: []
-        });
-      }
+      console.warn('[auth/me] Error (returning unauthenticated):', error?.message);
+      return safeJson(unauthResponse);
     }
   };
 
