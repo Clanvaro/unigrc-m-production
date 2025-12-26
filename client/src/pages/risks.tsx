@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../lib/queryKeys";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -17,7 +17,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import RiskForm from "@/components/forms/risk-form";
+
+// OPTIMIZED: Lazy load RiskForm - only loads when create/edit dialog opens
+// This reduces initial page load by ~150KB (includes ProbabilityWheel, HeatMaps, AI components)
+const RiskForm = lazy(() => import("@/components/forms/risk-form"));
 import { getRiskColor, getRiskLevelText, calculateResidualRisk, calculateResidualRiskFromControls, getResidualRiskColor, getInherentRiskColor } from "@/lib/risk-calculations";
 import { apiRequest } from "@/lib/queryClient";
 import { getCSRFTokenFromCookie } from "@/lib/csrf-cache";
@@ -26,12 +29,14 @@ import { useSearch } from "@/contexts/SearchContext";
 import { RiskValue } from "@/components/RiskValue";
 import type { Risk, Control, RiskControl } from "@shared/schema";
 import { EditGuard, DeleteGuard, CreateGuard } from "@/components/auth/permission-guard";
-import { RiskRelationshipMap } from "@/components/RiskRelationshipMap";
+// OPTIMIZED: Lazy load - only used in risk detail modal
+const RiskRelationshipMap = lazy(() => import("@/components/RiskRelationshipMap").then(m => ({ default: m.RiskRelationshipMap })));
 import { FilterToolbar } from "@/components/filter-toolbar";
 import { VirtualizedTable, VirtualizedTableColumn, generateMockRisks } from "@/components/virtualized-table";
 import SpecializedAIButton from "@/components/SpecializedAIButton";
 import { ExplanationPopover } from "@/components/ExplanationPopover";
-import { AuditHistory } from "@/components/AuditHistory";
+// OPTIMIZED: Lazy load - only used in risk detail modal
+const AuditHistory = lazy(() => import("@/components/AuditHistory").then(m => ({ default: m.AuditHistory })));
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSavedViews } from "@/hooks/useSavedViews";
 import { RiskValidationStatus } from "@/components/RiskValidationStatus";
@@ -1730,35 +1735,38 @@ export default function Risks() {
       id: 'category',
       header: 'Categoría',
       width: '180px',
-      cell: (risk) => (
-        <div className="flex flex-wrap gap-1">
-          {Array.isArray(risk.category) ? risk.category.slice(0, 2).map((categoryName: string) => (
-            <Badge
-              key={categoryName}
-              className="text-xs whitespace-nowrap"
-              style={{
-                backgroundColor: categoryColorMap[categoryName] || '#6b7280',
-                color: "white"
-              }}
-            >
-              {categoryName}
-            </Badge>
-          )) : (
-            <Badge 
-              className="text-xs whitespace-nowrap"
-              style={{
-                backgroundColor: categoryColorMap[risk.category as string] || '#6b7280',
-                color: "white"
-              }}
-            >
-              {risk.category}
-            </Badge>
-          )}
-          {Array.isArray(risk.category) && risk.category.length > 2 && (
-            <Badge variant="outline" className="text-xs whitespace-nowrap">+{risk.category.length - 2}</Badge>
-          )}
-        </div>
-      ),
+      cell: (risk) => {
+        // Normalize category to always be a string array (handles PostgreSQL format variations)
+        const categories: string[] = Array.isArray(risk.category) 
+          ? risk.category.filter((c: any) => typeof c === 'string' && c.trim())
+          : (typeof risk.category === 'string' && risk.category.trim()) 
+            ? [risk.category.trim()] 
+            : [];
+        
+        if (categories.length === 0) {
+          return <Badge variant="outline" className="text-xs">Sin categoría</Badge>;
+        }
+        
+        return (
+          <div className="flex flex-wrap gap-1">
+            {categories.slice(0, 2).map((categoryName: string) => (
+              <Badge
+                key={categoryName}
+                className="text-xs whitespace-nowrap"
+                style={{
+                  backgroundColor: categoryColorMap[categoryName] || '#6b7280',
+                  color: "white"
+                }}
+              >
+                {categoryName}
+              </Badge>
+            ))}
+            {categories.length > 2 && (
+              <Badge variant="outline" className="text-xs whitespace-nowrap">+{categories.length - 2}</Badge>
+            )}
+          </div>
+        );
+      },
       cellClassName: 'items-center',
       visible: visibleColumns.name,
     },
@@ -2409,10 +2417,16 @@ export default function Risks() {
                   </TabsList>
 
                   <TabsContent value="edit">
-                    <RiskForm
-                      risk={editingRisk}
-                      onSuccess={handleEditSuccess}
-                    />
+                    <Suspense fallback={
+                      <div className="flex items-center justify-center py-12">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                      </div>
+                    }>
+                      <RiskForm
+                        risk={editingRisk}
+                        onSuccess={handleEditSuccess}
+                      />
+                    </Suspense>
                   </TabsContent>
 
                   <TabsContent value="validation">
@@ -2748,7 +2762,13 @@ export default function Risks() {
                           />
                         </div>
                       </DialogHeader>
-                      <RiskForm onSuccess={handleCreateSuccess} />
+                      <Suspense fallback={
+                        <div className="flex items-center justify-center py-12">
+                          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                      }>
+                        <RiskForm onSuccess={handleCreateSuccess} />
+                      </Suspense>
                     </DialogContent>
                   </Dialog>
                 </CreateGuard>
@@ -3133,15 +3153,21 @@ export default function Risks() {
                     <div>
                       <h3 className="text-sm font-semibold mb-3">Mapa de Relaciones</h3>
                       <div className="h-[600px] border rounded-lg">
-                        <RiskRelationshipMap
-                          risk={viewingRisk}
-                          macroprocesos={macroprocesos}
-                          processes={processes}
-                          subprocesos={subprocesos}
-                          riskControls={allRiskControls.filter((rc: any) => rc.riskId === viewingRisk.id)}
-                          riskEvents={Array.isArray(viewingRiskEvents) ? viewingRiskEvents : []}
-                          riskProcessLinks={allRiskProcessLinks.filter((link: any) => link.riskId === viewingRisk.id)}
-                        />
+                        <Suspense fallback={
+                          <div className="flex items-center justify-center h-full">
+                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                          </div>
+                        }>
+                          <RiskRelationshipMap
+                            risk={viewingRisk}
+                            macroprocesos={macroprocesos}
+                            processes={processes}
+                            subprocesos={subprocesos}
+                            riskControls={allRiskControls.filter((rc: any) => rc.riskId === viewingRisk.id)}
+                            riskEvents={Array.isArray(viewingRiskEvents) ? viewingRiskEvents : []}
+                            riskProcessLinks={allRiskProcessLinks.filter((link: any) => link.riskId === viewingRisk.id)}
+                          />
+                        </Suspense>
                       </div>
                     </div>
 
@@ -3158,11 +3184,17 @@ export default function Risks() {
                 </TabsContent>
 
                 <TabsContent value="history" className="flex-1 overflow-y-auto mt-4">
-                  <AuditHistory
-                    entityType="risk"
-                    entityId={viewingRisk.id}
-                    maxHeight="500px"
-                  />
+                  <Suspense fallback={
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                  }>
+                    <AuditHistory
+                      entityType="risk"
+                      entityId={viewingRisk.id}
+                      maxHeight="500px"
+                    />
+                  </Suspense>
                 </TabsContent>
               </Tabs>
             );

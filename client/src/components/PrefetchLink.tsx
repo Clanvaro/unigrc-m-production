@@ -30,12 +30,15 @@ const routePrefetchMap: Record<string, () => Promise<any>> = {
 /**
  * API prefetch mapping for data-heavy pages
  * OPTIMIZED: Uses /api/pages/risks (BFF) instead of multiple legacy endpoints
- * This eliminates redundant API calls when navigating to risks page
+ * 
+ * NOTE: The queryKey must match EXACTLY what risks.tsx uses.
+ * risks.tsx uses: ["/api/pages/risks", { limit: pageSize, offset: 0, ...filters }]
+ * where filters starts as {} (empty object)
  */
 const apiPrefetchMap: Record<string, () => void> = {
   '/risks': () => {
-    // OPTIMIZED: Prefetch the single BFF endpoint that contains everything
-    // This replaces separate calls to /api/risks/bootstrap and /api/risks/page-data-lite
+    // OPTIMIZED: Prefetch with the EXACT same queryKey structure as risks.tsx
+    // filters starts as {} so we spread an empty object
     queryClient.prefetchQuery({
       queryKey: ["/api/pages/risks", { limit: 50, offset: 0 }],
       queryFn: async () => {

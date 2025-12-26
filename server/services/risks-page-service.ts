@@ -129,10 +129,40 @@ export async function getRisksFromReadModel(params: {
     console.warn(`[PERF] Slow query in getRisksFromReadModel: ${queryDuration}ms (limit: ${limit}, offset: ${offset}, filters: ${Object.keys(filters).length})`);
   }
 
+  // Normalize category field to always be a string array
+  // PostgreSQL text[] can come as string '{val1,val2}' or array depending on driver
+  const normalizedRisks = (risksResult.rows as any[]).map(risk => ({
+    ...risk,
+    category: normalizeCategory(risk.category),
+  }));
+
   return {
-    risks: risksResult.rows as any[],
+    risks: normalizedRisks,
     total: (countResult.rows[0] as any)?.total || 0,
   };
+}
+
+/**
+ * Normaliza el campo category a un array de strings
+ * PostgreSQL text[] puede venir como:
+ * - Array JavaScript: ['val1', 'val2']
+ * - String PostgreSQL: '{val1,val2}' o '{}'
+ * - null/undefined
+ */
+function normalizeCategory(category: any): string[] {
+  if (!category) return [];
+  if (Array.isArray(category)) return category.filter(c => typeof c === 'string' && c.trim());
+  if (typeof category === 'string') {
+    // Parse PostgreSQL array format: '{val1,val2}' or '{}'
+    if (category.startsWith('{') && category.endsWith('}')) {
+      const inner = category.slice(1, -1);
+      if (!inner) return [];
+      return inner.split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+    }
+    // Single value string
+    return category.trim() ? [category.trim()] : [];
+  }
+  return [];
 }
 
 /**

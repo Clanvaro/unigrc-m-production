@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { Search, Plus, Download, SlidersHorizontal, X, Menu, Calendar, AlertTriangle, ChevronDown, MoreVertical, RefreshCw, Settings, Filter, Eye, Clock, Sun, Moon, BarChart3, CheckCircle } from "lucide-react";
+import { Search, Plus, Download, SlidersHorizontal, X, Menu, Calendar, AlertTriangle, ChevronDown, MoreVertical, RefreshCw, Settings, Filter, Eye, Clock, Sun, Moon, BarChart3, CheckCircle, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -10,18 +10,32 @@ import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Combobox } from "@/components/ui/combobox";
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useSearch } from "@/contexts/SearchContext";
-import RiskForm from "@/components/forms/risk-form";
-import ControlForm from "@/components/forms/control-form";
-import MacroprocesoForm from "@/components/forms/macroproceso-form";
-import RegulationForm from "@/components/forms/regulation-form";
-import ActionPlanForm from "@/components/forms/action-plan-form";
-import RiskEventForm from "@/components/forms/risk-event-form";
-import { UserForm } from "@/components/forms/user-form";
-import ComplianceDocumentForm from "@/components/forms/compliance-document-form";
+
+// ============================================================================
+// OPTIMIZATION: Lazy load ALL form components
+// These are only needed when user clicks "+" to create new items
+// This saves ~200KB+ on initial load for every page in the app
+// ============================================================================
+const RiskForm = lazy(() => import("@/components/forms/risk-form"));
+const ControlForm = lazy(() => import("@/components/forms/control-form"));
+const MacroprocesoForm = lazy(() => import("@/components/forms/macroproceso-form"));
+const RegulationForm = lazy(() => import("@/components/forms/regulation-form"));
+const ActionPlanForm = lazy(() => import("@/components/forms/action-plan-form"));
+const RiskEventForm = lazy(() => import("@/components/forms/risk-event-form"));
+const UserForm = lazy(() => import("@/components/forms/user-form").then(m => ({ default: m.UserForm })));
+const ComplianceDocumentForm = lazy(() => import("@/components/forms/compliance-document-form"));
+
+// Form loading fallback component
+const FormLoadingFallback = () => (
+  <div className="flex items-center justify-center py-12">
+    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+  </div>
+);
+
 import AIAssistantDialog from "@/components/ai-assistant-lazy";
 import { CreateGuard } from "@/components/auth/permission-guard";
 import { RiskSearchAndFilterDialog } from "@/components/RiskSearchAndFilterDialog";
@@ -1671,7 +1685,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                       Registrar un nuevo riesgo en el sistema con su evaluación correspondiente.
                     </DialogDescription>
                   </DialogHeader>
-                  <RiskForm onSuccess={handleCreateSuccess} />
+                  <Suspense fallback={<FormLoadingFallback />}>
+                    <RiskForm onSuccess={handleCreateSuccess} />
+                  </Suspense>
                 </DialogContent>
               </Dialog>
             </CreateGuard>
@@ -1704,7 +1720,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                       Documenta un evento de riesgo materializado, fraude o delito que ha ocurrido.
                     </DialogDescription>
                   </DialogHeader>
-                  <RiskEventForm onSuccess={handleCreateSuccess} />
+                  <Suspense fallback={<FormLoadingFallback />}>
+                    <RiskEventForm onSuccess={handleCreateSuccess} />
+                  </Suspense>
                 </DialogContent>
               </Dialog>
             </>
@@ -1948,7 +1966,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                     Crear un nuevo control para mitigar riesgos en el sistema.
                   </DialogDescription>
                 </DialogHeader>
-                <ControlForm onSuccess={handleCreateSuccess} />
+                <Suspense fallback={<FormLoadingFallback />}>
+                  <ControlForm onSuccess={handleCreateSuccess} />
+                </Suspense>
               </DialogContent>
             </Dialog>
           )}
@@ -2399,7 +2419,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                     Agregar una nueva normativa regulatoria al sistema.
                   </DialogDescription>
                 </DialogHeader>
-                <RegulationForm onSuccess={handleCreateSuccess} />
+                <Suspense fallback={<FormLoadingFallback />}>
+                  <RegulationForm onSuccess={handleCreateSuccess} />
+                </Suspense>
               </DialogContent>
             </Dialog>
           )}
@@ -2626,18 +2648,20 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                       Completa la información para crear un nuevo usuario.
                     </DialogDescription>
                   </DialogHeader>
-                  <UserForm
-                    user={null}
-                    roles={roles}
-                    onSuccess={() => {
-                      setIsUserDialogOpen(false);
-                      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-                      toast({
-                        title: "Usuario creado",
-                        description: "El usuario ha sido creado exitosamente.",
-                      });
-                    }}
-                  />
+                  <Suspense fallback={<FormLoadingFallback />}>
+                    <UserForm
+                      user={null}
+                      roles={roles}
+                      onSuccess={() => {
+                        setIsUserDialogOpen(false);
+                        queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+                        toast({
+                          title: "Usuario creado",
+                          description: "El usuario ha sido creado exitosamente.",
+                        });
+                      }}
+                    />
+                  </Suspense>
                 </DialogContent>
               </Dialog>
             </CreateGuard>
@@ -2660,16 +2684,18 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                       Registra un nuevo documento normativo, política o procedimiento.
                     </DialogDescription>
                   </DialogHeader>
-                  <ComplianceDocumentForm
-                    onSuccess={() => {
-                      setIsComplianceDocumentDialogOpen(false);
-                      queryClient.invalidateQueries({ queryKey: ["/api/compliance-documents"] });
-                      toast({
-                        title: "Documento creado",
-                        description: "El documento ha sido creado exitosamente.",
-                      });
-                    }}
-                  />
+                  <Suspense fallback={<FormLoadingFallback />}>
+                    <ComplianceDocumentForm
+                      onSuccess={() => {
+                        setIsComplianceDocumentDialogOpen(false);
+                        queryClient.invalidateQueries({ queryKey: ["/api/compliance-documents"] });
+                        toast({
+                          title: "Documento creado",
+                          description: "El documento ha sido creado exitosamente.",
+                        });
+                      }}
+                    />
+                  </Suspense>
                 </DialogContent>
               </Dialog>
             </CreateGuard>
