@@ -1,4 +1,5 @@
 import { distributedCache } from "./services/redis";
+import { invalidateCatalogsCache } from "./services/risks-page-service";
 
 /**
  * Cache version for risk-control associations
@@ -265,13 +266,14 @@ export async function invalidateProcessRelationsCaches() {
     // Invalidate local caches first (instant)
     invalidateCatalogCache('processesWithRisks');
     invalidatePageDataLiteCache();
+    invalidateCatalogsCache(); // Invalidate catalogs L1 cache
     
     await Promise.all([
       distributedCache.invalidate(`process-gerencias:${TENANT_KEY}`),
       // Also invalidate consolidated risks page data cache
       distributedCache.invalidate(`risks-page-data:${CACHE_VERSION}:${TENANT_KEY}`)
     ]);
-    console.log(`✅ Invalidated process relations caches`);
+    console.log(`✅ Invalidated process relations + catalogs caches`);
   } catch (error) {
     console.error(`Error invalidating process relations caches:`, error);
   }

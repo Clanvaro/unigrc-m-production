@@ -274,11 +274,10 @@ function safeStr(val: any): string {
   return ''; // Objects become empty string
 }
 
-/**
- * Obtiene catálogos mínimos (solo IDs y nombres para filtros)
- * All values are sanitized to strings to prevent React error #185
- */
-export async function getMinimalCatalogs(): Promise<{
+// ============================================
+// L1 CACHE FOR CATALOGS (rarely change, 10 min TTL)
+// ============================================
+type CatalogsData = {
   gerencias: Array<{ id: string; name: string; code: string }>;
   macroprocesos: Array<{ id: string; name: string; code: string; gerenciaId?: string }>;
   processes: Array<{ id: string; name: string; code: string; macroprocesoId?: string }>;
@@ -286,70 +285,113 @@ export async function getMinimalCatalogs(): Promise<{
   riskCategories: Array<{ id: string; name: string; color: string }>;
   processOwners: Array<{ id: string; name: string; position?: string }>;
   processGerencias: Array<{ processId: string; gerenciaId: string }>;
-}> {
-  const [
-    gerencias,
-    macroprocesos,
-    processes,
-    subprocesos,
-    riskCategories,
-    processOwners,
-    processGerenciasRelations,
-  ] = await Promise.all([
-    storage.getGerencias(),
-    storage.getMacroprocesos(),
-    storage.getProcesses(),
-    storage.getSubprocesosWithOwners(),
-    storage.getRiskCategories(),
-    storage.getProcessOwners(),
-    storage.getAllProcessGerenciasRelations(),
-  ]);
+};
 
-  return {
-    gerencias: gerencias
-      .filter((g: any) => g.status !== 'deleted')
-      .map((g: any) => ({ id: safeStr(g.id), name: safeStr(g.name), code: safeStr(g.code) })),
-    macroprocesos: macroprocesos
-      .filter((m: any) => m.status !== 'deleted')
-      .map((m: any) => ({
-        id: safeStr(m.id),
-        name: safeStr(m.name),
-        code: safeStr(m.code),
-        gerenciaId: m.gerenciaId ? safeStr(m.gerenciaId) : undefined,
+let catalogsCache: { data: CatalogsData; timestamp: number } | null = null;
+const CATALOGS_TTL = 10 * 60 * 1000; // 10 minutes
+let catalogsFetchPromise: Promise<CatalogsData> | null = null; // Single-flight
+
+/** Invalidate catalogs cache (call when catalogs are modified) */
+export function invalidateCatalogsCache(): void {
+  catalogsCache = null;
+  console.log('[CATALOGS CACHE] Invalidated');
+}
+
+/**
+ * Obtiene catálogos mínimos (solo IDs y nombres para filtros)
+ * OPTIMIZED: L1 cache with 10 min TTL + single-flight
+ * All values are sanitized to strings to prevent React error #185
+ */
+export async function getMinimalCatalogs(): Promise<CatalogsData> {
+  // L1 cache check (instant)
+  if (catalogsCache && Date.now() - catalogsCache.timestamp < CATALOGS_TTL) {
+    return catalogsCache.data;
+  }
+
+  // Single-flight: reuse in-flight fetch
+  if (catalogsFetchPromise) {
+    return catalogsFetchPromise;
+  }
+
+  // Fetch from DB
+  catalogsFetchPromise = (async () => {
+    const fetchStart = Date.now();
+    const [
+      gerencias,
+      macroprocesos,
+      processes,
+      subprocesos,
+      riskCategories,
+      processOwners,
+      processGerenciasRelations,
+    ] = await Promise.all([
+      storage.getGerencias(),
+      storage.getMacroprocesos(),
+      storage.getProcesses(),
+      storage.getSubprocesosWithOwners(),
+      storage.getRiskCategories(),
+      storage.getProcessOwners(),
+      storage.getAllProcessGerenciasRelations(),
+    ]);
+
+    const data: CatalogsData = {
+      gerencias: gerencias
+        .filter((g: any) => g.status !== 'deleted')
+        .map((g: any) => ({ id: safeStr(g.id), name: safeStr(g.name), code: safeStr(g.code) })),
+      macroprocesos: macroprocesos
+        .filter((m: any) => m.status !== 'deleted')
+        .map((m: any) => ({
+          id: safeStr(m.id),
+          name: safeStr(m.name),
+          code: safeStr(m.code),
+          gerenciaId: m.gerenciaId ? safeStr(m.gerenciaId) : undefined,
+        })),
+      processes: processes
+        .filter((p: any) => p.status !== 'deleted')
+        .map((p: any) => ({
+          id: safeStr(p.id),
+          name: safeStr(p.name),
+          code: safeStr(p.code),
+          macroprocesoId: p.macroprocesoId ? safeStr(p.macroprocesoId) : undefined,
+        })),
+      subprocesos: subprocesos
+        .filter((s: any) => !s.deletedAt)
+        .map((s: any) => ({
+          id: safeStr(s.id),
+          name: safeStr(s.name),
+          code: safeStr(s.code),
+          processId: s.procesoId ? safeStr(s.procesoId) : undefined,
+        })),
+      riskCategories: riskCategories
+        .filter((c: any) => c.isActive)
+        .map((c: any) => ({
+          id: safeStr(c.id),
+          name: safeStr(c.name),
+          color: safeStr(c.color) || '#6b7280',
+        })),
+      processOwners: processOwners.map((po: any) => ({
+        id: safeStr(po.id),
+        name: safeStr(po.name),
+        position: po.position ? safeStr(po.position) : undefined,
       })),
-    processes: processes
-      .filter((p: any) => p.status !== 'deleted')
-      .map((p: any) => ({
-        id: safeStr(p.id),
-        name: safeStr(p.name),
-        code: safeStr(p.code),
-        macroprocesoId: p.macroprocesoId ? safeStr(p.macroprocesoId) : undefined,
+      processGerencias: processGerenciasRelations.map((pg: any) => ({
+        processId: safeStr(pg.processId),
+        gerenciaId: safeStr(pg.gerenciaId),
       })),
-    subprocesos: subprocesos
-      .filter((s: any) => !s.deletedAt)
-      .map((s: any) => ({
-        id: safeStr(s.id),
-        name: safeStr(s.name),
-        code: safeStr(s.code),
-        processId: s.procesoId ? safeStr(s.procesoId) : undefined,
-      })),
-    riskCategories: riskCategories
-      .filter((c: any) => c.isActive)
-      .map((c: any) => ({
-        id: safeStr(c.id),
-        name: safeStr(c.name),
-        color: safeStr(c.color) || '#6b7280',
-      })),
-    processOwners: processOwners.map((po: any) => ({
-      id: safeStr(po.id),
-      name: safeStr(po.name),
-      position: po.position ? safeStr(po.position) : undefined,
-    })),
-    processGerencias: processGerenciasRelations.map((pg: any) => ({
-      processId: safeStr(pg.processId),
-      gerenciaId: safeStr(pg.gerenciaId),
-    })),
-  };
+    };
+
+    // Update L1 cache
+    catalogsCache = { data, timestamp: Date.now() };
+    console.log(`[CATALOGS CACHE] Refreshed in ${Date.now() - fetchStart}ms (TTL: 10min)`);
+    
+    return data;
+  })();
+
+  try {
+    return await catalogsFetchPromise;
+  } finally {
+    catalogsFetchPromise = null;
+  }
 }
 
 /**

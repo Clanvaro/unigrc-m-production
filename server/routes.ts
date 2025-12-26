@@ -22,6 +22,7 @@ import {
   getRiskCounts,
   getMinimalCatalogs,
   getRelationsLite,
+  invalidateCatalogsCache,
 } from './services/risks-page-service';
 import {
   refreshRiskListView,
