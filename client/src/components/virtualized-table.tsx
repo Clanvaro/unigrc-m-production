@@ -1,5 +1,35 @@
-import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect } from "react";
+import { useRef, useCallback, ReactNode, KeyboardEvent, useState, useEffect, Component, ErrorInfo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+
+// Error boundary for individual cells to prevent entire table from crashing
+class CellErrorBoundary extends Component<
+  { children: ReactNode; columnId: string; rowIndex: number },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: ReactNode; columnId: string; rowIndex: number }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error(`[VirtualizedTable] Cell render error in column "${this.props.columnId}", row ${this.props.rowIndex}:`, error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <span className="text-xs text-red-500" title={this.state.error?.message}>
+          Error
+        </span>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export interface VirtualizedTableColumn<T> {
   id: string;
@@ -200,7 +230,9 @@ export function VirtualizedTable<T>({
                     overflow: 'hidden'
                   }}
                 >
-                  {column.cell(item, virtualRow.index)}
+                  <CellErrorBoundary columnId={column.id} rowIndex={virtualRow.index}>
+                    {column.cell(item, virtualRow.index)}
+                  </CellErrorBoundary>
                 </div>
               ))}
             </div>

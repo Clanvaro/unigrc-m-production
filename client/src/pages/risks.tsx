@@ -1684,8 +1684,24 @@ export default function Risks() {
 
   // ---------- Sanitize data before render to avoid React error #185 ----------
   const sanitizeRiskForRender = (risk: any) => {
-    // Ensure basic string fields
-    const safeString = (val: any) => (typeof val === 'string' ? val : val == null ? '' : String(val));
+    // Ensure basic string fields - convert any non-string to string
+    const safeString = (val: any): string => {
+      if (val == null) return '';
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+      // If it's an object, return empty string to avoid rendering objects
+      return '';
+    };
+
+    // Ensure numeric fields are actually numbers
+    const safeNumber = (val: any): number => {
+      if (typeof val === 'number' && !isNaN(val)) return val;
+      if (typeof val === 'string') {
+        const parsed = parseFloat(val);
+        return isNaN(parsed) ? 0 : parsed;
+      }
+      return 0;
+    };
 
     // Normalize categories to string[]
     const categories: string[] = Array.isArray(risk.category)
@@ -1698,7 +1714,7 @@ export default function Risks() {
     const processesSummary = Array.isArray(risk.processesSummary)
       ? risk.processesSummary
           .filter((p: any) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
-          .map((p: any) => ({ name: p.name.trim(), type: p.type || 'process' }))
+          .map((p: any) => ({ name: p.name.trim(), type: typeof p.type === 'string' ? p.type : 'process' }))
       : undefined;
 
     const controlsSummary = Array.isArray(risk.controlsSummary)
@@ -1718,9 +1734,18 @@ export default function Risks() {
 
     return {
       ...risk,
+      // String fields
+      id: safeString(risk.id),
       name: safeString(risk.name),
       description: safeString(risk.description),
       code: safeString(risk.code),
+      status: safeString(risk.status),
+      // Numeric fields - ensure they're actual numbers, not objects
+      probability: safeNumber(risk.probability),
+      impact: safeNumber(risk.impact),
+      inherentRisk: safeNumber(risk.inherent_risk ?? risk.inherentRisk),
+      residualRisk: safeNumber(risk.residual_risk ?? risk.residualRisk),
+      // Array fields
       category: categories,
       processesSummary,
       controlsSummary,
