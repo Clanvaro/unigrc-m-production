@@ -292,6 +292,9 @@ export default function Risks() {
         limit: pageSize.toString(),
         offset: ((currentPage - 1) * pageSize).toString(),
       });
+      
+      // DEBUG: Log the API response to identify React error #185 cause
+      console.log('[DEBUG] Fetching /api/pages/risks...');
 
       // Add filters to query params
       if (filters.status && filters.status !== 'all') params.append('status', filters.status);
@@ -306,7 +309,26 @@ export default function Risks() {
 
       const response = await fetch(`/api/pages/risks?${params}`);
       if (!response.ok) throw new Error("Failed to fetch risks page data");
-      return response.json();
+      const data = await response.json();
+      
+      // DEBUG: Log data structure to identify React error #185 cause
+      console.log('[DEBUG] /api/pages/risks response:', {
+        risksCount: data.risks?.data?.length,
+        firstRisk: data.risks?.data?.[0] ? {
+          id: typeof data.risks.data[0].id,
+          name: typeof data.risks.data[0].name,
+          code: typeof data.risks.data[0].code,
+          category: data.risks.data[0].category,
+          categoryType: typeof data.risks.data[0].category,
+          probability: typeof data.risks.data[0].probability,
+          impact: typeof data.risks.data[0].impact,
+        } : null,
+        catalogKeys: Object.keys(data.catalogs || {}),
+        firstMacroproceso: data.catalogs?.macroprocesos?.[0],
+        firstProcess: data.catalogs?.processes?.[0],
+      });
+      
+      return data;
     },
     staleTime: 1000 * 60 * 2, // 2 minutes - invalidated on mutations
     gcTime: 1000 * 60 * 10, // 10 minutes cache retention
@@ -1717,13 +1739,25 @@ export default function Risks() {
   // Loading state - skeleton shown during initial load
 
   // ---------- Sanitize data before render to avoid React error #185 ----------
-  const sanitizeRiskForRender = (risk: any) => {
+  const sanitizeRiskForRender = (risk: any, index?: number) => {
+    // DEBUG: Log if any field is an object (which would cause React error #185)
+    if (index === 0) {
+      const fields = ['id', 'name', 'code', 'description', 'status', 'category', 'probability', 'impact'];
+      fields.forEach(field => {
+        const value = risk[field];
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          console.error(`[DEBUG] Risk field "${field}" is an object:`, value);
+        }
+      });
+    }
+    
     // Ensure basic string fields - convert any non-string to string
     const safeString = (val: any): string => {
       if (val == null) return '';
       if (typeof val === 'string') return val;
       if (typeof val === 'number' || typeof val === 'boolean') return String(val);
-      // If it's an object, return empty string to avoid rendering objects
+      // If it's an object, log and return empty string to avoid rendering objects
+      console.error('[DEBUG] Attempted to render object as string:', val);
       return '';
     };
 
@@ -1790,7 +1824,7 @@ export default function Risks() {
   // Data selection: use mock data for testing or filtered paginated data
   // Note: With pagination, filters are applied only to the current page
   const displayDataRaw = testMode50k ? generateMockRisks(50000) as any[] : filteredRisks;
-  const displayData = useMemo(() => displayDataRaw.map(sanitizeRiskForRender), [displayDataRaw]);
+  const displayData = useMemo(() => displayDataRaw.map((risk, idx) => sanitizeRiskForRender(risk, idx)), [displayDataRaw]);
 
   // Memoize columns to prevent recreation on every render
   const columns: VirtualizedTableColumn<Risk>[] = useMemo(() => [
