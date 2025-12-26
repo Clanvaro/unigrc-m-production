@@ -306,6 +306,63 @@ export default function Risks() {
       const response = await fetch(`/api/pages/risks?${params}`);
       if (!response.ok) throw new Error("Failed to fetch risks page data");
       const data = await response.json();
+      
+      // ==================== DATA SANITIZATION ====================
+      // Sanitize ALL data at the source to prevent React error #185
+      // This ensures no objects are accidentally rendered as React children
+      const safeStr = (v: any): string => {
+        if (v == null) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+        return ''; // Objects become empty string
+      };
+      
+      // Sanitize catalog items
+      const sanitizeCatalogItem = (item: any) => {
+        if (!item || typeof item !== 'object') return null;
+        return {
+          ...item,
+          id: safeStr(item.id),
+          name: safeStr(item.name),
+          code: safeStr(item.code),
+          position: item.position ? safeStr(item.position) : undefined,
+          color: item.color ? safeStr(item.color) : undefined,
+        };
+      };
+      
+      // Sanitize all catalogs
+      if (data.catalogs) {
+        Object.keys(data.catalogs).forEach(key => {
+          if (Array.isArray(data.catalogs[key])) {
+            data.catalogs[key] = data.catalogs[key].map(sanitizeCatalogItem).filter(Boolean);
+          }
+        });
+      }
+      
+      // Sanitize risks
+      if (data.risks?.data) {
+        data.risks.data = data.risks.data.map((risk: any) => {
+          // Ensure category is an array of strings
+          let category: string[] = [];
+          if (Array.isArray(risk.category)) {
+            category = risk.category.filter((c: any) => typeof c === 'string' && c.trim()).map((c: string) => c.trim());
+          } else if (typeof risk.category === 'string' && risk.category.trim()) {
+            category = [risk.category.trim()];
+          }
+          
+          return {
+            ...risk,
+            id: safeStr(risk.id),
+            name: safeStr(risk.name),
+            description: safeStr(risk.description),
+            code: safeStr(risk.code),
+            status: safeStr(risk.status),
+            category,
+          };
+        });
+      }
+      // ==================== END SANITIZATION ====================
+      
       return data;
     },
     staleTime: 1000 * 60 * 2, // 2 minutes - invalidated on mutations
