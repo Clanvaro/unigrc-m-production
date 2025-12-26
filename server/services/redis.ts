@@ -495,6 +495,21 @@ export { usingRealRedis, initializeRedis, getRedisClient };
 
 export class DistributedCache {
   private readonly defaultTTL = 5 * 60;
+  // OPTIMIZED: Timeout for all Redis operations (fail-fast to L1/DB)
+  private readonly OPERATION_TIMEOUT_MS = 150;
+  
+  /**
+   * Helper: Wrap promise with timeout (fail-fast pattern)
+   * If Redis takes longer than OPERATION_TIMEOUT_MS, return null/undefined immediately
+   */
+  private async withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((resolve) => 
+        setTimeout(() => resolve(fallback), this.OPERATION_TIMEOUT_MS)
+      )
+    ]);
+  }
   
   /**
    * Get the Redis singleton client instance
@@ -529,44 +544,40 @@ export class DistributedCache {
   
   async set(key: string, data: any, ttl?: number): Promise<void> {
     try {
-      // FIXED: Get current redis instance to handle re-initialization
       const redisInstance = this.getRedis();
       if (!redisInstance || redisInstance === null) {
-        console.warn('[CACHE] Redis not initialized, skipping set operation');
-        return;
+        return; // Silent fail - no Redis available
       }
       const serializedData = JSON.stringify(data);
       const ttlSeconds = ttl || this.defaultTTL;
-      await redisInstance.setex(key, ttlSeconds, serializedData);
+      // OPTIMIZED: Timeout after 150ms - don't block on slow Redis
+      await this.withTimeout(
+        redisInstance.setex(key, ttlSeconds, serializedData),
+        undefined
+      );
     } catch (error) {
-      // FIXED: More detailed error logging to help debug initialization issues
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const errorName = error instanceof Error ? error.name : 'Error';
-      console.error(`[CACHE] Set error for key ${key}:`, errorName, errorMessage);
-      // Don't throw - graceful degradation
+      // Silent fail - graceful degradation to L1/DB
     }
   }
 
   async get(key: string): Promise<any | null> {
     try {
-      // FIXED: Get current redis instance to handle re-initialization
       const redisInstance = this.getRedis();
       if (!redisInstance || redisInstance === null) {
-        console.warn('[CACHE] Redis not initialized, returning null');
-        return null;
+        return null; // No Redis available
       }
-      const data = await redisInstance.get(key);
+      // OPTIMIZED: Timeout after 150ms - fallback to L1/DB immediately
+      const data = await this.withTimeout(
+        redisInstance.get(key),
+        null
+      );
       if (!data) return null;
       if (typeof data === 'string') {
         return JSON.parse(data);
       }
       return data;
     } catch (error) {
-      // FIXED: More detailed error logging to help debug initialization issues
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const errorName = error instanceof Error ? error.name : 'Error';
-      console.error(`[CACHE] Get error for key ${key}:`, errorName, errorMessage);
-      return null;
+      return null; // Silent fail - fallback to L1/DB
     }
   }
 
