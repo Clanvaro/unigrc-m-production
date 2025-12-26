@@ -34,6 +34,15 @@ interface ComboboxProps {
   className?: string;
 }
 
+// Helper to safely convert any value to string (prevents React error #185)
+const safeString = (val: any): string => {
+  if (val == null) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+  // If it's an object, return empty string to avoid rendering objects
+  return '';
+};
+
 export function Combobox({
   options,
   value,
@@ -47,7 +56,17 @@ export function Combobox({
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   
-  const selectedOption = options.find((option) => option.value === value);
+  // Normalize options to ensure all values are strings
+  const normalizedOptions = React.useMemo(() => 
+    options.map(opt => ({
+      value: safeString(opt.value),
+      label: safeString(opt.label),
+      description: opt.description ? safeString(opt.description) : undefined,
+    })),
+    [options]
+  );
+  
+  const selectedOption = normalizedOptions.find((option) => option.value === value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -81,7 +100,7 @@ export function Combobox({
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
-              {options.map((option) => (
+              {normalizedOptions.map((option) => (
                 <CommandItem
                   key={option.value}
                   value={`${option.label} ${option.description || ""}`}
