@@ -139,6 +139,7 @@ export async function getRisksFromReadModel(params: {
 
   // Normalize and sanitize all risk fields to prevent React error #185
   // PostgreSQL text[] can come as string '{val1,val2}' or array depending on driver
+  // Also convert snake_case to camelCase for frontend compatibility
   const normalizedRisks = (risksResult.rows as any[]).map(risk => ({
     ...risk,
     id: safeString(risk.id),
@@ -154,6 +155,11 @@ export async function getRisksFromReadModel(params: {
     subproceso_name: safeString(risk.subproceso_name),
     subproceso_code: safeString(risk.subproceso_code),
     validation_status: safeString(risk.validation_status),
+    // CamelCase aliases for frontend compatibility
+    controlCount: risk.control_count || 0,
+    avgEffectiveness: risk.avg_effectiveness || 0,
+    processCount: risk.process_count || 0,
+    actionPlanCount: risk.action_plan_count || 0,
   }));
 
   return {
@@ -347,7 +353,7 @@ export async function getMinimalCatalogs(): Promise<{
 }
 
 /**
- * Obtiene relaciones lite (solo totales, no detalles completos)
+ * Obtiene relaciones lite (totales + summaries para columnas)
  * OPTIMIZADO: Solo procesa los riesgos de la página actual (limit/offset)
  * Devuelve Record en lugar de Map para serialización JSON
  */
@@ -359,6 +365,8 @@ export async function getRelationsLite(
   controlsByRisk: Record<string, { count: number; avgEffectiveness: number }>;
   processesByRisk: Record<string, string[]>; // Array de process IDs
   actionPlansByRisk: Record<string, number>;
+  controlsSummary: Record<string, Array<{ code: string }>>;
+  actionPlansSummary: Record<string, Array<{ code: string; status: string }>>;
 }> {
   // Usar db global
 
@@ -449,14 +457,16 @@ export async function getRelationsLite(
       controlsByRisk: {},
       processesByRisk: {},
       actionPlansByRisk: {},
+      controlsSummary: {},
+      actionPlansSummary: {},
     };
   }
 
   const riskIdsSql = sql.join(riskIds.map((id) => sql`${id}`), sql`, `);
 
-  // Queries agregadas en paralelo
-  const [controlsResult, processesResult, actionsResult] = await Promise.all([
-    // Controls por riesgo
+  // Queries agregadas en paralelo - incluye summaries para columnas
+  const [controlsResult, processesResult, actionsResult, controlCodesResult, actionPlansCodesResult] = await Promise.all([
+    // Controls por riesgo (count + avg)
     db.execute(sql`
       SELECT 
         rc.risk_id,
@@ -490,6 +500,42 @@ export async function getRelationsLite(
         AND deleted_at IS NULL
       GROUP BY risk_id
     `),
+
+    // Control codes (limited to 3 per risk for display)
+    db.execute(sql`
+      WITH ranked_controls AS (
+        SELECT 
+          rc.risk_id,
+          c.code,
+          ROW_NUMBER() OVER (PARTITION BY rc.risk_id ORDER BY c.code) as rn
+        FROM risk_controls rc
+        INNER JOIN controls c ON rc.control_id = c.id
+        WHERE rc.risk_id IN (${riskIdsSql}) AND c.deleted_at IS NULL
+      )
+      SELECT risk_id, code
+      FROM ranked_controls
+      WHERE rn <= 3
+      ORDER BY risk_id, rn
+    `),
+
+    // Action plans codes (limited to 3 per risk for display)
+    db.execute(sql`
+      WITH ranked_actions AS (
+        SELECT 
+          a.risk_id,
+          a.code,
+          a.status,
+          ROW_NUMBER() OVER (PARTITION BY a.risk_id ORDER BY a.created_at DESC) as rn
+        FROM actions a
+        WHERE a.risk_id IN (${riskIdsSql}) 
+          AND a.origin = 'risk'
+          AND a.deleted_at IS NULL
+      )
+      SELECT risk_id, code, status
+      FROM ranked_actions
+      WHERE rn <= 3
+      ORDER BY risk_id, rn
+    `),
   ]);
 
   // Convertir a Record (serializable en JSON)
@@ -512,10 +558,34 @@ export async function getRelationsLite(
     actionPlansByRisk[row.risk_id] = row.count || 0;
   }
 
+  // Build controlsSummary (codes for display)
+  const controlsSummary: Record<string, Array<{ code: string }>> = {};
+  for (const row of controlCodesResult.rows as any[]) {
+    if (!controlsSummary[row.risk_id]) {
+      controlsSummary[row.risk_id] = [];
+    }
+    if (controlsSummary[row.risk_id].length < 3 && row.code) {
+      controlsSummary[row.risk_id].push({ code: row.code });
+    }
+  }
+
+  // Build actionPlansSummary (codes + status for display)
+  const actionPlansSummary: Record<string, Array<{ code: string; status: string }>> = {};
+  for (const row of actionPlansCodesResult.rows as any[]) {
+    if (!actionPlansSummary[row.risk_id]) {
+      actionPlansSummary[row.risk_id] = [];
+    }
+    if (actionPlansSummary[row.risk_id].length < 3 && row.code) {
+      actionPlansSummary[row.risk_id].push({ code: row.code, status: row.status || '' });
+    }
+  }
+
   return {
     controlsByRisk,
     processesByRisk,
     actionPlansByRisk,
+    controlsSummary,
+    actionPlansSummary,
   };
 }
 

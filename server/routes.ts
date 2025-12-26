@@ -2732,8 +2732,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[PERF] /api/pages/risks data fetch: ${fetchDuration}ms (risks: ${risksData.risks.length}, total: ${risksData.total})`);
 
         // Enrich risks with summary data from relations and catalogs
-        // Note: controlsSummary and actionPlansSummary codes require additional queries
-        // For now, we only add processesSummary. Frontend will use fallback for others.
         const enrichedRisks = risksData.risks.map((risk: any) => {
           const riskId = risk.id;
           
@@ -2750,11 +2748,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             })
             .filter((p: any): p is { name: string; type: 'process' } => p !== null && p.name.length > 0);
           
+          // Get controlsSummary and actionPlansSummary from relationsLite
+          const controlsSummary = relationsLite.controlsSummary[riskId] || [];
+          const actionPlansSummary = relationsLite.actionPlansSummary[riskId] || [];
+          
           return {
             ...risk,
-            // Only add processesSummary if we have valid data
-            // Frontend will use fallback for controlsSummary and actionPlansSummary
+            // Add all summary data for display columns
             ...(processesSummary.length > 0 && { processesSummary }),
+            ...(controlsSummary.length > 0 && { controlsSummary }),
+            ...(actionPlansSummary.length > 0 && { actionPlansSummary }),
           };
         });
 
@@ -12463,6 +12466,8 @@ Redactas en español neutro, claro y profesional.`;
   // Helper function to invalidate action plan caches
   async function invalidateActionPlanCaches(tenantId: string) {
     await distributedCache.set(`action-plans:${CACHE_VERSION}:${tenantId}`, null, 0);
+    // Also invalidate risks page cache so action plans column updates in risks list
+    invalidatePagesRisksCache();
   }
 
   app.post("/api/action-plans", isAuthenticated, async (req, res) => {
@@ -12494,7 +12499,7 @@ Redactas en español neutro, claro y profesional.`;
         name: action.title, // Map title back to name
       };
 
-      // Invalidate action plans cache
+      // Invalidate action plans cache (also invalidates risks page cache)
       const { tenantId } = await resolveActiveTenant(req, { required: true });
       await invalidateActionPlanCaches(tenantId);
 
