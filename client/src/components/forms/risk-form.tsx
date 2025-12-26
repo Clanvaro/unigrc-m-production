@@ -57,12 +57,22 @@ type AISuggestionsResponse = {
   analysisMetadata?: any;
 };
 
+// OPTIMIZED: Accept catalogs as optional props to avoid redundant API calls
+// When opened from risks page, catalogs are already loaded from BFF
+interface CatalogsProps {
+  macroprocesos?: any[];
+  processes?: any[];
+  subprocesos?: any[];
+  riskCategories?: any[];
+}
+
 interface RiskFormProps {
   risk?: Risk;
   onSuccess?: () => void;
+  catalogs?: CatalogsProps;
 }
 
-export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
+export default function RiskForm({ risk, onSuccess, catalogs }: RiskFormProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -78,17 +88,32 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
   const [useGlobalDocumentation, setUseGlobalDocumentation] = useState<boolean>(false);
   const lastToastTimeRef = useRef<number>(0);
 
-  const { data: macroprocesos = [] } = useQuery<any[]>({
+  // OPTIMIZED: Use props if provided, otherwise fetch (eliminates 4 API calls when opened from risks page)
+  const { data: fetchedMacroprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/macroprocesos"],
+    enabled: !catalogs?.macroprocesos?.length, // Only fetch if not provided
   });
+  const macroprocesos = catalogs?.macroprocesos?.length ? catalogs.macroprocesos : fetchedMacroprocesos;
 
-  const { data: processes = [] } = useQuery<any[]>({
+  const { data: fetchedProcesses = [] } = useQuery<any[]>({
     queryKey: ["/api/processes"],
+    enabled: !catalogs?.processes?.length,
   });
+  const processes = catalogs?.processes?.length ? catalogs.processes : fetchedProcesses;
 
-  const { data: subprocesos = [] } = useQuery<any[]>({
+  const { data: fetchedSubprocesos = [] } = useQuery<any[]>({
     queryKey: ["/api/subprocesos"],
+    enabled: !catalogs?.subprocesos?.length,
   });
+  const subprocesos = catalogs?.subprocesos?.length ? catalogs.subprocesos : fetchedSubprocesos;
+
+  const { data: fetchedRiskCategories = [] } = useQuery<any[]>({
+    queryKey: ["/api/risk-categories"],
+    enabled: !catalogs?.riskCategories?.length,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+  });
+  const riskCategories = catalogs?.riskCategories?.length ? catalogs.riskCategories : fetchedRiskCategories;
 
   // Cargar criterios dinámicos de probabilidad
   const { data: probabilityCriteria = [] } = useQuery<DynamicCriterion[]>({
@@ -1319,11 +1344,7 @@ export default function RiskForm({ risk, onSuccess }: RiskFormProps) {
           control={form.control}
           name="category"
           render={({ field }) => {
-            const { data: riskCategories = [], isLoading: isLoadingCategories, isFetching: isFetchingCategories } = useQuery<any[]>({
-              queryKey: ["/api/risk-categories"],
-              staleTime: 1000 * 60 * 5, // Cache for 5 minutes (catalog data changes infrequently)
-              refetchOnWindowFocus: false, // Don't refetch on window focus to improve performance
-            });
+            // OPTIMIZED: Use riskCategories from props or from query defined at component level
             const availableCategories = riskCategories
               .filter((cat: any) => cat.isActive !== false)
               .map((cat: any) => cat.name);

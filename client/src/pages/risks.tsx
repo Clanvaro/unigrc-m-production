@@ -2436,6 +2436,7 @@ export default function Risks() {
                       <RiskForm
                         risk={editingRisk}
                         onSuccess={handleEditSuccess}
+                        catalogs={{ macroprocesos, processes, subprocesos, riskCategories }}
                       />
                     </Suspense>
                   </TabsContent>
@@ -2778,7 +2779,10 @@ export default function Risks() {
                           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                         </div>
                       }>
-                        <RiskForm onSuccess={handleCreateSuccess} />
+                        <RiskForm 
+                          onSuccess={handleCreateSuccess}
+                          catalogs={{ macroprocesos, processes, subprocesos, riskCategories }}
+                        />
                       </Suspense>
                     </DialogContent>
                   </Dialog>
