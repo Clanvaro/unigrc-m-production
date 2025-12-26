@@ -19039,6 +19039,7 @@ Redactas en español neutro, claro y profesional.`;
   });
 
   // Macroprocesos routes - with 60s distributed cache
+  // OPTIMIZED: Owner data now comes from JOIN in getMacroprocesos() - eliminated separate query
   app.get("/api/macroprocesos", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const requestStart = Date.now();
     try {
@@ -19058,38 +19059,36 @@ Redactas en español neutro, claro y profesional.`;
       const fetchStart = Date.now();
 
       // PERFORMANCE: Only fetch macroproceso risk levels (not all entities)
-      const [macroprocesos, allRiskLevels] = await Promise.all([
+      // OPTIMIZED: getMacroprocesos() now includes owner data via LEFT JOIN
+      const [macroprocesosWithOwners, allRiskLevels] = await Promise.all([
         storage.getMacroprocesos(),
         storage.getAllRiskLevelsOptimized({ entities: ['macroprocesos'] })
       ]);
 
       const fetchDuration = Date.now() - fetchStart;
-      console.log(`[DB] /api/macroprocesos fetched ${macroprocesos.length} macroprocesos and risk levels in ${fetchDuration}ms`);
+      console.log(`[DB] /api/macroprocesos fetched ${macroprocesosWithOwners.length} macroprocesos and risk levels in ${fetchDuration}ms`);
 
       if (fetchDuration > 3000) {
         console.warn(`⚠️ Slow /api/macroprocesos query: ${fetchDuration}ms`);
       }
 
-      // Filter out soft-deleted records
-      const activeMacroprocesos = macroprocesos.filter((m: any) => m.status !== 'deleted');
-
-      // Fetch process owners for macroprocesos that have ownerId
-      const ownerIds = [...new Set(activeMacroprocesos.map((m: any) => m.ownerId).filter(Boolean))];
-      const owners = ownerIds.length > 0
-        ? await requireDb().select().from(processOwners).where(inArray(processOwners.id, ownerIds))
-        : [];
-      const ownersMap = new Map(owners.map(owner => [owner.id, owner]));
-
-      const macroprocesoswithRisks = activeMacroprocesos.map((macroproceso) => {
-        const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
-        const owner = macroproceso.ownerId ? ownersMap.get(macroproceso.ownerId) : null;
-
-        return {
-          ...macroproceso,
-          ...riskLevels,
-          owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : null
-        };
-      });
+      // OPTIMIZED: Owner data already included from JOIN, no separate query needed
+      const macroprocesoswithRisks = macroprocesosWithOwners
+        .filter((m: any) => m.status !== 'deleted')
+        .map((macroproceso) => {
+          const riskLevels = allRiskLevels.macroprocesos.get(macroproceso.id) || { inherentRisk: 0, residualRisk: 0, riskCount: 0 };
+          
+          // Owner data comes from JOIN (ownerName, ownerEmail)
+          const { ownerName, ownerEmail, ...rest } = macroproceso;
+          
+          return {
+            ...rest,
+            ...riskLevels,
+            owner: macroproceso.ownerId && ownerName 
+              ? { id: macroproceso.ownerId, name: ownerName, email: ownerEmail } 
+              : null
+          };
+        });
 
       // Cache for 5 minutes (L1: 2.5min, L2: 5min) - increased from 60s for better performance
       await twoTierCache.set(cacheKey, macroprocesoswithRisks, 300);

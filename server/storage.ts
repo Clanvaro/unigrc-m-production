@@ -8470,16 +8470,17 @@ export class DatabaseStorage extends MemStorage {
   }
 
   // ============== MACROPROCESOS - Use Database ==============
-  async getMacroprocesos(): Promise<Macroproceso[]> {
+  // OPTIMIZED: Returns macroprocesos with owner data via LEFT JOIN (eliminates N+1 query)
+  async getMacroprocesos(): Promise<(Macroproceso & { ownerName?: string | null; ownerEmail?: string | null })[]> {
     // OPTIMIZED: Use local cache only (no Upstash) - 2 hour TTL for static catalog data
-    const localCached = getCatalogFromCache<Macroproceso[]>('macroprocesos');
+    const localCached = getCatalogFromCache<(Macroproceso & { ownerName?: string | null; ownerEmail?: string | null })[]>('macroprocesos');
     if (localCached) {
       return localCached;
     }
 
     const result = await withRetry(async () => {
-      // OPTIMIZED: Only select fields needed for filters/display (reduces data transfer by ~40%)
-      // IMPORTANT: Include 'type' and 'order' for value chain display
+      // OPTIMIZED: LEFT JOIN with processOwners to include owner data in single query
+      // This eliminates the separate query for owners in /api/macroprocesos endpoint
       return await db.select({
         id: macroprocesos.id,
         name: macroprocesos.name,
@@ -8488,13 +8489,14 @@ export class DatabaseStorage extends MemStorage {
         order: macroprocesos.order, // Required for sorting in value chain
         status: macroprocesos.status,
         gerenciaId: macroprocesos.gerenciaId,
-        ownerId: macroprocesos.ownerId, // Required for owner display in value chain
+        ownerId: macroprocesos.ownerId,
+        // Owner data via LEFT JOIN
+        ownerName: processOwners.name,
+        ownerEmail: processOwners.email,
       })
         .from(macroprocesos)
-        .where(and(
-          isNull(macroprocesos.deletedAt),
-          sql`${macroprocesos.status} != 'deleted'`
-        ));
+        .leftJoin(processOwners, eq(macroprocesos.ownerId, processOwners.id))
+        .where(isNull(macroprocesos.deletedAt));
     });
 
     // Cache locally for 2 hours (static catalog data)
