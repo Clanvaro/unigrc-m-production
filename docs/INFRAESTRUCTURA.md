@@ -19,18 +19,14 @@
     │   (Cloud Run)         │       │   (GCS Bucket + CDN)      │
     └───────────┬───────────┘       └───────────────────────────┘
                 │
-    ┌───────────▼───────────┐
-    │  VPC Connector        │
-    │  (private network)    │
-    └───────────┬───────────┘
-                │
     ┌───────────▼───────────┐       ┌─────────────────────────┐
-    │    PgBouncer          │       │   Upstash Redis         │
-    │  (connection pooler)  │       │   (distributed cache)   │
+    │  VPC Connector        │       │   Upstash Redis         │
+    │  (private network)    │       │   (distributed cache)   │
     └───────────┬───────────┘       └─────────────────────────┘
                 │
     ┌───────────▼───────────┐
     │  Cloud SQL PostgreSQL │
+    │  (via Cloud SQL Proxy)│
     │  (instance: unigrc-db)│
     └───────────────────────┘
 ```
@@ -67,8 +63,9 @@
 |-----------|-------|
 | Instancia | `unigrc-db` |
 | Tipo | PostgreSQL |
-| Conexión | Via VPC + PgBouncer |
+| Conexión | Via Cloud SQL Auth Proxy (directo) |
 | Cloud SQL Instance | `unigrc-m:southamerica-west1:unigrc-db` |
+| Pool Size | 10 conexiones (Node.js pg pool) |
 
 ### VPC & Networking
 

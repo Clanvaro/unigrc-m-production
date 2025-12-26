@@ -46,7 +46,7 @@ steps:
       - '--concurrency=4'
       - '--timeout=300'
       - '--set-env-vars=NODE_ENV=production,IS_GCP_DEPLOYMENT=true,GCS_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=unigrc-uploads-$PROJECT_ID,FRONTEND_URL=https://cl.unigrc.app'
-      - '--set-secrets=DATABASE_URL=DATABASE_URL:latest,PGBOUNCER_URL=PGBOUNCER_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,CSRF_SECRET=CSRF_SECRET:latest,GCS_CLIENT_EMAIL=GCS_CLIENT_EMAIL:latest,GCS_PRIVATE_KEY=GCS_PRIVATE_KEY:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest'
+      - '--set-secrets=DATABASE_URL=DATABASE_URL:latest,SESSION_SECRET=SESSION_SECRET:latest,CSRF_SECRET=CSRF_SECRET:latest,GCS_CLIENT_EMAIL=GCS_CLIENT_EMAIL:latest,GCS_PRIVATE_KEY=GCS_PRIVATE_KEY:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,UPSTASH_REDIS_REST_TOKEN=UPSTASH_REDIS_REST_TOKEN:latest,UPSTASH_REDIS_REST_URL=UPSTASH_REDIS_REST_URL:latest'
       - '--add-cloudsql-instances=unigrc-m:southamerica-west1:unigrc-db'
       - '--vpc-connector=unigrc-connector'
       - '--vpc-egress=private-ranges-only'
