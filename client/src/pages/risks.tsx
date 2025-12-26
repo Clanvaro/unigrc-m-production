@@ -333,13 +333,31 @@ export default function Risks() {
   // Determine if this is the initial load (no previous data)
   const isInitialLoad = !bootstrapData || bootstrapData.risks.data.length === 0;
 
+  // Helper to sanitize catalog items - ensures all fields are primitive types
+  const sanitizeCatalog = useCallback((arr: any[]) => {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((item: any) => {
+      if (!item || typeof item !== 'object') return null;
+      const safeStr = (v: any) => (v == null ? '' : typeof v === 'string' ? v : String(v));
+      return {
+        ...item,
+        id: safeStr(item.id),
+        name: safeStr(item.name),
+        code: item.code ? safeStr(item.code) : undefined,
+        color: item.color ? safeStr(item.color) : undefined,
+        position: item.position ? safeStr(item.position) : undefined,
+      };
+    }).filter(Boolean);
+  }, []);
+
   // Catalogs from bootstrap (cached for 5 min on server, use local staleTime too)
-  const gerencias = bootstrapData?.catalogs?.gerencias || [];
-  const macroprocesos = bootstrapData?.catalogs?.macroprocesos || [];
-  const subprocesos = bootstrapData?.catalogs?.subprocesos || [];
-  const processes = bootstrapData?.catalogs?.processes || [];
+  // All catalogs are sanitized to ensure string values (prevents React error #185)
+  const gerencias = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.gerencias || []), [bootstrapData?.catalogs?.gerencias, sanitizeCatalog]);
+  const macroprocesos = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.macroprocesos || []), [bootstrapData?.catalogs?.macroprocesos, sanitizeCatalog]);
+  const subprocesos = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.subprocesos || []), [bootstrapData?.catalogs?.subprocesos, sanitizeCatalog]);
+  const processes = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.processes || []), [bootstrapData?.catalogs?.processes, sanitizeCatalog]);
   const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
-  const riskCategories = bootstrapData?.catalogs?.riskCategories || [];
+  const riskCategories = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.riskCategories || []), [bootstrapData?.catalogs?.riskCategories, sanitizeCatalog]);
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
 
   // Mapa de colores de categorías - O(1) lookup, se recalcula solo cuando cambia riskCategories
@@ -354,21 +372,37 @@ export default function Risks() {
   useEffect(() => {
     if (bootstrapData?.catalogs) {
       const { catalogs } = bootstrapData;
-      // Populate cache with catalogs (they will be served instantly from cache)
+      
+      // Helper to sanitize catalog items - ensures all fields are strings
+      const sanitizeCatalogItem = (item: any) => {
+        if (!item || typeof item !== 'object') return null;
+        const safeStr = (v: any) => (v == null ? '' : typeof v === 'string' ? v : String(v));
+        return {
+          ...item,
+          id: safeStr(item.id),
+          name: safeStr(item.name),
+          code: safeStr(item.code),
+          position: item.position ? safeStr(item.position) : undefined,
+        };
+      };
+      
+      const sanitizeArray = (arr: any[]) => arr?.map(sanitizeCatalogItem).filter(Boolean) || [];
+      
+      // Populate cache with sanitized catalogs (they will be served instantly from cache)
       if (catalogs.processes?.length) {
-        queryClient.setQueryData(["/api/processes"], catalogs.processes);
+        queryClient.setQueryData(["/api/processes"], sanitizeArray(catalogs.processes));
       }
       if (catalogs.macroprocesos?.length) {
-        queryClient.setQueryData(["/api/macroprocesos"], catalogs.macroprocesos);
+        queryClient.setQueryData(["/api/macroprocesos"], sanitizeArray(catalogs.macroprocesos));
       }
       if (catalogs.subprocesos?.length) {
-        queryClient.setQueryData(["/api/subprocesos"], catalogs.subprocesos);
+        queryClient.setQueryData(["/api/subprocesos"], sanitizeArray(catalogs.subprocesos));
       }
       if (catalogs.gerencias?.length) {
-        queryClient.setQueryData(["/api/gerencias"], catalogs.gerencias);
+        queryClient.setQueryData(["/api/gerencias"], sanitizeArray(catalogs.gerencias));
       }
       if (catalogs.processOwners?.length) {
-        queryClient.setQueryData(["/api/process-owners"], catalogs.processOwners);
+        queryClient.setQueryData(["/api/process-owners"], sanitizeArray(catalogs.processOwners));
       }
     }
   }, [bootstrapData?.catalogs, queryClient]);
