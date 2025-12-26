@@ -423,46 +423,9 @@ export default function Risks() {
   // Process owners from bootstrap (for basic display)
   const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
 
-  // OPTIMIZATION: Populate React Query cache with catalogs from /api/pages/risks
-  // This eliminates redundant API calls from RiskSearchAndFilterDialog (in header)
-  // The component queries /api/processes, /api/macroprocesos, etc. which now get data from cache
-  useEffect(() => {
-    if (bootstrapData?.catalogs) {
-      const { catalogs } = bootstrapData;
-      
-      // Helper to sanitize catalog items - ensures all fields are strings
-      const sanitizeCatalogItem = (item: any) => {
-        if (!item || typeof item !== 'object') return null;
-        const safeStr = (v: any) => (v == null ? '' : typeof v === 'string' ? v : String(v));
-        return {
-          ...item,
-          id: safeStr(item.id),
-          name: safeStr(item.name),
-          code: safeStr(item.code),
-          position: item.position ? safeStr(item.position) : undefined,
-        };
-      };
-      
-      const sanitizeArray = (arr: any[]) => arr?.map(sanitizeCatalogItem).filter(Boolean) || [];
-      
-      // Populate cache with sanitized catalogs (they will be served instantly from cache)
-      if (catalogs.processes?.length) {
-        queryClient.setQueryData(["/api/processes"], sanitizeArray(catalogs.processes));
-      }
-      if (catalogs.macroprocesos?.length) {
-        queryClient.setQueryData(["/api/macroprocesos"], sanitizeArray(catalogs.macroprocesos));
-      }
-      if (catalogs.subprocesos?.length) {
-        queryClient.setQueryData(["/api/subprocesos"], sanitizeArray(catalogs.subprocesos));
-      }
-      if (catalogs.gerencias?.length) {
-        queryClient.setQueryData(["/api/gerencias"], sanitizeArray(catalogs.gerencias));
-      }
-      if (catalogs.processOwners?.length) {
-        queryClient.setQueryData(["/api/process-owners"], sanitizeArray(catalogs.processOwners));
-      }
-    }
-  }, [bootstrapData?.catalogs, queryClient]);
+  // NOTE: Removed useEffect that populated React Query cache with catalogs
+  // This was causing React error #185 due to potential race conditions
+  // The RiskSearchAndFilterDialog in header doesn't receive catalogs anyway (uses empty arrays)
 
   // Legacy compatibility - these were separate queries before
   const isPageDataLoading = isBootstrapLoading;
