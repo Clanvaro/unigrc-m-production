@@ -26805,12 +26805,32 @@ Redactas en español neutro, claro y profesional.`;
   // OPTIMIZED: Uses local cache only (no Upstash latency)
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    
+    // Helper to ensure value is a string (prevents React error #185)
+    const safeStr = (val: any): string => {
+      if (val == null) return '';
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+      return '';
+    };
+    
+    // Sanitize process owners to prevent React error #185
+    const sanitizeOwners = (owners: any[]) => owners.map(po => ({
+      id: safeStr(po.id),
+      name: safeStr(po.name),
+      email: safeStr(po.email),
+      position: po.position ? safeStr(po.position) : undefined,
+      isActive: po.isActive,
+      createdAt: po.createdAt,
+      updatedAt: po.updatedAt,
+    }));
+    
     try {
       // Try local cache first (instant, <1ms)
       const cached = getCatalogFromCache<any[]>('processOwners');
       if (cached) {
         console.log(`[CACHE HIT] /api/process-owners in ${Date.now() - startTime}ms`);
-        return res.json(cached);
+        return res.json(sanitizeOwners(cached));
       }
 
       const queryStart = Date.now();
@@ -26818,13 +26838,16 @@ Redactas en español neutro, claro y profesional.`;
       const queryDuration = Date.now() - queryStart;
       console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
 
+      // Sanitize before caching and returning
+      const sanitizedOwners = sanitizeOwners(owners);
+      
       // Cache locally (1 hour TTL)
-      setCatalogCache('processOwners', owners);
+      setCatalogCache('processOwners', sanitizedOwners);
 
       const duration = Date.now() - startTime;
       console.log(`[CACHE SET] /api/process-owners in ${duration}ms`);
 
-      res.json(owners);
+      res.json(sanitizedOwners);
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
