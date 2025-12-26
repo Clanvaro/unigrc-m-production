@@ -107,7 +107,11 @@ export default function RiskForm({ risk, onSuccess, catalogs }: RiskFormProps) {
   });
   const subprocesos = catalogs?.subprocesos?.length ? catalogs.subprocesos : fetchedSubprocesos;
 
-  const { data: fetchedRiskCategories = [] } = useQuery<any[]>({
+  const { 
+    data: fetchedRiskCategories = [],
+    isLoading: isLoadingCategories,
+    isFetching: isFetchingCategories
+  } = useQuery<any[]>({
     queryKey: ["/api/risk-categories"],
     enabled: !catalogs?.riskCategories?.length,
     staleTime: 1000 * 60 * 5,
