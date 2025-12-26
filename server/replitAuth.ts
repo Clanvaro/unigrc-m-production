@@ -116,6 +116,9 @@ export function getSession() {
       ttl: sessionTtl,
       tableName: "sessions",
       pruneSessionInterval: 24 * 60 * 60, // Auto-cleanup expired sessions every 24 hours (in seconds)
+      // OPTIMIZED: Disable touch to prevent UPDATE on every request
+      // This dramatically reduces DB queries and connection usage
+      disableTouch: true,
       errorLog: (err: Error) => {
         console.error('[Session Store Error]', err.message);
         console.error('[Session Store Error Stack]', err.stack);
@@ -142,6 +145,9 @@ export function getSession() {
     store: sessionStore, // undefined = use default MemoryStore
     resave: false,
     saveUninitialized: false,
+    // OPTIMIZED: Disable rolling to prevent cookie refresh on every request
+    // Combined with disableTouch, this eliminates most session-related DB writes
+    rolling: false,
     cookie: {
       httpOnly: true,
       secure: isProduction, // Only require HTTPS in production

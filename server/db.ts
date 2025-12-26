@@ -180,15 +180,11 @@ if (databaseUrl) {
     poolMax = pgbouncerMax;
     console.log(`[DB Config] PgBouncer mode: Cloud Run poolMax=${poolMax} (PgBouncer handles real pooling to DB)`);
   } else if (isCloudSql) {
-    // OPTIMIZED: Reduced pool max from 20 to 4 for Cloud Run stability
-    // Formula: max instances (5) × pool max (4) = 20 total connections (stable)
-    // This prevents pool exhaustion and improves connection reuse
-    // Cloud Run + Cloud SQL: Adjust based on concurrency and max_connections
-    // Default: Conservative 4 connections per instance (adjust based on Cloud SQL instance size)
-    // Review Cloud SQL logs to detect too many connections and adjust accordingly
-    // OPTIMIZED: Increased from 4 to 5 for concurrency=8 config
-    // Formula: concurrency(8) / 2 = 4, +1 buffer = 5
-    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '5', 10);
+    // OPTIMIZED: Reduced pool max to 4 for Cloud SQL stability
+    // Formula: max instances (6) × pool max (4) = 24 total connections
+    // Cloud SQL db-g1-small has ~25 max connections, so 24 is safe
+    // This prevents "too many connections" errors under load
+    const cloudSqlMax = parseInt(process.env.DB_POOL_MAX || '4', 10);
     poolMax = cloudSqlMax;
   } else if (isRenderDb) {
     poolMax = 20; // Render Basic-1gb can handle ~50-100
@@ -206,28 +202,24 @@ if (databaseUrl) {
     connectionString: normalizedDatabaseUrl,
     max: poolMax,
     min: poolMin,
-    // Cloud SQL: Longer idle timeout to avoid frequent reconnections (Unix socket is stable)
-    // Render: 1 min idle (recycle before server closes)
-    idleTimeoutMillis: isCloudSql ? 60000 : (isRenderDb ? 60000 : 30000),
-    // Increased connection timeout to 60s for Cloud SQL to handle pool saturation better
-    // This gives more time when pool is busy, reducing "Connection terminated due to connection timeout" errors
-    // Also increased for other DBs to handle pool saturation better
-    connectionTimeoutMillis: isCloudSql ? 60000 : Math.max(connectionTimeout, 30000), // Min 30s to handle pool saturation
+    // OPTIMIZED: Increased idle timeout to 10 minutes to reduce connection churn
+    // Longer idle connections = fewer SSL handshakes = lower latency
+    // Cloud SQL connections are stable, no need to recycle frequently
+    idleTimeoutMillis: isCloudSql ? 600000 : (isRenderDb ? 60000 : 30000), // 10 min for Cloud SQL
+    // OPTIMIZED: Reduced connection timeout to fail fast and retry
+    // 10s is enough to detect connection issues; retry logic handles recovery
+    connectionTimeoutMillis: isCloudSql ? 10000 : Math.max(connectionTimeout, 10000),
     keepAlive: true,
     // Cloud SQL Proxy: Start keep-alive sooner for better connection health
     keepAliveInitialDelayMillis: isCloudSql ? 3000 : 5000,
-    // OPTIMIZED: Allow connections to be reused many times before recycling
-    // Higher maxUses reduces connection churn and improves performance with slow databases
-    // Connections will be recycled naturally after many uses, preventing stale connections
-    maxUses: 100, // Same for all DB types - allows connections to serve many queries before recycling
+    // OPTIMIZED: Disabled maxUses to prevent unnecessary connection recycling
+    // With direct Cloud SQL connection, connections are stable and don't need recycling
+    // This eliminates SSL handshake latency from connection churn
+    maxUses: 0, // 0 = disabled, connections live until idle timeout
     // Application name for better monitoring in Cloud SQL
     application_name: 'unigrc-backend',
     ssl: sslConfig,
     allowExitOnIdle: false,
-    // OPTIMIZED: Add acquire timeout to prevent indefinite waiting when pool is saturated
-    // This will throw an error if a connection can't be acquired within this time
-    // Set to 30s to match connectionTimeout, but this is for acquiring from pool, not creating new connection
-    // Note: pg Pool doesn't have acquireTimeoutMillis, but we handle this in our retry logic
   };
 
   // Only add statement_timeout if NOT using PgBouncer
@@ -238,8 +230,9 @@ if (databaseUrl) {
   pool = new Pool(poolConfig);
   db = drizzle(pool, { schema, logger: true });
 
-  const actualConnectionTimeout = isCloudSql ? 60000 : connectionTimeout;
-  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${isRenderDb ? 60000 : 30000}ms, maxUses=100, env=${isProduction ? 'production' : 'development'}`);
+  const actualConnectionTimeout = isCloudSql ? 10000 : connectionTimeout;
+  const actualIdleTimeout = isCloudSql ? 600000 : (isRenderDb ? 60000 : 30000);
+  console.log(`📊 Database config: pool=${poolMin}-${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, statementTimeout=${statementTimeout}ms, idleTimeout=${actualIdleTimeout}ms, maxUses=disabled, env=${isProduction ? 'production' : 'development'}`);
   if (isCloudSql) {
     // FIXED: Detect private IP correctly for logging
     const host = databaseUrl?.split('@')[1]?.split('/')[0]?.split(':')[0] || 'unknown';
@@ -249,7 +242,7 @@ if (databaseUrl) {
       : isPrivateIP
         ? 'IP privada (VPC)'
         : 'IP pública';
-    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, maxUses=100 (connections recycled after 100 uses), connectionType=${connectionType}, host: ${host}`);
+    console.log(`📊 Cloud SQL pool config: max=${poolMax}, connectionTimeout=${actualConnectionTimeout}ms, idleTimeout=${actualIdleTimeout}ms, maxUses=disabled (stable connections), connectionType=${connectionType}, host: ${host}`);
     if (!isCloudSqlProxy) {
       console.warn(`⚠️ RECOMMENDATION: Switch to Unix socket connection for Cloud SQL to reduce latency from 100-1000ms to <10ms`);
     }
@@ -1100,12 +1093,12 @@ function startPoolWarming() {
                 : isCloudSql
                   ? 'IP pública'
                   : 'unknown';
-            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}, host: ${host}) - connection will recycle naturally via maxUses`);
+            console.warn(`⚠️ Slow DB ping: ${pingDuration}ms (connectionType: ${connectionType}, host: ${host}) - connection stable until idleTimeout`);
           }
 
-          // OPTIMIZED: Let connections recycle naturally via maxUses instead of closing aggressively
+          // OPTIMIZED: Let connections stay alive until idleTimeout (10 min)
           // Slow pings don't necessarily mean the connection is bad - it might just be network latency
-          // maxUses=100 ensures connections are recycled after many uses anyway
+          // With maxUses disabled, connections are stable and efficient
           // Only log for monitoring, don't force close or warm pool unnecessarily
         } catch (error: any) {
           // Limpiar timeout si aún existe
@@ -1133,7 +1126,7 @@ function startPoolWarming() {
                   ? 'IP pública'
                   : 'unknown';
             console.warn(`⚠️ Ping timeout/error (${error?.message || error}) - connection will be recycled naturally (connectionType: ${connectionType}, host: ${host})`);
-            // Don't force close - let the pool handle it naturally via maxUses and idleTimeout
+            // Don't force close - let the pool handle it naturally via idleTimeout (10 min)
           } else {
             console.warn('⚠️ Pool keep-alive ping failed:', error?.message || error);
             // Only warm pool if it's completely empty, not on every ping failure
@@ -1145,7 +1138,7 @@ function startPoolWarming() {
             timeoutId = null;
           }
 
-          // Always release connection back to pool if valid (let maxUses handle recycling)
+          // Always release connection back to pool if valid
           if (client) {
             try {
               client.release();
@@ -1162,7 +1155,7 @@ function startPoolWarming() {
     }
   }, PING_INTERVAL);
 
-  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL / 1000}s (paused 00:00-07:00 Chile time, maxUses=100 for natural recycling)`);
+  console.log(`✅ Pool warming started - pinging every ${PING_INTERVAL / 1000}s (paused 00:00-07:00 Chile time, idleTimeout=10min)`);
 }
 
 function stopPoolWarming() {
