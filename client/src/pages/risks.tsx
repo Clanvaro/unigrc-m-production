@@ -305,65 +305,7 @@ export default function Risks() {
 
       const response = await fetch(`/api/pages/risks?${params}`);
       if (!response.ok) throw new Error("Failed to fetch risks page data");
-      const data = await response.json();
-      
-      // ==================== DATA SANITIZATION ====================
-      // Sanitize ALL data at the source to prevent React error #185
-      // This ensures no objects are accidentally rendered as React children
-      const safeStr = (v: any): string => {
-        if (v == null) return '';
-        if (typeof v === 'string') return v;
-        if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-        return ''; // Objects become empty string
-      };
-      
-      // Sanitize catalog items
-      const sanitizeCatalogItem = (item: any) => {
-        if (!item || typeof item !== 'object') return null;
-        return {
-          ...item,
-          id: safeStr(item.id),
-          name: safeStr(item.name),
-          code: safeStr(item.code),
-          position: item.position ? safeStr(item.position) : undefined,
-          color: item.color ? safeStr(item.color) : undefined,
-        };
-      };
-      
-      // Sanitize all catalogs
-      if (data.catalogs) {
-        Object.keys(data.catalogs).forEach(key => {
-          if (Array.isArray(data.catalogs[key])) {
-            data.catalogs[key] = data.catalogs[key].map(sanitizeCatalogItem).filter(Boolean);
-          }
-        });
-      }
-      
-      // Sanitize risks
-      if (data.risks?.data) {
-        data.risks.data = data.risks.data.map((risk: any) => {
-          // Ensure category is an array of strings
-          let category: string[] = [];
-          if (Array.isArray(risk.category)) {
-            category = risk.category.filter((c: any) => typeof c === 'string' && c.trim()).map((c: string) => c.trim());
-          } else if (typeof risk.category === 'string' && risk.category.trim()) {
-            category = [risk.category.trim()];
-          }
-          
-          return {
-            ...risk,
-            id: safeStr(risk.id),
-            name: safeStr(risk.name),
-            description: safeStr(risk.description),
-            code: safeStr(risk.code),
-            status: safeStr(risk.status),
-            category,
-          };
-        });
-      }
-      // ==================== END SANITIZATION ====================
-      
-      return data;
+      return response.json();
     },
     staleTime: 1000 * 60 * 2, // 2 minutes - invalidated on mutations
     gcTime: 1000 * 60 * 10, // 10 minutes cache retention
@@ -390,42 +332,20 @@ export default function Risks() {
   // Determine if this is the initial load (no previous data)
   const isInitialLoad = !bootstrapData || bootstrapData.risks.data.length === 0;
 
-  // Helper to sanitize catalog items - ensures all fields are primitive types
-  const sanitizeCatalog = useCallback((arr: any[]) => {
-    if (!Array.isArray(arr)) return [];
-    return arr.map((item: any) => {
-      if (!item || typeof item !== 'object') return null;
-      const safeStr = (v: any) => (v == null ? '' : typeof v === 'string' ? v : String(v));
-      return {
-        ...item,
-        id: safeStr(item.id),
-        name: safeStr(item.name),
-        code: item.code ? safeStr(item.code) : undefined,
-        color: item.color ? safeStr(item.color) : undefined,
-        position: item.position ? safeStr(item.position) : undefined,
-      };
-    }).filter(Boolean);
-  }, []);
-
-  // Catalogs from bootstrap (cached for 5 min on server, use local staleTime too)
-  // All catalogs are sanitized to ensure string values (prevents React error #185)
-  const gerencias = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.gerencias || []), [bootstrapData?.catalogs?.gerencias, sanitizeCatalog]);
-  const macroprocesos = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.macroprocesos || []), [bootstrapData?.catalogs?.macroprocesos, sanitizeCatalog]);
-  const subprocesos = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.subprocesos || []), [bootstrapData?.catalogs?.subprocesos, sanitizeCatalog]);
-  const processes = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.processes || []), [bootstrapData?.catalogs?.processes, sanitizeCatalog]);
+  // Catalogs from bootstrap (server sanitizes all data)
+  const gerencias = bootstrapData?.catalogs?.gerencias || [];
+  const macroprocesos = bootstrapData?.catalogs?.macroprocesos || [];
+  const subprocesos = bootstrapData?.catalogs?.subprocesos || [];
+  const processes = bootstrapData?.catalogs?.processes || [];
   const processGerencias = bootstrapData?.catalogs?.processGerencias || [];
-  const riskCategories = useMemo(() => sanitizeCatalog(bootstrapData?.catalogs?.riskCategories || []), [bootstrapData?.catalogs?.riskCategories, sanitizeCatalog]);
+  const riskCategories = bootstrapData?.catalogs?.riskCategories || [];
   const macroprocesoGerencias: any[] = []; // Placeholder - loaded on demand if needed
 
-  // Mapa de colores de categorías - O(1) lookup, se recalcula solo cuando cambia riskCategories
+  // Mapa de colores de categorías - O(1) lookup
   const categoryColorMap = useMemo(() => buildCategoryColorMap(riskCategories), [riskCategories]);
 
-  // Process owners from bootstrap (for basic display)
+  // Process owners from bootstrap
   const bootstrapProcessOwners = bootstrapData?.catalogs?.processOwners || [];
-
-  // NOTE: Removed useEffect that populated React Query cache with catalogs
-  // This was causing React error #185 due to potential race conditions
-  // The RiskSearchAndFilterDialog in header doesn't receive catalogs anyway (uses empty arrays)
 
   // Legacy compatibility - these were separate queries before
   const isPageDataLoading = isBootstrapLoading;
@@ -1736,80 +1656,19 @@ export default function Risks() {
 
   // Loading state - skeleton shown during initial load
 
-  // ---------- Sanitize data before render to avoid React error #185 ----------
-  const sanitizeRiskForRender = (risk: any) => {
-    // Ensure basic string fields - convert any non-string to string
-    const safeString = (val: any): string => {
-      if (val == null) return '';
-      if (typeof val === 'string') return val;
-      if (typeof val === 'number' || typeof val === 'boolean') return String(val);
-      return ''; // Object - return empty to prevent React error
-    };
-
-    // Ensure numeric fields are actually numbers
-    const safeNumber = (val: any): number => {
-      if (typeof val === 'number' && !isNaN(val)) return val;
-      if (typeof val === 'string') {
-        const parsed = parseFloat(val);
-        return isNaN(parsed) ? 0 : parsed;
-      }
-      return 0;
-    };
-
-    // Normalize categories to string[]
-    const categories: string[] = Array.isArray(risk.category)
-      ? risk.category.filter((c: any) => typeof c === 'string' && c.trim())
-      : (typeof risk.category === 'string' && risk.category.trim())
-        ? [risk.category.trim()]
-        : [];
-
-    // Normalize summaries to safe string values
-    const processesSummary = Array.isArray(risk.processesSummary)
-      ? risk.processesSummary
-          .filter((p: any) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
-          .map((p: any) => ({ name: p.name.trim(), type: typeof p.type === 'string' ? p.type : 'process' }))
-      : undefined;
-
-    const controlsSummary = Array.isArray(risk.controlsSummary)
-      ? risk.controlsSummary
-          .filter((c: any) => c && typeof c === 'object' && typeof c.code === 'string' && c.code.trim())
-          .map((c: any) => ({ code: c.code.trim() }))
-      : undefined;
-
-    const actionPlansSummary = Array.isArray(risk.actionPlansSummary)
-      ? risk.actionPlansSummary
-          .filter((a: any) => a && typeof a === 'object' && typeof a.code === 'string' && a.code.trim())
-          .map((a: any) => ({
-            code: a.code.trim(),
-            status: typeof a.status === 'string' ? a.status.trim() : ''
-          }))
-      : undefined;
-
-    return {
-      ...risk,
-      // String fields
-      id: safeString(risk.id),
-      name: safeString(risk.name),
-      description: safeString(risk.description),
-      code: safeString(risk.code),
-      status: safeString(risk.status),
-      // Numeric fields - ensure they're actual numbers, not objects
-      probability: safeNumber(risk.probability),
-      impact: safeNumber(risk.impact),
-      inherentRisk: safeNumber(risk.inherent_risk ?? risk.inherentRisk),
-      residualRisk: safeNumber(risk.residual_risk ?? risk.residualRisk),
-      // Array fields
-      category: categories,
-      processesSummary,
-      controlsSummary,
-      actionPlansSummary,
-    };
-  };
+  // Normalize risk data for display (server already sanitizes, this just normalizes field names)
+  const normalizeRisk = (risk: any) => ({
+    ...risk,
+    // Normalize snake_case to camelCase for frontend compatibility
+    inherentRisk: risk.inherent_risk ?? risk.inherentRisk ?? 0,
+    residualRisk: risk.residual_risk ?? risk.residualRisk ?? 0,
+    // Ensure category is always an array
+    category: Array.isArray(risk.category) ? risk.category : [],
+  });
 
   // Data selection: use mock data for testing or filtered paginated data
-  // Note: With pagination, filters are applied only to the current page
   const displayDataRaw = testMode50k ? generateMockRisks(50000) as any[] : filteredRisks;
-  const displayData = useMemo(() => displayDataRaw.map(sanitizeRiskForRender), [displayDataRaw]);
+  const displayData = useMemo(() => displayDataRaw.map(normalizeRisk), [displayDataRaw]);
 
   // Memoize columns to prevent recreation on every render
   const columns: VirtualizedTableColumn<Risk>[] = useMemo(() => [
