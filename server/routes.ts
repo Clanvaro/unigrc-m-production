@@ -26713,9 +26713,11 @@ Redactas en español neutro, claro y profesional.`;
   // ============= PROCESS OWNERS MANAGEMENT =============
 
   // Get all process owners
-  // OPTIMIZED: Uses local cache only (no Upstash latency)
+  // OPTIMIZED: Uses two-tier cache (L1 memory + L2 Redis) with prewarm support
+  // Cache key 'process-owners:single-tenant' is shared with prewarm-cache.ts
   app.get("/api/process-owners", noCacheMiddleware, isAuthenticated, async (req, res) => {
     const startTime = Date.now();
+    const CACHE_KEY = 'process-owners:single-tenant';
     
     // Helper to ensure value is a string (prevents React error #185)
     const safeStr = (val: any): string => {
@@ -26736,28 +26738,50 @@ Redactas en español neutro, claro y profesional.`;
       updatedAt: po.updatedAt,
     }));
     
-    try {
-      // Try local cache first (instant, <1ms)
-      const cached = getCatalogFromCache<any[]>('processOwners');
-      if (cached) {
-        console.log(`[CACHE HIT] /api/process-owners in ${Date.now() - startTime}ms`);
-        return res.json(sanitizeOwners(cached));
-      }
-
+    // Fetch function for cache miss - used by twoTierCache SingleFlight
+    const fetchProcessOwners = async () => {
       const queryStart = Date.now();
-      const owners = await storage.getProcessOwners();
-      const queryDuration = Date.now() - queryStart;
-      console.log(`📝 [API] Fetching process owners. Count: ${owners.length}, Query took: ${queryDuration}ms`);
-
-      // Sanitize before caching and returning
-      const sanitizedOwners = sanitizeOwners(owners);
+      const { requireDb } = await import('./db');
+      const { processOwners } = await import('@shared/schema');
+      const { eq } = await import('drizzle-orm');
       
-      // Cache locally (1 hour TTL)
-      setCatalogCache('processOwners', sanitizedOwners);
-
+      const data = await requireDb()
+        .select({
+          id: processOwners.id,
+          name: processOwners.name,
+          email: processOwners.email,
+          position: processOwners.position,
+          isActive: processOwners.isActive,
+          createdAt: processOwners.createdAt,
+          updatedAt: processOwners.updatedAt,
+        })
+        .from(processOwners)
+        .where(eq(processOwners.isActive, true))
+        .orderBy(processOwners.name);
+      
+      const queryDuration = Date.now() - queryStart;
+      console.log(`📝 [API] Fetching process owners. Count: ${data.length}, Query took: ${queryDuration}ms`);
+      return data;
+    };
+    
+    try {
+      // Use twoTierCache with SingleFlight (deduplicates concurrent requests)
+      // This cache is shared with prewarm-cache.ts for consistent caching
+      const owners = await twoTierCache.get(CACHE_KEY, fetchProcessOwners);
+      
+      if (owners) {
+        const duration = Date.now() - startTime;
+        console.log(`[CACHE] /api/process-owners in ${duration}ms (${owners.length} owners)`);
+        return res.json(sanitizeOwners(owners));
+      }
+      
+      // Fallback if cache returns null (shouldn't happen with fetchFn)
+      const fallbackOwners = await fetchProcessOwners();
+      const sanitizedOwners = sanitizeOwners(fallbackOwners);
+      
       const duration = Date.now() - startTime;
-      console.log(`[CACHE SET] /api/process-owners in ${duration}ms`);
-
+      console.log(`[FALLBACK] /api/process-owners in ${duration}ms`);
+      
       res.json(sanitizedOwners);
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -26835,8 +26859,10 @@ Redactas en español neutro, claro y profesional.`;
       const dataWithTenant = await withTenantId(req, validatedData);
       const processOwner = await storage.createProcessOwner(dataWithTenant);
 
-      // Invalidate cache
-      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
+      // Invalidate two-tier cache (shared with prewarm-cache.ts)
+      await twoTierCache.invalidate('process-owners:single-tenant');
+      // Also invalidate legacy catalog cache
+      invalidateCatalogCache('processOwners');
 
       res.status(201).json(processOwner);
     } catch (error) {
@@ -26900,8 +26926,10 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(404).json({ message: "Responsable no encontrado" });
       }
 
-      // Invalidate cache
-      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:default`);
+      // Invalidate two-tier cache (shared with prewarm-cache.ts)
+      await twoTierCache.invalidate('process-owners:single-tenant');
+      // Also invalidate legacy catalog cache
+      invalidateCatalogCache('processOwners');
 
       console.log(`✅ Process owner updated successfully:`, processOwner.id);
       res.json(processOwner);
@@ -26941,8 +26969,10 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(404).json({ message: "Process owner not found" });
       }
 
-      // Invalidate cache
-      await distributedCache.invalidate(`process-owners:${CACHE_VERSION}:${tenantId}`);
+      // Invalidate two-tier cache (shared with prewarm-cache.ts)
+      await twoTierCache.invalidate('process-owners:single-tenant');
+      // Also invalidate legacy catalog cache
+      invalidateCatalogCache('processOwners');
 
       res.status(204).send();
     } catch (error) {

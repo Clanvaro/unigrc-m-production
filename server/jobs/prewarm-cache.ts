@@ -90,6 +90,32 @@ class CachePrewarmService {
         
         return data;
       }
+    },
+    {
+      key: 'process-owners:single-tenant',
+      description: 'Process owners catalog',
+      fetchFn: async () => {
+        // Match the logic from /api/process-owners endpoint
+        const { requireDb } = await import('../db');
+        const { processOwners } = await import('@shared/schema');
+        const { eq } = await import('drizzle-orm');
+        
+        const data = await requireDb()
+          .select({
+            id: processOwners.id,
+            name: processOwners.name,
+            email: processOwners.email,
+            position: processOwners.position,
+            isActive: processOwners.isActive,
+            createdAt: processOwners.createdAt,
+            updatedAt: processOwners.updatedAt,
+          })
+          .from(processOwners)
+          .where(eq(processOwners.isActive, true))
+          .orderBy(processOwners.name);
+        
+        return data;
+      }
     }
   ];
 
