@@ -177,28 +177,35 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   });
 
   // Common data queries (used by multiple filter sections)
-  // /risks uses page-data, other pages use individual queries
+  // /risks uses page-data (BFF), other pages use individual queries
+  // OPTIMIZED: These will use React Query cache if populated by other pages
   const needsProcessData = location === "/validation" || location === "/controls" || location === "/actions" || location === "/action-plans";
   
   const { data: processes = [] } = useQuery<Process[]>({
     queryKey: ["/api/processes"],
     enabled: needsProcessData,
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
     refetchOnWindowFocus: false,
+    refetchOnMount: false, // Use cache if available
   });
 
   const { data: macroprocesos = [] } = useQuery<Macroproceso[]>({
     queryKey: ["/api/macroprocesos"],
     enabled: needsProcessData,
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
     refetchOnWindowFocus: false,
+    refetchOnMount: false, // Use cache if available
   });
 
   const { data: subprocesos = [] } = useQuery<Subproceso[]>({
     queryKey: ["/api/subprocesos"],
     enabled: needsProcessData,
     staleTime: 15 * 60 * 1000, // 15 minutes - static catalogs
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
     refetchOnWindowFocus: false,
+    refetchOnMount: false, // Use cache if available
   });
 
   const { data: users = [] } = useQuery<User[]>({
@@ -212,7 +219,9 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
     queryKey: ["/api/process-owners"],
     enabled: needsProcessData || location === "/risks", // Also needed for risks page exports
     staleTime: 15 * 60 * 1000, // 15 minutes - process owners change infrequently
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
     refetchOnWindowFocus: false,
+    refetchOnMount: false, // Use cache if available
   });
 
   const { data: gerencias = [] } = useQuery<any[]>({
