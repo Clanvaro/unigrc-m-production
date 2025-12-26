@@ -2731,9 +2731,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const fetchDuration = Date.now() - fetchStart;
         console.log(`[PERF] /api/pages/risks data fetch: ${fetchDuration}ms (risks: ${risksData.risks.length}, total: ${risksData.total})`);
 
+        // Enrich risks with summary data from relations and catalogs
+        // Note: controlsSummary and actionPlansSummary codes require additional queries
+        // For now, we only add processesSummary. Frontend will use fallback for others.
+        const enrichedRisks = risksData.risks.map((risk: any) => {
+          const riskId = risk.id;
+          
+          // Build processesSummary from relations and catalogs
+          const processIds = relationsLite.processesByRisk[riskId] || [];
+          const processesSummary = processIds
+            .slice(0, 3)
+            .map((processId: string) => {
+              const process = catalogs.processes.find((p: any) => p.id === processId);
+              if (process && process.name && typeof process.name === 'string') {
+                return { name: process.name.trim(), type: 'process' as const };
+              }
+              return null;
+            })
+            .filter((p: any): p is { name: string; type: 'process' } => p !== null && p.name.length > 0);
+          
+          return {
+            ...risk,
+            // Only add processesSummary if we have valid data
+            // Frontend will use fallback for controlsSummary and actionPlansSummary
+            ...(processesSummary.length > 0 && { processesSummary }),
+          };
+        });
+
         const response = {
           risks: {
-            data: risksData.risks,
+            data: enrichedRisks,
             pagination: {
               limit,
               offset,

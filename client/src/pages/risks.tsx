@@ -1997,22 +1997,31 @@ export default function Risks() {
         // Use processesSummary from bootstrap if available (optimized)
         const processesSummary = (risk as any).processesSummary;
         
-        if (processesSummary && processesSummary.length > 0) {
-          const displayed = processesSummary.slice(0, 2);
-          const remaining = processesSummary.length - displayed.length;
+        if (processesSummary && Array.isArray(processesSummary) && processesSummary.length > 0) {
+          // Filter and normalize - ensure we only render strings
+          const validProcesses = processesSummary
+            .filter((proc: any) => proc && typeof proc === 'object' && typeof proc.name === 'string' && proc.name.trim())
+            .slice(0, 2);
           
-          return (
-            <div className="space-y-0.5 min-w-0">
-              {displayed.map((proc: any, idx: number) => (
-                <div key={idx} className="text-xs line-clamp-1" title={proc.name}>
-                  {proc.name}
-                </div>
-              ))}
-              {remaining > 0 && (
-                <Badge variant="outline" className="text-xs">+{remaining} más</Badge>
-              )}
-            </div>
-          );
+          if (validProcesses.length > 0) {
+            const remaining = processesSummary.length - validProcesses.length;
+            
+            return (
+              <div className="space-y-0.5 min-w-0">
+                {validProcesses.map((proc: any, idx: number) => {
+                  const processName = String(proc.name || '').trim();
+                  return processName ? (
+                    <div key={idx} className="text-xs line-clamp-1" title={processName}>
+                      {processName}
+                    </div>
+                  ) : null;
+                })}
+                {remaining > 0 && (
+                  <Badge variant="outline" className="text-xs">+{remaining} más</Badge>
+                )}
+              </div>
+            );
+          }
         }
 
         // Fallback to legacy logic if summary not available
@@ -2183,34 +2192,43 @@ export default function Risks() {
         }
 
         // Use summary if available
-        if (controlsSummary && controlsSummary.length > 0) {
-          const displayed = controlsSummary.slice(0, 2);
-          const remaining = controlCount - displayed.length;
+        if (controlsSummary && Array.isArray(controlsSummary) && controlsSummary.length > 0) {
+          // Filter and normalize - ensure we only render strings
+          const validControls = controlsSummary
+            .filter((control: any) => control && typeof control === 'object' && typeof control.code === 'string' && control.code.trim())
+            .slice(0, 2);
+          
+          if (validControls.length > 0) {
+            const remaining = controlCount - validControls.length;
 
-          return (
-            <div className="flex flex-wrap gap-1 justify-center items-center">
-              {displayed.map((control: any, idx: number) => (
-                <Badge 
-                  key={idx}
-                  variant="secondary" 
-                  className="text-xs cursor-pointer hover:bg-accent transition-colors"
-                  onClick={() => setControlsDialogRisk(risk)}
-                  title={`Control ${control.code}`}
-                >
-                  {control.code}
-                </Badge>
-              ))}
-              {remaining > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="cursor-pointer hover:bg-accent transition-colors text-xs"
-                  onClick={() => setControlsDialogRisk(risk)}
-                >
-                  +{remaining}
-                </Badge>
-              )}
-            </div>
-          );
+            return (
+              <div className="flex flex-wrap gap-1 justify-center items-center">
+                {validControls.map((control: any, idx: number) => {
+                  const controlCode = String(control.code || '').trim();
+                  return controlCode ? (
+                    <Badge 
+                      key={idx}
+                      variant="secondary" 
+                      className="text-xs cursor-pointer hover:bg-accent transition-colors"
+                      onClick={() => setControlsDialogRisk(risk)}
+                      title={`Control ${controlCode}`}
+                    >
+                      {controlCode}
+                    </Badge>
+                  ) : null;
+                })}
+                {remaining > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className="cursor-pointer hover:bg-accent transition-colors text-xs"
+                    onClick={() => setControlsDialogRisk(risk)}
+                  >
+                    +{remaining}
+                  </Badge>
+                )}
+              </div>
+            );
+          }
         }
 
         // Fallback to detailed data if available
@@ -2262,38 +2280,47 @@ export default function Risks() {
         // Use actionPlansSummary from bootstrap if available (optimized)
         const actionPlansSummary = (risk as any).actionPlansSummary;
         
-        if (actionPlansSummary && actionPlansSummary.length > 0) {
-          const displayed = actionPlansSummary.slice(0, 2);
-          const totalCount = actionPlansSummary.length;
-          const remaining = totalCount - displayed.length;
+        if (actionPlansSummary && Array.isArray(actionPlansSummary) && actionPlansSummary.length > 0) {
+          // Filter and normalize - ensure we only render strings
+          const validPlans = actionPlansSummary
+            .filter((plan: any) => plan && typeof plan === 'object' && typeof plan.code === 'string' && plan.code.trim())
+            .slice(0, 2);
+          
+          if (validPlans.length > 0) {
+            const totalCount = actionPlansSummary.length;
+            const remaining = totalCount - validPlans.length;
 
-          return (
-            <div className="flex flex-wrap gap-1 justify-center">
-              {displayed.map((plan: any, idx: number) => {
-                const statusColor = getActionPlanStatusColor(plan.status);
-                return (
+            return (
+              <div className="flex flex-wrap gap-1 justify-center">
+                {validPlans.map((plan: any, idx: number) => {
+                  const planCode = String(plan.code || '').trim();
+                  const planStatus = String(plan.status || '').trim();
+                  const statusColor = getActionPlanStatusColor(planStatus);
+                  
+                  return planCode ? (
+                    <Badge
+                      key={idx}
+                      variant={getActionPlanStatusVariant(planStatus)}
+                      className={`cursor-pointer hover:opacity-80 transition-colors text-xs ${statusColor}`}
+                      onClick={() => setLocation(`/action-plans?riskId=${risk.id}`)}
+                      title={`${planCode} - ${planStatus}`}
+                    >
+                      {planCode}
+                    </Badge>
+                  ) : null;
+                })}
+                {remaining > 0 && (
                   <Badge
-                    key={idx}
-                    variant={getActionPlanStatusVariant(plan.status)}
-                    className={`cursor-pointer hover:opacity-80 transition-colors text-xs ${statusColor}`}
+                    variant="secondary"
+                    className="cursor-pointer hover:bg-accent transition-colors text-xs"
                     onClick={() => setLocation(`/action-plans?riskId=${risk.id}`)}
-                    title={`${plan.code} - ${plan.status}`}
                   >
-                    {plan.code}
+                    +{remaining}
                   </Badge>
-                );
-              })}
-              {remaining > 0 && (
-                <Badge
-                  variant="secondary"
-                  className="cursor-pointer hover:bg-accent transition-colors text-xs"
-                  onClick={() => setLocation(`/action-plans?riskId=${risk.id}`)}
-                >
-                  +{remaining}
-                </Badge>
-              )}
-            </div>
-          );
+                )}
+              </div>
+            );
+          }
         }
 
         // Fallback to detailed data if available
