@@ -1095,21 +1095,29 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
   const getActiveFilters = () => {
     const filters = [];
     
+    // Helper to ensure value is a string (prevents React error #185)
+    const safeStr = (val: any): string => {
+      if (val == null) return '';
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+      return ''; // Don't render objects
+    };
+    
     // Risk filters - use effective* variables for cached data
     if (location === "/risks") {
       if (macroprocesoFilter !== "all") {
         const macroproceso = effectiveMacroprocesos.find((m: any) => m.id === macroprocesoFilter);
-        filters.push({ key: "macroproceso", label: "Macroproceso", value: macroproceso?.name || macroprocesoFilter });
+        filters.push({ key: "macroproceso", label: "Macroproceso", value: safeStr(macroproceso?.name) || macroprocesoFilter });
       }
       
       if (processFilter !== "all") {
         const process = effectiveProcesses.find((p: any) => p.id === processFilter);
-        filters.push({ key: "process", label: "Proceso", value: process?.name || processFilter });
+        filters.push({ key: "process", label: "Proceso", value: safeStr(process?.name) || processFilter });
       }
       
       if (subprocesoFilter !== "all") {
         const subproceso = effectiveSubprocesos.find((s: any) => s.id === subprocesoFilter);
-        filters.push({ key: "subproceso", label: "Subproceso", value: subproceso?.name || subprocesoFilter });
+        filters.push({ key: "subproceso", label: "Subproceso", value: safeStr(subproceso?.name) || subprocesoFilter });
       }
       
       if (inherentRiskLevelFilter !== "all") {
@@ -1131,7 +1139,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       
       if (riskOwnerFilter !== "all") {
         const owner = effectiveProcessOwners.find((o: any) => o.id === riskOwnerFilter);
-        const ownerLabel = owner ? `${owner.name} - ${owner.position}` : riskOwnerFilter;
+        const ownerLabel = owner ? `${safeStr(owner.name)} - ${safeStr(owner.position)}` : riskOwnerFilter;
         filters.push({ key: "riskOwner", label: "Responsable", value: ownerLabel });
       }
     }
@@ -1150,18 +1158,18 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
       if (validationOwnerFilter !== "all") {
         const owner = processOwners.find((o: any) => o.id === validationOwnerFilter);
-        const ownerLabel = owner ? `${owner.name} - ${owner.position}` : validationOwnerFilter;
+        const ownerLabel = owner ? `${safeStr(owner.name)} - ${safeStr(owner.position)}` : validationOwnerFilter;
         filters.push({ key: "validationOwner", label: "Propietario", value: ownerLabel });
       }
 
       if (validationMacroprocesoFilter !== "all") {
         const macroproceso = macroprocesos.find((m: any) => m.id === validationMacroprocesoFilter);
-        filters.push({ key: "validationMacroproceso", label: "Macroproceso", value: macroproceso?.name || validationMacroprocesoFilter });
+        filters.push({ key: "validationMacroproceso", label: "Macroproceso", value: safeStr(macroproceso?.name) || validationMacroprocesoFilter });
       }
 
       if (validationProcessFilter !== "all") {
         const process = processes.find((p: any) => p.id === validationProcessFilter);
-        filters.push({ key: "validationProcess", label: "Proceso", value: process?.name || validationProcessFilter });
+        filters.push({ key: "validationProcess", label: "Proceso", value: safeStr(process?.name) || validationProcessFilter });
       }
 
       if (validationRiskLevelFilter !== "all") {
@@ -1277,7 +1285,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
       if (auditPlanFilter !== "all") {
         const plan = auditPlans.find((p: any) => p.id === auditPlanFilter);
-        filters.push({ key: "auditPlan", label: "Plan", value: plan?.name || auditPlanFilter });
+        filters.push({ key: "auditPlan", label: "Plan", value: safeStr(plan?.name) || auditPlanFilter });
       }
     }
 
@@ -1353,7 +1361,7 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
 
       if (eventProcessFilter !== "all") {
         const process = riskEventProcesses.find((p: any) => p.id === eventProcessFilter);
-        filters.push({ key: "eventProcess", label: "Proceso", value: process?.name || eventProcessFilter });
+        filters.push({ key: "eventProcess", label: "Proceso", value: safeStr(process?.name) || eventProcessFilter });
       }
     }
 
@@ -1362,12 +1370,12 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
       if (matrixProcessFilter !== "all") {
         const macro = matrixMacroprocesos.find((m: any) => m.id === matrixProcessFilter);
         const process = matrixProcesses.find((p: any) => p.id === matrixProcessFilter);
-        filters.push({ key: "matrixProcess", label: "Proceso", value: macro?.name || process?.name || matrixProcessFilter });
+        filters.push({ key: "matrixProcess", label: "Proceso", value: safeStr(macro?.name) || safeStr(process?.name) || matrixProcessFilter });
       }
 
       if (matrixGerenciaFilter !== "all") {
         const gerencia = matrixGerencias.find((g: any) => g.id === matrixGerenciaFilter);
-        filters.push({ key: "matrixGerencia", label: "Gerencia", value: gerencia?.name || matrixGerenciaFilter });
+        filters.push({ key: "matrixGerencia", label: "Gerencia", value: safeStr(gerencia?.name) || matrixGerenciaFilter });
       }
 
     }
@@ -1639,14 +1647,19 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
           {activeFilters.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted-foreground">Filtros activos:</span>
-              {activeFilters.map((filter) => (
+              {activeFilters.map((filter) => {
+                // Sanitize filter values to prevent React error #185
+                const safeLabel = typeof filter.label === 'string' ? filter.label : String(filter.label || '');
+                const safeValue = typeof filter.value === 'string' ? filter.value : String(filter.value || '');
+                
+                return (
                 <Badge 
                   key={filter.key} 
                   variant="secondary" 
                   className="gap-2 pr-1"
                 >
-                  <span className="text-xs font-medium">{filter.label}:</span>
-                  <span className="text-xs">{filter.value}</span>
+                  <span className="text-xs font-medium">{safeLabel}:</span>
+                  <span className="text-xs">{safeValue}</span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1656,7 +1669,8 @@ export default function Header({ isMobile = false, onToggleMobileSidebar, onTogg
                     <X className="h-3 w-3" />
                   </Button>
                 </Badge>
-              ))}
+              );
+              })}
               <Button 
                 variant="ghost" 
                 size="sm"
