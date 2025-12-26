@@ -281,29 +281,37 @@ export default function Risks() {
     };
   }
 
-  const { data: pageData, isLoading: isBootstrapLoading, isFetching, refetch: refetchRisks } = useQuery<PagesRisksResponse>({
-    queryKey: ["/api/pages/risks", {
+  // OPTIMIZED: Build stable queryKey to match PrefetchLink and avoid duplicate fetches
+  // Only include active filters (non-empty, non-'all' values) to ensure consistent cache keys
+  const queryKeyParams = useMemo(() => {
+    const params: Record<string, string | number> = {
       limit: pageSize,
       offset: (currentPage - 1) * pageSize,
-      ...filters
-    }],
-    queryFn: async () => {
-      const params = new URLSearchParams({
-        limit: pageSize.toString(),
-        offset: ((currentPage - 1) * pageSize).toString(),
-      });
-      // Add filters to query params
-      if (filters.status && filters.status !== 'all') params.append('status', filters.status);
-      if (filters.gerencia && filters.gerencia !== 'all') params.append('gerenciaId', filters.gerencia);
-      if (filters.macroproceso && filters.macroproceso !== 'all') params.append('macroprocesoId', filters.macroproceso);
-      if (filters.process && filters.process !== 'all') params.append('processId', filters.process);
-      if (filters.subproceso && filters.subproceso !== 'all') params.append('subprocesoId', filters.subproceso);
-      if (filters.search) params.append('search', filters.search);
-      if (filters.inherentRiskLevel && filters.inherentRiskLevel !== 'all') params.append('inherentRiskLevel', filters.inherentRiskLevel);
-      if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') params.append('residualRiskLevel', filters.residualRiskLevel);
-      if (filters.owner && filters.owner !== 'all') params.append('ownerId', filters.owner);
+    };
+    // Only add filters that have meaningful values
+    if (filters.status && filters.status !== 'all') params.status = filters.status;
+    if (filters.gerencia && filters.gerencia !== 'all') params.gerenciaId = filters.gerencia;
+    if (filters.macroproceso && filters.macroproceso !== 'all') params.macroprocesoId = filters.macroproceso;
+    if (filters.process && filters.process !== 'all') params.processId = filters.process;
+    if (filters.subproceso && filters.subproceso !== 'all') params.subprocesoId = filters.subproceso;
+    if (filters.search) params.search = filters.search;
+    if (filters.inherentRiskLevel && filters.inherentRiskLevel !== 'all') params.inherentRiskLevel = filters.inherentRiskLevel;
+    if (filters.residualRiskLevel && filters.residualRiskLevel !== 'all') params.residualRiskLevel = filters.residualRiskLevel;
+    if (filters.owner && filters.owner !== 'all') params.ownerId = filters.owner;
+    return params;
+  }, [pageSize, currentPage, filters]);
 
-      const response = await fetch(`/api/pages/risks?${params}`);
+  const { data: pageData, isLoading: isBootstrapLoading, isFetching, refetch: refetchRisks } = useQuery<PagesRisksResponse>({
+    // OPTIMIZED: Use memoized params for stable queryKey - matches PrefetchLink exactly when no filters
+    queryKey: ["/api/pages/risks", queryKeyParams],
+    queryFn: async () => {
+      const urlParams = new URLSearchParams();
+      Object.entries(queryKeyParams).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          urlParams.append(key, String(value));
+        }
+      });
+      const response = await fetch(`/api/pages/risks?${urlParams}`);
       if (!response.ok) throw new Error("Failed to fetch risks page data");
       return response.json();
     },

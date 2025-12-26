@@ -28,19 +28,25 @@ const routePrefetchMap: Record<string, () => Promise<any>> = {
 };
 
 /**
+ * Default risks page query params - MUST match risks.tsx initial state
+ * This ensures prefetch cache is reused when navigating to /risks
+ */
+const DEFAULT_RISKS_QUERY_PARAMS = { limit: 50, offset: 0 };
+
+/**
  * API prefetch mapping for data-heavy pages
  * OPTIMIZED: Uses /api/pages/risks (BFF) instead of multiple legacy endpoints
  * 
  * NOTE: The queryKey must match EXACTLY what risks.tsx uses.
- * risks.tsx uses: ["/api/pages/risks", { limit: pageSize, offset: 0, ...filters }]
- * where filters starts as {} (empty object)
+ * risks.tsx uses: ["/api/pages/risks", queryKeyParams] where queryKeyParams
+ * is { limit: 50, offset: 0 } when no filters are applied (initial state)
  */
 const apiPrefetchMap: Record<string, () => void> = {
   '/risks': () => {
     // OPTIMIZED: Prefetch with the EXACT same queryKey structure as risks.tsx
-    // filters starts as {} so we spread an empty object
+    // Uses same object shape: { limit, offset } with no extra properties
     queryClient.prefetchQuery({
-      queryKey: ["/api/pages/risks", { limit: 50, offset: 0 }],
+      queryKey: ["/api/pages/risks", DEFAULT_RISKS_QUERY_PARAMS],
       queryFn: async () => {
         const response = await fetch('/api/pages/risks?limit=50&offset=0');
         if (!response.ok) throw new Error('Failed to prefetch');
