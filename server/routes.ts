@@ -17692,27 +17692,48 @@ Redactas en español neutro, claro y profesional.`;
   });
 
   // User Roles
-  // OPTIMIZED: Added cache for user-roles endpoint
+  // OPTIMIZED: Two-tier cache (L1 local + L2 distributed) with timeout
   app.get("/api/user-roles", async (req, res) => {
     try {
       const startTime = Date.now();
-      
-      // Try cache first (5 min TTL)
       const cacheKey = `user-roles:all`;
-      const cached = await distributedCache.get(cacheKey);
-      if (cached) {
-        console.log(`[CACHE HIT] /api/user-roles in ${Date.now() - startTime}ms`);
-        return res.json(cached);
+      
+      // L1: Try local cache first (instant, <1ms)
+      const localCached = getCatalogFromCache<any[]>('userRoles');
+      if (localCached) {
+        console.log(`[L1 CACHE HIT] /api/user-roles in ${Date.now() - startTime}ms`);
+        return res.json(localCached);
       }
 
+      // L2: Try distributed cache with timeout (prevents slow Upstash from blocking)
+      try {
+        const distributedCached = await Promise.race([
+          distributedCache.get(cacheKey),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)) // 500ms timeout
+        ]);
+        if (distributedCached) {
+          // Populate L1 from L2 hit
+          setCatalogCache('userRoles', distributedCached);
+          console.log(`[L2 CACHE HIT] /api/user-roles in ${Date.now() - startTime}ms`);
+          return res.json(distributedCached);
+        }
+      } catch (l2Error) {
+        console.warn(`[L2 CACHE ERROR] /api/user-roles, falling back to DB`);
+      }
+
+      // Cache miss - fetch from database
       const userRoles = await storage.getAllUserRolesWithRoleInfo();
       
-      // Cache for 5 minutes
-      await distributedCache.set(cacheKey, userRoles, 300);
-      console.log(`[PERF] /api/user-roles completed in ${Date.now() - startTime}ms`);
-
+      // Populate both cache tiers
+      setCatalogCache('userRoles', userRoles);
+      distributedCache.set(cacheKey, userRoles, 300).catch(err => 
+        console.warn(`[L2 CACHE SET ERROR] /api/user-roles:`, err)
+      );
+      
+      console.log(`[PERF] /api/user-roles from DB in ${Date.now() - startTime}ms`);
       res.json(userRoles);
     } catch (error) {
+      console.error('[ERROR] /api/user-roles failed:', error);
       res.status(500).json({ message: "Failed to fetch all user roles" });
     }
   });
@@ -17734,9 +17755,12 @@ Redactas en español neutro, claro y profesional.`;
 
       const userRole = await storage.assignUserRole(validatedData);
 
-      // Invalidate BOTH auth caches for this user (permissions changed)
+      // Invalidate auth caches for this user (permissions changed)
       authCache.invalidate(userId);
       await distributedCache.invalidate(`auth-me:${userId}`);
+      // Invalidate user-roles list cache (L1 + L2)
+      invalidateCatalogCache('userRoles');
+      await distributedCache.invalidate(`user-roles:all`);
 
       res.status(201).json(userRole);
     } catch (error) {
@@ -17765,9 +17789,12 @@ Redactas en español neutro, claro y profesional.`;
       });
       const userRole = await storage.assignUserRole(validatedData);
 
-      // Invalidate BOTH auth caches for this user (permissions changed)
+      // Invalidate auth caches for this user (permissions changed)
       authCache.invalidate(req.params.userId);
       await distributedCache.invalidate(`auth-me:${req.params.userId}`);
+      // Invalidate user-roles list cache (L1 + L2)
+      invalidateCatalogCache('userRoles');
+      await distributedCache.invalidate(`user-roles:all`);
 
       res.status(201).json(userRole);
     } catch (error) {
@@ -17786,9 +17813,12 @@ Redactas en español neutro, claro y profesional.`;
         return res.status(404).json({ message: "User role assignment not found" });
       }
 
-      // Invalidate BOTH auth caches for this user (permissions changed)
+      // Invalidate auth caches for this user (permissions changed)
       authCache.invalidate(req.params.userId);
       await distributedCache.invalidate(`auth-me:${req.params.userId}`);
+      // Invalidate user-roles list cache (L1 + L2)
+      invalidateCatalogCache('userRoles');
+      await distributedCache.invalidate(`user-roles:all`);
 
       res.status(204).send();
     } catch (error) {
