@@ -14052,6 +14052,9 @@ Redactas en español neutro, claro y profesional.`;
   // Dynamic Risk Report - Get grouped risks
   app.post("/api/reports/risks-grouped", isAuthenticated, async (req, res) => {
     try {
+      // Ensure tenantId is available
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
       const { groupBy = 'macroproceso', includeControls = true, includeActionPlans = true, includeEvents = false, filters = {} } = req.body;
 
       // Get all risks
@@ -14286,13 +14289,20 @@ Redactas en español neutro, claro y profesional.`;
       res.json({ groups, totals });
     } catch (error) {
       console.error('Error generating grouped risks report:', error);
-      res.status(500).json({ error: 'Failed to generate grouped risks report' });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ 
+        error: 'Failed to generate grouped risks report',
+        message: errorMessage 
+      });
     }
   });
 
   // Dynamic Risk Report - Export
   app.post("/api/reports/risks-grouped/export", isAuthenticated, async (req, res) => {
     try {
+      // Ensure tenantId is available
+      const { tenantId } = await resolveActiveTenant(req, { required: true });
+      
       const { groupBy, includeControls, includeActionPlans, includeEvents, format = 'excel' } = req.body;
 
       // Get the grouped data by calling the endpoint internally
@@ -14517,12 +14527,171 @@ Redactas en español neutro, claro y profesional.`;
         res.setHeader('Content-Disposition', `attachment; filename=informe-riesgos-${groupBy}-${new Date().toISOString().split('T')[0]}.xlsx`);
         await workbook.xlsx.write(res);
         res.end();
+      } else if (format === 'pdf') {
+        // Generate PDF file using jsPDF
+        const { default: jsPDF } = await import('jspdf');
+        const doc = new jsPDF();
+        
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 20;
+        let yPosition = margin;
+        
+        // Header
+        doc.setFontSize(20);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Informe Dinámico de Riesgos', margin, yPosition);
+        yPosition += 10;
+        
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'normal');
+        const groupByLabel = groupBy === 'macroproceso' ? 'Macroproceso' :
+                            groupBy === 'process' ? 'Proceso' :
+                            groupBy === 'subproceso' ? 'Subproceso' :
+                            groupBy === 'gerencia' ? 'Gerencia' :
+                            groupBy === 'category' ? 'Categoría' : 'Sin agrupar';
+        doc.text(`Agrupado por: ${groupByLabel}`, margin, yPosition);
+        yPosition += 8;
+        
+        doc.setFontSize(10);
+        doc.text(`Generado: ${new Date().toLocaleString('es-ES')}`, margin, yPosition);
+        yPosition += 10;
+        
+        // Separator
+        doc.setLineWidth(0.5);
+        doc.line(margin, yPosition, pageWidth - margin, yPosition);
+        yPosition += 15;
+        
+        // Table headers
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        const colWidths = {
+          group: 40,
+          code: 20,
+          name: 50,
+          level: 20,
+          controls: includeControls ? 30 : 0,
+          plans: includeActionPlans ? 30 : 0,
+          events: includeEvents ? 30 : 0,
+        };
+        
+        let xPos = margin;
+        doc.text('Grupo', xPos, yPosition);
+        xPos += colWidths.group;
+        doc.text('Código', xPos, yPosition);
+        xPos += colWidths.code;
+        doc.text('Riesgo', xPos, yPosition);
+        xPos += colWidths.name;
+        doc.text('Nivel', xPos, yPosition);
+        xPos += colWidths.level;
+        if (includeControls) {
+          doc.text('Controles', xPos, yPosition);
+          xPos += colWidths.controls;
+        }
+        if (includeActionPlans) {
+          doc.text('Planes', xPos, yPosition);
+          xPos += colWidths.plans;
+        }
+        if (includeEvents) {
+          doc.text('Eventos', xPos, yPosition);
+        }
+        
+        yPosition += 8;
+        doc.line(margin, yPosition, pageWidth - margin, yPosition);
+        yPosition += 5;
+        
+        // Table content
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        
+        for (const group of groups) {
+          // Group header
+          if (yPosition > pageHeight - 40) {
+            doc.addPage();
+            yPosition = margin;
+          }
+          
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(10);
+          doc.text(`${group.groupName} (${group.risks.length} riesgos)`, margin, yPosition);
+          yPosition += 7;
+          
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          
+          // Risks in group
+          for (const riskData of group.risks) {
+            if (yPosition > pageHeight - 30) {
+              doc.addPage();
+              yPosition = margin;
+            }
+            
+            xPos = margin + 5; // Indent risks
+            const riskName = doc.splitTextToSize(riskData.risk.name || '', colWidths.name - 5);
+            const riskCode = riskData.risk.code || '';
+            const riskLevel = `${riskData.risk.inherentRisk}${riskData.risk.residualRisk ? '/' + riskData.risk.residualRisk : ''}`;
+            
+            doc.text(riskCode, xPos, yPosition);
+            xPos += colWidths.code;
+            doc.text(riskName[0] || '', xPos, yPosition);
+            xPos += colWidths.name;
+            doc.text(riskLevel, xPos, yPosition);
+            xPos += colWidths.level;
+            
+            if (includeControls) {
+              const controlsText = riskData.controls.length > 0 
+                ? riskData.controls.map((c: any) => c.code).slice(0, 2).join(', ') + (riskData.controls.length > 2 ? '...' : '')
+                : '-';
+              doc.text(controlsText, xPos, yPosition);
+              xPos += colWidths.controls;
+            }
+            
+            if (includeActionPlans) {
+              const plansText = riskData.actionPlans.length > 0
+                ? riskData.actionPlans.map((ap: any) => ap.code).slice(0, 2).join(', ') + (riskData.actionPlans.length > 2 ? '...' : '')
+                : '-';
+              doc.text(plansText, xPos, yPosition);
+              xPos += colWidths.plans;
+            }
+            
+            if (includeEvents) {
+              const eventsText = riskData.events.length > 0
+                ? riskData.events.map((e: any) => e.code).slice(0, 2).join(', ') + (riskData.events.length > 2 ? '...' : '')
+                : '-';
+              doc.text(eventsText, xPos, yPosition);
+            }
+            
+            yPosition += riskName.length > 1 ? riskName.length * 5 : 6;
+          }
+          
+          yPosition += 5; // Space between groups
+        }
+        
+        // Footer
+        const totalPages = doc.getNumberOfPages();
+        for (let i = 1; i <= totalPages; i++) {
+          doc.setPage(i);
+          doc.setFontSize(8);
+          doc.text(`Página ${i} de ${totalPages}`, pageWidth - margin - 30, pageHeight - 10);
+        }
+        
+        const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=informe-riesgos-${groupBy}-${new Date().toISOString().split('T')[0]}.pdf`);
+        res.setHeader('Content-Length', pdfBuffer.length.toString());
+        res.send(pdfBuffer);
       } else {
-        res.status(400).json({ error: 'PDF export not yet implemented' });
+        res.status(400).json({ error: 'Unsupported format. Use "excel" or "pdf"' });
       }
     } catch (error) {
       console.error('Error exporting grouped risks report:', error);
-      res.status(500).json({ error: 'Failed to export grouped risks report' });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error('Export error details:', { errorMessage, errorStack, format, groupBy });
+      res.status(500).json({ 
+        error: 'Failed to export grouped risks report',
+        message: errorMessage 
+      });
     }
   });
 
