@@ -27387,35 +27387,53 @@ Redactas en español neutro, claro y profesional.`;
     // Fetch function for cache miss - used by twoTierCache SingleFlight
     const fetchProcessOwners = async () => {
       const queryStart = Date.now();
-      const { requireDb } = await import('./db');
-      const { processOwners } = await import('@shared/schema');
-      const { eq } = await import('drizzle-orm');
-      
-      const data = await requireDb()
-        .select({
-          id: processOwners.id,
-          name: processOwners.name,
-          email: processOwners.email,
-          position: processOwners.position,
-          isActive: processOwners.isActive,
-          createdAt: processOwners.createdAt,
-          updatedAt: processOwners.updatedAt,
-        })
-        .from(processOwners)
-        .where(eq(processOwners.isActive, true))
-        .orderBy(processOwners.name);
-      
-      const queryDuration = Date.now() - queryStart;
-      console.log(`📝 [API] Fetching process owners. Count: ${data.length}, Query took: ${queryDuration}ms`);
-      return data;
+      try {
+        const { requireDb } = await import('./db');
+        const { processOwners } = await import('@shared/schema');
+        const { eq } = await import('drizzle-orm');
+        
+        const db = requireDb();
+        if (!db) {
+          throw new Error('Database connection not available');
+        }
+        
+        const data = await db
+          .select({
+            id: processOwners.id,
+            name: processOwners.name,
+            email: processOwners.email,
+            position: processOwners.position,
+            isActive: processOwners.isActive,
+            createdAt: processOwners.createdAt,
+            updatedAt: processOwners.updatedAt,
+          })
+          .from(processOwners)
+          .where(eq(processOwners.isActive, true))
+          .orderBy(processOwners.name);
+        
+        const queryDuration = Date.now() - queryStart;
+        console.log(`📝 [API] Fetching process owners. Count: ${data.length}, Query took: ${queryDuration}ms`);
+        return data;
+      } catch (dbError) {
+        const queryDuration = Date.now() - queryStart;
+        console.error(`[ERROR] Database query failed in fetchProcessOwners after ${queryDuration}ms:`, dbError);
+        throw dbError;
+      }
     };
     
     try {
       // Use twoTierCache with SingleFlight (deduplicates concurrent requests)
       // This cache is shared with prewarm-cache.ts for consistent caching
-      const owners = await twoTierCache.get(CACHE_KEY, fetchProcessOwners);
+      let owners;
+      try {
+        owners = await twoTierCache.get(CACHE_KEY, fetchProcessOwners);
+      } catch (cacheError) {
+        console.error(`[ERROR] Cache error in /api/process-owners:`, cacheError);
+        // Fallback: try direct fetch if cache fails
+        owners = await fetchProcessOwners();
+      }
       
-      if (owners) {
+      if (owners && Array.isArray(owners)) {
         const duration = Date.now() - startTime;
         console.log(`[CACHE] /api/process-owners in ${duration}ms (${owners.length} owners)`);
         return res.json(sanitizeOwners(owners));
@@ -27431,7 +27449,14 @@ Redactas en español neutro, claro y profesional.`;
       res.json(sanitizedOwners);
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      console.error(`[ERROR] /api/process-owners failed after ${duration}ms:`, {
+        message: errorMessage,
+        stack: errorStack,
+        error: error
+      });
 
       if (error instanceof Error && (error.message.includes('timeout') || error.message.includes('Connection terminated'))) {
         return res.status(500).json({
@@ -27442,7 +27467,7 @@ Redactas en español neutro, claro y profesional.`;
 
       res.status(500).json({
         message: "Failed to fetch process owners",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: errorMessage
       });
     }
   });

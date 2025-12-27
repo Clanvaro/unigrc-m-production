@@ -2201,11 +2201,13 @@ function GerenciasContent() {
     refetchOnWindowFocus: true,
   });
 
-  const { data: processOwners = [] } = useQuery<ProcessOwner[]>({
+  const { data: processOwners = [], error: processOwnersError, isLoading: isLoadingProcessOwners } = useQuery<ProcessOwner[]>({
     queryKey: ["/api/process-owners"],
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
+    retry: 2, // Retry up to 2 times
+    retryDelay: 1000, // Wait 1 second between retries
   });
 
   const { data: macroprocesos = [] } = useQuery<MacroprocesoWithRisks[]>({
@@ -2430,6 +2432,8 @@ function GerenciasContent() {
 
   const getManagerName = (managerId?: string | null) => {
     if (!managerId) return "Sin asignar";
+    if (processOwnersError) return "Error al cargar";
+    if (isLoadingProcessOwners) return "Cargando...";
     const manager = processOwners.find(owner => owner.id === managerId);
     return manager ? manager.name : "Desconocido";
   };
