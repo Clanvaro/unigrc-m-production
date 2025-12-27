@@ -3399,6 +3399,22 @@ export default function Risks() {
 
             <div className="flex items-center space-x-2">
               <Checkbox
+                id="col-actionPlans"
+                checked={visibleColumns.actionPlans}
+                onCheckedChange={(checked) =>
+                  setVisibleColumns({ ...visibleColumns, actionPlans: checked as boolean })
+                }
+              />
+              <label
+                htmlFor="col-actionPlans"
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              >
+                Planes de Acción
+              </label>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox
                 id="col-actions"
                 checked={visibleColumns.actions}
                 onCheckedChange={(checked) =>
@@ -3427,6 +3443,7 @@ export default function Risks() {
                   process: true,
                   validation: true,
                   status: true,
+                  actionPlans: true,
                   actions: true
                 });
               }}
