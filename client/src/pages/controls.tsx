@@ -282,10 +282,7 @@ export default function Controls() {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false, // evita limpiar la tabla si ya hay datos en caché
-    placeholderData: {
-      data: [],
-      pagination: { limit: pageSize, offset: 0, total: 0 }
-    },
+    placeholderData: (previousData) => previousData, // Mantener datos anteriores durante navegación
     gcTime: 5 * 60 * 1000,
   });
   const controls = controlsResponse?.data || [];

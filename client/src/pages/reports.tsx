@@ -10,6 +10,7 @@ import { Top5Risks } from "@/components/Top5Risks";
 import { useToast } from "@/hooks/use-toast";
 import { ReportsPageSkeleton } from "@/components/skeletons/reports-page-skeleton";
 import type { RiskWithProcess, Control, Action } from "@shared/schema";
+import { DynamicRiskReport } from "@/components/reports/DynamicRiskReport";
 
 export default function Reports() {
   const { toast } = useToast();
@@ -710,6 +711,9 @@ export default function Reports() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Dynamic Risk Report */}
+      <DynamicRiskReport />
     </div>
   );
 }

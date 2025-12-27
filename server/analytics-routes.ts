@@ -551,4 +551,286 @@ router.get('/health', async (req, res) => {
   }
 });
 
+// NOTE: Dynamic Risk Report endpoints are now in routes.ts
+// This file kept for reference but endpoints moved to main routes file
+
+export default router;
+    
+    // Get catalogs for mapping
+    const macroprocesos = await storage.getMacroprocesos();
+    const processes = await storage.getProcesses();
+    const subprocesos = await storage.getSubprocesos();
+    const gerencias = await storage.getGerencias();
+    const riskCategories = await storage.getRiskCategories();
+    const riskProcessLinks = await storage.getRiskProcessLinks();
+    
+    // Get related data if needed
+    let riskControlsData: any[] = [];
+    let actionPlansData: any[] = [];
+    let riskEventsData: any[] = [];
+    let controlsData: any[] = [];
+    let riskEventRisksData: any[] = [];
+    
+    if (includeControls) {
+      riskControlsData = await db.select().from(riskControls);
+      controlsData = await db.select().from(controls);
+    }
+    
+    if (includeActionPlans) {
+      actionPlansData = await db.select().from(actionPlans);
+    }
+    
+    if (includeEvents) {
+      riskEventsData = await db.select().from(riskEvents);
+      riskEventRisksData = await db.select().from(riskEventRisks);
+    }
+
+    // Create lookup maps
+    const macroprocesosMap = new Map(macroprocesos.map(m => [m.id, m]));
+    const processesMap = new Map(processes.map(p => [p.id, p]));
+    const subprocesosMap = new Map(subprocesos.map(s => [s.id, s]));
+    const gerenciasMap = new Map(gerencias.map(g => [g.id, g]));
+    const categoriesMap = new Map(riskCategories.map(c => [c.id, c]));
+
+    // Group risks
+    const groupsMap = new Map<string, any[]>();
+
+    for (const risk of allRisks) {
+      let groupKey: string | null = null;
+      let groupName: string = 'Sin agrupar';
+
+      // Determine group based on groupBy parameter
+      switch (groupBy) {
+        case 'macroproceso': {
+          const links = riskProcessLinks.filter(l => l.riskId === risk.id);
+          if (links.length > 0) {
+            const macroId = links[0].macroprocesoId;
+            if (macroId) {
+              const macro = macroprocesosMap.get(macroId);
+              groupKey = macroId;
+              groupName = macro?.name || macroId;
+            }
+          } else if (risk.macroprocesoId) {
+            const macro = macroprocesosMap.get(risk.macroprocesoId);
+            groupKey = risk.macroprocesoId;
+            groupName = macro?.name || risk.macroprocesoId;
+          }
+          break;
+        }
+        case 'process': {
+          const links = riskProcessLinks.filter(l => l.riskId === risk.id);
+          if (links.length > 0) {
+            const procId = links[0].processId;
+            if (procId) {
+              const proc = processesMap.get(procId);
+              groupKey = procId;
+              groupName = proc?.name || procId;
+            }
+          } else if (risk.processId) {
+            const proc = processesMap.get(risk.processId);
+            groupKey = risk.processId;
+            groupName = proc?.name || risk.processId;
+          }
+          break;
+        }
+        case 'subproceso': {
+          const links = riskProcessLinks.filter(l => l.riskId === risk.id);
+          if (links.length > 0) {
+            const subId = links[0].subprocesoId;
+            if (subId) {
+              const sub = subprocesosMap.get(subId);
+              groupKey = subId;
+              groupName = sub?.name || subId;
+            }
+          } else if (risk.subprocesoId) {
+            const sub = subprocesosMap.get(risk.subprocesoId);
+            groupKey = risk.subprocesoId;
+            groupName = sub?.name || risk.subprocesoId;
+          }
+          break;
+        }
+        case 'gerencia': {
+          const links = riskProcessLinks.filter(l => l.riskId === risk.id);
+          if (links.length > 0) {
+            const gerenciaId = links[0].gerenciaId;
+            if (gerenciaId) {
+              const gerencia = gerenciasMap.get(gerenciaId);
+              groupKey = gerenciaId;
+              groupName = gerencia?.name || gerenciaId;
+            }
+          }
+          // Also check process gerencia
+          if (!groupKey && risk.processId) {
+            const proc = processesMap.get(risk.processId);
+            if (proc?.gerenciaId) {
+              const gerencia = gerenciasMap.get(proc.gerenciaId);
+              groupKey = proc.gerenciaId;
+              groupName = gerencia?.name || proc.gerenciaId;
+            }
+          }
+          break;
+        }
+        case 'category': {
+          if (risk.categoryId) {
+            const category = categoriesMap.get(risk.categoryId);
+            groupKey = risk.categoryId;
+            groupName = category?.name || risk.categoryId;
+          }
+          break;
+        }
+      }
+
+      if (!groupKey) {
+        groupKey = 'ungrouped';
+        groupName = 'Sin agrupar';
+      }
+
+      // Get related data
+      const riskControlsForRisk = includeControls 
+        ? riskControlsData.filter(rc => rc.riskId === risk.id).map(rc => {
+            const control = controlsData.find(c => c.id === rc.controlId);
+            return control ? { ...rc, control } : null;
+          }).filter(Boolean)
+        : [];
+
+      const actionPlansForRisk = includeActionPlans
+        ? actionPlansData.filter(ap => ap.riskId === risk.id)
+        : [];
+
+      const eventsForRisk = includeEvents
+        ? riskEventsData.filter(e => {
+            const eventRisks = riskEventRisksData.filter(er => er.eventId === e.id);
+            return eventRisks.some(er => er.riskId === risk.id);
+          })
+        : [];
+
+      // Get process info
+      const links = riskProcessLinks.filter(l => l.riskId === risk.id);
+      const processInfo: any = {};
+      if (links.length > 0) {
+        const link = links[0];
+        if (link.macroprocesoId) {
+          const macro = macroprocesosMap.get(link.macroprocesoId);
+          processInfo.macroproceso = macro?.name;
+        }
+        if (link.processId) {
+          const proc = processesMap.get(link.processId);
+          processInfo.process = proc?.name;
+        }
+        if (link.subprocesoId) {
+          const sub = subprocesosMap.get(link.subprocesoId);
+          processInfo.subproceso = sub?.name;
+        }
+        if (link.gerenciaId) {
+          const gerencia = gerenciasMap.get(link.gerenciaId);
+          processInfo.gerencia = gerencia?.name;
+        }
+      }
+
+      if (!groupsMap.has(groupKey)) {
+        groupsMap.set(groupKey, []);
+      }
+
+      groupsMap.get(groupKey)!.push({
+        risk,
+        controls: riskControlsForRisk.map(rc => rc.control).filter(Boolean),
+        actionPlans: actionPlansForRisk,
+        events: eventsForRisk,
+        processInfo,
+      });
+    }
+
+    // Convert to array format
+    const groups = Array.from(groupsMap.entries()).map(([groupKey, risks]) => ({
+      groupKey,
+      groupName: risks.length > 0 && risks[0].risk ? 
+        (groupBy === 'macroproceso' ? risks[0].processInfo?.macroproceso :
+         groupBy === 'process' ? risks[0].processInfo?.process :
+         groupBy === 'subproceso' ? risks[0].processInfo?.subproceso :
+         groupBy === 'gerencia' ? risks[0].processInfo?.gerencia :
+         groupBy === 'category' ? risks[0].risk.categoryId : 'Sin agrupar') || 'Sin agrupar' :
+        'Sin agrupar',
+      risks,
+    }));
+
+    // Calculate totals
+    const totals = {
+      totalRisks: allRisks.length,
+      totalControls: includeControls ? riskControlsData.length : 0,
+      totalActionPlans: includeActionPlans ? actionPlansData.length : 0,
+      totalEvents: includeEvents ? riskEventsData.length : 0,
+    };
+
+    res.json({ groups, totals });
+  } catch (error) {
+    console.error('Error generating grouped risks report:', error);
+    res.status(500).json({ error: 'Failed to generate grouped risks report' });
+  }
+});
+
+/**
+ * POST /api/reports/risks-grouped/export
+ * Export grouped risks report to Excel or PDF
+ */
+router.post('/reports/risks-grouped/export', async (req, res) => {
+  try {
+    const { groupBy, includeControls, includeActionPlans, includeEvents, format = 'excel' } = req.body;
+
+    // Get the grouped data (reuse the same logic)
+    const response = await fetch(`${req.protocol}://${req.get('host')}/api/reports/risks-grouped`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupBy, includeControls, includeActionPlans, includeEvents }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to get grouped data');
+    }
+
+    const { groups, totals } = await response.json();
+
+    // Generate export file using ExportService
+    let fileBuffer: Buffer;
+    let filename: string;
+    let mimeType: string;
+
+    if (format === 'excel') {
+      // Use ExportService to generate Excel
+      fileBuffer = await exportService.generateExcelReport(
+        'custom_report' as ReportType,
+        {
+          reportType: 'custom_report',
+          format: 'excel',
+          title: `Informe de Riesgos por ${groupBy}`,
+          filters: { groupBy, includeControls, includeActionPlans, includeEvents },
+        },
+        { groups, totals }
+      );
+      filename = `informe-riesgos-${groupBy}-${new Date().toISOString().split('T')[0]}.xlsx`;
+      mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    } else {
+      // PDF export
+      fileBuffer = await exportService.generatePDFReport(
+        'custom_report' as ReportType,
+        {
+          reportType: 'custom_report',
+          format: 'pdf',
+          title: `Informe de Riesgos por ${groupBy}`,
+          filters: { groupBy, includeControls, includeActionPlans, includeEvents },
+        },
+        { groups, totals }
+      );
+      filename = `informe-riesgos-${groupBy}-${new Date().toISOString().split('T')[0]}.pdf`;
+      mimeType = 'application/pdf';
+    }
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(fileBuffer);
+  } catch (error) {
+    console.error('Error exporting grouped risks report:', error);
+    res.status(500).json({ error: 'Failed to export grouped risks report' });
+  }
+});
+
 export default router;

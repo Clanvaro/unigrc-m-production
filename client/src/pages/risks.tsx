@@ -380,11 +380,19 @@ export default function Risks() {
     };
   }
 
-  // Only load batch relations when needed (viewing details, editing, etc.)
+  // OPTIMIZED: Only load batch relations when needed based on visible columns or dialogs
   // Note: Summary data (processesSummary, controlsSummary, actionPlansSummary) comes from bootstrap
-  // so we only need detailed relations when opening detail dialogs
-  // OPTIMIZED: Use limitPerRisk to reduce payload size (50 per risk is usually enough for display)
+  // so we only need detailed relations when:
+  // 1. Dialogs are open (viewingRisk, editingRisk, controlsDialogRisk)
+  // 2. Heavy columns are visible (process, validation) - these need riskProcessLinks
+  // 3. Status column is visible AND user clicks to expand - but NOT on initial load
   const needsFullRelations = !!viewingRisk || !!editingRisk || !!controlsDialogRisk;
+  const needsProcessLinks = needsFullRelations || visibleColumns.process || visibleColumns.validation;
+  const needsControlsList = needsFullRelations || (visibleColumns.status && needsDetailedData);
+  
+  // Only enable batch-relations if we actually need the data
+  const shouldLoadBatchRelations = riskIds.length > 0 && (needsProcessLinks || needsControlsList);
+  
   const limitPerRisk = needsFullRelations ? undefined : 50; // Limit to 50 per risk when just displaying, unlimited when editing
   
   const { data: batchRelations, isLoading: isRelationsLoading } = useQuery<BatchRelationsData>({
@@ -409,14 +417,11 @@ export default function Risks() {
       if (!response.ok) throw new Error("Failed to fetch risk relations");
       return response.json();
     },
-    // FIXED: Always fetch risk-process links to calculate validation status correctly
-    // This is needed even when validation column is not visible, as validation status affects filtering
-    // Summary columns (process, controls, actionPlans) use bootstrap data, so they don't need this
-    // CRITICAL: Always enabled when there are risks to ensure validation status is always calculated correctly
-    enabled: riskIds.length > 0,
-    staleTime: 1000 * 30, // 30 seconds - reduced to ensure validation status updates appear faster
-    refetchOnMount: true, // Refetch on mount to ensure fresh validation status after returning from validation center
-    refetchOnWindowFocus: true, // FIXED: Refetch on window focus to ensure validation status is up-to-date
+    // OPTIMIZED: Only load when columns that need it are visible or dialogs are open
+    enabled: shouldLoadBatchRelations,
+    staleTime: 1000 * 30, // 30 seconds
+    refetchOnMount: needsFullRelations, // Only refetch on mount if dialogs are open
+    refetchOnWindowFocus: needsFullRelations, // Only refetch on window focus if dialogs are open
   });
 
   // Extract relations from batch response (empty when not loaded)
@@ -452,6 +457,14 @@ export default function Risks() {
       setNeedsDetailedData(true);
     }
   }, [visibleColumns.process, visibleColumns.responsible, visibleColumns.validation]);
+
+  // OPTIMIZED: Also activate when status column is visible (needs controls list on click)
+  useEffect(() => {
+    if (visibleColumns.status) {
+      // Don't set needsDetailedData immediately - only when user clicks to expand
+      // This prevents loading batch-relations unnecessarily
+    }
+  }, [visibleColumns.status]);
 
   // ============== LAZY-LOADED DATA (only when needed) ==============
 
@@ -497,10 +510,12 @@ export default function Risks() {
   // Legacy refetch function for mutations
   const refetchRiskControls = refetchControlsSummary;
 
-  // Action plans - lazy loaded
+  // OPTIMIZED: Action plans - only load when column is visible or viewing a risk
   const { data: allActionPlans = [] } = useQuery<any[]>({
     queryKey: ["/api/action-plans"],
-    enabled: !!viewingRisk, // Only fetch when viewing a risk
+    enabled: !!viewingRisk || visibleColumns.actionPlans, // Only fetch when viewing a risk OR column is visible
+    staleTime: 1000 * 60 * 2, // 2 minutes
+    refetchOnWindowFocus: false,
   });
 
   // Get risk events for the viewing risk

@@ -14049,6 +14049,483 @@ Redactas en español neutro, claro y profesional.`;
     }
   });
 
+  // Dynamic Risk Report - Get grouped risks
+  app.post("/api/reports/risks-grouped", isAuthenticated, async (req, res) => {
+    try {
+      const { groupBy = 'macroproceso', includeControls = true, includeActionPlans = true, includeEvents = false, filters = {} } = req.body;
+
+      // Get all risks
+      const allRisks = await requireDb().select().from(risks);
+      
+      // Get catalogs for mapping
+      const macroprocesosData = await storage.getMacroprocesos();
+      const processesData = await storage.getProcesses();
+      const subprocesosData = await storage.getSubprocesos();
+      const gerenciasData = await storage.getGerencias();
+      const riskCategoriesData = await storage.getRiskCategories();
+      const riskProcessLinksData = await storage.getRiskProcessLinks();
+      
+      // Create lookup maps
+      const macroprocesosMap = new Map(macroprocesosData.map(m => [m.id, m]));
+      const processesMap = new Map(processesData.map(p => [p.id, p]));
+      const subprocesosMap = new Map(subprocesosData.map(s => [s.id, s]));
+      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
+      const categoriesMap = new Map(riskCategoriesData.map(c => [c.id, c]));
+
+      // Get related data if needed
+      let riskControlsData: any[] = [];
+      let actionPlansData: any[] = [];
+      let riskEventsData: any[] = [];
+      let controlsData: any[] = [];
+      let riskEventRisksData: any[] = [];
+      
+      if (includeControls) {
+        riskControlsData = await requireDb().select().from(riskControls);
+        controlsData = await requireDb().select().from(controls);
+      }
+      
+      if (includeActionPlans) {
+        actionPlansData = await requireDb().select().from(actions);
+      }
+      
+      if (includeEvents) {
+        riskEventsData = await requireDb().select().from(riskEvents);
+        riskEventRisksData = await requireDb().select().from(riskEventRisks);
+      }
+
+      // Group risks
+      const groupsMap = new Map<string, any[]>();
+
+      for (const risk of allRisks) {
+        let groupKey: string | null = null;
+        let groupName: string = 'Sin agrupar';
+
+        // Determine group based on groupBy parameter
+        switch (groupBy) {
+          case 'macroproceso': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0) {
+              const macroId = links[0].macroprocesoId;
+              if (macroId) {
+                const macro = macroprocesosMap.get(macroId);
+                groupKey = macroId;
+                groupName = macro?.name || macroId;
+              }
+            } else if (risk.macroprocesoId) {
+              const macro = macroprocesosMap.get(risk.macroprocesoId);
+              groupKey = risk.macroprocesoId;
+              groupName = macro?.name || risk.macroprocesoId;
+            }
+            break;
+          }
+          case 'process': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0) {
+              const procId = links[0].processId;
+              if (procId) {
+                const proc = processesMap.get(procId);
+                groupKey = procId;
+                groupName = proc?.name || procId;
+              }
+            } else if (risk.processId) {
+              const proc = processesMap.get(risk.processId);
+              groupKey = risk.processId;
+              groupName = proc?.name || risk.processId;
+            }
+            break;
+          }
+          case 'subproceso': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0) {
+              const subId = links[0].subprocesoId;
+              if (subId) {
+                const sub = subprocesosMap.get(subId);
+                groupKey = subId;
+                groupName = sub?.name || subId;
+              }
+            } else if (risk.subprocesoId) {
+              const sub = subprocesosMap.get(risk.subprocesoId);
+              groupKey = risk.subprocesoId;
+              groupName = sub?.name || risk.subprocesoId;
+            }
+            break;
+          }
+          case 'gerencia': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0) {
+              const gerenciaId = links[0].gerenciaId;
+              if (gerenciaId) {
+                const gerencia = gerenciasMap.get(gerenciaId);
+                groupKey = gerenciaId;
+                groupName = gerencia?.name || gerenciaId;
+              }
+            }
+            // Also check process gerencia
+            if (!groupKey && risk.processId) {
+              const proc = processesMap.get(risk.processId);
+              if (proc?.gerenciaId) {
+                const gerencia = gerenciasMap.get(proc.gerenciaId);
+                groupKey = proc.gerenciaId;
+                groupName = gerencia?.name || proc.gerenciaId;
+              }
+            }
+            break;
+          }
+          case 'category': {
+            if (risk.categoryId) {
+              const category = categoriesMap.get(risk.categoryId);
+              groupKey = risk.categoryId;
+              groupName = category?.name || risk.categoryId;
+            }
+            break;
+          }
+        }
+
+        if (!groupKey) {
+          groupKey = 'ungrouped';
+          groupName = 'Sin agrupar';
+        }
+
+        // Get related data
+        const riskControlsForRisk = includeControls 
+          ? riskControlsData.filter(rc => rc.riskId === risk.id).map(rc => {
+              const control = controlsData.find(c => c.id === rc.controlId);
+              return control;
+            }).filter(Boolean)
+          : [];
+
+        const actionPlansForRisk = includeActionPlans
+          ? actionPlansData.filter(ap => ap.riskId === risk.id)
+          : [];
+
+        const eventsForRisk = includeEvents
+          ? riskEventsData.filter(e => {
+              const eventRisks = riskEventRisksData.filter(er => er.eventId === e.id);
+              return eventRisks.some(er => er.riskId === risk.id);
+            })
+          : [];
+
+        // Get process info
+        const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+        const processInfo: any = {};
+        if (links.length > 0) {
+          const link = links[0];
+          if (link.macroprocesoId) {
+            const macro = macroprocesosMap.get(link.macroprocesoId);
+            processInfo.macroproceso = macro?.name;
+          }
+          if (link.processId) {
+            const proc = processesMap.get(link.processId);
+            processInfo.process = proc?.name;
+          }
+          if (link.subprocesoId) {
+            const sub = subprocesosMap.get(link.subprocesoId);
+            processInfo.subproceso = sub?.name;
+          }
+          if (link.gerenciaId) {
+            const gerencia = gerenciasMap.get(link.gerenciaId);
+            processInfo.gerencia = gerencia?.name;
+          }
+        }
+
+        if (!groupsMap.has(groupKey)) {
+          groupsMap.set(groupKey, []);
+        }
+
+        groupsMap.get(groupKey)!.push({
+          risk,
+          controls: riskControlsForRisk,
+          actionPlans: actionPlansForRisk,
+          events: eventsForRisk,
+          processInfo,
+        });
+      }
+
+      // Convert to array format and determine group name
+      const groups = Array.from(groupsMap.entries()).map(([groupKey, risks]) => {
+        // Determine group name from first risk's data
+        let groupName = 'Sin agrupar';
+        if (risks.length > 0) {
+          const firstRisk = risks[0];
+          switch (groupBy) {
+            case 'macroproceso':
+              groupName = firstRisk.processInfo?.macroproceso || 
+                         (firstRisk.risk.macroprocesoId ? macroprocesosMap.get(firstRisk.risk.macroprocesoId)?.name : 'Sin agrupar');
+              break;
+            case 'process':
+              groupName = firstRisk.processInfo?.process || 
+                         (firstRisk.risk.processId ? processesMap.get(firstRisk.risk.processId)?.name : 'Sin agrupar');
+              break;
+            case 'subproceso':
+              groupName = firstRisk.processInfo?.subproceso || 
+                         (firstRisk.risk.subprocesoId ? subprocesosMap.get(firstRisk.risk.subprocesoId)?.name : 'Sin agrupar');
+              break;
+            case 'gerencia':
+              groupName = firstRisk.processInfo?.gerencia || 'Sin agrupar';
+              break;
+            case 'category':
+              groupName = firstRisk.risk.categoryId ? categoriesMap.get(firstRisk.risk.categoryId)?.name : 'Sin agrupar';
+              break;
+          }
+        }
+        return {
+          groupKey,
+          groupName,
+          risks,
+        };
+      });
+
+      // Calculate totals
+      const totals = {
+        totalRisks: allRisks.length,
+        totalControls: includeControls ? riskControlsData.length : 0,
+        totalActionPlans: includeActionPlans ? actionPlansData.length : 0,
+        totalEvents: includeEvents ? riskEventsData.length : 0,
+      };
+
+      res.json({ groups, totals });
+    } catch (error) {
+      console.error('Error generating grouped risks report:', error);
+      res.status(500).json({ error: 'Failed to generate grouped risks report' });
+    }
+  });
+
+  // Dynamic Risk Report - Export
+  app.post("/api/reports/risks-grouped/export", isAuthenticated, async (req, res) => {
+    try {
+      const { groupBy, includeControls, includeActionPlans, includeEvents, format = 'excel' } = req.body;
+
+      // Get the grouped data by calling the endpoint internally
+      const internalReq = {
+        body: { groupBy, includeControls, includeActionPlans, includeEvents },
+        protocol: req.protocol,
+        get: (header: string) => req.get(header),
+      };
+      
+      // Create a mock response to capture the data
+      let groupsData: any = null;
+      const mockRes = {
+        json: (data: any) => { groupsData = data; },
+        status: () => mockRes,
+      };
+
+      // Call the grouped endpoint logic (simplified - in production, extract to a function)
+      const allRisks = await requireDb().select().from(risks);
+      const macroprocesosData = await storage.getMacroprocesos();
+      const processesData = await storage.getProcesses();
+      const subprocesosData = await storage.getSubprocesos();
+      const gerenciasData = await storage.getGerencias();
+      const riskCategoriesData = await storage.getRiskCategories();
+      const riskProcessLinksData = await storage.getRiskProcessLinks();
+      
+      const macroprocesosMap = new Map(macroprocesosData.map(m => [m.id, m]));
+      const processesMap = new Map(processesData.map(p => [p.id, p]));
+      const subprocesosMap = new Map(subprocesosData.map(s => [s.id, s]));
+      const gerenciasMap = new Map(gerenciasData.map(g => [g.id, g]));
+      const categoriesMap = new Map(riskCategoriesData.map(c => [c.id, c]));
+
+      let riskControlsData: any[] = [];
+      let actionPlansData: any[] = [];
+      let riskEventsData: any[] = [];
+      let controlsData: any[] = [];
+      let riskEventRisksData: any[] = [];
+      
+      if (includeControls) {
+        riskControlsData = await requireDb().select().from(riskControls);
+        controlsData = await requireDb().select().from(controls);
+      }
+      
+      if (includeActionPlans) {
+        actionPlansData = await requireDb().select().from(actions);
+      }
+      
+      if (includeEvents) {
+        riskEventsData = await requireDb().select().from(riskEvents);
+        riskEventRisksData = await requireDb().select().from(riskEventRisks);
+      }
+
+      const groupsMap = new Map<string, any[]>();
+      for (const risk of allRisks) {
+        let groupKey: string | null = null;
+        let groupName: string = 'Sin agrupar';
+
+        switch (groupBy) {
+          case 'macroproceso': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0 && links[0].macroprocesoId) {
+              const macro = macroprocesosMap.get(links[0].macroprocesoId);
+              groupKey = links[0].macroprocesoId;
+              groupName = macro?.name || links[0].macroprocesoId;
+            } else if (risk.macroprocesoId) {
+              const macro = macroprocesosMap.get(risk.macroprocesoId);
+              groupKey = risk.macroprocesoId;
+              groupName = macro?.name || risk.macroprocesoId;
+            }
+            break;
+          }
+          case 'process': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0 && links[0].processId) {
+              const proc = processesMap.get(links[0].processId);
+              groupKey = links[0].processId;
+              groupName = proc?.name || links[0].processId;
+            } else if (risk.processId) {
+              const proc = processesMap.get(risk.processId);
+              groupKey = risk.processId;
+              groupName = proc?.name || risk.processId;
+            }
+            break;
+          }
+          case 'subproceso': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0 && links[0].subprocesoId) {
+              const sub = subprocesosMap.get(links[0].subprocesoId);
+              groupKey = links[0].subprocesoId;
+              groupName = sub?.name || links[0].subprocesoId;
+            } else if (risk.subprocesoId) {
+              const sub = subprocesosMap.get(risk.subprocesoId);
+              groupKey = risk.subprocesoId;
+              groupName = sub?.name || risk.subprocesoId;
+            }
+            break;
+          }
+          case 'gerencia': {
+            const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+            if (links.length > 0 && links[0].gerenciaId) {
+              const gerencia = gerenciasMap.get(links[0].gerenciaId);
+              groupKey = links[0].gerenciaId;
+              groupName = gerencia?.name || links[0].gerenciaId;
+            }
+            break;
+          }
+          case 'category': {
+            if (risk.categoryId) {
+              const category = categoriesMap.get(risk.categoryId);
+              groupKey = risk.categoryId;
+              groupName = category?.name || risk.categoryId;
+            }
+            break;
+          }
+        }
+
+        if (!groupKey) {
+          groupKey = 'ungrouped';
+          groupName = 'Sin agrupar';
+        }
+
+        const riskControlsForRisk = includeControls 
+          ? riskControlsData.filter(rc => rc.riskId === risk.id).map(rc => controlsData.find(c => c.id === rc.controlId)).filter(Boolean)
+          : [];
+        const actionPlansForRisk = includeActionPlans ? actionPlansData.filter(ap => ap.riskId === risk.id) : [];
+        const eventsForRisk = includeEvents ? riskEventsData.filter(e => riskEventRisksData.some(er => er.eventId === e.id && er.riskId === risk.id)) : [];
+
+        const links = riskProcessLinksData.filter(l => l.riskId === risk.id);
+        const processInfo: any = {};
+        if (links.length > 0) {
+          const link = links[0];
+          if (link.macroprocesoId) processInfo.macroproceso = macroprocesosMap.get(link.macroprocesoId)?.name;
+          if (link.processId) processInfo.process = processesMap.get(link.processId)?.name;
+          if (link.subprocesoId) processInfo.subproceso = subprocesosMap.get(link.subprocesoId)?.name;
+          if (link.gerenciaId) processInfo.gerencia = gerenciasMap.get(link.gerenciaId)?.name;
+        }
+
+        if (!groupsMap.has(groupKey)) {
+          groupsMap.set(groupKey, []);
+        }
+
+        groupsMap.get(groupKey)!.push({
+          risk,
+          controls: riskControlsForRisk,
+          actionPlans: actionPlansForRisk,
+          events: eventsForRisk,
+          processInfo,
+        });
+      }
+
+      const groups = Array.from(groupsMap.entries()).map(([groupKey, risks]) => {
+        let groupName = 'Sin agrupar';
+        if (risks.length > 0) {
+          const firstRisk = risks[0];
+          switch (groupBy) {
+            case 'macroproceso':
+              groupName = firstRisk.processInfo?.macroproceso || (firstRisk.risk.macroprocesoId ? macroprocesosMap.get(firstRisk.risk.macroprocesoId)?.name : 'Sin agrupar');
+              break;
+            case 'process':
+              groupName = firstRisk.processInfo?.process || (firstRisk.risk.processId ? processesMap.get(firstRisk.risk.processId)?.name : 'Sin agrupar');
+              break;
+            case 'subproceso':
+              groupName = firstRisk.processInfo?.subproceso || (firstRisk.risk.subprocesoId ? subprocesosMap.get(firstRisk.risk.subprocesoId)?.name : 'Sin agrupar');
+              break;
+            case 'gerencia':
+              groupName = firstRisk.processInfo?.gerencia || 'Sin agrupar';
+              break;
+            case 'category':
+              groupName = firstRisk.risk.categoryId ? categoriesMap.get(firstRisk.risk.categoryId)?.name : 'Sin agrupar';
+              break;
+          }
+        }
+        return { groupKey, groupName, risks };
+      });
+
+      // Generate Excel file
+      if (format === 'excel') {
+        const ExcelJS = (await import('exceljs')).default;
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Riesgos Agrupados');
+
+        worksheet.columns = [
+          { header: 'Grupo', key: 'group', width: 30 },
+          { header: 'Código Riesgo', key: 'riskCode', width: 15 },
+          { header: 'Nombre Riesgo', key: 'riskName', width: 40 },
+          { header: 'Nivel Inherente', key: 'inherentRisk', width: 15 },
+          { header: 'Nivel Residual', key: 'residualRisk', width: 15 },
+        ];
+
+        if (includeControls) {
+          worksheet.columns.push({ header: 'Controles', key: 'controls', width: 30 });
+        }
+        if (includeActionPlans) {
+          worksheet.columns.push({ header: 'Planes de Acción', key: 'actionPlans', width: 30 });
+        }
+        if (includeEvents) {
+          worksheet.columns.push({ header: 'Eventos', key: 'events', width: 30 });
+        }
+
+        for (const group of groups) {
+          for (const riskData of group.risks) {
+            worksheet.addRow({
+              group: group.groupName,
+              riskCode: riskData.risk.code,
+              riskName: riskData.risk.name,
+              inherentRisk: riskData.risk.inherentRisk,
+              residualRisk: riskData.risk.residualRisk || riskData.risk.inherentRisk,
+              controls: includeControls ? riskData.controls.map((c: any) => c.code).join(', ') : '',
+              actionPlans: includeActionPlans ? riskData.actionPlans.map((ap: any) => ap.code).join(', ') : '',
+              events: includeEvents ? riskData.events.map((e: any) => e.code).join(', ') : '',
+            });
+          }
+        }
+
+        worksheet.getRow(1).font = { bold: true };
+        worksheet.getRow(1).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF4F46E5' }
+        };
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=informe-riesgos-${groupBy}-${new Date().toISOString().split('T')[0]}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+      } else {
+        res.status(400).json({ error: 'PDF export not yet implemented' });
+      }
+    } catch (error) {
+      console.error('Error exporting grouped risks report:', error);
+      res.status(500).json({ error: 'Failed to export grouped risks report' });
+    }
+  });
+
   // Send email to selected action plans
   app.post("/api/action-plans/send-email", isAuthenticated, async (req, res) => {
     try {

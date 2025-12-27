@@ -115,6 +115,14 @@ export const queryKeys = {
     alerts: () => ["/api/dashboard/alerts"] as const,
   },
   
+  // Reports
+  reports: {
+    risksGrouped: (params: { groupBy?: string; includeControls?: boolean; includeActionPlans?: boolean; includeEvents?: boolean; filters?: any } = {}) => {
+      const stableParams = JSON.stringify(params, Object.keys(params).sort());
+      return ["/api/reports/risks-grouped", stableParams] as const;
+    },
+  },
+  
   // Other common endpoints
   processes: () => ["/api/processes"] as const,
   macroprocesos: () => ["/api/macroprocesos"] as const,

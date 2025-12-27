@@ -34,6 +34,11 @@ const routePrefetchMap: Record<string, () => Promise<any>> = {
 const DEFAULT_RISKS_QUERY_PARAMS = { limit: 50, offset: 0 };
 
 /**
+ * Default controls page query params - MUST match controls.tsx initial state
+ */
+const DEFAULT_CONTROLS_QUERY_PARAMS = { limit: 25, offset: 0 };
+
+/**
  * API prefetch mapping for data-heavy pages
  * OPTIMIZED: Uses /api/pages/risks (BFF) instead of multiple legacy endpoints
  * 
@@ -54,6 +59,29 @@ const apiPrefetchMap: Record<string, () => void> = {
       },
       staleTime: 2 * 60 * 1000, // 2 minutes - matches risks.tsx staleTime
       gcTime: 10 * 60 * 1000, // 10 minutes - keep in cache
+    });
+  },
+  '/controls': () => {
+    // OPTIMIZED: Prefetch controls with the EXACT same queryKey structure as controls.tsx
+    // Uses queryKeys.controls.withDetails to match exactly
+    const { queryKeys } = require('@/lib/queryKeys');
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.controls.withDetails(DEFAULT_CONTROLS_QUERY_PARAMS),
+      queryFn: async () => {
+        const params = new URLSearchParams({
+          limit: '25',
+          offset: '0',
+          search: '',
+          type: '',
+          status: '',
+          validationStatus: '',
+        });
+        const response = await fetch(`/api/controls/with-details?${params}`);
+        if (!response.ok) throw new Error('Failed to prefetch');
+        return response.json();
+      },
+      staleTime: 2 * 60 * 1000, // 2 minutes - matches controls.tsx staleTime
+      gcTime: 5 * 60 * 1000, // 5 minutes - keep in cache
     });
   },
 };
